@@ -89,6 +89,14 @@ mode: all
 - Аудитор **не** меняет код. Только отчёт.
 - Коммит — только после `APPROVE` аудитора и с разрешения человека.
 
+## Инструменты и окружение
+
+- **Python:** 3.14.7
+- **Виртуальное окружение:** `.venv` (активируется через `.venv\Scripts\activate` в Windows)
+- **Запуск тестов:** `python manage.py test storage`
+- **Проверка Django:** `python manage.py check`
+- **Миграции:** `python manage.py makemigrations`, `python manage.py migrate`
+
 ---
 
 ## Если что-то неясно

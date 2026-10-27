@@ -104,7 +104,7 @@ class UserProfile(models.Model):
 
 
 class ProjectMembership(models.Model):
-    project = models.ForeignKey(Project, on_delete=models.CASCADE)
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='memberships')
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     ROLE_IN_PROJECT_CHOICES = [
         ('gip', 'ГИП'),
