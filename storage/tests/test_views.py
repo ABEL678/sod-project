@@ -51,12 +51,14 @@ class ViewTests(TestCase):
         )
 
     def test_project_list(self):
+        self.client.force_login(self.user_gip)
         response = self.client.get(reverse('storage:project_list'))
         self.assertEqual(response.status_code, 200)
         self.assertTemplateUsed(response, 'storage/project_list.html')
         self.assertContains(response, 'P-1')
 
     def test_project_detail(self):
+        self.client.force_login(self.user_gip)
         response = self.client.get(reverse('storage:project_detail', args=[self.project.pk]))
         self.assertEqual(response.status_code, 200)
         self.assertTemplateUsed(response, 'storage/project_detail.html')
@@ -193,9 +195,10 @@ class ViewTests(TestCase):
         self.assertTrue(target.startswith('http://') or target.startswith('https://'))
         self.assertIn(f'/download/{version.pk}/', target)
 
-    def test_export_anonymous_forbidden(self):
+    def test_export_anonymous_redirects_to_login(self):
         response = self.client.get(reverse('storage:export_vedomost', args=[self.project.pk]))
-        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn(reverse('login'), response['Location'])
 
     def test_document_detail(self):
         self.client.force_login(self.user_gip)
@@ -216,12 +219,49 @@ class ViewTests(TestCase):
         self.assertEqual(response.status_code, 403)
 
     def test_project_detail_links_to_document_detail(self):
+        self.client.force_login(self.user_gip)
         version = self._upload()
         response = self.client.get(reverse('storage:project_detail', args=[self.project.pk]))
         self.assertContains(
             response,
             reverse('storage:document_detail', args=[version.document_id]),
         )
+
+    def test_pages_require_login(self):
+        for url in (
+            reverse('storage:project_list'),
+            reverse('storage:project_detail', args=[self.project.pk]),
+            reverse('storage:export_vedomost', args=[self.project.pk]),
+            reverse('storage:simulate_mail_import', args=[self.project.pk]),
+        ):
+            response = self.client.get(url)
+            self.assertEqual(response.status_code, 302, url)
+            self.assertIn(reverse('login'), response['Location'], url)
+
+    def test_login_page_renders(self):
+        response = self.client.get(reverse('login'))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Вход в систему')
+        self.assertContains(response, 'Войти')
+
+    def test_logout_redirects_home(self):
+        self.client.force_login(self.user_gip)
+        response = self.client.post(reverse('logout'))
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response['Location'], '/')
+
+    def test_upload_ajax_requires_login(self):
+        response = self.client.post(
+            reverse('storage:document_upload_ajax', args=[self.project.pk]),
+            {
+                'section_id': self.section.pk,
+                'code': 'АР-99',
+                'name': 'План',
+                'file': SimpleUploadedFile('plan.pdf', b'data', content_type='application/pdf'),
+            },
+        )
+        self.assertEqual(response.status_code, 403)
+        self.assertIn('Требуется авторизация', response.json()['error'])
 
     def test_simulate_mail_import_success(self):
         MailRule.objects.create(

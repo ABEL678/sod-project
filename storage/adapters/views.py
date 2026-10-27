@@ -1,6 +1,7 @@
 from io import BytesIO
 
 from django.contrib import messages
+from django.contrib.auth.mixins import LoginRequiredMixin
 from django.core.exceptions import PermissionDenied
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.http import (
@@ -22,14 +23,14 @@ from storage.domain.models import Document, DocumentVersion, MailRule, Project, 
 from storage.domain.services import check_read_permission, generate_vedomost, upload_document
 
 
-class ProjectListView(ListView):
+class ProjectListView(LoginRequiredMixin, ListView):
     model = Project
     template_name = 'storage/project_list.html'
     context_object_name = 'projects'
     ordering = ['code']
 
 
-class ProjectDetailView(DetailView):
+class ProjectDetailView(LoginRequiredMixin, DetailView):
     model = Project
     template_name = 'storage/project_detail.html'
     context_object_name = 'project'
@@ -41,7 +42,7 @@ class ProjectDetailView(DetailView):
         return context
 
 
-class DocumentDetailView(DetailView):
+class DocumentDetailView(LoginRequiredMixin, DetailView):
     model = Document
     template_name = 'storage/document_detail.html'
     context_object_name = 'document'
@@ -60,7 +61,10 @@ class DocumentDetailView(DetailView):
         return context
 
 
-class DocumentUploadAjaxView(View):
+class DocumentUploadAjaxView(LoginRequiredMixin, View):
+    def handle_no_permission(self):
+        return JsonResponse({'error': 'Требуется авторизация'}, status=403)
+
     def post(self, request, project_id):
         project = Project.objects.filter(pk=project_id).first()
         if project is None:
@@ -119,11 +123,8 @@ class DocumentDownloadView(View):
         return FileResponse(file_handle, as_attachment=True, filename=filename)
 
 
-class ExportVedomostView(View):
+class ExportVedomostView(LoginRequiredMixin, View):
     def get(self, request, project_id):
-        if not request.user.is_authenticated:
-            return HttpResponseForbidden('Нет прав на экспорт ведомости')
-
         project = get_object_or_404(Project, pk=project_id)
 
         documents = Document.objects.filter(project=project).select_related(
@@ -198,7 +199,7 @@ class ExportVedomostView(View):
         return version.uploaded_by.get_full_name() or version.uploaded_by.username
 
 
-class SimulateMailImportView(View):
+class SimulateMailImportView(LoginRequiredMixin, View):
     def post(self, request, project_id):
         project = get_object_or_404(Project, pk=project_id)
 
