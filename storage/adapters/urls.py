@@ -11,4 +11,5 @@ urlpatterns = [
     path('documents/<int:pk>/', views.DocumentDetailView.as_view(), name='document_detail'),
     path('download/<int:version_id>/', views.DocumentDownloadView.as_view(), name='document_download'),
     path('projects/<int:project_id>/export/', views.ExportVedomostView.as_view(), name='export_vedomost'),
+    path('projects/<int:project_id>/mail-import/', views.SimulateMailImportView.as_view(), name='simulate_mail_import'),
 ]

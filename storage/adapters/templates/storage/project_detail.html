@@ -42,6 +42,12 @@
 <main class="container-fluid pb-5">
     <a href="{% url 'storage:project_list' %}" class="btn btn-sm btn-outline-secondary mb-3">← К списку проектов</a>
 
+    {% if messages %}
+        {% for message in messages %}
+            <div class="alert {% if message.tags == 'error' %}alert-danger{% else %}alert-{{ message.tags }}{% endif %}">{{ message }}</div>
+        {% endfor %}
+    {% endif %}
+
     <div class="card shadow-sm mb-4">
         <div class="card-body">
             <div class="d-flex justify-content-between align-items-start flex-wrap gap-3">
@@ -98,7 +104,13 @@
             <div class="card shadow-sm">
                 <div class="card-header bg-white d-flex justify-content-between align-items-center">
                     <span class="fw-semibold">Документы ({{ documents|length }})</span>
-                    <a class="btn btn-success btn-sm" href="{% url 'storage:export_vedomost' project.pk %}">Экспорт в Excel</a>
+                    <div class="d-flex gap-2">
+                        <form method="post" action="{% url 'storage:simulate_mail_import' project.pk %}">
+                            {% csrf_token %}
+                            <button type="submit" class="btn btn-outline-primary btn-sm">Импорт из почты</button>
+                        </form>
+                        <a class="btn btn-success btn-sm" href="{% url 'storage:export_vedomost' project.pk %}">Экспорт в Excel</a>
+                    </div>
                 </div>
                 <div class="table-responsive">
                     <table class="table table-hover align-middle mb-0">

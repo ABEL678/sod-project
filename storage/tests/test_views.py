@@ -7,7 +7,7 @@ from django.test import TestCase, override_settings
 from django.urls import reverse
 from openpyxl import load_workbook
 
-from storage.domain.models import Project, Section, UserProfile
+from storage.domain.models import MailRule, Project, Section, UserProfile
 from storage.domain.services import upload_document
 
 
@@ -222,3 +222,29 @@ class ViewTests(TestCase):
             response,
             reverse('storage:document_detail', args=[version.document_id]),
         )
+
+    def test_simulate_mail_import_success(self):
+        MailRule.objects.create(
+            project=self.project,
+            section=self.section,
+            email_filter='P-1',
+        )
+        self.client.force_login(self.user_gip)
+        response = self.client.post(
+            reverse('storage:simulate_mail_import', args=[self.project.pk]),
+            follow=True,
+        )
+        self.assertRedirects(response, reverse('storage:project_detail', args=[self.project.pk]))
+        self.assertContains(response, 'Письмо обработано, файл добавлен.')
+        document = self.project.documents.get()
+        self.assertEqual(document.doc_type, 'source_data')
+        self.assertEqual(document.current_version.version_number, 1)
+
+    def test_simulate_mail_import_without_rules(self):
+        self.client.force_login(self.user_gip)
+        response = self.client.post(
+            reverse('storage:simulate_mail_import', args=[self.project.pk]),
+            follow=True,
+        )
+        self.assertContains(response, 'не настроены правила импорта')
+        self.assertEqual(self.project.documents.count(), 0)

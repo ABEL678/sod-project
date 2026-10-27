@@ -1,6 +1,8 @@
 from io import BytesIO
 
+from django.contrib import messages
 from django.core.exceptions import PermissionDenied
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.http import (
     FileResponse,
     HttpResponseBadRequest,
@@ -8,7 +10,7 @@ from django.http import (
     HttpResponseNotFound,
     JsonResponse,
 )
-from django.shortcuts import get_object_or_404
+from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse
 from django.utils import timezone
 from django.views import View
@@ -16,7 +18,7 @@ from django.views.generic import DetailView, ListView
 from openpyxl import Workbook
 from openpyxl.styles import Font
 
-from storage.domain.models import Document, DocumentVersion, Project, Section
+from storage.domain.models import Document, DocumentVersion, MailRule, Project, Section
 from storage.domain.services import check_read_permission, generate_vedomost, upload_document
 
 
@@ -194,3 +196,38 @@ class ExportVedomostView(View):
         if version is None:
             return ''
         return version.uploaded_by.get_full_name() or version.uploaded_by.username
+
+
+class SimulateMailImportView(View):
+    def post(self, request, project_id):
+        project = get_object_or_404(Project, pk=project_id)
+
+        rule = MailRule.objects.filter(project=project).order_by('pk').first()
+        if rule is None:
+            messages.error(request, 'Для проекта не настроены правила импорта из почты.')
+            return redirect('storage:project_detail', pk=project.pk)
+
+        filename = 'Исходные_данные_из_почты.pdf'
+        fake_file = SimpleUploadedFile(
+            filename,
+            b'%PDF-1.4 simulated mail attachment',
+            content_type='application/pdf',
+        )
+
+        try:
+            upload_document(
+                user=request.user,
+                project=project,
+                section=rule.section,
+                code='ИЗ-ПОЧТЫ-ИД',
+                name='Исходные данные из почты',
+                doc_type=rule.doc_type,
+                file=fake_file,
+                comment='Импортировано из почты (симуляция)',
+            )
+        except (PermissionDenied, ValueError) as exc:
+            messages.error(request, str(exc))
+            return redirect('storage:project_detail', pk=project.pk)
+
+        messages.success(request, 'Письмо обработано, файл добавлен.')
+        return redirect('storage:project_detail', pk=project.pk)
