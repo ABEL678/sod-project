@@ -39,6 +39,24 @@ class ProjectDetailView(DetailView):
         return context
 
 
+class DocumentDetailView(DetailView):
+    model = Document
+    template_name = 'storage/document_detail.html'
+    context_object_name = 'document'
+
+    def get(self, request, *args, **kwargs):
+        self.object = self.get_object()
+        if not check_read_permission(request.user, self.object):
+            return HttpResponseForbidden('Нет прав на просмотр документа')
+        context = self.get_context_data(object=self.object)
+        return self.render_to_response(context)
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context['versions'] = self.object.versions.select_related('uploaded_by').order_by('-version_number')
+        return context
+
+
 class DocumentUploadAjaxView(View):
     def post(self, request, project_id):
         project = Project.objects.filter(pk=project_id).first()

@@ -180,6 +180,7 @@ def generate_vedomost(project: Project, section=None) -> list:
     result = []
     for doc in qs:
         result.append({
+            'id': doc.pk,
             'code': doc.code,
             'name': doc.name,
             'doc_type': doc.get_doc_type_display(),

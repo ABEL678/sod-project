@@ -1,0 +1,102 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ document.code }} — СОД</title>
+    <link rel="stylesheet" href="{% static 'css/bootstrap.min.css' %}">
+</head>
+<body class="bg-light">
+<nav class="navbar navbar-dark bg-dark mb-4">
+    <div class="container-fluid">
+        <a class="navbar-brand" href="{% url 'storage:project_list' %}">СОД</a>
+    </div>
+</nav>
+<main class="container-fluid pb-5">
+    <a href="{% url 'storage:project_detail' document.project.pk %}" class="btn btn-sm btn-outline-secondary mb-3">
+        ← К проекту {{ document.project.code }}
+    </a>
+
+    <div class="card shadow-sm mb-4">
+        <div class="card-body">
+            <div class="d-flex justify-content-between align-items-start flex-wrap gap-3">
+                <div>
+                    <h1 class="h3 mb-1">{{ document.name }}</h1>
+                    <div class="text-muted">Шифр: {{ document.code }}</div>
+                </div>
+                {% if document.current_version %}
+                    <span class="badge bg-primary fs-6">Текущая версия: {{ document.current_version.version_number }}</span>
+                {% else %}
+                    <span class="badge bg-secondary fs-6">Версий нет</span>
+                {% endif %}
+            </div>
+            <hr>
+            <div class="row g-3">
+                <div class="col-md-3">
+                    <div class="text-muted small">Проект</div>
+                    <div>{{ document.project.code }} — {{ document.project.name }}</div>
+                </div>
+                <div class="col-md-3">
+                    <div class="text-muted small">Раздел</div>
+                    <div>{{ document.section.code }} — {{ document.section.name }}</div>
+                </div>
+                <div class="col-md-3">
+                    <div class="text-muted small">Тип документа</div>
+                    <div>{{ document.get_doc_type_display }}</div>
+                </div>
+                <div class="col-md-3">
+                    <div class="text-muted small">Статус</div>
+                    <div>
+                        <span class="badge {% if document.status == 'approved' %}bg-success{% elif document.status == 'archived' %}bg-secondary{% else %}bg-warning text-dark{% endif %}">
+                            {{ document.get_status_display }}
+                        </span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="card shadow-sm">
+        <div class="card-header bg-white d-flex justify-content-between align-items-center">
+            <span class="fw-semibold">История версий ({{ versions|length }})</span>
+        </div>
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th>Версия</th>
+                        <th>Дата загрузки</th>
+                        <th>Автор</th>
+                        <th>Комментарий</th>
+                        <th class="text-end">Действие</th>
+                    </tr>
+                </thead>
+                <tbody>
+                {% for version in versions %}
+                    <tr>
+                        <td>
+                            <span class="fw-semibold">v{{ version.version_number }}</span>
+                            {% if document.current_version_id == version.pk %}
+                                <span class="badge bg-primary ms-1">текущая</span>
+                            {% endif %}
+                        </td>
+                        <td>{{ version.uploaded_at|date:"d.m.Y H:i" }}</td>
+                        <td>{{ version.uploaded_by.get_full_name|default:version.uploaded_by.username }}</td>
+                        <td>{{ version.comment|default:"—" }}</td>
+                        <td class="text-end">
+                            <a class="btn btn-sm btn-outline-primary" href="{% url 'storage:document_download' version.pk %}">Скачать</a>
+                        </td>
+                    </tr>
+                {% empty %}
+                    <tr>
+                        <td colspan="5" class="text-center text-muted py-4">Версий пока нет</td>
+                    </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</main>
+</body>
+</html>

@@ -196,3 +196,28 @@ class ViewTests(TestCase):
     def test_export_anonymous_forbidden(self):
         response = self.client.get(reverse('storage:export_vedomost', args=[self.project.pk]))
         self.assertEqual(response.status_code, 403)
+
+    def test_document_detail(self):
+        self.client.force_login(self.user_gip)
+        version = self._upload()
+        response = self.client.get(reverse('storage:document_detail', args=[version.document_id]))
+        self.assertEqual(response.status_code, 200)
+        self.assertTemplateUsed(response, 'storage/document_detail.html')
+        self.assertContains(response, 'История версий')
+        self.assertContains(response, 'Скачать')
+
+    def test_document_detail_forbidden_without_rights(self):
+        version = self._upload()
+        contractor = User.objects.create_user('contractor2', password='pass')
+        UserProfile.objects.create(user=contractor, role='contractor')
+        self.client.force_login(contractor)
+        response = self.client.get(reverse('storage:document_detail', args=[version.document_id]))
+        self.assertEqual(response.status_code, 403)
+
+    def test_project_detail_links_to_document_detail(self):
+        version = self._upload()
+        response = self.client.get(reverse('storage:project_detail', args=[self.project.pk]))
+        self.assertContains(
+            response,
+            reverse('storage:document_detail', args=[version.document_id]),
+        )

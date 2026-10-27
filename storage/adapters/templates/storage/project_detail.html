@@ -117,11 +117,7 @@
                             <tr>
                                 <td class="fw-semibold">{{ doc.code }}</td>
                                 <td>
-                                    {% if doc.version_id %}
-                                        <a href="{% url 'storage:document_download' doc.version_id %}">{{ doc.name }}</a>
-                                    {% else %}
-                                        {{ doc.name }}
-                                    {% endif %}
+                                    <a href="{% url 'storage:document_detail' doc.id %}">{{ doc.name }}</a>
                                 </td>
                                 <td>{{ doc.doc_type }}</td>
                                 <td>{{ doc.version }}</td>
