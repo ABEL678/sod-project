@@ -18,6 +18,12 @@
         ← К проекту {{ document.project.code }}
     </a>
 
+    {% if messages %}
+        {% for message in messages %}
+            <div class="alert {% if message.tags == 'error' %}alert-danger{% else %}alert-{{ message.tags }}{% endif %}">{{ message }}</div>
+        {% endfor %}
+    {% endif %}
+
     <div class="card shadow-sm mb-4">
         <div class="card-body">
             <div class="d-flex justify-content-between align-items-start flex-wrap gap-3">
@@ -95,6 +101,59 @@
                 {% endfor %}
                 </tbody>
             </table>
+        </div>
+    </div>
+
+    <div class="card shadow-sm mt-4">
+        <div class="card-header bg-white fw-semibold">Замечания ({{ issues|length }})</div>
+        <div class="card-body">
+            <form method="post" action="{% url 'issues:issue_create' document.pk %}" class="mb-4">
+                {% csrf_token %}
+                {% if document.current_version %}
+                    <input type="hidden" name="version_id" value="{{ document.current_version.pk }}">
+                {% endif %}
+                <div class="mb-2">
+                    <textarea name="description" class="form-control" rows="3" placeholder="Опишите замечание" required></textarea>
+                </div>
+                <button type="submit" class="btn btn-primary btn-sm">Добавить</button>
+            </form>
+
+            {% for issue in issues %}
+                <div class="border rounded p-3 mb-2">
+                    <div class="d-flex justify-content-between align-items-start gap-3">
+                        <div>
+                            <div class="mb-1">
+                                <span class="badge {% if issue.status == 'open' %}bg-danger{% elif issue.status == 'in_progress' %}bg-warning text-dark{% else %}bg-success{% endif %}">
+                                    {{ issue.get_status_display }}
+                                </span>
+                                {% if issue.version %}
+                                    <span class="text-muted small">к версии v{{ issue.version.version_number }}</span>
+                                {% endif %}
+                                <span class="text-muted small">· {{ issue.author.get_full_name|default:issue.author.username }}</span>
+                                <span class="text-muted small">· {{ issue.created_at|date:"d.m.Y H:i" }}</span>
+                                {% if issue.assignee %}
+                                    <span class="text-muted small">· адресат: {{ issue.assignee.get_full_name|default:issue.assignee.username }}</span>
+                                {% endif %}
+                            </div>
+                            <div>{{ issue.description|linebreaksbr }}</div>
+                        </div>
+                        <div class="flex-shrink-0">
+                            <form method="post" action="{% url 'issues:issue_status' issue.pk %}">
+                                {% csrf_token %}
+                                {% if issue.status == 'closed' %}
+                                    <input type="hidden" name="action" value="open">
+                                    <button type="submit" class="btn btn-sm btn-outline-secondary">Открыть</button>
+                                {% else %}
+                                    <input type="hidden" name="action" value="close">
+                                    <button type="submit" class="btn btn-sm btn-outline-danger">Закрыть</button>
+                                {% endif %}
+                            </form>
+                        </div>
+                    </div>
+                </div>
+            {% empty %}
+                <div class="text-muted">Замечаний пока нет</div>
+            {% endfor %}
         </div>
     </div>
 </main>

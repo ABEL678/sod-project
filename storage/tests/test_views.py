@@ -204,6 +204,7 @@ class ViewTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTemplateUsed(response, 'storage/document_detail.html')
         self.assertContains(response, 'История версий')
+        self.assertContains(response, 'Замечания')
         self.assertContains(response, 'Скачать')
 
     def test_document_detail_forbidden_without_rights(self):

@@ -54,6 +54,7 @@ class DocumentDetailView(DetailView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context['versions'] = self.object.versions.select_related('uploaded_by').order_by('-version_number')
+        context['issues'] = self.object.issues.select_related('author', 'assignee', 'version').order_by('-created_at')
         return context
 
 
