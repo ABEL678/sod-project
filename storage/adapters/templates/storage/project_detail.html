@@ -96,7 +96,10 @@
             <div id="uploadStatus" class="text-primary small mb-3 d-none">Загрузка...</div>
 
             <div class="card shadow-sm">
-                <div class="card-header bg-white fw-semibold">Документы ({{ documents|length }})</div>
+                <div class="card-header bg-white d-flex justify-content-between align-items-center">
+                    <span class="fw-semibold">Документы ({{ documents|length }})</span>
+                    <a class="btn btn-success btn-sm" href="{% url 'storage:export_vedomost' project.pk %}">Экспорт в Excel</a>
+                </div>
                 <div class="table-responsive">
                     <table class="table table-hover align-middle mb-0">
                         <thead class="table-light">
@@ -113,7 +116,13 @@
                         {% for doc in documents %}
                             <tr>
                                 <td class="fw-semibold">{{ doc.code }}</td>
-                                <td>{{ doc.name }}</td>
+                                <td>
+                                    {% if doc.version_id %}
+                                        <a href="{% url 'storage:document_download' doc.version_id %}">{{ doc.name }}</a>
+                                    {% else %}
+                                        {{ doc.name }}
+                                    {% endif %}
+                                </td>
                                 <td>{{ doc.doc_type }}</td>
                                 <td>{{ doc.version }}</td>
                                 <td>{{ doc.date|date:"d.m.Y H:i" }}</td>

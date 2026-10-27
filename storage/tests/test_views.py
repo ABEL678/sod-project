@@ -1,11 +1,14 @@
 import tempfile
+from io import BytesIO
 
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase, override_settings
 from django.urls import reverse
+from openpyxl import load_workbook
 
 from storage.domain.models import Project, Section, UserProfile
+from storage.domain.services import upload_document
 
 
 User = get_user_model()
@@ -137,3 +140,59 @@ class ViewTests(TestCase):
         )
         self.assertEqual(response.status_code, 400)
         self.assertIn('Не выбран раздел', response.json()['error'])
+
+    def _upload(self, code='АР-01', name='План 1 этажа', content=b'data'):
+        return upload_document(
+            user=self.user_gip,
+            project=self.project,
+            section=self.section,
+            code=code,
+            name=name,
+            doc_type='drawing',
+            file=SimpleUploadedFile(f'{code}.pdf', content, content_type='application/pdf'),
+        )
+
+    def test_download_version(self):
+        self.client.force_login(self.user_gip)
+        version = self._upload(content=b'pdf-body')
+        response = self.client.get(reverse('storage:document_download', args=[version.pk]))
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('attachment', response['Content-Disposition'])
+        self.assertEqual(b''.join(response.streaming_content), b'pdf-body')
+
+    def test_download_anonymous_allowed(self):
+        version = self._upload()
+        response = self.client.get(reverse('storage:document_download', args=[version.pk]))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(b''.join(response.streaming_content), b'data')
+
+    def test_download_without_read_permission_forbidden(self):
+        version = self._upload()
+        contractor = User.objects.create_user('contractor', password='pass')
+        UserProfile.objects.create(user=contractor, role='contractor')
+        self.client.force_login(contractor)
+        response = self.client.get(reverse('storage:document_download', args=[version.pk]))
+        self.assertEqual(response.status_code, 403)
+
+    def test_export_vedomost(self):
+        self.client.force_login(self.user_gip)
+        version = self._upload()
+        response = self.client.get(reverse('storage:export_vedomost', args=[self.project.pk]))
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('attachment', response['Content-Disposition'])
+        self.assertIn('vedomost.xlsx', response['Content-Disposition'])
+
+        data = b''.join(response.streaming_content)
+        workbook = load_workbook(BytesIO(data))
+        sheet = workbook.active
+        self.assertEqual(sheet.cell(row=1, column=1).value, 'Шифр')
+        self.assertEqual(sheet.cell(row=2, column=1).value, 'АР-01')
+        self.assertEqual(sheet.cell(row=2, column=2).value, 'План 1 этажа')
+        self.assertIsNotNone(sheet.cell(row=2, column=2).hyperlink)
+        target = sheet.cell(row=2, column=2).hyperlink.target
+        self.assertTrue(target.startswith('http://') or target.startswith('https://'))
+        self.assertIn(f'/download/{version.pk}/', target)
+
+    def test_export_anonymous_forbidden(self):
+        response = self.client.get(reverse('storage:export_vedomost', args=[self.project.pk]))
+        self.assertEqual(response.status_code, 403)

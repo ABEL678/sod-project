@@ -184,7 +184,15 @@ def generate_vedomost(project: Project, section=None) -> list:
             'name': doc.name,
             'doc_type': doc.get_doc_type_display(),
             'version': doc.current_version.version_number if doc.current_version else '-',
+            'version_id': doc.current_version_id,
             'date': doc.current_version.uploaded_at if doc.current_version else '',
             'author': doc.current_version.uploaded_by.get_full_name() or doc.current_version.uploaded_by.username if doc.current_version else '',
         })
     return result
+
+
+def get_document_versions(user: User, document_id: int):
+    document = Document.objects.get(pk=document_id)
+    if not check_read_permission(user, document):
+        raise PermissionDenied("Нет прав на чтение документа")
+    return document.versions.all().order_by('-version_number')
