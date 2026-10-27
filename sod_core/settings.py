@@ -129,3 +129,14 @@ MAILERS = {
 
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
+
+# Static files (CSS, JavaScript, Images)
+STATIC_URL = 'static/'
+
+# Папки, где Django ищет статику (наша папка static в корне)
+STATICFILES_DIRS = [
+    BASE_DIR / 'static',
+]
+
+# Куда собирать статику для продакшена (collectstatic)
+STATIC_ROOT = BASE_DIR / 'staticfiles'
