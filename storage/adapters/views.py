@@ -15,7 +15,7 @@ from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse
 from django.utils import timezone
 from django.views import View
-from django.views.generic import DetailView, ListView
+from django.views.generic import DetailView, ListView, TemplateView
 from openpyxl import Workbook
 from openpyxl.styles import Font
 
@@ -25,9 +25,49 @@ from storage.domain.services import (
     generate_vedomost,
     get_accessible_documents,
     get_accessible_projects,
+    get_accessible_sections,
     get_user_company,
+    search_documents,
     upload_document,
 )
+
+
+RECENT_DOCUMENTS_SESSION_KEY = 'recent_documents'
+RECENT_DOCUMENTS_LIMIT = 10
+
+
+def _remember_document(request, document_id):
+    """Сохраняет в сессии только ID недавно открытых документов."""
+    recent = [
+        pk
+        for pk in request.session.get(RECENT_DOCUMENTS_SESSION_KEY, [])
+        if isinstance(pk, int) and pk != document_id
+    ]
+    request.session[RECENT_DOCUMENTS_SESSION_KEY] = [document_id, *recent][:RECENT_DOCUMENTS_LIMIT]
+
+
+def _recent_documents(request, user, project):
+    """Возвращает недавние документы, отфильтрованные по текущим правам."""
+    ids = [
+        pk
+        for pk in request.session.get(RECENT_DOCUMENTS_SESSION_KEY, [])
+        if isinstance(pk, int)
+    ]
+    if not ids:
+        return []
+
+    documents = {
+        document.pk: document
+        for document in get_accessible_documents(user).filter(
+            project=project,
+            pk__in=ids,
+        ).select_related(
+            'section',
+            'current_version',
+            'current_version__uploaded_by',
+        )
+    }
+    return [documents[pk] for pk in ids if pk in documents][:RECENT_DOCUMENTS_LIMIT]
 
 
 class ProjectListView(LoginRequiredMixin, ListView):
@@ -51,12 +91,72 @@ class ProjectDetailView(LoginRequiredMixin, DetailView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         company = self.object.company if self.request.user.is_superuser else get_user_company(self.request.user)
-        context['sections'] = self.object.sections.order_by('order')
+        context['sections'] = get_accessible_sections(self.request.user, self.object)
+        context['recent_documents'] = _recent_documents(
+            self.request,
+            self.request.user,
+            self.object,
+        )
         context['documents'] = generate_vedomost(
             self.object,
             company=company,
             user=self.request.user,
         )
+        return context
+
+
+class SearchView(LoginRequiredMixin, TemplateView):
+    template_name = 'storage/search.html'
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        user = self.request.user
+        project = get_object_or_404(
+            get_accessible_projects(user),
+            pk=self.kwargs['project_id'],
+        )
+        sections = get_accessible_sections(user, project)
+
+        query = (self.request.GET.get('q') or '').strip()
+
+        selected_section = None
+        section_id = (self.request.GET.get('section') or '').strip()
+        if section_id:
+            try:
+                selected_section = sections.filter(pk=int(section_id)).first()
+            except (TypeError, ValueError):
+                selected_section = None
+
+        doc_type_choices = Document.DOC_TYPE_CHOICES
+        doc_type = (self.request.GET.get('doc_type') or '').strip()
+        if doc_type not in dict(doc_type_choices):
+            doc_type = ''
+
+        status_choices = Document.STATUS_CHOICES
+        status = (self.request.GET.get('status') or '').strip()
+        if status not in dict(status_choices):
+            status = ''
+
+        documents = search_documents(
+            user=user,
+            project=project,
+            query=query,
+            section=selected_section,
+            doc_type=doc_type or None,
+            status=status or None,
+        )
+
+        context.update({
+            'project': project,
+            'documents': documents,
+            'query': query,
+            'sections': sections,
+            'selected_section': selected_section,
+            'selected_doc_type': doc_type,
+            'selected_status': status,
+            'doc_type_choices': doc_type_choices,
+            'status_choices': status_choices,
+        })
         return context
 
 
@@ -66,12 +166,18 @@ class DocumentDetailView(LoginRequiredMixin, DetailView):
     context_object_name = 'document'
 
     def get_queryset(self):
-        return get_accessible_documents(self.request.user).select_related('project')
+        return get_accessible_documents(self.request.user).select_related(
+            'project',
+            'section',
+            'current_version',
+            'current_version__uploaded_by',
+        )
 
     def get(self, request, *args, **kwargs):
         self.object = self.get_object()
         if not check_read_permission(request.user, self.object):
             return HttpResponseForbidden('Нет прав на просмотр документа')
+        _remember_document(request, self.object.pk)
         context = self.get_context_data(object=self.object)
         return self.render_to_response(context)
 
@@ -136,6 +242,8 @@ class DocumentDownloadView(LoginRequiredMixin, View):
 
         if not check_read_permission(request.user, version.document):
             return HttpResponseForbidden('Нет прав на скачивание файла')
+
+        _remember_document(request, version.document_id)
 
         if not version.file:
             return HttpResponseNotFound('Файл не найден')

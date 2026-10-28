@@ -113,6 +113,99 @@ class ViewTests(TestCase):
         self.assertContains(response, 'АР-01')
         self.assertNotContains(response, 'КР-99')
 
+    def test_project_detail_has_search_form(self):
+        self.client.force_login(self.user_gip)
+        response = self.client.get(reverse('storage:project_detail', args=[self.project.pk]))
+        self.assertContains(
+            response,
+            f'action="{reverse("storage:search", args=[self.project.pk])}"',
+        )
+
+    def test_search_page_requires_login(self):
+        response = self.client.get(reverse('storage:search', args=[self.project.pk]))
+        self.assertEqual(response.status_code, 302)
+        self.assertIn(reverse('login'), response['Location'])
+
+    def test_search_page_by_code(self):
+        version = self._upload(code='АР-01', name='План 1 этажа')
+        self.client.force_login(self.user_gip)
+
+        response = self.client.get(
+            reverse('storage:search', args=[self.project.pk]),
+            {'q': 'АР-01'},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTemplateUsed(response, 'storage/search.html')
+        self.assertContains(response, 'АР-01')
+        self.assertContains(
+            response,
+            reverse('storage:document_download', args=[version.pk]),
+        )
+
+    def test_search_page_by_version_comment(self):
+        self._upload(comment='УникальныйПоисковыйКомментарий')
+        self.client.force_login(self.user_gip)
+
+        response = self.client.get(
+            reverse('storage:search', args=[self.project.pk]),
+            {'q': 'УникальныйПоисковыйКомментарий'},
+        )
+
+        self.assertContains(response, 'АР-01')
+
+    def test_search_page_filters_by_section_and_type(self):
+        self._upload(code='АР-01', doc_type='drawing')
+        extra_section = Section.objects.create(
+            project=self.project,
+            code='ОВ',
+            name='Отопление и вентиляция',
+            order=2,
+        )
+        self._upload(code='ОВ-01', section=extra_section, doc_type='report')
+        self.client.force_login(self.user_gip)
+        url = reverse('storage:search', args=[self.project.pk])
+
+        by_section = self.client.get(url, {'section': extra_section.pk})
+        by_type = self.client.get(url, {'doc_type': 'report'})
+
+        self.assertContains(by_section, 'ОВ-01')
+        self.assertNotContains(by_section, 'АР-01')
+        self.assertContains(by_type, 'ОВ-01')
+        self.assertNotContains(by_type, 'АР-01')
+
+    def test_search_page_filters_by_status(self):
+        approved = self._upload(code='АР-01')
+        approved.document.status = 'approved'
+        approved.document.save(update_fields=['status'])
+        self._upload(code='АР-02')
+        self.client.force_login(self.user_gip)
+
+        response = self.client.get(
+            reverse('storage:search', args=[self.project.pk]),
+            {'status': 'approved'},
+        )
+
+        self.assertContains(response, 'АР-01')
+        self.assertNotContains(response, 'АР-02')
+
+    def test_search_page_contractor_limited_to_allowed_sections(self):
+        self._make_contractor_docs()
+        self.client.force_login(self.user_contractor)
+
+        response = self.client.get(reverse('storage:search', args=[self.project.pk]))
+
+        self.assertContains(response, 'АР-01')
+        self.assertNotContains(response, 'КР-99')
+        self.assertNotContains(response, 'Конструктивные решения')
+
+    def test_search_page_foreign_project_404(self):
+        self.client.force_login(self.user_gip)
+        response = self.client.get(
+            reverse('storage:search', args=[self.foreign_project.pk]),
+        )
+        self.assertEqual(response.status_code, 404)
+
     def test_upload_ajax_success(self):
         self.client.force_login(self.user_gip)
         response = self.client.post(
@@ -204,15 +297,16 @@ class ViewTests(TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn('Не выбран раздел', response.json()['error'])
 
-    def _upload(self, code='АР-01', name='План 1 этажа', content=b'data', section=None):
+    def _upload(self, code='АР-01', name='План 1 этажа', content=b'data', section=None, doc_type='drawing', comment=''):
         return upload_document(
             user=self.user_gip,
             project=self.project,
             section=section or self.section,
             code=code,
             name=name,
-            doc_type='drawing',
+            doc_type=doc_type,
             file=SimpleUploadedFile(f'{code}.pdf', content, content_type='application/pdf'),
+            comment=comment,
         )
 
     def _upload_foreign(self):
@@ -325,6 +419,64 @@ class ViewTests(TestCase):
         self.assertContains(response, 'История версий')
         self.assertContains(response, 'Замечания')
         self.assertContains(response, 'Скачать')
+
+    def test_document_detail_has_version_select(self):
+        version = self._upload()
+        self.client.force_login(self.user_gip)
+
+        response = self.client.get(
+            reverse('storage:document_detail', args=[version.document_id]),
+        )
+
+        self.assertContains(response, 'id="versionSelect"')
+        self.assertContains(
+            response,
+            reverse('storage:document_download', args=[version.pk]),
+        )
+
+    def test_recent_documents_tracked_in_session(self):
+        version = self._upload()
+        self.client.force_login(self.user_gip)
+        detail_url = reverse('storage:document_detail', args=[version.document_id])
+
+        self.client.get(detail_url)
+        self.client.get(detail_url)
+
+        self.assertEqual(
+            self.client.session['recent_documents'],
+            [version.document_id],
+        )
+
+        response = self.client.get(reverse('storage:project_detail', args=[self.project.pk]))
+        self.assertContains(response, 'id="recent-documents"')
+        self.assertContains(response, 'Последние документы')
+
+    def test_recent_documents_tracked_on_download(self):
+        version = self._upload()
+        self.client.force_login(self.user_gip)
+
+        self.client.get(reverse('storage:document_download', args=[version.pk]))
+
+        self.assertEqual(
+            self.client.session['recent_documents'],
+            [version.document_id],
+        )
+
+    def test_recent_documents_hidden_when_access_revoked(self):
+        allowed, _ = self._make_contractor_docs()
+        self.client.force_login(self.user_contractor)
+        self.client.get(
+            reverse('storage:document_detail', args=[allowed.document_id]),
+        )
+        self.assertEqual(
+            self.client.session['recent_documents'],
+            [allowed.document_id],
+        )
+
+        self.user_contractor.userprofile.allowed_sections.clear()
+        response = self.client.get(reverse('storage:project_detail', args=[self.project.pk]))
+
+        self.assertEqual(response.context['recent_documents'], [])
 
     def test_document_detail_foreign_company_404(self):
         version = self._upload_foreign()

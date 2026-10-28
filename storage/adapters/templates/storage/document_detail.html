@@ -74,9 +74,27 @@
         </div>
     </div>
 
-    <div class="card shadow-sm">
-        <div class="card-header bg-white d-flex justify-content-between align-items-center">
+    <div class="card shadow-sm" id="versions">
+        <div class="card-header bg-white d-flex justify-content-between align-items-center flex-wrap gap-2">
             <span class="fw-semibold">История версий ({{ versions|length }})</span>
+            {% if versions %}
+                <form class="d-flex align-items-center gap-2 mb-0">
+                    <label for="versionSelect" class="small text-muted mb-0">Скачать версию:</label>
+                    <select
+                        id="versionSelect"
+                        class="form-select form-select-sm"
+                        style="width: auto;"
+                        onchange="if (this.value) { window.location.href = this.value; }"
+                    >
+                        <option value="">Выберите версию</option>
+                        {% for version in versions %}
+                            <option value="{% url 'storage:document_download' version.pk %}">
+                                v{{ version.version_number }} — {{ version.uploaded_at|date:"d.m.Y H:i" }}{% if version.comment %} — {{ version.comment|truncatechars:40 }}{% endif %}
+                            </option>
+                        {% endfor %}
+                    </select>
+                </form>
+            {% endif %}
         </div>
         <div class="table-responsive">
             <table class="table table-hover align-middle mb-0">

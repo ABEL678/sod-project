@@ -1,0 +1,170 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Поиск — {{ project.code }} — СОД</title>
+    <link rel="stylesheet" href="{% static 'css/bootstrap.min.css' %}">
+</head>
+<body class="bg-light">
+<nav class="navbar navbar-dark bg-dark mb-4">
+    <div class="container-fluid">
+        <a class="navbar-brand" href="{% url 'storage:project_list' %}">СОД</a>
+        <div class="d-flex align-items-center gap-3">
+            {% if user.is_authenticated %}
+                <span class="navbar-text text-light">Привет, {{ user.username }}</span>
+                <form method="post" action="{% url 'logout' %}" class="mb-0">
+                    {% csrf_token %}
+                    <button type="submit" class="btn btn-outline-light btn-sm">Выйти</button>
+                </form>
+            {% else %}
+                <a class="btn btn-outline-light btn-sm" href="{% url 'login' %}">Войти</a>
+            {% endif %}
+        </div>
+    </div>
+</nav>
+<main class="container-fluid pb-5">
+    <a href="{% url 'storage:project_detail' project.pk %}" class="btn btn-sm btn-outline-secondary mb-3">
+        ← К проекту {{ project.code }}
+    </a>
+
+    <div class="card shadow-sm mb-4">
+        <div class="card-body">
+            <h1 class="h4 mb-3">Поиск по проекту {{ project.code }}</h1>
+            <form method="get" action="{% url 'storage:search' project.pk %}" class="row g-2 align-items-end">
+                <div class="col-lg-4">
+                    <label for="searchQuery" class="form-label small text-muted">Запрос</label>
+                    <input
+                        id="searchQuery"
+                        type="search"
+                        name="q"
+                        value="{{ query }}"
+                        class="form-control"
+                        placeholder="Шифр, название или комментарий версии"
+                    >
+                </div>
+                <div class="col-lg-3">
+                    <label for="searchSection" class="form-label small text-muted">Раздел</label>
+                    <select id="searchSection" name="section" class="form-select">
+                        <option value="">Все разделы</option>
+                        {% for section in sections %}
+                            <option value="{{ section.pk }}" {% if selected_section and selected_section.pk == section.pk %}selected{% endif %}>
+                                {{ section.code }} — {{ section.name }}
+                            </option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-lg-2">
+                    <label for="searchDocType" class="form-label small text-muted">Тип</label>
+                    <select id="searchDocType" name="doc_type" class="form-select">
+                        <option value="">Все типы</option>
+                        {% for value, label in doc_type_choices %}
+                            <option value="{{ value }}" {% if selected_doc_type == value %}selected{% endif %}>{{ label }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-lg-2">
+                    <label for="searchStatus" class="form-label small text-muted">Статус</label>
+                    <select id="searchStatus" name="status" class="form-select">
+                        <option value="">Все статусы</option>
+                        {% for value, label in status_choices %}
+                            <option value="{{ value }}" {% if selected_status == value %}selected{% endif %}>{{ label }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-lg-1 d-grid">
+                    <button type="submit" class="btn btn-primary">Найти</button>
+                </div>
+            </form>
+            <div class="mt-2">
+                <a href="{% url 'storage:search' project.pk %}" class="btn btn-sm btn-outline-secondary">Сбросить</a>
+            </div>
+        </div>
+    </div>
+
+    <div class="card shadow-sm">
+        <div class="card-header bg-white d-flex justify-content-between align-items-center">
+            <span class="fw-semibold">Найдено документов: {{ documents|length }}</span>
+            <a href="{% url 'storage:project_detail' project.pk %}" class="btn btn-sm btn-outline-secondary">К Explorer</a>
+        </div>
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th>Шифр</th>
+                        <th>Название</th>
+                        <th>Тип</th>
+                        <th>Версия</th>
+                        <th>Дата</th>
+                        <th>Автор</th>
+                        <th class="text-end">Действия</th>
+                    </tr>
+                </thead>
+                <tbody>
+                {% for document in documents %}
+                    <tr>
+                        <td class="fw-semibold">{{ document.code }}</td>
+                        <td>
+                            <a href="{% url 'storage:document_detail' document.pk %}">{{ document.name }}</a>
+                            <div class="small text-muted">{{ document.section.code }} — {{ document.section.name }}</div>
+                        </td>
+                        <td>{{ document.get_doc_type_display }}</td>
+                        <td>
+                            {% if document.current_version %}
+                                <a href="{% url 'storage:document_download' document.current_version_id %}" class="fw-semibold">
+                                    v{{ document.current_version.version_number }}
+                                </a>
+                                <select
+                                    class="form-select form-select-sm mt-1"
+                                    onchange="if (this.value) { window.location.href = this.value; }"
+                                    title="Скачать версию"
+                                >
+                                    <option value="">Все версии</option>
+                                    {% for version in document.versions.all %}
+                                        <option value="{% url 'storage:document_download' version.pk %}">
+                                            v{{ version.version_number }} — {{ version.uploaded_at|date:"d.m.Y H:i" }}{% if version.comment %} — {{ version.comment|truncatechars:40 }}{% endif %}
+                                        </option>
+                                    {% endfor %}
+                                </select>
+                            {% else %}
+                                <span class="text-muted">—</span>
+                            {% endif %}
+                        </td>
+                        <td>{{ document.current_version.uploaded_at|date:"d.m.Y H:i"|default:"—" }}</td>
+                        <td>
+                            {% if document.current_version %}
+                                {{ document.current_version.uploaded_by.get_full_name|default:document.current_version.uploaded_by.username }}
+                            {% else %}
+                                —
+                            {% endif %}
+                        </td>
+                        <td class="text-end">
+                            <div class="d-flex justify-content-end gap-2">
+                                <a class="btn btn-sm btn-outline-primary" href="{% url 'storage:document_detail' document.pk %}">
+                                    Открыть документ
+                                </a>
+                                <a class="btn btn-sm btn-outline-secondary" href="{% url 'storage:document_detail' document.pk %}#versions">
+                                    История версий
+                                </a>
+                            </div>
+                        </td>
+                    </tr>
+                {% empty %}
+                    <tr>
+                        <td colspan="7" class="text-center text-muted py-4">
+                            {% if query or selected_section or selected_doc_type or selected_status %}
+                                Ничего не найдено. Измените запрос или фильтры.
+                            {% else %}
+                                В проекте пока нет доступных документов.
+                            {% endif %}
+                        </td>
+                    </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</main>
+</body>
+</html>

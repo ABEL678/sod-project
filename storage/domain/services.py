@@ -1,5 +1,5 @@
 from django.core.exceptions import PermissionDenied
-from django.db.models import Max
+from django.db.models import Max, Prefetch, Q
 from django.db import transaction
 from django.utils import timezone
 
@@ -50,6 +50,21 @@ def get_accessible_documents(user: User):
         queryset = queryset.filter(section__in=profile.allowed_sections.all())
 
     return queryset
+
+
+def get_accessible_sections(user: User, project: Project):
+    """Разделы проекта, доступные пользователю с учётом компании и роли."""
+    queryset = Section.objects.filter(
+        project=project,
+        project__in=get_accessible_projects(user),
+    )
+
+    if not user.is_superuser:
+        profile = getattr(user, 'userprofile', None)
+        if profile is not None and profile.role == 'contractor':
+            queryset = queryset.filter(pk__in=profile.allowed_sections.values('pk'))
+
+    return queryset.order_by('order', 'code')
 
 
 def create_project(
@@ -299,3 +314,49 @@ def get_document_versions(user: User, document_id: int):
     if not check_read_permission(user, document):
         raise PermissionDenied("Нет прав на чтение документа")
     return document.versions.all().order_by('-version_number')
+
+
+def search_documents(
+    user: User,
+    project: Project,
+    query: str = "",
+    section: Section | None = None,
+    doc_type: str | None = None,
+    status: str | None = None,
+) -> list[Document]:
+    """Поиск документов проекта по метаданным с учётом прав пользователя.
+
+    Ищет по шифру, названию и комментариям версий. Пустой query не сужает
+    выборку: применяются только переданные фильтры.
+    """
+    queryset = get_accessible_documents(user).filter(project=project)
+
+    query = (query or "").strip()
+    if query:
+        queryset = queryset.filter(
+            Q(code__icontains=query)
+            | Q(name__icontains=query)
+            | Q(versions__comment__icontains=query)
+        ).distinct()
+
+    if section is not None:
+        queryset = queryset.filter(section=section)
+    if doc_type:
+        queryset = queryset.filter(doc_type=doc_type)
+    if status:
+        queryset = queryset.filter(status=status)
+
+    return list(
+        queryset.select_related(
+            'section',
+            'current_version',
+            'current_version__uploaded_by',
+        )
+        .prefetch_related(
+            Prefetch(
+                'versions',
+                queryset=DocumentVersion.objects.order_by('-version_number'),
+            )
+        )
+        .order_by('section__order', 'code')
+    )

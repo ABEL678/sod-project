@@ -232,6 +232,8 @@ def get_accessible_projects(user: User) -> QuerySet[Project]: ...
 
 def get_accessible_documents(user: User) -> QuerySet[Document]: ...
 
+def get_accessible_sections(user: User, project: Project) -> QuerySet[Section]: ...
+
 def generate_vedomost(
     project: Project,
     section: Section | None = None,
@@ -240,7 +242,7 @@ def generate_vedomost(
     user: User | None = None,
 ) -> list[dict]: ...
 
-**Правило:** `get_accessible_documents(user)` ограничивает выборку компанией пользователя, а для роли `contractor` — ещё и разделами из `UserProfile.allowed_sections`. `generate_vedomost(..., user=...)` использует эту же выборку, поэтому ведомость и Excel не показывают contractor'у чужие разделы.
+**Правило:** `get_accessible_documents(user)` ограничивает выборку компанией пользователя, а для роли `contractor` — ещё и разделами из `UserProfile.allowed_sections`. `get_accessible_sections(user, project)` делает то же для дерева разделов и фильтров поиска. `generate_vedomost(..., user=...)` использует эту же выборку, поэтому ведомость и Excel не показывают contractor'у чужие разделы.
 
 def search_documents(
     user: User,
@@ -250,6 +252,8 @@ def search_documents(
     doc_type: str | None = None,
     status: str | None = None,
 ) -> list[Document]: ...
+
+**Правило поиска:** `search_documents()` ищет по `Document.code`, `Document.name` и `DocumentVersion.comment` через `icontains`/`Q`, всегда применяет `get_accessible_documents()` и фильтр проекта. Поиск только по метаданным, без полнотекстового индекса.
 
 def save_document_view(
     user: User,

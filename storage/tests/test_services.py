@@ -17,6 +17,8 @@ from storage.domain.services import (
     create_project,
     generate_vedomost,
     get_accessible_documents,
+    get_accessible_sections,
+    search_documents,
     upload_document,
 )
 
@@ -331,3 +333,105 @@ class ServiceTests(TestCase):
         )
 
         self.assertEqual([item['code'] for item in vedomost], ['ДО-001'])
+
+    def test_get_accessible_sections_for_contractor(self):
+        self.user_contractor.userprofile.allowed_sections.add(self.section_own)
+
+        own_sections = get_accessible_sections(self.user_contractor, self.project_own)
+        other_sections = get_accessible_sections(self.user_contractor, self.project_other)
+
+        self.assertEqual(list(own_sections), [self.section_own])
+        self.assertEqual(list(other_sections), [])
+
+    def test_search_documents_by_code_and_name(self):
+        by_code = search_documents(self.user_gip, self.project_own, query='ДО-001')
+        by_name = search_documents(self.user_gip, self.project_own, query='Чертеж А')
+
+        self.assertEqual([document.pk for document in by_code], [self.document.pk])
+        self.assertEqual([document.pk for document in by_name], [self.document.pk])
+
+    def test_search_documents_by_version_comment(self):
+        upload_document(
+            user=self.user_gip,
+            project=self.project_own,
+            section=self.section_own,
+            code='ДО-001',
+            name='Чертеж А',
+            doc_type='drawing',
+            file=SimpleUploadedFile('v1.pdf', b'v1', content_type='application/pdf'),
+            comment='УникальныйКомментарийВерсии',
+        )
+
+        results = search_documents(
+            self.user_gip,
+            self.project_own,
+            query='УникальныйКомментарийВерсии',
+        )
+
+        self.assertEqual([document.pk for document in results], [self.document.pk])
+
+    def test_search_documents_empty_query_with_filters(self):
+        report = Document.objects.create(
+            project=self.project_own,
+            section=self.section_own,
+            code='ОТ-001',
+            name='Отчет',
+            doc_type='report',
+            status='approved',
+            created_by=self.user_admin,
+        )
+
+        by_type = search_documents(self.user_gip, self.project_own, doc_type='report')
+        by_status = search_documents(self.user_gip, self.project_own, status='draft')
+
+        self.assertEqual([document.pk for document in by_type], [report.pk])
+        self.assertEqual([document.pk for document in by_status], [self.document.pk])
+
+    def test_search_documents_filter_by_section(self):
+        self._create_forbidden_document()
+
+        results = search_documents(
+            self.user_gip,
+            self.project_own,
+            section=self.section_own,
+        )
+
+        self.assertEqual([document.pk for document in results], [self.document.pk])
+
+    def test_search_documents_contractor_limited_to_allowed_sections(self):
+        self._create_forbidden_document()
+        self.user_contractor.userprofile.allowed_sections.add(self.section_own)
+
+        results = search_documents(self.user_contractor, self.project_own)
+
+        self.assertEqual([document.pk for document in results], [self.document.pk])
+
+    def test_search_documents_foreign_company_returns_empty(self):
+        results = search_documents(self.user_gip, self.foreign_project)
+
+        self.assertEqual(results, [])
+
+    def test_search_documents_distinct_by_version_comments(self):
+        for index in range(2):
+            upload_document(
+                user=self.user_gip,
+                project=self.project_own,
+                section=self.section_own,
+                code='ДО-001',
+                name='Чертеж А',
+                doc_type='drawing',
+                file=SimpleUploadedFile(
+                    f'v{index}.pdf',
+                    f'version {index}'.encode(),
+                    content_type='application/pdf',
+                ),
+                comment='ПовторяющеесяСловоВКомментарии',
+            )
+
+        results = search_documents(
+            self.user_gip,
+            self.project_own,
+            query='ПовторяющеесяСловоВКомментарии',
+        )
+
+        self.assertEqual([document.pk for document in results], [self.document.pk])

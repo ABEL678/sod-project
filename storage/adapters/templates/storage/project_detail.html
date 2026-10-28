@@ -112,10 +112,40 @@
             </div>
             <div id="uploadStatus" class="text-primary small mb-3 d-none">Загрузка...</div>
 
+            {% if recent_documents %}
+                <div class="card shadow-sm mb-3" id="recent-documents">
+                    <div class="card-header bg-white fw-semibold">Последние документы</div>
+                    <div class="list-group list-group-flush">
+                        {% for doc in recent_documents %}
+                            <a href="{% url 'storage:document_detail' doc.pk %}" class="list-group-item list-group-item-action d-flex justify-content-between align-items-center gap-3">
+                                <span><span class="fw-semibold">{{ doc.code }}</span> — {{ doc.name }}</span>
+                                <span class="small text-muted">
+                                    {% if doc.current_version %}
+                                        v{{ doc.current_version.version_number }} · {{ doc.current_version.uploaded_at|date:"d.m.Y H:i" }}
+                                    {% else %}
+                                        версий нет
+                                    {% endif %}
+                                </span>
+                            </a>
+                        {% endfor %}
+                    </div>
+                </div>
+            {% endif %}
+
             <div class="card shadow-sm">
-                <div class="card-header bg-white d-flex justify-content-between align-items-center">
+                <div class="card-header bg-white d-flex justify-content-between align-items-center flex-wrap gap-2">
                     <span class="fw-semibold">Документы ({{ documents|length }})</span>
-                    <div class="d-flex gap-2">
+                    <div class="d-flex gap-2 align-items-center flex-wrap">
+                        <form method="get" action="{% url 'storage:search' project.pk %}" class="d-flex">
+                            <input
+                                type="search"
+                                name="q"
+                                class="form-control form-control-sm"
+                                placeholder="Поиск: шифр, название, комментарий"
+                                style="min-width: 240px;"
+                            >
+                            <button type="submit" class="btn btn-outline-primary btn-sm ms-2">Найти</button>
+                        </form>
                         <form method="post" action="{% url 'storage:simulate_mail_import' project.pk %}">
                             {% csrf_token %}
                             <button type="submit" class="btn btn-outline-primary btn-sm">Импорт из почты</button>
