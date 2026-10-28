@@ -46,7 +46,7 @@ SECRET_KEY = os.environ.get(
 
 # SECURITY WARNING: don't run with debug turned on in production!
 # По умолчанию DEBUG выключен; для локальной разработки задайте DJANGO_DEBUG=True.
-DEBUG = env_bool('DJANGO_DEBUG', False)
+DEBUG = env_bool('DJANGO_DEBUG', True)  # Временно для локальной разработки!
 
 ALLOWED_HOSTS = env_list('DJANGO_ALLOWED_HOSTS', ('localhost', '127.0.0.1'))
 
