@@ -4,13 +4,13 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Поиск — {{ project.code }} — СОД</title>
+    <title>Поиск — {{ project.code }} — Stream-CAD</title>
     <link rel="stylesheet" href="{% static 'css/bootstrap.min.css' %}">
 </head>
 <body class="bg-light">
 <nav class="navbar navbar-dark bg-dark mb-4">
     <div class="container-fluid">
-        <a class="navbar-brand" href="{% url 'storage:project_list' %}">СОД</a>
+        <a class="navbar-brand" href="{% url 'storage:project_list' %}">Stream-CAD</a>
         <div class="d-flex align-items-center gap-3">
             {% if user.is_authenticated %}
                 <span class="navbar-text text-light">Привет, {{ user.username }}</span>

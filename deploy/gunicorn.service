@@ -1,0 +1,22 @@
+[Unit]
+Description=Gunicorn daemon for SOD
+After=network.target network-online.target
+Wants=network-online.target
+
+[Service]
+User=soduser
+Group=www-data
+WorkingDirectory=/opt/sod
+EnvironmentFile=/opt/sod/.env
+
+ExecStart=/opt/sod/.venv/bin/gunicorn --workers 3 --timeout 120 --bind unix:/run/gunicorn/sod.sock --access-logfile - --error-logfile - sod_core.wsgi:application
+
+RuntimeDirectory=gunicorn
+RuntimeDirectoryMode=0755
+UMask=0007
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
