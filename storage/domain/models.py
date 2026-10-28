@@ -159,6 +159,44 @@ class ProjectMembership(models.Model):
         return f'{self.user.username} - {self.project.code} ({self.role_in_project})'
 
 
+class DocumentView(models.Model):
+    project = models.ForeignKey(
+        Project,
+        on_delete=models.CASCADE,
+        related_name='document_views',
+        verbose_name="Проект",
+    )
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='document_views',
+        verbose_name="Пользователь",
+    )
+    name = models.CharField(max_length=100, verbose_name="Название вида")
+    config = models.JSONField(default=dict, verbose_name="Настройки")
+    is_shared = models.BooleanField(default=False, verbose_name="Общий вид")
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name="Дата создания")
+
+    class Meta:
+        ordering = ['name']
+        verbose_name = "Вид документа"
+        verbose_name_plural = "Виды документов"
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    models.Q(is_shared=True, user__isnull=True)
+                    | models.Q(is_shared=False, user__isnull=False)
+                ),
+                name='documentview_shared_owner_consistency',
+            ),
+        ]
+
+    def __str__(self):
+        return f'{self.name} ({self.project.code})'
+
+
 class MailRule(models.Model):
     project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='mail_rules', verbose_name="Проект")
     section = models.ForeignKey(Section, on_delete=models.CASCADE, related_name='mail_rules', verbose_name="Раздел")

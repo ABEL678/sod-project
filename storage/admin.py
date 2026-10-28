@@ -1,5 +1,8 @@
 from django.contrib import admin
-from .domain.models import Company, Project, Section, Document, DocumentVersion, UserProfile, ProjectMembership
+from .domain.models import (
+    Company, Project, Section, Document, DocumentVersion, UserProfile, ProjectMembership,
+    DocumentView,
+)
 
 
 @admin.register(Company)
@@ -46,3 +49,10 @@ class UserProfileAdmin(admin.ModelAdmin):
 class ProjectMembershipAdmin(admin.ModelAdmin):
     list_display = ('project', 'user', 'role_in_project')
     list_filter = ('project', 'role_in_project')
+
+
+@admin.register(DocumentView)
+class DocumentViewAdmin(admin.ModelAdmin):
+    list_display = ('name', 'project', 'user', 'is_shared', 'created_at')
+    list_filter = ('project', 'is_shared')
+    search_fields = ('name',)

@@ -1,9 +1,46 @@
 from django.core.exceptions import PermissionDenied
-from django.db.models import Max, Prefetch, Q
+from django.db.models import Count, Max, Prefetch, Q
 from django.db import transaction
 from django.utils import timezone
 
-from storage.domain.models import Company, Document, DocumentVersion, Section, Project, User
+from storage.domain.models import (
+    Company,
+    Document,
+    DocumentView,
+    DocumentVersion,
+    Project,
+    ProjectMembership,
+    Section,
+    User,
+)
+
+
+DOCUMENT_VIEW_COLUMNS = ('code', 'name', 'doc_type', 'status', 'version', 'date', 'author')
+DOCUMENT_VIEW_FILTERS = ('section', 'doc_type', 'status')
+DOCUMENT_VIEW_SORT_FIELDS = ('code', 'name', 'date', 'version')
+
+
+def _document_row(document: Document) -> dict:
+    """Единый формат строки документа для ведомости и видов таблицы."""
+    version = document.current_version
+    author = ''
+    if version is not None:
+        author = version.uploaded_by.get_full_name() or version.uploaded_by.username
+
+    return {
+        'id': document.pk,
+        'code': document.code,
+        'name': document.name,
+        'doc_type': document.get_doc_type_display(),
+        'doc_type_code': document.doc_type,
+        'status': document.get_status_display(),
+        'status_code': document.status,
+        'version': version.version_number if version else '-',
+        'version_id': document.current_version_id,
+        'date': version.uploaded_at if version else '',
+        'author': author,
+        'section_id': document.section_id,
+    }
 
 
 def get_user_company(user: User) -> Company | None:
@@ -65,6 +102,275 @@ def get_accessible_sections(user: User, project: Project):
             queryset = queryset.filter(pk__in=profile.allowed_sections.values('pk'))
 
     return queryset.order_by('order', 'code')
+
+
+def normalize_document_view_config(config: dict) -> dict:
+    """Проверяет и нормализует настройки вида таблицы документов."""
+    if not isinstance(config, dict):
+        raise ValueError("Настройки вида должны быть словарём")
+
+    unknown_keys = set(config) - {'columns', 'filters', 'sort'}
+    if unknown_keys:
+        raise ValueError(f"Неизвестные ключи настроек: {', '.join(sorted(unknown_keys))}")
+
+    raw_columns = config.get('columns')
+    if raw_columns is None:
+        columns = list(DOCUMENT_VIEW_COLUMNS)
+    else:
+        if isinstance(raw_columns, str):
+            raw_columns = [raw_columns]
+        if not isinstance(raw_columns, (list, tuple)):
+            raise ValueError("Столбцы должны быть списком")
+
+        columns = []
+        for column in raw_columns:
+            key = str(column).strip()
+            if key not in DOCUMENT_VIEW_COLUMNS:
+                raise ValueError(f"Неизвестный столбец: {key}")
+            if key not in columns:
+                columns.append(key)
+
+        if not columns:
+            raise ValueError("Нужно выбрать хотя бы один столбец")
+
+    raw_filters = config.get('filters') or {}
+    if not isinstance(raw_filters, dict):
+        raise ValueError("Фильтры должны быть словарём")
+
+    filters = {}
+    for key, value in raw_filters.items():
+        if key not in DOCUMENT_VIEW_FILTERS:
+            raise ValueError(f"Неизвестный фильтр: {key}")
+        if value in (None, '', []):
+            continue
+
+        if key == 'section':
+            try:
+                filters['section'] = int(value)
+            except (TypeError, ValueError):
+                raise ValueError("Неверный идентификатор раздела")
+        elif key == 'doc_type':
+            if not isinstance(value, str) or value not in dict(Document.DOC_TYPE_CHOICES):
+                raise ValueError("Неверный тип документа")
+            filters[key] = value
+        elif key == 'status':
+            if not isinstance(value, str) or value not in dict(Document.STATUS_CHOICES):
+                raise ValueError("Неверный статус документа")
+            filters[key] = value
+
+    raw_sort = config.get('sort')
+    if raw_sort in (None, ''):
+        sort = []
+    elif isinstance(raw_sort, str):
+        sort = [raw_sort]
+    elif isinstance(raw_sort, (list, tuple)):
+        sort = list(raw_sort)
+    else:
+        raise ValueError("Сортировка должна быть списком")
+
+    normalized_sort = []
+    for item in sort:
+        field = str(item).strip()
+        if not field:
+            continue
+        if field.lstrip('-') not in DOCUMENT_VIEW_SORT_FIELDS:
+            raise ValueError(f"Неизвестное поле сортировки: {field}")
+        if field not in normalized_sort:
+            normalized_sort.append(field)
+
+    return {'columns': columns, 'filters': filters, 'sort': normalized_sort}
+
+
+def _ensure_project_access(user: User, project: Project) -> None:
+    if not get_accessible_projects(user).filter(pk=project.pk).exists():
+        raise PermissionDenied("Нет доступа к проекту")
+
+
+def can_manage_project_participants(user: User, project: Project) -> bool:
+    """Может ли пользователь просматривать и менять участников проекта."""
+    if user.is_superuser:
+        return True
+
+    profile = getattr(user, 'userprofile', None)
+    if profile is None or not _check_company_access(user, project.company_id):
+        return False
+
+    # Contractor — только чтение, даже если он ошибочно назначен ГИПом.
+    if profile.role == 'contractor':
+        return False
+
+    if profile.role == 'admin':
+        return True
+
+    if project.gip_id == user.id:
+        return True
+
+    return project.memberships.filter(user=user, role_in_project='gip').exists()
+
+
+def list_project_participants(actor: User, project: Project):
+    """Участники проекта для карточки. Доступно только ГИПу или админу."""
+    if not can_manage_project_participants(actor, project):
+        raise PermissionDenied("Нет прав на просмотр участников проекта")
+
+    return project.memberships.select_related('user').order_by(
+        'role_in_project',
+        'user__username',
+    )
+
+
+def get_project_membership(actor: User, project: Project, membership_id):
+    """Участник проекта по идентификатору с проверкой прав."""
+    if not can_manage_project_participants(actor, project):
+        raise PermissionDenied("Нет прав на изменение участников проекта")
+
+    try:
+        return project.memberships.select_related('user').get(pk=membership_id)
+    except (ProjectMembership.DoesNotExist, TypeError, ValueError):
+        return None
+
+
+def save_document_view(
+    user: User,
+    project: Project,
+    name: str,
+    config: dict,
+    is_shared: bool = False,
+) -> DocumentView:
+    """Сохраняет личный или общий вид таблицы документов.
+
+    Повторное сохранение вида с тем же именем обновляет его настройки.
+    Общие виды может создавать только ГИП проекта или администратор.
+    """
+    _ensure_project_access(user, project)
+
+    name = (name or '').strip()
+    if not name:
+        raise ValueError("Укажите название вида")
+    if len(name) > 100:
+        raise ValueError("Название вида не должно превышать 100 символов")
+
+    if is_shared and not can_manage_project_participants(user, project):
+        raise PermissionDenied("Только ГИП или администратор может создавать общие виды")
+
+    normalized_config = normalize_document_view_config(config)
+    owner = None if is_shared else user
+
+    with transaction.atomic():
+        view, created = DocumentView.objects.get_or_create(
+            project=project,
+            user=owner,
+            name=name,
+            defaults={
+                'config': normalized_config,
+                'is_shared': bool(is_shared),
+            },
+        )
+        if not created:
+            view.config = normalized_config
+            view.is_shared = bool(is_shared)
+            view.save(update_fields=['config', 'is_shared'])
+
+    return view
+
+
+def list_document_views(user: User, project: Project) -> list[DocumentView]:
+    """Личные виды пользователя и общие виды проекта."""
+    _ensure_project_access(user, project)
+
+    return list(
+        DocumentView.objects.filter(project=project)
+        .filter(Q(user=user) | Q(is_shared=True))
+        .order_by('-is_shared', 'name')
+    )
+
+
+def get_document_view(user: User, project: Project, view_id) -> DocumentView | None:
+    """Возвращает доступный пользователю вид по идентификатору."""
+    _ensure_project_access(user, project)
+
+    try:
+        view_id = int(view_id)
+    except (TypeError, ValueError):
+        return None
+
+    return (
+        DocumentView.objects.filter(project=project, pk=view_id)
+        .filter(Q(user=user) | Q(is_shared=True))
+        .first()
+    )
+
+
+def get_sections_with_counts(user: User, project: Project):
+    """Разделы проекта с количеством документов в каждом."""
+    return get_accessible_sections(user, project).annotate(
+        document_count=Count('documents', distinct=True),
+    )
+
+
+def get_project_documents_for_view(
+    user: User,
+    project: Project,
+    config: dict | None = None,
+) -> list[dict]:
+    """Документы проекта для таблицы с учётом сохранённого вида."""
+    _ensure_project_access(user, project)
+
+    normalized_config = normalize_document_view_config(config or {})
+    queryset = get_accessible_documents(user).filter(project=project)
+
+    filters = normalized_config['filters']
+    if 'section' in filters:
+        queryset = queryset.filter(section_id=filters['section'])
+    if 'doc_type' in filters:
+        queryset = queryset.filter(doc_type=filters['doc_type'])
+    if 'status' in filters:
+        queryset = queryset.filter(status=filters['status'])
+
+    sort_mapping = {
+        'code': 'code',
+        'name': 'name',
+        'date': 'current_version__uploaded_at',
+        'version': 'current_version__version_number',
+    }
+    ordering = []
+    for field in normalized_config['sort']:
+        prefix = '-' if field.startswith('-') else ''
+        ordering.append(f"{prefix}{sort_mapping[field.lstrip('-')]}")
+    if not ordering:
+        ordering = ['section__order', 'code']
+
+    documents = queryset.select_related(
+        'section',
+        'current_version',
+        'current_version__uploaded_by',
+    ).order_by(*ordering)
+
+    return [_document_row(document) for document in documents]
+
+
+def update_project_member_role(
+    actor: User,
+    membership: ProjectMembership,
+    role: str,
+) -> ProjectMembership:
+    """Меняет роль участника проекта. Доступно только ГИПу или админу."""
+    if not can_manage_project_participants(actor, membership.project):
+        raise PermissionDenied("Нет прав на изменение участников проекта")
+
+    if role not in dict(ProjectMembership.ROLE_IN_PROJECT_CHOICES):
+        raise ValueError("Неверная роль участника")
+
+    if membership.role_in_project == 'gip' and role != 'gip':
+        other_gips = membership.project.memberships.filter(
+            role_in_project='gip',
+        ).exclude(pk=membership.pk)
+        if not other_gips.exists() and membership.project.gip_id is None:
+            raise ValueError("Нельзя снять роль последнего ГИП проекта")
+
+    membership.role_in_project = role
+    membership.save(update_fields=['role_in_project'])
+    return membership
 
 
 def create_project(
@@ -294,19 +600,7 @@ def generate_vedomost(project: Project, section=None, *, company: Company, user:
     if section is not None:
         qs = qs.filter(section=section)
 
-    result = []
-    for doc in qs:
-        result.append({
-            'id': doc.pk,
-            'code': doc.code,
-            'name': doc.name,
-            'doc_type': doc.get_doc_type_display(),
-            'version': doc.current_version.version_number if doc.current_version else '-',
-            'version_id': doc.current_version_id,
-            'date': doc.current_version.uploaded_at if doc.current_version else '',
-            'author': doc.current_version.uploaded_by.get_full_name() or doc.current_version.uploaded_by.username if doc.current_version else '',
-        })
-    return result
+    return [_document_row(doc) for doc in qs]
 
 
 def get_document_versions(user: User, document_id: int):

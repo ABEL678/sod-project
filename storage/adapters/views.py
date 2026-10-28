@@ -6,6 +6,7 @@ from django.core.exceptions import PermissionDenied
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.http import (
     FileResponse,
+    Http404,
     HttpResponseBadRequest,
     HttpResponseForbidden,
     HttpResponseNotFound,
@@ -19,21 +20,77 @@ from django.views.generic import DetailView, ListView, TemplateView
 from openpyxl import Workbook
 from openpyxl.styles import Font
 
-from storage.domain.models import Document, DocumentVersion, MailRule, Project, Section
+from storage.domain.models import (
+    Document,
+    DocumentVersion,
+    MailRule,
+    Project,
+    ProjectMembership,
+    Section,
+)
 from storage.domain.services import (
+    DOCUMENT_VIEW_COLUMNS,
+    can_manage_project_participants,
     check_read_permission,
-    generate_vedomost,
     get_accessible_documents,
     get_accessible_projects,
     get_accessible_sections,
+    get_document_view,
+    get_project_documents_for_view,
+    get_project_membership,
+    get_sections_with_counts,
     get_user_company,
+    list_document_views,
+    list_project_participants,
+    normalize_document_view_config,
+    save_document_view,
     search_documents,
+    update_project_member_role,
     upload_document,
 )
 
 
 RECENT_DOCUMENTS_SESSION_KEY = 'recent_documents'
 RECENT_DOCUMENTS_LIMIT = 10
+
+DOCUMENT_VIEW_COLUMN_LABELS = {
+    'code': 'Шифр',
+    'name': 'Название',
+    'doc_type': 'Тип',
+    'status': 'Статус',
+    'version': 'Версия',
+    'date': 'Дата',
+    'author': 'Автор',
+}
+
+
+def _document_column_defs(config):
+    visible = set(config['columns'])
+    return [
+        {
+            'key': key,
+            'label': DOCUMENT_VIEW_COLUMN_LABELS[key],
+            'visible': key in visible,
+        }
+        for key in DOCUMENT_VIEW_COLUMNS
+    ]
+
+
+def _config_from_filters(request, columns):
+    config = {
+        'columns': columns,
+        'filters': {
+            'section': request.GET.get('section', ''),
+            'doc_type': request.GET.get('doc_type', ''),
+            'status': request.GET.get('status', ''),
+        },
+        'sort': request.GET.get('sort', ''),
+    }
+    try:
+        return normalize_document_view_config(config)
+    except ValueError:
+        # Некорректные GET-параметры не должны ронять страницу проекта.
+        return normalize_document_view_config({'columns': columns})
 
 
 def _remember_document(request, document_id):
@@ -90,19 +147,136 @@ class ProjectDetailView(LoginRequiredMixin, DetailView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        company = self.object.company if self.request.user.is_superuser else get_user_company(self.request.user)
-        context['sections'] = get_accessible_sections(self.request.user, self.object)
-        context['recent_documents'] = _recent_documents(
-            self.request,
-            self.request.user,
-            self.object,
+        user = self.request.user
+        project = self.object
+
+        document_views = list_document_views(user, project)
+        selected_view = get_document_view(
+            user,
+            project,
+            self.request.GET.get('view'),
         )
-        context['documents'] = generate_vedomost(
-            self.object,
-            company=company,
-            user=self.request.user,
-        )
+
+        if selected_view is not None:
+            try:
+                base_config = normalize_document_view_config(selected_view.config)
+            except ValueError:
+                # Повреждённый JSON в БД не должен ронять страницу проекта.
+                selected_view = None
+                base_config = normalize_document_view_config({})
+        else:
+            base_config = normalize_document_view_config({})
+        if self.request.GET.get('apply'):
+            view_config = _config_from_filters(
+                self.request,
+                base_config['columns'],
+            )
+        else:
+            view_config = base_config
+
+        can_manage_participants = can_manage_project_participants(user, project)
+        active_tab = 'documents'
+        if can_manage_participants and self.request.GET.get('tab') == 'participants':
+            active_tab = 'participants'
+
+        column_defs = _document_column_defs(view_config)
+        context.update({
+            'sections': get_sections_with_counts(user, project),
+            'recent_documents': _recent_documents(
+                self.request,
+                user,
+                project,
+            ),
+            'documents': get_project_documents_for_view(user, project, view_config),
+            'document_views': document_views,
+            'selected_view': selected_view,
+            'view_config': view_config,
+            'active_filters': view_config['filters'],
+            'column_defs': column_defs,
+            'visible_columns': [column for column in column_defs if column['visible']],
+            'active_sort': view_config['sort'][0] if view_config['sort'] else '',
+            'active_tab': active_tab,
+            'can_manage_participants': can_manage_participants,
+            'doc_type_choices': Document.DOC_TYPE_CHOICES,
+            'status_choices': Document.STATUS_CHOICES,
+        })
+
+        if can_manage_participants:
+            context['participants'] = list_project_participants(user, project)
+            context['membership_role_choices'] = ProjectMembership.ROLE_IN_PROJECT_CHOICES
+
         return context
+
+
+class DocumentViewSaveView(LoginRequiredMixin, View):
+    def post(self, request, project_id):
+        project = get_object_or_404(
+            get_accessible_projects(request.user),
+            pk=project_id,
+        )
+
+        config = {
+            'columns': request.POST.getlist('columns'),
+            'filters': {
+                'section': request.POST.get('section', ''),
+                'doc_type': request.POST.get('doc_type', ''),
+                'status': request.POST.get('status', ''),
+            },
+            'sort': request.POST.get('sort', ''),
+        }
+
+        try:
+            view = save_document_view(
+                user=request.user,
+                project=project,
+                name=request.POST.get('name', ''),
+                config=config,
+                is_shared=request.POST.get('is_shared') == 'on',
+            )
+        except PermissionDenied as exc:
+            return HttpResponseForbidden(str(exc))
+        except ValueError as exc:
+            messages.error(request, str(exc))
+            return redirect('storage:project_detail', pk=project.pk)
+
+        messages.success(request, f'Вид «{view.name}» сохранён.')
+        project_url = reverse('storage:project_detail', args=[project.pk])
+        return redirect(f'{project_url}?view={view.pk}')
+
+
+class MembershipRoleUpdateView(LoginRequiredMixin, View):
+    def post(self, request, project_id, membership_id):
+        project = get_object_or_404(
+            get_accessible_projects(request.user),
+            pk=project_id,
+        )
+        try:
+            membership = get_project_membership(
+                request.user,
+                project,
+                membership_id,
+            )
+            if membership is None:
+                raise Http404("Участник проекта не найден")
+
+            update_project_member_role(
+                request.user,
+                membership,
+                request.POST.get('role', ''),
+            )
+        except PermissionDenied as exc:
+            return HttpResponseForbidden(str(exc))
+        except ValueError as exc:
+            messages.error(request, str(exc))
+            project_url = reverse('storage:project_detail', args=[project.pk])
+            return redirect(f'{project_url}?tab=participants')
+
+        messages.success(
+            request,
+            f'Роль участника {membership.user.get_full_name() or membership.user.username} обновлена.',
+        )
+        project_url = reverse('storage:project_detail', args=[project.pk])
+        return redirect(f'{project_url}?tab=participants')
 
 
 class SearchView(LoginRequiredMixin, TemplateView):
