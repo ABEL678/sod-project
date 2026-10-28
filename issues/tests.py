@@ -6,7 +6,7 @@ from django.test import TestCase, override_settings
 from django.urls import reverse
 
 from issues.models import Issue
-from storage.domain.models import Company, Project, Section, UserProfile
+from storage.domain.models import Company, Document, Project, Section, UserProfile
 from storage.domain.services import upload_document
 
 
@@ -86,7 +86,40 @@ class IssueTests(TestCase):
             reverse('issues:issue_create', args=[self.document.pk]),
             {'description': 'Чужое замечание'},
         )
-        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(Issue.objects.count(), 0)
+
+    def test_create_issue_contractor_foreign_section_not_found(self):
+        other_section = Section.objects.create(
+            project=self.project,
+            code='КР',
+            name='Конструктивные решения',
+            order=2,
+        )
+        other_document = Document.objects.create(
+            project=self.project,
+            section=other_section,
+            code='КР-01',
+            name='Разрез',
+            doc_type='drawing',
+            status='draft',
+            created_by=self.user_gip,
+        )
+        contractor = User.objects.create_user('contractor2', password='pass')
+        profile = UserProfile.objects.create(
+            user=contractor,
+            role='contractor',
+            company=self.company,
+        )
+        profile.allowed_sections.add(self.section)
+        self.client.force_login(contractor)
+
+        response = self.client.post(
+            reverse('issues:issue_create', args=[other_document.pk]),
+            {'description': 'Чужое замечание'},
+        )
+
+        self.assertEqual(response.status_code, 404)
         self.assertEqual(Issue.objects.count(), 0)
 
     def test_toggle_status(self):
@@ -129,5 +162,45 @@ class IssueTests(TestCase):
             {'action': 'close'},
         )
         self.assertEqual(response.status_code, 403)
+        issue.refresh_from_db()
+        self.assertEqual(issue.status, 'open')
+
+    def test_status_change_contractor_foreign_section_not_found(self):
+        other_section = Section.objects.create(
+            project=self.project,
+            code='КР',
+            name='Конструктивные решения',
+            order=2,
+        )
+        other_document = Document.objects.create(
+            project=self.project,
+            section=other_section,
+            code='КР-02',
+            name='Разрез',
+            doc_type='drawing',
+            status='draft',
+            created_by=self.user_gip,
+        )
+        issue = Issue.objects.create(
+            document=other_document,
+            version=None,
+            author=self.user_gip,
+            description='Замечание в чужом разделе',
+        )
+        contractor = User.objects.create_user('contractor3', password='pass')
+        profile = UserProfile.objects.create(
+            user=contractor,
+            role='contractor',
+            company=self.company,
+        )
+        profile.allowed_sections.add(self.section)
+        self.client.force_login(contractor)
+
+        response = self.client.post(
+            reverse('issues:issue_status', args=[issue.pk]),
+            {'action': 'close'},
+        )
+
+        self.assertEqual(response.status_code, 404)
         issue.refresh_from_db()
         self.assertEqual(issue.status, 'open')

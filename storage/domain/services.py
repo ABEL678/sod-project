@@ -32,14 +32,24 @@ def get_accessible_projects(user: User):
 
 
 def get_accessible_documents(user: User):
-    """Документы компании пользователя (superuser видит все)."""
+    """Документы, доступные пользователю с учётом компании и роли.
+
+    Contractor видит только разделы из allowed_sections. Остальные роли
+    ограничены компанией; superuser видит всё.
+    """
     queryset = Document.objects.all()
     if user.is_superuser:
         return queryset
     company = get_user_company(user)
     if company is None:
         return queryset.none()
-    return queryset.filter(project__company=company)
+    queryset = queryset.filter(project__company=company)
+
+    profile = getattr(user, 'userprofile', None)
+    if profile is not None and profile.role == 'contractor':
+        queryset = queryset.filter(section__in=profile.allowed_sections.all())
+
+    return queryset
 
 
 def create_project(
@@ -244,17 +254,23 @@ def upload_document(
     return version
 
 
-def generate_vedomost(project: Project, section=None, *, company: Company) -> list:
+def generate_vedomost(project: Project, section=None, *, company: Company, user: User | None = None) -> list:
     """Формирует список словарей для ведомости документов.
 
     Проект обязан принадлежать переданной компании — это защита от
-    межтенантного доступа. Использует select_related для оптимизации
-    запросов к профилям и версии, order_by для сортировки по разделу и шифру.
+    межтенантного доступа. Если передан user, документы дополнительно
+    фильтруются через get_accessible_documents() с учётом роли
+    (contractor видит только allowed_sections).
     """
     if project.company_id != company.pk:
         raise PermissionDenied("Нет прав на просмотр ведомости этого проекта")
 
-    qs = Document.objects.filter(project=project).select_related(
+    if user is not None:
+        qs = get_accessible_documents(user)
+    else:
+        qs = Document.objects.all()
+
+    qs = qs.filter(project=project).select_related(
         'current_version',
         'current_version__uploaded_by',
         'created_by',

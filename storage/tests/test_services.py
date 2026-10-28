@@ -16,6 +16,7 @@ from storage.domain.services import (
     check_write_permission,
     create_project,
     generate_vedomost,
+    get_accessible_documents,
     upload_document,
 )
 
@@ -292,3 +293,41 @@ class ServiceTests(TestCase):
     def test_generate_vedomost_denied_for_foreign_company(self):
         with self.assertRaises(PermissionDenied):
             generate_vedomost(self.foreign_project, company=self.company)
+
+    def _create_forbidden_document(self):
+        forbidden_section = Section.objects.create(
+            project=self.project_own,
+            code='Секция Г',
+            name='Секция Г',
+            order=2,
+        )
+        return Document.objects.create(
+            project=self.project_own,
+            section=forbidden_section,
+            code='ДО-002',
+            name='Чертеж Б',
+            doc_type='drawing',
+            status='draft',
+            created_by=self.user_admin,
+        )
+
+    def test_contractor_accessible_documents_limited_to_allowed_sections(self):
+        other_document = self._create_forbidden_document()
+        self.user_contractor.userprofile.allowed_sections.add(self.section_own)
+
+        documents = get_accessible_documents(self.user_contractor)
+
+        self.assertIn(self.document, documents)
+        self.assertNotIn(other_document, documents)
+
+    def test_generate_vedomost_contractor_only_allowed_sections(self):
+        self._create_forbidden_document()
+        self.user_contractor.userprofile.allowed_sections.add(self.section_own)
+
+        vedomost = generate_vedomost(
+            self.project_own,
+            company=self.company,
+            user=self.user_contractor,
+        )
+
+        self.assertEqual([item['code'] for item in vedomost], ['ДО-001'])

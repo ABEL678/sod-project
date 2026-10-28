@@ -7,7 +7,6 @@ from django.views.generic import CreateView
 from storage.domain.services import (
     check_read_permission,
     get_accessible_documents,
-    get_user_company,
 )
 
 from issues.models import Issue
@@ -52,13 +51,9 @@ class IssueUpdateStatusView(View):
         if not request.user.is_authenticated:
             return HttpResponseForbidden('Нет прав на изменение замечания')
 
-        issues = Issue.objects.select_related('document__project', 'author', 'assignee')
-
-        if not request.user.is_superuser:
-            company = get_user_company(request.user)
-            if company is None:
-                return HttpResponseForbidden('Нет прав на изменение замечания')
-            issues = issues.filter(document__project__company=company)
+        issues = Issue.objects.select_related(
+            'document__project', 'author', 'assignee'
+        ).filter(document__in=get_accessible_documents(request.user))
 
         issue = get_object_or_404(issues, pk=issue_id)
 

@@ -20,7 +20,7 @@ sod_project/
 ├── storage/               # ЯДРО
 │   ├── domain/
 │   │   ├── models.py      # Project, Section, Document, DocumentVersion, UserProfile, ProjectMembership, Company, DocumentView
-│   │   └── services.py    # upload_document(), create_project(), check_write_permission(), generate_vedomost(), search_documents()
+│   │   └── services.py    # upload_document(), create_project(), check_write_permission(), get_accessible_documents(), generate_vedomost(), search_documents()
 │   ├── ports/
 │   │   └── file_storage.py # интерфейс FileStorage: save(), get(), delete()
 │   ├── adapters/
@@ -237,7 +237,10 @@ def generate_vedomost(
     section: Section | None = None,
     *,
     company: Company,
+    user: User | None = None,
 ) -> list[dict]: ...
+
+**Правило:** `get_accessible_documents(user)` ограничивает выборку компанией пользователя, а для роли `contractor` — ещё и разделами из `UserProfile.allowed_sections`. `generate_vedomost(..., user=...)` использует эту же выборку, поэтому ведомость и Excel не показывают contractor'у чужие разделы.
 
 def search_documents(
     user: User,

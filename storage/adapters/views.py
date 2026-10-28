@@ -52,7 +52,11 @@ class ProjectDetailView(LoginRequiredMixin, DetailView):
         context = super().get_context_data(**kwargs)
         company = self.object.company if self.request.user.is_superuser else get_user_company(self.request.user)
         context['sections'] = self.object.sections.order_by('order')
-        context['documents'] = generate_vedomost(self.object, company=company)
+        context['documents'] = generate_vedomost(
+            self.object,
+            company=company,
+            user=self.request.user,
+        )
         return context
 
 
@@ -149,7 +153,7 @@ class ExportVedomostView(LoginRequiredMixin, View):
     def get(self, request, project_id):
         project = get_object_or_404(get_accessible_projects(request.user), pk=project_id)
 
-        documents = Document.objects.filter(project=project).select_related(
+        documents = get_accessible_documents(request.user).filter(project=project).select_related(
             'section',
             'current_version',
             'current_version__uploaded_by',

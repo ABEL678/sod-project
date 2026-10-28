@@ -26,6 +26,9 @@ class ViewTests(TestCase):
         self.user_viewer = User.objects.create_user('viewer', password='pass')
         UserProfile.objects.create(user=self.user_viewer, role='viewer', company=self.company)
 
+        self.user_contractor = User.objects.create_user('contractor', password='pass')
+        UserProfile.objects.create(user=self.user_contractor, role='contractor', company=self.company)
+
         self.user_foreign_gip = User.objects.create_user('foreign_gip', password='pass')
         UserProfile.objects.create(
             user=self.user_foreign_gip,
@@ -101,6 +104,14 @@ class ViewTests(TestCase):
         self.client.force_login(self.user_gip)
         response = self.client.get(reverse('storage:project_detail', args=[self.foreign_project.pk]))
         self.assertEqual(response.status_code, 404)
+
+    def test_project_detail_contractor_sees_only_allowed_documents(self):
+        self._make_contractor_docs()
+        self.client.force_login(self.user_contractor)
+        response = self.client.get(reverse('storage:project_detail', args=[self.project.pk]))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'АР-01')
+        self.assertNotContains(response, 'КР-99')
 
     def test_upload_ajax_success(self):
         self.client.force_login(self.user_gip)
@@ -193,11 +204,11 @@ class ViewTests(TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn('Не выбран раздел', response.json()['error'])
 
-    def _upload(self, code='АР-01', name='План 1 этажа', content=b'data'):
+    def _upload(self, code='АР-01', name='План 1 этажа', content=b'data', section=None):
         return upload_document(
             user=self.user_gip,
             project=self.project,
-            section=self.section,
+            section=section or self.section,
             code=code,
             name=name,
             doc_type='drawing',
@@ -214,6 +225,27 @@ class ViewTests(TestCase):
             doc_type='drawing',
             file=SimpleUploadedFile('foreign.pdf', b'foreign', content_type='application/pdf'),
         )
+
+    def _make_contractor_docs(self):
+        self.user_contractor.userprofile.allowed_sections.add(self.section)
+        allowed = self._upload(
+            code='АР-01',
+            name='Разрешённый чертеж',
+            content=b'allowed',
+        )
+        forbidden_section = Section.objects.create(
+            project=self.project,
+            code='КР',
+            name='Конструктивные решения',
+            order=2,
+        )
+        other = self._upload(
+            code='КР-99',
+            name='Запрещённый чертеж',
+            content=b'other',
+            section=forbidden_section,
+        )
+        return allowed, other
 
     def test_download_version(self):
         self.client.force_login(self.user_gip)
@@ -237,9 +269,7 @@ class ViewTests(TestCase):
 
     def test_download_without_read_permission_forbidden(self):
         version = self._upload()
-        contractor = User.objects.create_user('contractor', password='pass')
-        UserProfile.objects.create(user=contractor, role='contractor', company=self.company)
-        self.client.force_login(contractor)
+        self.client.force_login(self.user_contractor)
         response = self.client.get(reverse('storage:document_download', args=[version.pk]))
         self.assertEqual(response.status_code, 403)
 
@@ -267,6 +297,20 @@ class ViewTests(TestCase):
         response = self.client.get(reverse('storage:export_vedomost', args=[self.foreign_project.pk]))
         self.assertEqual(response.status_code, 404)
 
+    def test_export_vedomost_contractor_sees_only_allowed_sections(self):
+        self._make_contractor_docs()
+        self.client.force_login(self.user_contractor)
+        response = self.client.get(reverse('storage:export_vedomost', args=[self.project.pk]))
+        self.assertEqual(response.status_code, 200)
+
+        data = b''.join(response.streaming_content)
+        sheet = load_workbook(BytesIO(data)).active
+        codes = [
+            sheet.cell(row=row, column=1).value
+            for row in range(2, sheet.max_row + 1)
+        ]
+        self.assertEqual(codes, ['АР-01'])
+
     def test_export_anonymous_redirects_to_login(self):
         response = self.client.get(reverse('storage:export_vedomost', args=[self.project.pk]))
         self.assertEqual(response.status_code, 302)
@@ -288,13 +332,23 @@ class ViewTests(TestCase):
         response = self.client.get(reverse('storage:document_detail', args=[version.document_id]))
         self.assertEqual(response.status_code, 404)
 
+    def test_document_detail_contractor_allowed_section(self):
+        allowed, _ = self._make_contractor_docs()
+        self.client.force_login(self.user_contractor)
+        response = self.client.get(reverse('storage:document_detail', args=[allowed.document_id]))
+        self.assertEqual(response.status_code, 200)
+
+    def test_document_detail_contractor_foreign_section_404(self):
+        _, other = self._make_contractor_docs()
+        self.client.force_login(self.user_contractor)
+        response = self.client.get(reverse('storage:document_detail', args=[other.document_id]))
+        self.assertEqual(response.status_code, 404)
+
     def test_document_detail_forbidden_without_rights(self):
         version = self._upload()
-        contractor = User.objects.create_user('contractor2', password='pass')
-        UserProfile.objects.create(user=contractor, role='contractor', company=self.company)
-        self.client.force_login(contractor)
+        self.client.force_login(self.user_contractor)
         response = self.client.get(reverse('storage:document_detail', args=[version.document_id]))
-        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.status_code, 404)
 
     def test_project_detail_links_to_document_detail(self):
         self.client.force_login(self.user_gip)
