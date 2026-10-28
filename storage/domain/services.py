@@ -3,22 +3,99 @@ from django.db.models import Max
 from django.db import transaction
 from django.utils import timezone
 
-from storage.domain.models import Document, DocumentVersion, Section, Project, User
+from storage.domain.models import Company, Document, DocumentVersion, Section, Project, User
+
+
+def get_user_company(user: User) -> Company | None:
+    """Возвращает компанию пользователя из профиля."""
+    profile = getattr(user, 'userprofile', None)
+    return profile.company if profile is not None else None
+
+
+def _check_company_access(user: User, company_id: int) -> bool:
+    """Проверяет, что пользователь принадлежит компании (superuser — вне ограничений)."""
+    if user.is_superuser:
+        return True
+    company = get_user_company(user)
+    return company is not None and company.pk == company_id
+
+
+def get_accessible_projects(user: User):
+    """Проекты компании пользователя (superuser видит все)."""
+    queryset = Project.objects.all()
+    if user.is_superuser:
+        return queryset
+    company = get_user_company(user)
+    if company is None:
+        return queryset.none()
+    return queryset.filter(company=company)
+
+
+def get_accessible_documents(user: User):
+    """Документы компании пользователя (superuser видит все)."""
+    queryset = Document.objects.all()
+    if user.is_superuser:
+        return queryset
+    company = get_user_company(user)
+    if company is None:
+        return queryset.none()
+    return queryset.filter(project__company=company)
+
+
+def create_project(
+    company: Company,
+    code: str,
+    name: str,
+    customer: str,
+    gip: User | None = None,
+    created_by: User | None = None,
+) -> Project:
+    """Создает проект в указанной компании.
+
+    Создатель по умолчанию — ГИП. Создатель и ГИП должны принадлежать компании,
+    если они не superuser.
+    """
+    actor = created_by or gip
+    if actor is None:
+        raise ValueError("Не указан создатель проекта")
+
+    if not _check_company_access(actor, company.pk):
+        raise PermissionDenied("Нет прав на создание проекта в этой компании")
+
+    if gip is not None and not _check_company_access(gip, company.pk):
+        raise PermissionDenied("ГИП должен принадлежать компании проекта")
+
+    return Project.objects.create(
+        company=company,
+        code=code,
+        name=name,
+        customer=customer,
+        gip=gip,
+        status='active',
+        created_by=actor,
+    )
 
 
 def check_write_permission(user: User, section: Section) -> bool:
     """Проверка права на запись в раздел.
 
     Правила (всего 3 должности):
-    - admin — всегда может писать.
+    - admin — всегда может писать в своей компании.
     - gip — может писать только в свои проекты (через Project.gip или ProjectMembership).
     - engineer — может писать только в разрешенные разделы (allowed_sections).
     - viewer и contractor — не могут писать.
+
+    Любая запись ограничена компанией пользователя.
     """
-    try:
-        profile = user.userprofile
-    except Exception:
-        # Профиля нет (например, суперюзер без создания профиля) — отказ
+    if user.is_superuser:
+        return True
+
+    profile = getattr(user, 'userprofile', None)
+    if profile is None:
+        # Профиля нет — отказ
+        return False
+
+    if not _check_company_access(user, section.project.company_id):
         return False
 
     role = profile.role
@@ -48,12 +125,17 @@ def check_read_permission(user: User, document: Document) -> bool:
 
     - admin и gip (в своих проектах) читают всё.
     - engineer читает всё в своих проектах.
-    - viewer читает всё.
+    - viewer читает всё в своей компании.
     - contractor читает только если раздел документа в allowed_sections.
     """
-    try:
-        profile = user.userprofile
-    except Exception:
+    if user.is_superuser:
+        return True
+
+    profile = getattr(user, 'userprofile', None)
+    if profile is None:
+        return False
+
+    if not _check_company_access(user, document.project.company_id):
         return False
 
     role = profile.role
@@ -162,12 +244,16 @@ def upload_document(
     return version
 
 
-def generate_vedomost(project: Project, section=None) -> list:
+def generate_vedomost(project: Project, section=None, *, company: Company) -> list:
     """Формирует список словарей для ведомости документов.
 
-    Использует select_related для оптимизации запросов к профилям
-    и версии, order_by для сортировки по разделу и шифру.
+    Проект обязан принадлежать переданной компании — это защита от
+    межтенантного доступа. Использует select_related для оптимизации
+    запросов к профилям и версии, order_by для сортировки по разделу и шифру.
     """
+    if project.company_id != company.pk:
+        raise PermissionDenied("Нет прав на просмотр ведомости этого проекта")
+
     qs = Document.objects.filter(project=project).select_related(
         'current_version',
         'current_version__uploaded_by',

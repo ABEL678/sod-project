@@ -7,7 +7,7 @@ from django.test import TestCase, override_settings
 from django.urls import reverse
 from openpyxl import load_workbook
 
-from storage.domain.models import MailRule, Project, Section, UserProfile
+from storage.domain.models import Company, MailRule, Project, Section, UserProfile
 from storage.domain.services import upload_document
 
 
@@ -17,13 +17,24 @@ User = get_user_model()
 @override_settings(MEDIA_ROOT=tempfile.mkdtemp())
 class ViewTests(TestCase):
     def setUp(self):
+        self.company = Company.objects.create(name='Компания 1')
+        self.other_company = Company.objects.create(name='Компания 2')
+
         self.user_gip = User.objects.create_user('gip', password='pass')
-        UserProfile.objects.create(user=self.user_gip, role='gip')
+        UserProfile.objects.create(user=self.user_gip, role='gip', company=self.company)
 
         self.user_viewer = User.objects.create_user('viewer', password='pass')
-        UserProfile.objects.create(user=self.user_viewer, role='viewer')
+        UserProfile.objects.create(user=self.user_viewer, role='viewer', company=self.company)
+
+        self.user_foreign_gip = User.objects.create_user('foreign_gip', password='pass')
+        UserProfile.objects.create(
+            user=self.user_foreign_gip,
+            role='gip',
+            company=self.other_company,
+        )
 
         self.project = Project.objects.create(
+            company=self.company,
             code='P-1',
             name='Проект',
             status='active',
@@ -31,11 +42,20 @@ class ViewTests(TestCase):
             created_by=self.user_gip,
         )
         self.project_other = Project.objects.create(
+            company=self.company,
             code='P-2',
             name='Другой проект',
             status='active',
             gip=self.user_gip,
             created_by=self.user_gip,
+        )
+        self.foreign_project = Project.objects.create(
+            company=self.other_company,
+            code='P-FOREIGN',
+            name='Чужой проект',
+            status='active',
+            gip=self.user_foreign_gip,
+            created_by=self.user_foreign_gip,
         )
         self.section = Section.objects.create(
             project=self.project,
@@ -49,6 +69,12 @@ class ViewTests(TestCase):
             name='Конструктивные решения',
             order=1,
         )
+        self.foreign_section = Section.objects.create(
+            project=self.foreign_project,
+            code='ОВ',
+            name='Отопление и вентиляция',
+            order=1,
+        )
 
     def test_project_list(self):
         self.client.force_login(self.user_gip)
@@ -56,6 +82,11 @@ class ViewTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTemplateUsed(response, 'storage/project_list.html')
         self.assertContains(response, 'P-1')
+
+    def test_project_list_excludes_other_company(self):
+        self.client.force_login(self.user_gip)
+        response = self.client.get(reverse('storage:project_list'))
+        self.assertNotContains(response, 'P-FOREIGN')
 
     def test_project_detail(self):
         self.client.force_login(self.user_gip)
@@ -65,6 +96,11 @@ class ViewTests(TestCase):
         self.assertContains(response, 'АР')
         self.assertContains(response, 'Перетащите файлы сюда или нажмите для выбора')
         self.assertContains(response, 'upload-ajax')
+
+    def test_project_detail_foreign_company_404(self):
+        self.client.force_login(self.user_gip)
+        response = self.client.get(reverse('storage:project_detail', args=[self.foreign_project.pk]))
+        self.assertEqual(response.status_code, 404)
 
     def test_upload_ajax_success(self):
         self.client.force_login(self.user_gip)
@@ -130,6 +166,20 @@ class ViewTests(TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn('Раздел не относится к указанному проекту', response.json()['error'])
 
+    def test_upload_ajax_foreign_project_404(self):
+        self.client.force_login(self.user_gip)
+        response = self.client.post(
+            reverse('storage:document_upload_ajax', args=[self.foreign_project.pk]),
+            {
+                'section_id': self.foreign_section.pk,
+                'code': 'ОВ-01',
+                'name': 'Схема',
+                'file': SimpleUploadedFile('plan.pdf', b'data', content_type='application/pdf'),
+            },
+        )
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.json()['error'], 'Проект не найден')
+
     def test_upload_ajax_missing_section(self):
         self.client.force_login(self.user_gip)
         response = self.client.post(
@@ -154,6 +204,17 @@ class ViewTests(TestCase):
             file=SimpleUploadedFile(f'{code}.pdf', content, content_type='application/pdf'),
         )
 
+    def _upload_foreign(self):
+        return upload_document(
+            user=self.user_foreign_gip,
+            project=self.foreign_project,
+            section=self.foreign_section,
+            code='ОВ-01',
+            name='Схема вентиляции',
+            doc_type='drawing',
+            file=SimpleUploadedFile('foreign.pdf', b'foreign', content_type='application/pdf'),
+        )
+
     def test_download_version(self):
         self.client.force_login(self.user_gip)
         version = self._upload(content=b'pdf-body')
@@ -162,16 +223,22 @@ class ViewTests(TestCase):
         self.assertIn('attachment', response['Content-Disposition'])
         self.assertEqual(b''.join(response.streaming_content), b'pdf-body')
 
-    def test_download_anonymous_allowed(self):
+    def test_download_anonymous_redirects_to_login(self):
         version = self._upload()
         response = self.client.get(reverse('storage:document_download', args=[version.pk]))
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(b''.join(response.streaming_content), b'data')
+        self.assertEqual(response.status_code, 302)
+        self.assertIn(reverse('login'), response['Location'])
+
+    def test_download_foreign_company_404(self):
+        version = self._upload_foreign()
+        self.client.force_login(self.user_gip)
+        response = self.client.get(reverse('storage:document_download', args=[version.pk]))
+        self.assertEqual(response.status_code, 404)
 
     def test_download_without_read_permission_forbidden(self):
         version = self._upload()
         contractor = User.objects.create_user('contractor', password='pass')
-        UserProfile.objects.create(user=contractor, role='contractor')
+        UserProfile.objects.create(user=contractor, role='contractor', company=self.company)
         self.client.force_login(contractor)
         response = self.client.get(reverse('storage:document_download', args=[version.pk]))
         self.assertEqual(response.status_code, 403)
@@ -195,6 +262,11 @@ class ViewTests(TestCase):
         self.assertTrue(target.startswith('http://') or target.startswith('https://'))
         self.assertIn(f'/download/{version.pk}/', target)
 
+    def test_export_vedomost_foreign_project_404(self):
+        self.client.force_login(self.user_gip)
+        response = self.client.get(reverse('storage:export_vedomost', args=[self.foreign_project.pk]))
+        self.assertEqual(response.status_code, 404)
+
     def test_export_anonymous_redirects_to_login(self):
         response = self.client.get(reverse('storage:export_vedomost', args=[self.project.pk]))
         self.assertEqual(response.status_code, 302)
@@ -210,10 +282,16 @@ class ViewTests(TestCase):
         self.assertContains(response, 'Замечания')
         self.assertContains(response, 'Скачать')
 
+    def test_document_detail_foreign_company_404(self):
+        version = self._upload_foreign()
+        self.client.force_login(self.user_gip)
+        response = self.client.get(reverse('storage:document_detail', args=[version.document_id]))
+        self.assertEqual(response.status_code, 404)
+
     def test_document_detail_forbidden_without_rights(self):
         version = self._upload()
         contractor = User.objects.create_user('contractor2', password='pass')
-        UserProfile.objects.create(user=contractor, role='contractor')
+        UserProfile.objects.create(user=contractor, role='contractor', company=self.company)
         self.client.force_login(contractor)
         response = self.client.get(reverse('storage:document_detail', args=[version.document_id]))
         self.assertEqual(response.status_code, 403)
@@ -279,6 +357,18 @@ class ViewTests(TestCase):
         document = self.project.documents.get()
         self.assertEqual(document.doc_type, 'source_data')
         self.assertEqual(document.current_version.version_number, 1)
+
+    def test_simulate_mail_import_foreign_project_404(self):
+        MailRule.objects.create(
+            project=self.foreign_project,
+            section=self.foreign_section,
+            email_filter='P-FOREIGN',
+        )
+        self.client.force_login(self.user_gip)
+        response = self.client.post(
+            reverse('storage:simulate_mail_import', args=[self.foreign_project.pk]),
+        )
+        self.assertEqual(response.status_code, 404)
 
     def test_simulate_mail_import_without_rules(self):
         self.client.force_login(self.user_gip)

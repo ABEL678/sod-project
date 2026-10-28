@@ -6,7 +6,7 @@ from django.test import TestCase, override_settings
 from django.urls import reverse
 
 from issues.models import Issue
-from storage.domain.models import Project, Section, UserProfile
+from storage.domain.models import Company, Project, Section, UserProfile
 from storage.domain.services import upload_document
 
 
@@ -16,13 +16,16 @@ User = get_user_model()
 @override_settings(MEDIA_ROOT=tempfile.mkdtemp())
 class IssueTests(TestCase):
     def setUp(self):
+        self.company = Company.objects.create(name='Компания 1')
+
         self.user_gip = User.objects.create_user('gip', password='pass')
-        UserProfile.objects.create(user=self.user_gip, role='gip')
+        UserProfile.objects.create(user=self.user_gip, role='gip', company=self.company)
 
         self.user_viewer = User.objects.create_user('viewer', password='pass')
-        UserProfile.objects.create(user=self.user_viewer, role='viewer')
+        UserProfile.objects.create(user=self.user_viewer, role='viewer', company=self.company)
 
         self.project = Project.objects.create(
+            company=self.company,
             code='P-1',
             name='Проект',
             status='active',
@@ -77,7 +80,7 @@ class IssueTests(TestCase):
 
     def test_create_issue_requires_read_permission(self):
         contractor = User.objects.create_user('contractor', password='pass')
-        UserProfile.objects.create(user=contractor, role='contractor')
+        UserProfile.objects.create(user=contractor, role='contractor', company=self.company)
         self.client.force_login(contractor)
         response = self.client.post(
             reverse('issues:issue_create', args=[self.document.pk]),

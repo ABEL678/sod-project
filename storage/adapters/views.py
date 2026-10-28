@@ -20,7 +20,14 @@ from openpyxl import Workbook
 from openpyxl.styles import Font
 
 from storage.domain.models import Document, DocumentVersion, MailRule, Project, Section
-from storage.domain.services import check_read_permission, generate_vedomost, upload_document
+from storage.domain.services import (
+    check_read_permission,
+    generate_vedomost,
+    get_accessible_documents,
+    get_accessible_projects,
+    get_user_company,
+    upload_document,
+)
 
 
 class ProjectListView(LoginRequiredMixin, ListView):
@@ -29,16 +36,23 @@ class ProjectListView(LoginRequiredMixin, ListView):
     context_object_name = 'projects'
     ordering = ['code']
 
+    def get_queryset(self):
+        return get_accessible_projects(self.request.user)
+
 
 class ProjectDetailView(LoginRequiredMixin, DetailView):
     model = Project
     template_name = 'storage/project_detail.html'
     context_object_name = 'project'
 
+    def get_queryset(self):
+        return get_accessible_projects(self.request.user)
+
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
+        company = self.object.company if self.request.user.is_superuser else get_user_company(self.request.user)
         context['sections'] = self.object.sections.order_by('order')
-        context['documents'] = generate_vedomost(self.object)
+        context['documents'] = generate_vedomost(self.object, company=company)
         return context
 
 
@@ -46,6 +60,9 @@ class DocumentDetailView(LoginRequiredMixin, DetailView):
     model = Document
     template_name = 'storage/document_detail.html'
     context_object_name = 'document'
+
+    def get_queryset(self):
+        return get_accessible_documents(self.request.user).select_related('project')
 
     def get(self, request, *args, **kwargs):
         self.object = self.get_object()
@@ -66,7 +83,7 @@ class DocumentUploadAjaxView(LoginRequiredMixin, View):
         return JsonResponse({'error': 'Требуется авторизация'}, status=403)
 
     def post(self, request, project_id):
-        project = Project.objects.filter(pk=project_id).first()
+        project = get_accessible_projects(request.user).filter(pk=project_id).first()
         if project is None:
             return JsonResponse({'error': 'Проект не найден'}, status=404)
 
@@ -76,7 +93,7 @@ class DocumentUploadAjaxView(LoginRequiredMixin, View):
             return JsonResponse({'error': 'Не выбран раздел или файл'}, status=400)
 
         try:
-            section = Section.objects.get(pk=section_id)
+            section = Section.objects.get(pk=section_id, project__company=project.company)
         except (Section.DoesNotExist, ValueError, TypeError):
             return JsonResponse({'error': 'Раздел не найден'}, status=400)
 
@@ -101,14 +118,19 @@ class DocumentUploadAjaxView(LoginRequiredMixin, View):
         return JsonResponse({'status': 'ok', 'version': version.version_number})
 
 
-class DocumentDownloadView(View):
+class DocumentDownloadView(LoginRequiredMixin, View):
     def get(self, request, version_id):
-        version = get_object_or_404(
-            DocumentVersion.objects.select_related('document__project'),
-            pk=version_id,
-        )
+        versions = DocumentVersion.objects.select_related('document__project')
 
-        if request.user.is_authenticated and not check_read_permission(request.user, version.document):
+        if not request.user.is_superuser:
+            company = get_user_company(request.user)
+            if company is None:
+                return HttpResponseForbidden('Нет прав на скачивание файла')
+            versions = versions.filter(document__project__company=company)
+
+        version = get_object_or_404(versions, pk=version_id)
+
+        if not check_read_permission(request.user, version.document):
             return HttpResponseForbidden('Нет прав на скачивание файла')
 
         if not version.file:
@@ -125,7 +147,7 @@ class DocumentDownloadView(View):
 
 class ExportVedomostView(LoginRequiredMixin, View):
     def get(self, request, project_id):
-        project = get_object_or_404(Project, pk=project_id)
+        project = get_object_or_404(get_accessible_projects(request.user), pk=project_id)
 
         documents = Document.objects.filter(project=project).select_related(
             'section',
@@ -201,7 +223,7 @@ class ExportVedomostView(LoginRequiredMixin, View):
 
 class SimulateMailImportView(LoginRequiredMixin, View):
     def post(self, request, project_id):
-        project = get_object_or_404(Project, pk=project_id)
+        project = get_object_or_404(get_accessible_projects(request.user), pk=project_id)
 
         rule = MailRule.objects.filter(project=project).order_by('pk').first()
         if rule is None:
