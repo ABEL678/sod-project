@@ -377,6 +377,7 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
         context.update({
             'project': project,
             'sections': sections,
+            'folder_tree': folder_roots,
             'project_folders': project_folders,
             'all_folders': get_flat_folders(user, project),
             'recent_documents': _recent_documents(
