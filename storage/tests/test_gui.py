@@ -233,6 +233,64 @@ class DocumentViewServiceTests(GuiTestBase):
         with self.assertRaises(ValueError):
             save_document_view(self.user_engineer, self.project, ' ', {'columns': ['code']})
 
+    def test_widths_validated_in_config(self):
+        config = normalize_document_view_config({
+            'columns': ['code', 'name'],
+            'widths': {'code': 120, 'name': '300'},
+        })
+        self.assertEqual(config['widths'], {'code': 120, 'name': 300})
+
+        view = save_document_view(
+            self.user_engineer,
+            self.project,
+            'С ширинами',
+            {
+                'columns': ['code', 'name'],
+                'widths': {'code': 90, 'name': 480},
+            },
+        )
+        self.assertEqual(view.config['widths'], {'code': 90, 'name': 480})
+
+        invalid_widths = [
+            {'code': 49},
+            {'code': 801},
+            {'unknown': 120},
+            {'code': 'wide'},
+            {'code': True},
+            [],
+        ]
+        for widths in invalid_widths:
+            with self.subTest(widths=widths):
+                with self.assertRaises(ValueError):
+                    normalize_document_view_config({
+                        'columns': ['code'],
+                        'widths': widths,
+                    })
+
+    def test_widths_infinity_raises(self):
+        for value in (float('inf'), float('-inf'), 1e400):
+            with self.subTest(value=value):
+                with self.assertRaises(ValueError):
+                    normalize_document_view_config({
+                        'columns': ['code'],
+                        'widths': {'code': value},
+                    })
+
+    def test_widths_float_raises(self):
+        for value in (100.9, 100.5, float('nan')):
+            with self.subTest(value=value):
+                with self.assertRaises(ValueError):
+                    normalize_document_view_config({
+                        'columns': ['code'],
+                        'widths': {'code': value},
+                    })
+
+        config = normalize_document_view_config({
+            'columns': ['code'],
+            'widths': {'code': 100.0},
+        })
+        self.assertEqual(config['widths'], {'code': 100})
+
     def test_foreign_project_forbidden(self):
         with self.assertRaises(PermissionDenied):
             save_document_view(
@@ -459,8 +517,93 @@ class GuiViewTests(GuiTestBase):
         self.client.force_login(self.user_gip)
         response = self.client.get(reverse('storage:project_detail', args=[self.project.pk]))
 
-        self.assertContains(response, 'АР</span> (2)')
-        self.assertContains(response, 'КР</span> (1)')
+        self.assertContains(
+            response,
+            f'data-section-id="{self.section_ar.pk}" data-role="section-count">2</span>',
+        )
+        self.assertContains(
+            response,
+            f'data-section-id="{self.section_kr.pk}" data-role="section-count">1</span>',
+        )
+
+    def test_ui_refactor_structure(self):
+        self.client.force_login(self.user_gip)
+        response = self.client.get(reverse('storage:project_detail', args=[self.project.pk]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'data-role="sidebar"')
+        self.assertContains(response, 'data-role="toolbar"')
+        self.assertContains(response, 'data-role="documents-table"')
+        self.assertContains(response, 'data-role="settings-modal"')
+        self.assertContains(response, 'id="quickFilter"')
+        self.assertContains(response, 'id="openSettings"')
+        self.assertContains(response, 'id="viewWidthsInput"')
+        self.assertContains(response, 'id="sidebarCollapse"')
+        self.assertContains(response, 'class="col-resizer"', count=7)
+        self.assertContains(response, 'id="uploadBtn"')
+        self.assertNotContains(response, 'Перетащите файлы сюда')
+        self.assertNotContains(response, 'upload-zone')
+
+    def test_scotty_table_filters(self):
+        self.client.force_login(self.user_gip)
+        response = self.client.get(
+            reverse('storage:project_detail', args=[self.project.pk]),
+            {'status': 'approved'},
+        )
+
+        table = response.context['table']
+        self.assertEqual(
+            [row.record.code for row in table.rows],
+            ['АР-02'],
+        )
+        self.assertEqual(table.paginator.per_page, 50)
+        self.assertContains(response, 'data-role="documents-table"')
+
+        response = self.client.get(
+            reverse('storage:project_detail', args=[self.project.pk]),
+            {'code': 'АР-01'},
+        )
+        self.assertEqual(
+            [row.record.code for row in response.context['table'].rows],
+            ['АР-01'],
+        )
+
+    def test_scotty_table_pagination(self):
+        Document.objects.bulk_create([
+            Document(
+                project=self.project,
+                section=self.section_ar,
+                code=f'P-{index:03}',
+                name=f'Документ {index}',
+                doc_type='drawing',
+                status='draft',
+                created_by=self.user_gip,
+            )
+            for index in range(51)
+        ])
+        self.client.force_login(self.user_gip)
+        response = self.client.get(
+            reverse('storage:project_detail', args=[self.project.pk])
+        )
+
+        table = response.context['table']
+        self.assertEqual(table.paginator.num_pages, 2)
+        self.assertEqual(len(table.paginated_rows), 50)
+        self.assertContains(response, 'data-role="pagination"')
+        self.assertContains(response, 'page=2')
+
+    def test_scotty_export_xlsx(self):
+        self.client.force_login(self.user_gip)
+        response = self.client.get(
+            reverse('storage:project_detail', args=[self.project.pk]),
+            {'_export': 'xlsx'},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(
+            'spreadsheetml',
+            response['Content-Type'],
+        )
 
     def test_save_view_via_post(self):
         self.client.force_login(self.user_engineer)

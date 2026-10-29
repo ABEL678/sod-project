@@ -62,9 +62,25 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    'django_cotton',
+    'django_tables2',
+    'django_filters',
+    'django_scotty',
+    'django_htmx',
+    'crispy_forms',
+    'crispy_bootstrap5',
     'storage',
     'issues',
 ]
+
+CRISPY_ALLOWED_TEMPLATE_PACKS = 'bootstrap5'
+CRISPY_TEMPLATE_PACK = 'bootstrap5'
+
+SCOTTY_CONFIG = {
+    'BUTTON_VARIANT': 'primary',
+}
+
+DJANGO_TABLES2_TEMPLATE = 'storage/documents_table.html'
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
@@ -73,6 +89,7 @@ MIDDLEWARE = [
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
+    'django_htmx.middleware.HtmxMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
 

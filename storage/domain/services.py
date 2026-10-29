@@ -1,23 +1,31 @@
+from collections import defaultdict
+import uuid
+
 from django.core.exceptions import PermissionDenied
-from django.db.models import Count, Max, Prefetch, Q
+from django.db.models import Count, Max, Prefetch, Q, QuerySet
 from django.db import transaction
 from django.utils import timezone
 
 from storage.domain.models import (
     Company,
     Document,
-    DocumentView,
     DocumentVersion,
+    DocumentView,
+    Folder,
+    MailRule,
     Project,
     ProjectMembership,
     Section,
     User,
 )
+from issues.models import Issue
 
 
 DOCUMENT_VIEW_COLUMNS = ('code', 'name', 'doc_type', 'status', 'version', 'date', 'author')
 DOCUMENT_VIEW_FILTERS = ('section', 'doc_type', 'status')
 DOCUMENT_VIEW_SORT_FIELDS = ('code', 'name', 'date', 'version')
+DOCUMENT_VIEW_MIN_WIDTH = 50
+DOCUMENT_VIEW_MAX_WIDTH = 800
 
 
 def _document_row(document: Document) -> dict:
@@ -74,7 +82,7 @@ def get_accessible_documents(user: User):
     Contractor видит только разделы из allowed_sections. Остальные роли
     ограничены компанией; superuser видит всё.
     """
-    queryset = Document.objects.all()
+    queryset = Document.objects.filter(is_deleted=False)
     if user.is_superuser:
         return queryset
     company = get_user_company(user)
@@ -109,7 +117,7 @@ def normalize_document_view_config(config: dict) -> dict:
     if not isinstance(config, dict):
         raise ValueError("Настройки вида должны быть словарём")
 
-    unknown_keys = set(config) - {'columns', 'filters', 'sort'}
+    unknown_keys = set(config) - {'columns', 'filters', 'sort', 'widths'}
     if unknown_keys:
         raise ValueError(f"Неизвестные ключи настроек: {', '.join(sorted(unknown_keys))}")
 
@@ -178,7 +186,37 @@ def normalize_document_view_config(config: dict) -> dict:
         if field not in normalized_sort:
             normalized_sort.append(field)
 
-    return {'columns': columns, 'filters': filters, 'sort': normalized_sort}
+    raw_widths = config.get('widths')
+    if raw_widths is None:
+        raw_widths = {}
+    if not isinstance(raw_widths, dict):
+        raise ValueError("Ширины столбцов должны быть словарём")
+
+    widths = {}
+    for key, value in raw_widths.items():
+        if key not in DOCUMENT_VIEW_COLUMNS:
+            raise ValueError(f"Неизвестный столбец ширины: {key}")
+        if isinstance(value, bool):
+            raise ValueError("Ширина столбца должна быть целым числом")
+        try:
+            width = int(value)
+        except (TypeError, ValueError, OverflowError):
+            raise ValueError("Ширина столбца должна быть целым числом")
+        if isinstance(value, float) and value != width:
+            raise ValueError("Ширина столбца должна быть целым числом")
+        if width < DOCUMENT_VIEW_MIN_WIDTH or width > DOCUMENT_VIEW_MAX_WIDTH:
+            raise ValueError(
+                "Ширина столбца должна быть от "
+                f"{DOCUMENT_VIEW_MIN_WIDTH} до {DOCUMENT_VIEW_MAX_WIDTH} px"
+            )
+        widths[key] = width
+
+    return {
+        'columns': columns,
+        'filters': filters,
+        'sort': normalized_sort,
+        'widths': widths,
+    }
 
 
 def _ensure_project_access(user: User, project: Project) -> None:
@@ -304,16 +342,20 @@ def get_document_view(user: User, project: Project, view_id) -> DocumentView | N
 def get_sections_with_counts(user: User, project: Project):
     """Разделы проекта с количеством документов в каждом."""
     return get_accessible_sections(user, project).annotate(
-        document_count=Count('documents', distinct=True),
+        document_count=Count(
+            'documents',
+            filter=Q(documents__is_deleted=False),
+            distinct=True,
+        ),
     )
 
 
-def get_project_documents_for_view(
+def get_project_documents_queryset(
     user: User,
     project: Project,
     config: dict | None = None,
-) -> list[dict]:
-    """Документы проекта для таблицы с учётом сохранённого вида."""
+) -> QuerySet:
+    """Возвращает queryset документов проекта с учётом сохранённого вида."""
     _ensure_project_access(user, project)
 
     normalized_config = normalize_document_view_config(config or {})
@@ -340,12 +382,21 @@ def get_project_documents_for_view(
     if not ordering:
         ordering = ['section__order', 'code']
 
-    documents = queryset.select_related(
+    return queryset.select_related(
         'section',
         'current_version',
         'current_version__uploaded_by',
+        'created_by',
     ).order_by(*ordering)
 
+
+def get_project_documents_for_view(
+    user: User,
+    project: Project,
+    config: dict | None = None,
+) -> list[dict]:
+    """Документы проекта для таблицы с учётом сохранённого вида."""
+    documents = get_project_documents_queryset(user, project, config)
     return [_document_row(document) for document in documents]
 
 
@@ -361,6 +412,9 @@ def update_project_member_role(
     if role not in dict(ProjectMembership.ROLE_IN_PROJECT_CHOICES):
         raise ValueError("Неверная роль участника")
 
+    if role == 'gip':
+        _validate_gip_role(membership.user)
+
     if membership.role_in_project == 'gip' and role != 'gip':
         other_gips = membership.project.memberships.filter(
             role_in_project='gip',
@@ -371,6 +425,15 @@ def update_project_member_role(
     membership.role_in_project = role
     membership.save(update_fields=['role_in_project'])
     return membership
+
+
+def _validate_gip_role(user: User | None) -> None:
+    """ГИПом проекта может быть только ГИП, админ или superuser."""
+    if user is None or user.is_superuser:
+        return
+    profile = getattr(user, 'userprofile', None)
+    if profile is None or profile.role not in ('gip', 'admin'):
+        raise ValueError("Назначаемый ГИП должен иметь роль ГИП или администратора")
 
 
 def create_project(
@@ -390,6 +453,15 @@ def create_project(
     if actor is None:
         raise ValueError("Не указан создатель проекта")
 
+    _validate_gip_role(gip)
+
+    code = (code or '').strip()
+    name = (name or '').strip()
+    if not code or not name:
+        raise ValueError("Шифр и название проекта обязательны")
+    if Project.objects.filter(code=code).exists():
+        raise ValueError("Проект с таким шифром уже существует")
+
     if not _check_company_access(actor, company.pk):
         raise PermissionDenied("Нет прав на создание проекта в этой компании")
 
@@ -404,6 +476,320 @@ def create_project(
         gip=gip,
         status='active',
         created_by=actor,
+    )
+
+
+def can_create_project(user: User) -> bool:
+    """Может ли пользователь создавать проекты через интерфейс."""
+    if user.is_superuser:
+        return True
+    profile = getattr(user, 'userprofile', None)
+    return profile is not None and profile.role in ('admin', 'gip')
+
+
+def create_section(project: Project, code: str, name: str, order: int, user: User | None = None) -> Section:
+    """Создаёт раздел проекта."""
+    if user is not None:
+        _ensure_content_manager(user, project)
+    code = (code or '').strip()
+    name = (name or '').strip()
+    if not code or not name:
+        raise ValueError("Код и название раздела обязательны")
+    if Section.objects.filter(project=project, code=code).exists():
+        raise ValueError("Раздел с таким кодом уже существует")
+    return Section.objects.create(
+        project=project,
+        code=code,
+        name=name,
+        order=int(order or 0),
+    )
+
+
+def _ensure_content_manager(user: User, project: Project) -> None:
+    _ensure_project_access(user, project)
+    if not can_manage_project_participants(user, project):
+        raise PermissionDenied("Нет прав на управление структурой проекта")
+
+
+def _folder_subtree_ids(folder: Folder) -> set[int]:
+    ids = {folder.pk}
+    frontier = [folder.pk]
+    while frontier:
+        children = list(
+            Folder.objects.filter(parent_id__in=frontier).values_list('pk', flat=True)
+        )
+        frontier = [pk for pk in children if pk not in ids]
+        ids.update(frontier)
+    return ids
+
+
+def create_folder(
+    user: User,
+    project: Project,
+    name: str,
+    section: Section | None = None,
+    parent: Folder | None = None,
+) -> Folder:
+    """Создаёт папку проекта или вложенную папку."""
+    _ensure_content_manager(user, project)
+    name = (name or '').strip()
+    if not name:
+        raise ValueError("Название папки обязательно")
+
+    if section is not None and section.project_id != project.pk:
+        raise ValueError("Раздел относится к другому проекту")
+
+    if parent is not None:
+        if parent.project_id != project.pk:
+            raise ValueError("Родительская папка относится к другому проекту")
+        if parent.is_deleted:
+            raise ValueError("Нельзя создать папку внутри удалённой папки")
+        if parent.section_id is not None:
+            if section is not None and section.pk != parent.section_id:
+                raise ValueError("Раздел папки не совпадает с разделом родителя")
+            section = parent.section
+
+    max_order = Folder.objects.filter(project=project, parent=parent).aggregate(
+        Max('order')
+    )['order__max']
+    return Folder.objects.create(
+        project=project,
+        section=section,
+        parent=parent,
+        name=name,
+        order=(max_order or 0) + 1,
+        created_by=user,
+    )
+
+
+def rename_folder(user: User, folder: Folder, name: str) -> Folder:
+    """Переименовывает папку."""
+    _ensure_content_manager(user, folder.project)
+    name = (name or '').strip()
+    if not name:
+        raise ValueError("Название папки обязательно")
+    folder.name = name
+    folder.save(update_fields=['name'])
+    return folder
+
+
+def get_folder_tree(user: User, project: Project) -> list[Folder]:
+    """Возвращает корневые папки проекта с вложенными children_tree."""
+    _ensure_project_access(user, project)
+    accessible_sections = get_accessible_sections(user, project)
+    folders = list(
+        Folder.objects.filter(
+            project=project,
+            is_deleted=False,
+        )
+        .filter(Q(section__in=accessible_sections) | Q(section__isnull=True))
+        .select_related('section')
+        .annotate(
+            document_count=Count(
+                'documents',
+                filter=Q(documents__is_deleted=False),
+                distinct=True,
+            )
+        )
+        .order_by('order', 'name')
+    )
+    by_parent = defaultdict(list)
+    for folder in folders:
+        folder.children_tree = []
+        by_parent[folder.parent_id].append(folder)
+    for folder in folders:
+        folder.children_tree = by_parent[folder.pk]
+    return by_parent[None]
+
+
+def get_flat_folders(user: User, project: Project):
+    """Плоский список активных папок для выбора при перемещении."""
+    _ensure_project_access(user, project)
+    accessible_sections = get_accessible_sections(user, project)
+    return (
+        Folder.objects.filter(
+            project=project,
+            is_deleted=False,
+        )
+        .filter(Q(section__in=accessible_sections) | Q(section__isnull=True))
+        .select_related('section')
+        .order_by('section__order', 'order', 'name')
+    )
+
+
+def move_document(user: User, document: Document, folder: Folder | None) -> Document:
+    """Перемещает документ в папку проекта."""
+    if not check_write_permission(user, document.section):
+        raise PermissionDenied("Нет прав на перемещение документа")
+    if document.is_deleted:
+        raise ValueError("Нельзя перемещать документ из корзины")
+
+    if folder is not None:
+        if folder.project_id != document.project_id:
+            raise ValueError("Папка относится к другому проекту")
+        if folder.is_deleted:
+            raise ValueError("Нельзя переместить документ в удалённую папку")
+        if folder.section_id is not None and folder.section_id != document.section_id:
+            raise ValueError("Папка относится к другому разделу")
+
+    document.folder = folder
+    document.save(update_fields=['folder', 'updated_at'])
+    return document
+
+
+def move_documents(user: User, documents, folder: Folder | None) -> list[Document]:
+    """Перемещает несколько документов, проверяя права для каждого."""
+    with transaction.atomic():
+        return [move_document(user, document, folder) for document in documents]
+
+
+def delete_document(user: User, document: Document) -> Document:
+    """Мягко удаляет документ."""
+    if not check_write_permission(user, document.section):
+        raise PermissionDenied("Нет прав на удаление документа")
+    if not document.is_deleted:
+        document.is_deleted = True
+        document.deleted_at = timezone.now()
+        document.deleted_with_parent = False
+        document.save(update_fields=['is_deleted', 'deleted_at', 'deleted_with_parent'])
+    return document
+
+
+def delete_documents(user: User, documents) -> int:
+    """Мягко удаляет несколько документов."""
+    count = 0
+    with transaction.atomic():
+        for document in documents:
+            delete_document(user, document)
+            count += 1
+    return count
+
+
+def restore_document(user: User, document: Document) -> Document:
+    """Восстанавливает документ из корзины."""
+    if not check_write_permission(user, document.section):
+        raise PermissionDenied("Нет прав на восстановление документа")
+    if document.folder_id and document.folder.is_deleted:
+        document.folder = None
+    document.is_deleted = False
+    document.deleted_at = None
+    document.deleted_with_parent = False
+    document.save(update_fields=[
+        'is_deleted',
+        'deleted_at',
+        'deleted_with_parent',
+        'folder',
+        'updated_at',
+    ])
+    return document
+
+
+def delete_folder(user: User, folder: Folder) -> None:
+    """Мягко удаляет папку, вложенные папки и документы."""
+    _ensure_content_manager(user, folder.project)
+    folder_ids = _folder_subtree_ids(folder)
+    now = timezone.now()
+    with transaction.atomic():
+        Folder.objects.filter(
+            pk__in=folder_ids,
+            is_deleted=False,
+        ).update(
+            is_deleted=True,
+            deleted_at=now,
+            deleted_with_parent=True,
+        )
+        Document.objects.filter(
+            folder_id__in=folder_ids,
+            is_deleted=False,
+        ).update(
+            is_deleted=True,
+            deleted_at=now,
+            deleted_with_parent=True,
+        )
+
+
+def restore_folder(user: User, folder: Folder) -> None:
+    """Восстанавливает папку, вложенные папки и документы."""
+    _ensure_content_manager(user, folder.project)
+    folder_ids = _folder_subtree_ids(folder)
+    with transaction.atomic():
+        Folder.objects.filter(pk=folder.pk).update(
+            is_deleted=False,
+            deleted_at=None,
+            deleted_with_parent=False,
+        )
+        Folder.objects.filter(
+            pk__in=folder_ids,
+            deleted_with_parent=True,
+        ).update(
+            is_deleted=False,
+            deleted_at=None,
+            deleted_with_parent=False,
+        )
+        Document.objects.filter(
+            folder_id__in=folder_ids,
+            deleted_with_parent=True,
+        ).update(
+            is_deleted=False,
+            deleted_at=None,
+            deleted_with_parent=False,
+        )
+
+
+def generate_share_link(user: User, document: Document) -> str:
+    """Генерирует и сохраняет публичный токен документа."""
+    if not check_read_permission(user, document):
+        raise PermissionDenied("Нет прав на создание ссылки")
+    if document.is_deleted:
+        raise ValueError("Нельзя создать ссылку на удалённый документ")
+
+    if not document.public_link_token:
+        document.public_link_token = uuid.uuid4()
+        document.save(update_fields=['public_link_token'])
+    return str(document.public_link_token)
+
+
+def get_trash(user: User, project: Project) -> dict:
+    """Удалённые документы и папки проекта для корзины."""
+    _ensure_content_manager(user, project)
+    return {
+        'documents': Document.objects.filter(
+            project=project,
+            is_deleted=True,
+        ).select_related('section', 'current_version').order_by('-deleted_at'),
+        'folders': Folder.objects.filter(
+            project=project,
+            is_deleted=True,
+        ).select_related('section', 'parent').order_by('-deleted_at'),
+    }
+
+
+def get_documents_for_archive(user: User, document_ids) -> QuerySet:
+    """Документы для ZIP-архива с проверкой доступа."""
+    ids = [value for value in document_ids if str(value).isdigit()]
+    return (
+        get_accessible_documents(user)
+        .filter(pk__in=ids, is_deleted=False)
+        .select_related('current_version', 'section')
+        .order_by('section__order', 'code')
+    )
+
+
+def get_folder_documents(user: User, folder: Folder) -> QuerySet:
+    """Документы папки и вложенных папок для ZIP-архива."""
+    _ensure_project_access(user, folder.project)
+    if folder.is_deleted:
+        raise ValueError("Папка находится в корзине")
+    folder_ids = _folder_subtree_ids(folder)
+    return (
+        get_accessible_documents(user)
+        .filter(
+            project=folder.project,
+            folder_id__in=folder_ids,
+            is_deleted=False,
+        )
+        .select_related('current_version', 'section')
+        .order_by('section__order', 'code')
     )
 
 
@@ -513,6 +899,7 @@ def upload_document(
     doc_type: str,
     file,
     comment: str = "",
+    folder: Folder | None = None,
 ) -> DocumentVersion:
     """Единственная точка создания версий документа.
 
@@ -529,6 +916,14 @@ def upload_document(
     if section.project != project:
         raise ValueError("Раздел не относится к указанному проекту")
 
+    if folder is not None:
+        if folder.project_id != project.pk:
+            raise ValueError("Папка относится к другому проекту")
+        if folder.is_deleted:
+            raise ValueError("Нельзя загрузить файл в удалённую папку")
+        if folder.section_id is not None and folder.section_id != section.pk:
+            raise ValueError("Папка относится к другому разделу")
+
     # Валидация doc_type
     if doc_type not in dict(Document.DOC_TYPE_CHOICES):
         raise ValueError("Неверный тип документа")
@@ -544,6 +939,7 @@ def upload_document(
                 'name': name,
                 'doc_type': doc_type,
                 'status': 'draft',
+                'folder': folder,
                 'created_by': user,
             },
         )
@@ -551,7 +947,11 @@ def upload_document(
             # Обновляем поля, если документ уже существует
             doc.name = name
             doc.doc_type = doc_type
-            doc.save(update_fields=['name', 'doc_type', 'updated_at'])
+            update_fields = ['name', 'doc_type', 'updated_at']
+            if folder is not None:
+                doc.folder = folder
+                update_fields.append('folder')
+            doc.save(update_fields=update_fields)
 
         # Вычисляем следующую версию
         max_number = DocumentVersion.objects.filter(document=doc).aggregate(Max('version_number'))['version_number__max']
@@ -589,7 +989,7 @@ def generate_vedomost(project: Project, section=None, *, company: Company, user:
     if user is not None:
         qs = get_accessible_documents(user)
     else:
-        qs = Document.objects.all()
+        qs = Document.objects.filter(is_deleted=False)
 
     qs = qs.filter(project=project).select_related(
         'current_version',
@@ -653,4 +1053,46 @@ def search_documents(
             )
         )
         .order_by('section__order', 'code')
+    )
+
+
+def create_issue(
+    user: User,
+    document: Document,
+    description: str,
+    version: DocumentVersion | None = None,
+    page_number: int | None = None,
+    x_ratio: float | None = None,
+    y_ratio: float | None = None,
+) -> Issue:
+    """Создаёт замечание к документу с проверкой прав и валидацией координат пина."""
+    if not check_write_permission(user, document.section):
+        raise PermissionDenied("Нет прав на добавление замечания к документу")
+
+    if page_number is None and (x_ratio is not None or y_ratio is not None):
+        raise ValueError("x_ratio и y_ratio требуют page_number")
+
+    if page_number is not None:
+        if page_number < 1:
+            raise ValueError("Номер страницы должен быть больше 0")
+        if x_ratio is None or y_ratio is None:
+            raise ValueError(
+                "При указании page_number необходимо указать x_ratio и y_ratio"
+            )
+    if x_ratio is not None and not (0.0 <= x_ratio <= 1.0):
+        raise ValueError("x_ratio должен быть в диапазоне 0.0 — 1.0")
+    if y_ratio is not None and not (0.0 <= y_ratio <= 1.0):
+        raise ValueError("y_ratio должен быть в диапазоне 0.0 — 1.0")
+
+    if version is not None and version.document_id != document.pk:
+        raise ValueError("Указанная версия не принадлежит данному документу")
+
+    return Issue.objects.create(
+        document=document,
+        version=version,
+        author=user,
+        description=description,
+        page_number=page_number,
+        x_ratio=x_ratio,
+        y_ratio=y_ratio,
     )

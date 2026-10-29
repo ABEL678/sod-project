@@ -1,0 +1,41 @@
+{% load static %}
+<div class="folder-node" data-folder-id="{{ folder.pk }}" data-section-id="{{ folder.section_id|default:'' }}">
+    <div class="folder-row dropdown" data-folder-row>
+        <button type="button" class="folder-toggle" data-folder-toggle aria-label="Свернуть папку">
+            {% if folder.children_tree %}<i class="bi bi-chevron-down" aria-hidden="true"></i>{% endif %}
+        </button>
+        <i class="bi bi-folder2 folder-icon" aria-hidden="true"></i>
+        <span class="folder-name" title="{{ folder.name }}">{{ folder.name }}</span>
+        <span class="folder-count">{{ folder.document_count }}</span>
+        {% if can_manage_structure %}
+            <button type="button" class="folder-menu-btn" data-dropdown-toggle="#folderMenu-{{ folder.pk }}" title="Действия с папкой" aria-label="Действия с папкой">
+                <i class="bi bi-three-dots" aria-hidden="true"></i>
+            </button>
+            <div class="dropdown-menu folder-menu" id="folderMenu-{{ folder.pk }}">
+                <button type="button" class="dropdown-item" data-folder-create="{{ folder.pk }}" data-section="{{ folder.section_id|default:'' }}">
+                    <i class="bi bi-folder-plus me-2" aria-hidden="true"></i>Создать папку
+                </button>
+                <button type="button" class="dropdown-item" data-folder-rename="{{ folder.pk }}" data-folder-name="{{ folder.name }}" data-rename-url="{% url 'storage:folder_rename' folder.pk %}">
+                    <i class="bi bi-pencil me-2" aria-hidden="true"></i>Переименовать
+                </button>
+                <a class="dropdown-item" href="{% url 'storage:folder_download' folder.pk %}">
+                    <i class="bi bi-file-earmark-zip me-2" aria-hidden="true"></i>Скачать папку (ZIP)
+                </a>
+                <div class="dropdown-divider"></div>
+                <form method="post" action="{% url 'storage:folder_delete' folder.pk %}">
+                    {% csrf_token %}
+                    <button type="submit" class="dropdown-item text-danger">
+                        <i class="bi bi-trash me-2" aria-hidden="true"></i>Удалить
+                    </button>
+                </form>
+            </div>
+        {% endif %}
+    </div>
+    {% if folder.children_tree %}
+        <div class="folder-children" data-folder-children>
+            {% for child in folder.children_tree %}
+                {% include 'storage/_folder_tree.html' with folder=child %}
+            {% endfor %}
+        </div>
+    {% endif %}
+</div>
