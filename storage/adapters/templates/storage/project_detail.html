@@ -12,14 +12,16 @@
 <body class="app-body">
 <div class="app-shell" id="appShell">
     <header class="app-topbar" data-role="topbar">
-        <a class="topbar-brand" href="{% url 'storage:project_list' %}">
-            <i class="bi bi-layers-half" aria-hidden="true"></i>
-            <span>Stream-CAD</span>
-        </a>
+        <div class="topbar-identity">
+            <a class="topbar-brand" href="{% url 'storage:project_list' %}">
+                <i class="bi bi-layers-half" aria-hidden="true"></i>
+                <span class="topbar-company">{{ user.userprofile.company.name|default:"Stream-CAD" }}</span>
+            </a>
 
-        <div class="topbar-project">
-            <span class="topbar-project-name" title="{{ project.name }}">{{ project.name }}</span>
-            <span class="topbar-code">{{ project.code }}</span>
+            <div class="topbar-project">
+                <span class="topbar-project-name" title="{{ project.name }}">{{ project.name }}</span>
+                <span class="topbar-code">{{ project.code }}</span>
+            </div>
         </div>
 
         <form class="topbar-search" method="get" action="{% url 'storage:search' project.pk %}" role="search">
