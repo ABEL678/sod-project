@@ -170,9 +170,35 @@ sod_project/
 | project | FK → Project | |
 | user | FK → User, null=True | NULL = общий вид для всех участников проекта |
 | name | CharField(100) | «Мой вид: только шифры» |
-| config | JSONField | {"columns": [...], "filters": {...}, "sort": [...]} |
+| config | JSONField | {"columns": [...], "filters": {...}, "sort": [...], "widths": {"code": 120, "name": 300}}; ширины колонок — 50–800 px |
 | is_shared | BooleanField | Общий или личный |
 | created_at | DateTimeField | |
+
+#### IssueComment (Этап 9)
+| Поле | Тип | Описание |
+|---|---|---|
+| id | PK | |
+| issue | FK → Issue, related_name='comments' | |
+| author | FK → User | |
+| text | TextField | Текст комментария |
+| created_at | DateTimeField | |
+
+#### IssueAttachment (Этап 9)
+| Поле | Тип | Описание |
+|---|---|---|
+| id | PK | |
+| issue | FK → Issue, related_name='attachments' | |
+| file | FileField | Через порт FileStorage |
+| filename | CharField(255) | |
+| uploaded_at | DateTimeField | |
+
+**Изменения в Issue (Этап 8 и 9):**
+- `page_number` (int, null=True)
+- `x_ratio` (float, null=True)
+- `y_ratio` (float, null=True)
+- `assignee` (FK User, null=True)
+- `due_date` (DateField, null=True)
+**Constraint:** `(page_number IS NULL AND x_ratio IS NULL AND y_ratio IS NULL) OR (page_number IS NOT NULL AND x_ratio IS NOT NULL AND y_ratio IS NOT NULL)`
 
 ### 3.3. Связи
 
@@ -265,6 +291,27 @@ def save_document_view(
 
 def list_document_views(user: User, project: Project) -> list[DocumentView]: ...
 
+### Модуль issues (Этап 8-9)
+
+def create_issue(
+    user: User,
+    document: Document,
+    version: DocumentVersion | None,
+    description: str,
+    page_number: int | None = None,
+    x_ratio: float | None = None,
+    y_ratio: float | None = None,
+) -> Issue: ...
+# Проверяет права на чтение документа. Если версия указана, проверяет, что она принадлежит документу.
+
+def get_issues_for_document(document: Document, version: DocumentVersion | None = None) -> QuerySet[Issue]: ...
+# Без version — все замечания документа. С version — только к этой версии.
+
+def add_issue_comment(user: User, issue: Issue, text: str) -> IssueComment: ...
+def attach_file_to_issue(user: User, issue: Issue, file) -> IssueAttachment: ...
+def update_issue_status(user: User, issue: Issue, status: str) -> Issue: ...
+def get_my_issues(user: User, role: str = 'assignee') -> QuerySet[Issue]: ...
+
 **Правило:** upload_document() — единственная точка создания версий. Ни views, ни почтовый модуль, ни ИИ не создают DocumentVersion напрямую.
 
 ## 5. Порты
@@ -278,7 +325,51 @@ class FileStorage(Protocol):
 
 Реализации: adapters/local_storage.py (сейчас), adapters/s3_storage.py (позже, без правок домена).
 
-## 6. Правила для ИИ-агента Kilo
+### 5.2. ExternalIntegrationPort (ports/integration.py) — новый порт
+
+Интерфейс для общения с внешними системами (ГИП-Ассистент, ВОР-билдер, Витро-трекер). Реализации — адаптеры в `storage/adapters/`.
+
+---
+
+## 6. Экосистема и интеграция (API Gateway)
+
+СОД (Stream-CAD) выступает центральным хабом (API Gateway) для экосистемы из четырех продуктов:
+1. **ГИП-Ассистент** (FastAPI/React) — управление задачами (Goal/Decision/Task/RFI).
+2. **ВОР-билдер** (Python/NiceGUI) — генерация ведомостей объёмов работ (ВОР).
+3. **Витро-трекер** (Python/Streamlit) — синхронизация замечаний из Витрокад.
+4. **СОД (Stream-CAD)** — наш продукт, хранение файлов и версий.
+
+### 6.1. Принципы интеграции (Anti-Corruption Layer)
+- СОД — источник истины для файлов и версий.
+- Все системы ходят в СОД через **REST API** (Django JSON-ответы + токен-аутентификация).
+- Аутентификация — по API-ключам, привязанным к `Company`.
+- В СОД создается порт `ExternalIntegrationPort` и Django-приложение `external_api`.
+
+### 6.2. Маппинг сущностей (СОД ↔ Другие системы)
+| СОД (Stream-CAD) | ГИП-Ассистент | ВОР-билдер | Витро-трекер |
+|---|---|---|---|
+| `Project.code` | `Project.code` | `spec_code` (префикс) | Шифр комплекта (`complex`) |
+| `Document.code` | `Document.cipher` | `Specification` (СО) | Шифр листа (`cipher`) |
+| `DocumentVersion.version_number` | `DocumentVersion.version` | `revision` | `vitro_version` |
+| `Issue` | `Task` (или `RFI`) | — | `comments` (замечания) |
+| `Issue.description` | `Task.formulation` | — | `note_text` |
+
+### 6.3. Контракты API СОД (для внутренних систем)
+- `POST /api/v1/projects/` — создать проект (ГИП-Ассистент).
+- `GET /api/v1/projects/{code}/specifications/` — получить список СО (ВОР-билдер).
+- `POST /api/v1/projects/{code}/vor/` — загрузить ВОР (ВОР-билдер).
+- `POST /api/v1/projects/{code}/issues/sync/` — синхронизировать замечания (Витро-трекер).
+- `GET /api/v1/projects/{code}/issues/pending/` — получить обновленные замечания (Витро-трекер).
+
+### 6.4. Интеграция с Витрокад (SharePoint)
+- **Маркапы на PDF:** Клик по чертежу → создание замечания с координатами (пин). В Vitro-CAD это стандарт. У нас это **Этап 8**.
+- **Панель замечаний с чатом:** Слева — документ, справа — список замечаний с обсуждением (как в Sarex #7). У нас это **Этап 9**.
+- **Сравнение версий:** Наложение слоев PDF.js (Этап 8.1).
+- **Синхронизация с SharePoint:** Используем `httpx` для REST API SharePoint (аналогично Витро-трекеру).
+
+---
+
+## 7. Правила для ИИ-агента Kilo
 
 При генерации кода обязательно:
 
@@ -288,3 +379,4 @@ class FileStorage(Protocol):
 4. Не добавлять Celery, Redis, pgvector, MCP-сервер, пока явно не попросят.
 5. Не менять модели из раздела 3.2 без обновления этого файла.
 6. Не предлагать микросервисы и альтернативные фреймворки.
+7. Не создавать API-эндпоинты напрямую во views — только через сервисы и порты.

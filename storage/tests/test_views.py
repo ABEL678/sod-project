@@ -97,7 +97,8 @@ class ViewTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTemplateUsed(response, 'storage/project_detail.html')
         self.assertContains(response, 'АР')
-        self.assertContains(response, 'Перетащите файлы сюда или нажмите для выбора')
+        self.assertContains(response, 'data-role="sidebar"')
+        self.assertContains(response, 'data-role="toolbar"')
         self.assertContains(response, 'upload-ajax')
 
     def test_project_detail_foreign_company_404(self):

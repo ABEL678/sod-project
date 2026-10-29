@@ -1,3 +1,4 @@
+import json
 from io import BytesIO
 
 from django.contrib import messages
@@ -63,22 +64,35 @@ DOCUMENT_VIEW_COLUMN_LABELS = {
     'author': 'Автор',
 }
 
+DEFAULT_COLUMN_WIDTHS = {
+    'code': 140,
+    'name': 340,
+    'doc_type': 130,
+    'status': 130,
+    'version': 90,
+    'date': 150,
+    'author': 170,
+}
+
 
 def _document_column_defs(config):
     visible = set(config['columns'])
+    widths = config.get('widths') or {}
     return [
         {
             'key': key,
             'label': DOCUMENT_VIEW_COLUMN_LABELS[key],
             'visible': key in visible,
+            'width': widths.get(key, DEFAULT_COLUMN_WIDTHS[key]),
         }
         for key in DOCUMENT_VIEW_COLUMNS
     ]
 
 
-def _config_from_filters(request, columns):
+def _config_from_filters(request, base_config):
     config = {
-        'columns': columns,
+        'columns': base_config['columns'],
+        'widths': base_config.get('widths', {}),
         'filters': {
             'section': request.GET.get('section', ''),
             'doc_type': request.GET.get('doc_type', ''),
@@ -90,7 +104,10 @@ def _config_from_filters(request, columns):
         return normalize_document_view_config(config)
     except ValueError:
         # Некорректные GET-параметры не должны ронять страницу проекта.
-        return normalize_document_view_config({'columns': columns})
+        return normalize_document_view_config({
+            'columns': base_config['columns'],
+            'widths': base_config.get('widths', {}),
+        })
 
 
 def _remember_document(request, document_id):
@@ -169,7 +186,7 @@ class ProjectDetailView(LoginRequiredMixin, DetailView):
         if self.request.GET.get('apply'):
             view_config = _config_from_filters(
                 self.request,
-                base_config['columns'],
+                base_config,
             )
         else:
             view_config = base_config
@@ -191,6 +208,7 @@ class ProjectDetailView(LoginRequiredMixin, DetailView):
             'document_views': document_views,
             'selected_view': selected_view,
             'view_config': view_config,
+            'widths_json': json.dumps(view_config['widths']),
             'active_filters': view_config['filters'],
             'column_defs': column_defs,
             'visible_columns': [column for column in column_defs if column['visible']],
@@ -215,8 +233,18 @@ class DocumentViewSaveView(LoginRequiredMixin, View):
             pk=project_id,
         )
 
+        raw_widths = (request.POST.get('widths') or '').strip()
+        widths = {}
+        if raw_widths:
+            try:
+                widths = json.loads(raw_widths)
+            except (TypeError, ValueError):
+                messages.error(request, 'Некорректные ширины столбцов.')
+                return redirect('storage:project_detail', pk=project.pk)
+
         config = {
             'columns': request.POST.getlist('columns'),
+            'widths': widths,
             'filters': {
                 'section': request.POST.get('section', ''),
                 'doc_type': request.POST.get('doc_type', ''),

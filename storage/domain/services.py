@@ -18,6 +18,8 @@ from storage.domain.models import (
 DOCUMENT_VIEW_COLUMNS = ('code', 'name', 'doc_type', 'status', 'version', 'date', 'author')
 DOCUMENT_VIEW_FILTERS = ('section', 'doc_type', 'status')
 DOCUMENT_VIEW_SORT_FIELDS = ('code', 'name', 'date', 'version')
+DOCUMENT_VIEW_MIN_WIDTH = 50
+DOCUMENT_VIEW_MAX_WIDTH = 800
 
 
 def _document_row(document: Document) -> dict:
@@ -109,7 +111,7 @@ def normalize_document_view_config(config: dict) -> dict:
     if not isinstance(config, dict):
         raise ValueError("Настройки вида должны быть словарём")
 
-    unknown_keys = set(config) - {'columns', 'filters', 'sort'}
+    unknown_keys = set(config) - {'columns', 'filters', 'sort', 'widths'}
     if unknown_keys:
         raise ValueError(f"Неизвестные ключи настроек: {', '.join(sorted(unknown_keys))}")
 
@@ -178,7 +180,37 @@ def normalize_document_view_config(config: dict) -> dict:
         if field not in normalized_sort:
             normalized_sort.append(field)
 
-    return {'columns': columns, 'filters': filters, 'sort': normalized_sort}
+    raw_widths = config.get('widths')
+    if raw_widths is None:
+        raw_widths = {}
+    if not isinstance(raw_widths, dict):
+        raise ValueError("Ширины столбцов должны быть словарём")
+
+    widths = {}
+    for key, value in raw_widths.items():
+        if key not in DOCUMENT_VIEW_COLUMNS:
+            raise ValueError(f"Неизвестный столбец ширины: {key}")
+        if isinstance(value, bool):
+            raise ValueError("Ширина столбца должна быть целым числом")
+        try:
+            width = int(value)
+        except (TypeError, ValueError, OverflowError):
+            raise ValueError("Ширина столбца должна быть целым числом")
+        if isinstance(value, float) and value != width:
+            raise ValueError("Ширина столбца должна быть целым числом")
+        if width < DOCUMENT_VIEW_MIN_WIDTH or width > DOCUMENT_VIEW_MAX_WIDTH:
+            raise ValueError(
+                "Ширина столбца должна быть от "
+                f"{DOCUMENT_VIEW_MIN_WIDTH} до {DOCUMENT_VIEW_MAX_WIDTH} px"
+            )
+        widths[key] = width
+
+    return {
+        'columns': columns,
+        'filters': filters,
+        'sort': normalized_sort,
+        'widths': widths,
+    }
 
 
 def _ensure_project_access(user: User, project: Project) -> None:
