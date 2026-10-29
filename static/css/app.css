@@ -436,6 +436,37 @@ body.app-body {
     background: #eef2f7;
 }
 
+.folder-row.folder-selected {
+    background: #dbeafe;
+    color: #1e3a8a;
+}
+
+.folder-row.dragover {
+    outline: 2px dashed var(--app-accent);
+    outline-offset: -2px;
+    background: #eff6ff;
+}
+
+.app-main.drag-over {
+    position: relative;
+}
+
+.app-main.drag-over::after {
+    content: "Отпустите файл, чтобы загрузить";
+    position: absolute;
+    inset: 0;
+    z-index: 60;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 2px dashed var(--app-accent);
+    background: rgba(59, 130, 246, .08);
+    color: #1d4ed8;
+    font-size: 15px;
+    font-weight: 600;
+    pointer-events: none;
+}
+
 .folder-toggle {
     flex: 0 0 auto;
     width: 15px;

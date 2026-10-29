@@ -891,14 +891,41 @@ class DocumentUploadAjaxView(LoginRequiredMixin, View):
             return JsonResponse({'error': 'Проект не найден'}, status=404)
 
         section_id = request.POST.get('section_id')
+        folder_id = request.POST.get('folder_id')
         file = request.FILES.get('file')
-        if not section_id or file is None:
-            return JsonResponse({'error': 'Не выбран раздел или файл'}, status=400)
+        if file is None:
+            return JsonResponse({'error': 'Файл не выбран'}, status=400)
 
-        try:
-            section = Section.objects.get(pk=section_id, project__company=project.company)
-        except (Section.DoesNotExist, ValueError, TypeError):
-            return JsonResponse({'error': 'Раздел не найден'}, status=400)
+        folder = None
+        if folder_id:
+            folder = Folder.objects.filter(
+                project=project,
+                pk=folder_id,
+                is_deleted=False,
+            ).first()
+            if folder is None:
+                return JsonResponse({'error': 'Папка не найдена'}, status=400)
+
+        if folder is not None and folder.section_id is not None:
+            section = folder.section
+            if section_id and str(section.pk) != str(section_id):
+                return JsonResponse(
+                    {'error': 'Раздел не совпадает с разделом папки'},
+                    status=400,
+                )
+        else:
+            if not section_id:
+                return JsonResponse({'error': 'Не выбран раздел'}, status=400)
+            try:
+                section = Section.objects.get(
+                    pk=section_id,
+                    project__company=project.company,
+                )
+            except (Section.DoesNotExist, ValueError, TypeError):
+                return JsonResponse({'error': 'Раздел не найден'}, status=400)
+
+        if folder is not None and folder.project_id != project.pk:
+            return JsonResponse({'error': 'Папка не найдена'}, status=400)
 
         code = (request.POST.get('code') or file.name).strip()
         name = (request.POST.get('name') or file.name).strip()
@@ -914,11 +941,15 @@ class DocumentUploadAjaxView(LoginRequiredMixin, View):
                 doc_type=doc_type,
                 file=file,
                 comment=request.POST.get('comment', ''),
+                folder=folder,
             )
         except (PermissionDenied, ValueError) as exc:
             return JsonResponse({'error': str(exc)}, status=400)
 
-        return JsonResponse({'status': 'ok', 'version': version.version_number})
+        return JsonResponse({
+            'status': 'ok',
+            'version': version.version_number,
+        })
 
 
 class DocumentDownloadView(LoginRequiredMixin, View):

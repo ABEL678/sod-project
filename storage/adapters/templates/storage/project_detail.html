@@ -75,7 +75,7 @@
             <div class="sidebar-footer">
                 <div class="upload-target" id="uploadTarget">Файл попадёт в выбранный раздел</div>
                 <input type="file" id="fileInput" multiple hidden>
-                <button type="button" class="btn btn-primary upload-btn" id="uploadButton" data-role="upload-button">
+                <button type="button" class="btn btn-primary upload-btn" id="uploadBtn" data-role="upload-button">
                     <i class="bi bi-plus-lg" aria-hidden="true"></i>
                     Загрузить
                 </button>
@@ -812,9 +812,12 @@
     /* Upload: click, file picker and drag&drop on a section */
     var sectionList = document.getElementById('sectionList');
     var fileInput = document.getElementById('fileInput');
-    var uploadButton = document.getElementById('uploadButton');
+    var uploadButton = document.getElementById('uploadBtn');
     var uploadStatus = document.getElementById('uploadStatus');
     var uploadTarget = document.getElementById('uploadTarget');
+    var sectionItems = [];
+    var selectedSectionId = null;
+    var selectedFolderId = null;
 
     function setStatus(text, isError) {
         if (!uploadStatus) {
@@ -825,22 +828,28 @@
         uploadStatus.classList.toggle('is-error', !!isError);
     }
 
-    if (sectionList) {
-        var sectionItems = Array.prototype.slice.call(sectionList.querySelectorAll('.section-item'));
-        var selectedSectionId = null;
-        var initialSection = '{{ active_filters.section|default:"" }}';
-
-        function selectSection(item) {
-            sectionItems.forEach(function (other) {
-                other.classList.remove('active');
-            });
-            item.classList.add('active');
-            selectedSectionId = item.dataset.id;
-            if (uploadTarget) {
-                uploadTarget.textContent = 'Выбран раздел ' + item.dataset.code;
-                uploadTarget.title = 'Файл попадёт в раздел ' + item.dataset.code;
-            }
+    function selectSection(item) {
+        sectionItems.forEach(function (other) {
+            other.classList.remove('active');
+        });
+        item.classList.add('active');
+        selectedSectionId = item.dataset.id;
+        if (uploadTarget) {
+            uploadTarget.textContent = 'Выбран раздел ' + item.dataset.code;
+            uploadTarget.title = 'Файл попадёт в раздел ' + item.dataset.code;
         }
+    }
+
+    function clearFolderSelection() {
+        selectedFolderId = null;
+        document.querySelectorAll('.folder-row.folder-selected').forEach(function (row) {
+            row.classList.remove('folder-selected');
+        });
+    }
+
+    if (sectionList) {
+        sectionItems = Array.prototype.slice.call(sectionList.querySelectorAll('.section-item'));
+        var initialSection = '{{ active_filters.section|default:"" }}';
 
         if (sectionItems.length) {
             var preselected = null;
@@ -854,6 +863,7 @@
 
         sectionItems.forEach(function (item) {
             item.addEventListener('click', function () {
+                clearFolderSelection();
                 selectSection(item);
             });
             item.addEventListener('dragenter', function (event) {
@@ -872,11 +882,105 @@
                 event.preventDefault();
                 event.stopPropagation();
                 item.classList.remove('dragover');
+                clearFolderSelection();
                 selectSection(item);
                 if (event.dataTransfer.files.length) {
                     handleFiles(event.dataTransfer.files);
                 }
             });
+        });
+    }
+
+    function selectFolder(row) {
+        var node = row.closest('.folder-node');
+        if (!node) {
+            return;
+        }
+        clearFolderSelection();
+        row.classList.add('folder-selected');
+        selectedFolderId = node.dataset.folderId;
+
+        var sectionId = node.dataset.sectionId;
+        if (sectionId) {
+            var sectionItem = sectionItems.find(function (item) {
+                return item.dataset.id === sectionId;
+            });
+            if (sectionItem) {
+                selectSection(sectionItem);
+            }
+        }
+
+        var name = row.querySelector('.folder-name');
+        if (uploadTarget) {
+            uploadTarget.textContent = 'Выбрана папка ' + (name ? name.textContent.trim() : '');
+            uploadTarget.title = 'Файл попадёт в выбранную папку';
+        }
+    }
+
+    document.querySelectorAll('[data-folder-row]').forEach(function (row) {
+        row.addEventListener('click', function (event) {
+            if (event.target.closest('.folder-menu-btn, .folder-toggle, .folder-menu')) {
+                return;
+            }
+            selectFolder(row);
+        });
+        row.addEventListener('dragenter', function (event) {
+            event.preventDefault();
+            event.stopPropagation();
+            row.classList.add('dragover');
+        });
+        row.addEventListener('dragover', function (event) {
+            event.preventDefault();
+            event.stopPropagation();
+            event.dataTransfer.dropEffect = 'copy';
+            row.classList.add('dragover');
+        });
+        row.addEventListener('dragleave', function () {
+            row.classList.remove('dragover');
+        });
+        row.addEventListener('drop', function (event) {
+            event.preventDefault();
+            event.stopPropagation();
+            row.classList.remove('dragover');
+            selectFolder(row);
+            if (event.dataTransfer.files.length) {
+                handleFiles(event.dataTransfer.files);
+            }
+        });
+    });
+
+    var mainArea = document.querySelector('.app-main');
+    var dragCounter = 0;
+    if (mainArea) {
+        mainArea.addEventListener('dragenter', function (event) {
+            event.preventDefault();
+            dragCounter += 1;
+            mainArea.classList.add('drag-over');
+        });
+        mainArea.addEventListener('dragover', function (event) {
+            event.preventDefault();
+            event.dataTransfer.dropEffect = 'copy';
+            mainArea.classList.add('drag-over');
+        });
+        mainArea.addEventListener('dragleave', function (event) {
+            dragCounter = Math.max(0, dragCounter - 1);
+            if (dragCounter === 0 || !mainArea.contains(event.relatedTarget)) {
+                dragCounter = 0;
+                mainArea.classList.remove('drag-over');
+            }
+        });
+        mainArea.addEventListener('drop', function (event) {
+            event.preventDefault();
+            event.stopPropagation();
+            dragCounter = 0;
+            mainArea.classList.remove('drag-over');
+            if (!selectedSectionId) {
+                setStatus('Сначала выберите раздел', true);
+                return;
+            }
+            if (event.dataTransfer.files.length) {
+                handleFiles(event.dataTransfer.files);
+            }
         });
     }
 
@@ -927,6 +1031,9 @@
             var file = files[index];
             var formData = new FormData();
             formData.append('section_id', selectedSectionId);
+            if (selectedFolderId) {
+                formData.append('folder_id', selectedFolderId);
+            }
             formData.append('file', file);
             formData.append('code', file.name.replace(/\.[^.]+$/, ''));
             formData.append('name', file.name);

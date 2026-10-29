@@ -899,6 +899,7 @@ def upload_document(
     doc_type: str,
     file,
     comment: str = "",
+    folder: Folder | None = None,
 ) -> DocumentVersion:
     """Единственная точка создания версий документа.
 
@@ -915,6 +916,14 @@ def upload_document(
     if section.project != project:
         raise ValueError("Раздел не относится к указанному проекту")
 
+    if folder is not None:
+        if folder.project_id != project.pk:
+            raise ValueError("Папка относится к другому проекту")
+        if folder.is_deleted:
+            raise ValueError("Нельзя загрузить файл в удалённую папку")
+        if folder.section_id is not None and folder.section_id != section.pk:
+            raise ValueError("Папка относится к другому разделу")
+
     # Валидация doc_type
     if doc_type not in dict(Document.DOC_TYPE_CHOICES):
         raise ValueError("Неверный тип документа")
@@ -930,6 +939,7 @@ def upload_document(
                 'name': name,
                 'doc_type': doc_type,
                 'status': 'draft',
+                'folder': folder,
                 'created_by': user,
             },
         )
@@ -937,7 +947,11 @@ def upload_document(
             # Обновляем поля, если документ уже существует
             doc.name = name
             doc.doc_type = doc_type
-            doc.save(update_fields=['name', 'doc_type', 'updated_at'])
+            update_fields = ['name', 'doc_type', 'updated_at']
+            if folder is not None:
+                doc.folder = folder
+                update_fields.append('folder')
+            doc.save(update_fields=update_fields)
 
         # Вычисляем следующую версию
         max_number = DocumentVersion.objects.filter(document=doc).aggregate(Max('version_number'))['version_number__max']

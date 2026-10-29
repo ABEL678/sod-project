@@ -540,7 +540,7 @@ class GuiViewTests(GuiTestBase):
         self.assertContains(response, 'id="viewWidthsInput"')
         self.assertContains(response, 'id="sidebarCollapse"')
         self.assertContains(response, 'class="col-resizer"', count=7)
-        self.assertContains(response, 'id="uploadButton"')
+        self.assertContains(response, 'id="uploadBtn"')
         self.assertNotContains(response, 'Перетащите файлы сюда')
         self.assertNotContains(response, 'upload-zone')
 

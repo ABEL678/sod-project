@@ -266,6 +266,66 @@ class T8CoreViewTests(T8CoreTestBase):
         self.assertContains(response, 'Создать проект')
         self.assertContains(response, 'createProjectModal')
 
+    def test_upload_document_into_folder(self):
+        folder = create_folder(self.user_gip, self.project, 'Uploads', section=self.section)
+        version = upload_document(
+            user=self.user_gip,
+            project=self.project,
+            section=self.section,
+            code='UPLOAD-1',
+            name='Uploaded',
+            doc_type='drawing',
+            file=SimpleUploadedFile('upload.txt', b'upload'),
+            folder=folder,
+        )
+        version.document.refresh_from_db()
+        self.assertEqual(version.document.folder_id, folder.pk)
+
+    def test_upload_ajax_into_folder(self):
+        folder = create_folder(self.user_gip, self.project, 'Drop target', section=self.section)
+        self.client.force_login(self.user_gip)
+        response = self.client.post(
+            reverse('storage:document_upload_ajax', args=[self.project.pk]),
+            {
+                'folder_id': folder.pk,
+                'section_id': self.section.pk,
+                'code': 'DROP-1',
+                'name': 'Dropped file',
+                'file': SimpleUploadedFile('drop.txt', b'drop'),
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        document = Document.objects.get(project=self.project, code='DROP-1')
+        self.assertEqual(document.folder_id, folder.pk)
+
+    def test_upload_ajax_rejects_foreign_folder(self):
+        other_project = Project.objects.create(
+            company=self.company,
+            code='T8-FOREIGN',
+            name='Foreign',
+            status='active',
+            gip=self.user_gip,
+            created_by=self.user_gip,
+        )
+        foreign_folder = create_folder(
+            self.user_gip,
+            other_project,
+            'Foreign folder',
+        )
+        self.client.force_login(self.user_gip)
+        response = self.client.post(
+            reverse('storage:document_upload_ajax', args=[self.project.pk]),
+            {
+                'folder_id': foreign_folder.pk,
+                'section_id': self.section.pk,
+                'code': 'DROP-2',
+                'name': 'Dropped file',
+                'file': SimpleUploadedFile('drop.txt', b'drop'),
+            },
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(Document.objects.filter(code='DROP-2').exists())
+
     def test_project_create_view(self):
         self.client.force_login(self.user_gip)
         response = self.client.post(
