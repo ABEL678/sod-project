@@ -16,6 +16,19 @@ STATUS_BADGE_CLASSES = {
 class DocumentTable(tables.Table):
     """Таблица документов проекта для django-tables2 / django-scotty."""
 
+    selection = tables.TemplateColumn(
+        verbose_name='',
+        orderable=False,
+        exclude_from_export=True,
+        template_code=(
+            '<input type="checkbox" class="doc-select" name="document_ids" '
+            'value="{{ record.pk }}" aria-label="Выбрать документ">'
+        ),
+        attrs={
+            'th': {'class': 'doc-select-col'},
+            'td': {'class': 'doc-select-col'},
+        },
+    )
     code = tables.Column(verbose_name='Шифр')
     name = tables.Column(verbose_name='Название')
     doc_type = tables.Column(verbose_name='Тип')
@@ -35,6 +48,7 @@ class DocumentTable(tables.Table):
             'data-role': 'documents-table',
         }
         sequence = (
+            'selection',
             'code',
             'name',
             'doc_type',
@@ -52,10 +66,18 @@ class DocumentTable(tables.Table):
         super().__init__(*args, **kwargs)
 
     def render_name(self, record):
+        share_url = reverse('storage:document_share_link', args=[record.pk])
         return format_html(
-            '<a href="{}">{}</a>',
+            '<span class="doc-name-cell">'
+            '<a href="{}">{}</a>'
+            '<button type="button" class="doc-share-btn" data-share-url="{}" '
+            'title="Скопировать ссылку" aria-label="Скопировать ссылку">'
+            '<i class="bi bi-link-45deg" aria-hidden="true"></i>'
+            '</button>'
+            '</span>',
             reverse('storage:document_detail', args=[record.pk]),
             record.name,
+            share_url,
         )
 
     def render_doc_type(self, record):

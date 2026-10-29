@@ -1,13 +1,18 @@
 import json
+import uuid
+import zipfile
 from io import BytesIO
 
 from django.contrib import messages
+from django.contrib.auth import get_user_model
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.core.exceptions import PermissionDenied
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.db.models import Q
 from django.http import (
     FileResponse,
     Http404,
+    HttpResponse,
     HttpResponseBadRequest,
     HttpResponseForbidden,
     HttpResponseNotFound,
@@ -16,6 +21,7 @@ from django.http import (
 from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse
 from django.utils import timezone
+from django.utils.text import get_valid_filename
 from django.views import View
 from django.views.generic import DetailView, ListView, TemplateView
 from django_scotty.views import CottonTableView
@@ -25,8 +31,10 @@ from openpyxl.styles import Font
 from storage.adapters.filters import DocumentFilter
 from storage.adapters.tables import DocumentTable
 from storage.domain.models import (
+    Company,
     Document,
     DocumentVersion,
+    Folder,
     MailRule,
     Project,
     ProjectMembership,
@@ -34,20 +42,35 @@ from storage.domain.models import (
 )
 from storage.domain.services import (
     DOCUMENT_VIEW_COLUMNS,
+    can_create_project,
     can_manage_project_participants,
     check_read_permission,
+    create_folder,
+    create_project,
+    create_section,
+    delete_documents,
+    delete_folder,
+    generate_share_link,
     get_accessible_documents,
     get_accessible_projects,
     get_accessible_sections,
     get_document_view,
+    get_flat_folders,
+    get_folder_documents,
+    get_folder_tree,
     get_project_documents_for_view,
     get_project_documents_queryset,
     get_project_membership,
     get_sections_with_counts,
+    get_trash,
     get_user_company,
     list_document_views,
     list_project_participants,
+    move_documents,
     normalize_document_view_config,
+    rename_folder,
+    restore_document,
+    restore_folder,
     save_document_view,
     search_documents,
     update_project_member_role,
@@ -69,8 +92,9 @@ DOCUMENT_VIEW_COLUMN_LABELS = {
 }
 
 DEFAULT_COLUMN_WIDTHS = {
+    'selection': 36,
     'code': 120,
-    'name': 340,
+    'name': 315,
     'doc_type': 100,
     'status': 100,
     'version': 70,
@@ -79,6 +103,7 @@ DEFAULT_COLUMN_WIDTHS = {
 }
 
 DOCUMENT_TABLE_COLUMN_MAP = {
+    'selection': 'selection',
     'code': 'code',
     'name': 'name',
     'doc_type': 'doc_type',
@@ -87,6 +112,8 @@ DOCUMENT_TABLE_COLUMN_MAP = {
     'updated_at': 'date',
     'created_by': 'author',
 }
+
+ALWAYS_VISIBLE_TABLE_COLUMNS = {'selection'}
 
 DOCUMENT_SORT_COLUMN_MAP = {
     'code': 'code',
@@ -173,6 +200,20 @@ class ProjectListView(LoginRequiredMixin, ListView):
 
     def get_queryset(self):
         return get_accessible_projects(self.request.user)
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        user = self.request.user
+        context['can_create_project'] = can_create_project(user)
+        if context['can_create_project']:
+            context['gip_candidates'] = (
+                get_user_model()
+                .objects.filter(
+                    Q(userprofile__role__in=('gip', 'admin')) | Q(is_superuser=True)
+                )
+                .order_by('last_name', 'username')
+            )
+        return context
 
 
 class ProjectDetailView(LoginRequiredMixin, CottonTableView):
@@ -278,7 +319,8 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
         kwargs['exclude'] = [
             name
             for name in DocumentTable.base_columns
-            if DOCUMENT_TABLE_COLUMN_MAP.get(name, name) not in visible
+            if name not in ALWAYS_VISIBLE_TABLE_COLUMNS
+            and DOCUMENT_TABLE_COLUMN_MAP.get(name, name) not in visible
         ]
         return kwargs
 
@@ -315,13 +357,28 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
 
         can_manage_participants = can_manage_project_participants(user, project)
         active_tab = 'documents'
-        if can_manage_participants and self.request.GET.get('tab') == 'participants':
-            active_tab = 'participants'
+        requested_tab = self.request.GET.get('tab')
+        if can_manage_participants and requested_tab in ('participants', 'trash'):
+            active_tab = requested_tab
+
+        sections = list(get_sections_with_counts(user, project))
+        folder_roots = get_folder_tree(user, project)
+        folders_by_section = {}
+        project_folders = []
+        for folder in folder_roots:
+            if folder.section_id:
+                folders_by_section.setdefault(folder.section_id, []).append(folder)
+            else:
+                project_folders.append(folder)
+        for section in sections:
+            section.folder_nodes = folders_by_section.get(section.pk, [])
 
         column_defs = _document_column_defs(view_config)
         context.update({
             'project': project,
-            'sections': get_sections_with_counts(user, project),
+            'sections': sections,
+            'project_folders': project_folders,
+            'all_folders': get_flat_folders(user, project),
             'recent_documents': _recent_documents(
                 self.request,
                 user,
@@ -338,6 +395,7 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
             'active_sort': view_config['sort'][0] if view_config['sort'] else '',
             'active_tab': active_tab,
             'can_manage_participants': can_manage_participants,
+            'can_manage_structure': can_manage_participants,
             'doc_type_choices': Document.DOC_TYPE_CHOICES,
             'status_choices': Document.STATUS_CHOICES,
         })
@@ -346,7 +404,286 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
             context['participants'] = list_project_participants(user, project)
             context['membership_role_choices'] = ProjectMembership.ROLE_IN_PROJECT_CHOICES
 
+        if active_tab == 'trash':
+            context['trash'] = get_trash(user, project)
+
         return context
+
+
+def _folder_archive_segments(folder, base_folder=None):
+    """Возвращает относительные сегменты пути папки для ZIP."""
+    segments = []
+    current = folder
+    while current is not None:
+        if base_folder is not None and current.pk == base_folder.pk:
+            break
+        segments.append(get_valid_filename(current.name) or f'folder-{current.pk}')
+        current = current.parent
+    return list(reversed(segments))
+
+
+def _zip_documents(documents, filename='documents.zip', base_folder=None):
+    """Собирает ZIP из текущих версий документов с сохранением папок."""
+    buffer = BytesIO()
+    with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as archive:
+        for document in documents:
+            version = document.current_version
+            if version is None or not version.file:
+                continue
+            extension = version.file.name.rsplit('.', 1)[-1]
+            if extension and len(extension) <= 8:
+                extension = f'.{extension}'
+            else:
+                extension = ''
+            document_filename = (
+                get_valid_filename(document.code) or f'document-{document.pk}'
+            )
+            archive_name = '/'.join(
+                _folder_archive_segments(document.folder, base_folder)
+                + [f'{document_filename}_v{version.version_number}{extension}']
+            )
+            try:
+                with version.file.open('rb') as source:
+                    archive.writestr(archive_name, source.read())
+            except (FileNotFoundError, OSError):
+                continue
+
+    response = HttpResponse(buffer.getvalue(), content_type='application/zip')
+    response['Content-Disposition'] = f'attachment; filename="{filename}"'
+    return response
+
+
+class ProjectCreateView(LoginRequiredMixin, View):
+    def post(self, request):
+        if not can_create_project(request.user):
+            return HttpResponseForbidden('Нет прав на создание проекта')
+
+        company = get_user_company(request.user)
+        if company is None and request.user.is_superuser:
+            company = Company.objects.first()
+        if company is None:
+            messages.error(request, 'Не удалось определить компанию пользователя.')
+            return redirect('storage:project_list')
+
+        gip = None
+        gip_id = request.POST.get('gip')
+        if gip_id:
+            gip = get_user_model().objects.filter(pk=gip_id).first()
+
+        try:
+            project = create_project(
+                company=company,
+                code=request.POST.get('code', '').strip(),
+                name=request.POST.get('name', '').strip(),
+                customer=request.POST.get('customer', '').strip(),
+                gip=gip,
+                created_by=request.user,
+            )
+        except (PermissionDenied, ValueError) as exc:
+            messages.error(request, str(exc))
+            return redirect('storage:project_list')
+
+        messages.success(request, f'Проект «{project.name}» создан.')
+        return redirect('storage:project_detail', pk=project.pk)
+
+
+class SectionCreateView(LoginRequiredMixin, View):
+    def post(self, request, project_id):
+        project = get_object_or_404(
+            get_accessible_projects(request.user),
+            pk=project_id,
+        )
+        try:
+            create_section(
+                project=project,
+                code=request.POST.get('code', ''),
+                name=request.POST.get('name', ''),
+                order=request.POST.get('order') or 0,
+                user=request.user,
+            )
+        except (PermissionDenied, ValueError) as exc:
+            messages.error(request, str(exc))
+        else:
+            messages.success(request, 'Раздел создан.')
+        return redirect('storage:project_detail', pk=project.pk)
+
+
+class FolderCreateView(LoginRequiredMixin, View):
+    def post(self, request, project_id):
+        project = get_object_or_404(
+            get_accessible_projects(request.user),
+            pk=project_id,
+        )
+        section = None
+        section_id = request.POST.get('section')
+        if section_id:
+            section = Section.objects.filter(project=project, pk=section_id).first()
+            if section is None:
+                messages.error(request, 'Раздел не найден.')
+                return redirect('storage:project_detail', pk=project.pk)
+        parent = None
+        parent_id = request.POST.get('parent')
+        if parent_id:
+            parent = Folder.objects.filter(project=project, pk=parent_id).first()
+            if parent is None:
+                messages.error(request, 'Родительская папка не найдена.')
+                return redirect('storage:project_detail', pk=project.pk)
+
+        try:
+            create_folder(
+                user=request.user,
+                project=project,
+                name=request.POST.get('name', ''),
+                section=section,
+                parent=parent,
+            )
+        except (PermissionDenied, ValueError) as exc:
+            messages.error(request, str(exc))
+        else:
+            messages.success(request, 'Папка создана.')
+        return redirect('storage:project_detail', pk=project.pk)
+
+
+class FolderRenameView(LoginRequiredMixin, View):
+    def post(self, request, folder_id):
+        folder = get_object_or_404(
+            Folder,
+            pk=folder_id,
+            project__in=get_accessible_projects(request.user),
+        )
+        try:
+            rename_folder(request.user, folder, request.POST.get('name', ''))
+        except (PermissionDenied, ValueError) as exc:
+            messages.error(request, str(exc))
+        else:
+            messages.success(request, 'Папка переименована.')
+        return redirect('storage:project_detail', pk=folder.project_id)
+
+
+class FolderDeleteView(LoginRequiredMixin, View):
+    def post(self, request, folder_id):
+        folder = get_object_or_404(
+            Folder,
+            pk=folder_id,
+            project__in=get_accessible_projects(request.user),
+        )
+        try:
+            delete_folder(request.user, folder)
+        except (PermissionDenied, ValueError) as exc:
+            messages.error(request, str(exc))
+        else:
+            messages.success(request, 'Папка перемещена в корзину.')
+        return redirect('storage:project_detail', pk=folder.project_id)
+
+
+class FolderDownloadView(LoginRequiredMixin, View):
+    def get(self, request, folder_id):
+        folder = get_object_or_404(
+            Folder,
+            pk=folder_id,
+            project__in=get_accessible_projects(request.user),
+        )
+        try:
+            documents = list(get_folder_documents(request.user, folder))
+        except (PermissionDenied, ValueError) as exc:
+            return HttpResponseForbidden(str(exc))
+        return _zip_documents(documents, 'folder.zip', base_folder=folder)
+
+
+class DocumentShareLinkView(LoginRequiredMixin, View):
+    def get(self, request, document_id):
+        document = get_object_or_404(
+            get_accessible_documents(request.user),
+            pk=document_id,
+        )
+        try:
+            token = generate_share_link(request.user, document)
+        except (PermissionDenied, ValueError) as exc:
+            return JsonResponse({'error': str(exc)}, status=403)
+        url = request.build_absolute_uri(
+            reverse('storage:document_detail', args=[document.pk])
+        )
+        return JsonResponse({'token': token, 'url': f'{url}?share={token}'})
+
+
+class DocumentBulkActionView(LoginRequiredMixin, View):
+    def post(self, request, project_id):
+        project = get_object_or_404(
+            get_accessible_projects(request.user),
+            pk=project_id,
+        )
+        document_ids = request.POST.getlist('document_ids')
+        documents = list(
+            get_accessible_documents(request.user).filter(
+                project=project,
+                pk__in=document_ids,
+                is_deleted=False,
+            )
+        )
+        if not documents:
+            messages.error(request, 'Не выбраны документы.')
+            return redirect('storage:project_detail', pk=project.pk)
+
+        action = request.POST.get('action')
+        try:
+            if action == 'download':
+                return _zip_documents(documents)
+            if action == 'move':
+                folder = None
+                folder_id = request.POST.get('folder')
+                if folder_id:
+                    folder = Folder.objects.filter(
+                        project=project,
+                        pk=folder_id,
+                        is_deleted=False,
+                    ).first()
+                    if folder is None:
+                        raise ValueError('Папка не найдена.')
+                move_documents(request.user, documents, folder)
+                messages.success(request, f'Перемещено документов: {len(documents)}.')
+            elif action == 'delete':
+                delete_documents(request.user, documents)
+                messages.success(request, f'В корзину отправлено: {len(documents)}.')
+            else:
+                messages.error(request, 'Неизвестное действие.')
+        except (PermissionDenied, ValueError) as exc:
+            messages.error(request, str(exc))
+
+        return redirect('storage:project_detail', pk=project.pk)
+
+
+class TrashRestoreView(LoginRequiredMixin, View):
+    def post(self, request, project_id):
+        project = get_object_or_404(
+            get_accessible_projects(request.user),
+            pk=project_id,
+        )
+        item_type = request.POST.get('item_type')
+        item_id = request.POST.get('item_id')
+        try:
+            if item_type == 'document':
+                document = get_object_or_404(
+                    Document,
+                    pk=item_id,
+                    project=project,
+                    is_deleted=True,
+                )
+                restore_document(request.user, document)
+            elif item_type == 'folder':
+                folder = get_object_or_404(
+                    Folder,
+                    pk=item_id,
+                    project=project,
+                    is_deleted=True,
+                )
+                restore_folder(request.user, folder)
+            else:
+                raise ValueError('Неизвестный тип элемента корзины')
+        except (PermissionDenied, ValueError) as exc:
+            messages.error(request, str(exc))
+        else:
+            messages.success(request, 'Элемент восстановлен.')
+        return redirect(f"{reverse('storage:project_detail', args=[project.pk])}?tab=trash")
 
 
 class DocumentViewSaveView(LoginRequiredMixin, View):
@@ -490,6 +827,36 @@ class DocumentDetailView(LoginRequiredMixin, DetailView):
     template_name = 'storage/document_detail.html'
     context_object_name = 'document'
 
+    def dispatch(self, request, *args, **kwargs):
+        share_token = request.GET.get('share')
+        if share_token:
+            try:
+                token = uuid.UUID(str(share_token))
+            except (TypeError, ValueError, AttributeError):
+                raise Http404
+            document = (
+                Document.objects.filter(
+                    pk=kwargs['pk'],
+                    public_link_token=token,
+                    is_deleted=False,
+                )
+                .select_related(
+                    'project',
+                    'section',
+                    'current_version',
+                    'current_version__uploaded_by',
+                )
+                .first()
+            )
+            if document is None:
+                raise Http404
+            self.object = document
+            _remember_document(request, document.pk)
+            context = self.get_context_data(object=document)
+            context['public_view'] = True
+            return self.render_to_response(context)
+        return super().dispatch(request, *args, **kwargs)
+
     def get_queryset(self):
         return get_accessible_documents(self.request.user).select_related(
             'project',
@@ -555,7 +922,9 @@ class DocumentUploadAjaxView(LoginRequiredMixin, View):
 
 class DocumentDownloadView(LoginRequiredMixin, View):
     def get(self, request, version_id):
-        versions = DocumentVersion.objects.select_related('document__project')
+        versions = DocumentVersion.objects.select_related('document__project').filter(
+            document__is_deleted=False,
+        )
 
         if not request.user.is_superuser:
             company = get_user_company(request.user)

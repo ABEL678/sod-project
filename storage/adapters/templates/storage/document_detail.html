@@ -12,9 +12,19 @@
 <body class="bg-light">
 {% include 'storage/_topbar.html' with topbar_project=document.project %}
 <main class="container-fluid py-3 pb-5">
-    <a href="{% url 'storage:project_detail' document.project.pk %}" class="btn btn-sm btn-outline-secondary mb-3">
-        ← К проекту {{ document.project.code }}
-    </a>
+    {% if not public_view %}
+        <a href="{% url 'storage:project_detail' document.project.pk %}" class="btn btn-sm btn-outline-secondary mb-3">
+            ← К проекту {{ document.project.code }}
+        </a>
+    {% else %}
+        <div class="alert alert-info py-2 small">
+            <i class="bi bi-link-45deg me-1" aria-hidden="true"></i>
+            Публичный просмотр документа. Доступ только на чтение.
+        </div>
+        <div class="mb-3">
+            <span class="text-muted">Проект: {{ document.project.name }} ({{ document.project.code }})</span>
+        </div>
+    {% endif %}
 
     {% if messages %}
         {% for message in messages %}
@@ -64,7 +74,7 @@
     <div class="card shadow-sm" id="versions">
         <div class="card-header bg-white d-flex justify-content-between align-items-center flex-wrap gap-2">
             <span class="fw-semibold">История версий ({{ versions|length }})</span>
-            {% if versions %}
+            {% if versions and not public_view %}
                 <form class="d-flex align-items-center gap-2 mb-0">
                     <label for="versionSelect" class="small text-muted mb-0">Скачать версию:</label>
                     <select
@@ -107,7 +117,9 @@
                         <td>{{ version.uploaded_by.get_full_name|default:version.uploaded_by.username }}</td>
                         <td>{{ version.comment|default:"—" }}</td>
                         <td class="text-end">
-                            <a class="btn btn-sm btn-outline-primary" href="{% url 'storage:document_download' version.pk %}">Скачать</a>
+                            {% if not public_view %}
+                                <a class="btn btn-sm btn-outline-primary" href="{% url 'storage:document_download' version.pk %}">Скачать</a>
+                            {% endif %}
                         </td>
                     </tr>
                 {% empty %}
@@ -123,16 +135,18 @@
     <div class="card shadow-sm mt-4">
         <div class="card-header bg-white fw-semibold">Замечания ({{ issues|length }})</div>
         <div class="card-body">
-            <form method="post" action="{% url 'issues:issue_create' document.pk %}" class="mb-4">
-                {% csrf_token %}
-                {% if document.current_version %}
-                    <input type="hidden" name="version_id" value="{{ document.current_version.pk }}">
-                {% endif %}
-                <div class="mb-2">
-                    <textarea name="description" class="form-control" rows="3" placeholder="Опишите замечание" required></textarea>
-                </div>
-                <button type="submit" class="btn btn-primary btn-sm">Добавить</button>
-            </form>
+            {% if not public_view %}
+                <form method="post" action="{% url 'issues:issue_create' document.pk %}" class="mb-4">
+                    {% csrf_token %}
+                    {% if document.current_version %}
+                        <input type="hidden" name="version_id" value="{{ document.current_version.pk }}">
+                    {% endif %}
+                    <div class="mb-2">
+                        <textarea name="description" class="form-control" rows="3" placeholder="Опишите замечание" required></textarea>
+                    </div>
+                    <button type="submit" class="btn btn-primary btn-sm">Добавить</button>
+                </form>
+            {% endif %}
 
             {% for issue in issues %}
                 <div class="border rounded p-3 mb-2">
@@ -154,16 +168,18 @@
                             <div>{{ issue.description|linebreaksbr }}</div>
                         </div>
                         <div class="flex-shrink-0">
-                            <form method="post" action="{% url 'issues:issue_status' issue.pk %}">
-                                {% csrf_token %}
-                                {% if issue.status == 'closed' %}
-                                    <input type="hidden" name="action" value="open">
-                                    <button type="submit" class="btn btn-sm btn-outline-secondary">Открыть</button>
-                                {% else %}
-                                    <input type="hidden" name="action" value="close">
-                                    <button type="submit" class="btn btn-sm btn-outline-danger">Закрыть</button>
-                                {% endif %}
-                            </form>
+                            {% if not public_view %}
+                                <form method="post" action="{% url 'issues:issue_status' issue.pk %}">
+                                    {% csrf_token %}
+                                    {% if issue.status == 'closed' %}
+                                        <input type="hidden" name="action" value="open">
+                                        <button type="submit" class="btn btn-sm btn-outline-secondary">Открыть</button>
+                                    {% else %}
+                                        <input type="hidden" name="action" value="close">
+                                        <button type="submit" class="btn btn-sm btn-outline-danger">Закрыть</button>
+                                    {% endif %}
+                                </form>
+                            {% endif %}
                         </div>
                     </div>
                 </div>

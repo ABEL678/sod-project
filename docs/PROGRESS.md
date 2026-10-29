@@ -3,11 +3,13 @@
 **Дата обновления:** 29.10.2026
 
 ## Текущий этап
-**Этап 7 завершён (T6).** Идём к Этапу 8 (PDF-вьюер и пины).
-Система готова к базовому использованию (MVP), добавлены мультитенантность, production-настройки, поиск по ревизиям и GUI-улучшения.
+**T8-CORE: Фундамент СОД (папки, проекты, ссылки, корзина).** 
+Этап 7 (UI Refactoring) полностью закрыт (T6 + T7-ui-final). 
+Система развернута в production: **https://stream-cad.ru/**
 
 ## Что сделано
 - [x] **Развертывание:** Django-проект, настройки, локальный Bootstrap.
+- [x] **Продакшн:** Система развернута на сервере, доступна по адресу https://stream-cad.ru/ (Nginx, Gunicorn, HTTPS).
 - [x] **Модели ядра:** Company, Project, Section, Document, DocumentVersion, UserProfile, ProjectMembership, DocumentView.
 - [x] **Мультитенантность:** Project.company и UserProfile.company, фильтрация проектов/документов по компании.
 - [x] **Production-настройки:** SECRET_KEY/DEBUG/ALLOWED_HOSTS/CSRF_TRUSTED_ORIGINS из окружения.
@@ -20,9 +22,27 @@
 - [x] **Почта (Симуляция):** Модель MailRule, импорт из почты.
 - [x] **Аутентификация:** Вход/выход.
 - [x] **GUI (Этап 7):** Сохраняемые виды таблицы (DocumentView), счётчики документов, вкладка «Участники».
-- [x] **Документация:** ARCHITECTURE.md, MASTER_SPEC.md, CONTEXT.md обновлены.
+- [x] **GUI (T7-ui-final):** Внедрён django-scotty (таблицы, фильтры, пагинация, экспорт). Кастомный шаблон documents_table.html. Новый топбар с компанией.
+- [x] **Документация:** ARCHITECTURE.md, MASTER_SPEC.md, CONTEXT.md, PROGRESS.md обновлены.
 
 ## Журнал (Changelog)
+
+### 29.10.2026 — T7-ui-final (django-scotty)
+- Установлен django-scotty и зависимости (django-cotton, django-tables2, django-filters, htmx).
+- Созданы `storage/adapters/tables.py` (DocumentTable) и `filters.py` (DocumentFilter).
+- `ProjectDetailView` переведён на `CottonTableView` с пагинацией (50 строк).
+- Ручная HTML-таблица заменена на `{% render_table table %}`.
+- Создан кастомный шаблон `documents_table.html` (sticky, resizable).
+- Экспорт переведён на scotty (`{% export_url 'xlsx' %}`).
+- 127 тестов зелёные (добавлены тесты на фильтры, пагинацию, экспорт).
+
+### 29.10.2026 — T7-polish / T8-prep blockers
+- Создан общий топбар (`_topbar.html`) для всех страниц.
+- Исправлен fallback компании (через `project.company.name`).
+- Добавлена валидация `x_ratio`/`y_ratio` без `page_number`.
+- Viewer/contractor больше не могут создавать замечания (check_write_permission).
+- 124 теста зелёные.
+
 ### 29.10.2026 — Документация и планирование
 - Обновлён ARCHITECTURE.md: добавлены разделы «Порты (ExternalIntegrationPort)» и «Экосистема (API Gateway)».
 - Обновлён MASTER_SPEC.md: добавлены Этапы 8-11 (PDF, Карточка замечания, Экспорт PDF, API Gateway).
@@ -68,9 +88,11 @@
 - [x] **Задача T2:** Добавление модели Company.
 - [x] **Этап 6:** Поиск и навигация по ревизиям.
 - [x] **Этап 7:** GUI-улучшения (виды таблицы, участники).
-- [ ] **Этап 7 (Layout Overhaul):** Глобальный рефакторинг UI (сворачиваемая шапка, сайдбар, sticky-заголовки).
-- [ ] **Этап 8:** PDF-вьюер и визуальные замечания (пины).
-- [ ] **Этап 9:** Карточка замечания 2.0 (обсуждение, сроки, реестр, Excel).
-- [ ] **Этап 10:** Экспорт PDF с наложенными замечаниями (PyMuPDF).
-- [ ] **Этап 11:** Интеграция с экосистемой (API Gateway).
-- [ ] **Деплой:** Настройка сервера (Nginx, Gunicorn, домен, HTTPS).
+- [x] **T7-ui-final:** Внедрение django-scotty.
+- [x] **Деплой:** Настройка сервера (Nginx, Gunicorn, домен, HTTPS) — https://stream-cad.ru/.
+- [ ] **T8-CORE:** Фундамент СОД (папки, проекты, ссылки, корзина) — В РАБОТЕ.
+- [ ] **T9: UI Consistency:** Приведение всех страниц к единому стилю (топбар, таблицы scotty).
+- [ ] **T10:** PDF-вьювер и визуальные замечания (пины).
+- [ ] **T11:** Карточка замечания 2.0 (обсуждение, сроки, реестр, Excel).
+- [ ] **T12:** Экспорт PDF с наложенными замечаниями (PyMuPDF).
+- [ ] **T13:** Интеграция с экосистемой (API Gateway).

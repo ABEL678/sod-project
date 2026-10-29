@@ -11,15 +11,21 @@
         <thead>
             <tr>
                 {% for column in table.columns %}
-                    <th data-column="{{ column.config_key }}"
-                        {% if column.config_key == 'code' %}class="doc-col-sticky"{% endif %}>
-                        {% if column.orderable %}
-                            <a href="{% querystring_replace table.prefixed_order_by_field=column.order_by_alias.next %}">{{ column.header }}</a>
-                        {% else %}
-                            {{ column.header }}
-                        {% endif %}
-                        <span class="col-resizer" data-column="{{ column.config_key }}" role="separator" aria-label="Изменить ширину столбца {{ column.header }}"></span>
-                    </th>
+                    {% if column.config_key == 'selection' %}
+                        <th class="doc-select-col" data-column="selection">
+                            <input type="checkbox" id="selectAllDocuments" aria-label="Выбрать все документы">
+                        </th>
+                    {% else %}
+                        <th data-column="{{ column.config_key }}"
+                            {% if column.config_key == 'code' %}class="doc-col-sticky"{% endif %}>
+                            {% if column.orderable %}
+                                <a href="{% querystring_replace table.prefixed_order_by_field=column.order_by_alias.next %}">{{ column.header }}</a>
+                            {% else %}
+                                {{ column.header }}
+                            {% endif %}
+                            <span class="col-resizer" data-column="{{ column.config_key }}" role="separator" aria-label="Изменить ширину столбца {{ column.header }}"></span>
+                        </th>
+                    {% endif %}
                 {% endfor %}
                 <th class="doc-filler" aria-hidden="true"></th>
             </tr>

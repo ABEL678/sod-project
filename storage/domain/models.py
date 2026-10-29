@@ -55,6 +55,14 @@ class Section(models.Model):
 class Document(models.Model):
     project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='documents', verbose_name="Проект")
     section = models.ForeignKey(Section, on_delete=models.CASCADE, related_name='documents', verbose_name="Раздел")
+    folder = models.ForeignKey(
+        'Folder',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='documents',
+        verbose_name="Папка",
+    )
     code = models.CharField(max_length=100, verbose_name="Шифр документа")
     name = models.CharField(max_length=255, verbose_name="Название")
     DOC_TYPE_CHOICES = [
@@ -79,6 +87,18 @@ class Document(models.Model):
         ('archived', 'Архив'),
     ]
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, verbose_name="Статус")
+    public_link_token = models.UUIDField(
+        null=True,
+        blank=True,
+        unique=True,
+        verbose_name="Публичный токен",
+    )
+    is_deleted = models.BooleanField(default=False, verbose_name="Удален")
+    deleted_at = models.DateTimeField(null=True, blank=True, verbose_name="Дата удаления")
+    deleted_with_parent = models.BooleanField(
+        default=False,
+        verbose_name="Удален вместе с родителем",
+    )
     created_at = models.DateTimeField(auto_now_add=True, verbose_name="Дата создания")
     created_by = models.ForeignKey(User, on_delete=models.PROTECT, verbose_name="Создатель")
     updated_at = models.DateTimeField(auto_now=True, verbose_name="Дата обновления")
@@ -90,6 +110,60 @@ class Document(models.Model):
 
     def __str__(self):
         return f'{self.code} - {self.name}'
+
+
+class Folder(models.Model):
+    project = models.ForeignKey(
+        Project,
+        on_delete=models.CASCADE,
+        related_name='folders',
+        verbose_name="Проект",
+    )
+    section = models.ForeignKey(
+        Section,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='folders',
+        verbose_name="Раздел",
+    )
+    parent = models.ForeignKey(
+        'self',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='children',
+        verbose_name="Родительская папка",
+    )
+    name = models.CharField(max_length=255, verbose_name="Название")
+    order = models.IntegerField(default=0, verbose_name="Порядок сортировки")
+    is_deleted = models.BooleanField(default=False, verbose_name="Удалена")
+    deleted_at = models.DateTimeField(null=True, blank=True, verbose_name="Дата удаления")
+    deleted_with_parent = models.BooleanField(
+        default=False,
+        verbose_name="Удалена вместе с родителем",
+    )
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name="Дата создания")
+    created_by = models.ForeignKey(
+        User,
+        on_delete=models.PROTECT,
+        related_name='created_folders',
+        verbose_name="Создатель",
+    )
+
+    class Meta:
+        ordering = ['order', 'name']
+        verbose_name = "Папка"
+        verbose_name_plural = "Папки"
+        constraints = [
+            models.CheckConstraint(
+                condition=~models.Q(parent=models.F('id')),
+                name='folder_parent_not_self',
+            ),
+        ]
+
+    def __str__(self):
+        return f'{self.project.code} / {self.name}'
 
 
 class DocumentVersion(models.Model):

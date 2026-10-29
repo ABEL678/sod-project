@@ -14,6 +14,11 @@
 <main class="container py-3 pb-5">
     <div class="d-flex justify-content-between align-items-center mb-3">
         <h1 class="h3 mb-0">Проекты</h1>
+        {% if can_create_project %}
+            <button type="button" class="btn btn-primary btn-sm" id="openCreateProject">
+                <i class="bi bi-plus-lg me-1" aria-hidden="true"></i>Создать проект
+            </button>
+        {% endif %}
     </div>
     {% if messages %}
         {% for message in messages %}
@@ -57,5 +62,82 @@
         </div>
     </div>
 </main>
+
+{% if can_create_project %}
+    <div class="modal fade settings-modal" id="createProjectModal" tabindex="-1" aria-hidden="true" data-role="project-create-modal">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <form method="post" action="{% url 'storage:project_create' %}">
+                    {% csrf_token %}
+                    <div class="modal-header">
+                        <h5 class="modal-title">Новый проект</h5>
+                        <button type="button" class="btn-close" data-project-modal-close aria-label="Закрыть"></button>
+                    </div>
+                    <div class="modal-body">
+                        <div class="row g-2">
+                            <div class="col-5">
+                                <label class="form-label small" for="projectCode">Шифр</label>
+                                <input class="form-control form-control-sm" id="projectCode" name="code" required maxlength="50" placeholder="28-10-26-ТЕСТ">
+                            </div>
+                            <div class="col-7">
+                                <label class="form-label small" for="projectName">Название</label>
+                                <input class="form-control form-control-sm" id="projectName" name="name" required maxlength="255" placeholder="ЖК Тестовый">
+                            </div>
+                            <div class="col-12">
+                                <label class="form-label small" for="projectCustomer">Заказчик</label>
+                                <input class="form-control form-control-sm" id="projectCustomer" name="customer" maxlength="255">
+                            </div>
+                            <div class="col-12">
+                                <label class="form-label small" for="projectGip">ГИП</label>
+                                <select class="form-select form-select-sm" id="projectGip" name="gip">
+                                    <option value="">Не назначен</option>
+                                    {% for candidate in gip_candidates %}
+                                        <option value="{{ candidate.pk }}">{{ candidate.get_full_name|default:candidate.username }}</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-outline-secondary btn-sm" data-project-modal-close>Отмена</button>
+                        <button type="submit" class="btn btn-primary btn-sm">Создать проект</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+    <script>
+    (function () {
+        'use strict';
+        var modal = document.getElementById('createProjectModal');
+        var open = document.getElementById('openCreateProject');
+        if (!modal || !open) { return; }
+        function show() {
+            modal.classList.add('show');
+            modal.style.display = 'block';
+            modal.setAttribute('aria-hidden', 'false');
+            document.body.classList.add('modal-open');
+            var input = document.getElementById('projectCode');
+            if (input) { input.focus(); }
+        }
+        function hide() {
+            modal.classList.remove('show');
+            modal.style.display = 'none';
+            modal.setAttribute('aria-hidden', 'true');
+            document.body.classList.remove('modal-open');
+        }
+        open.addEventListener('click', show);
+        modal.querySelectorAll('[data-project-modal-close]').forEach(function (button) {
+            button.addEventListener('click', hide);
+        });
+        modal.addEventListener('click', function (event) {
+            if (event.target === modal) { hide(); }
+        });
+        document.addEventListener('keydown', function (event) {
+            if (event.key === 'Escape' && modal.classList.contains('show')) { hide(); }
+        });
+    })();
+    </script>
+{% endif %}
 </body>
 </html>
