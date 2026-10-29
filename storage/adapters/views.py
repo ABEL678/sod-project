@@ -18,9 +18,12 @@ from django.urls import reverse
 from django.utils import timezone
 from django.views import View
 from django.views.generic import DetailView, ListView, TemplateView
+from django_scotty.views import CottonTableView
 from openpyxl import Workbook
 from openpyxl.styles import Font
 
+from storage.adapters.filters import DocumentFilter
+from storage.adapters.tables import DocumentTable
 from storage.domain.models import (
     Document,
     DocumentVersion,
@@ -38,6 +41,7 @@ from storage.domain.services import (
     get_accessible_sections,
     get_document_view,
     get_project_documents_for_view,
+    get_project_documents_queryset,
     get_project_membership,
     get_sections_with_counts,
     get_user_company,
@@ -65,13 +69,30 @@ DOCUMENT_VIEW_COLUMN_LABELS = {
 }
 
 DEFAULT_COLUMN_WIDTHS = {
-    'code': 140,
+    'code': 120,
     'name': 340,
-    'doc_type': 130,
-    'status': 130,
-    'version': 90,
-    'date': 150,
-    'author': 170,
+    'doc_type': 100,
+    'status': 100,
+    'version': 70,
+    'date': 130,
+    'author': 120,
+}
+
+DOCUMENT_TABLE_COLUMN_MAP = {
+    'code': 'code',
+    'name': 'name',
+    'doc_type': 'doc_type',
+    'status': 'status',
+    'current_version': 'version',
+    'updated_at': 'date',
+    'created_by': 'author',
+}
+
+DOCUMENT_SORT_COLUMN_MAP = {
+    'code': 'code',
+    'name': 'name',
+    'date': 'updated_at',
+    'version': 'current_version',
 }
 
 
@@ -154,42 +175,143 @@ class ProjectListView(LoginRequiredMixin, ListView):
         return get_accessible_projects(self.request.user)
 
 
-class ProjectDetailView(LoginRequiredMixin, DetailView):
-    model = Project
+class ProjectDetailView(LoginRequiredMixin, CottonTableView):
+    model = Document
+    table_class = DocumentTable
+    filterset_class = DocumentFilter
+    paginate_by = 50
+    title = 'Документы проекта'
     template_name = 'storage/project_detail.html'
-    context_object_name = 'project'
+    strict = False
+    export_formats = ('xlsx',)
+    export_name = 'documents'
+    available_filter_buttons = []
+    show_filter_line = False
+    show_bulk_actions = False
+    table_show_download_link = False
+
+    def _get_project(self):
+        if not hasattr(self, '_project_cache'):
+            self._project_cache = get_object_or_404(
+                get_accessible_projects(self.request.user),
+                pk=self.kwargs['pk'],
+            )
+        return self._project_cache
+
+    def _get_view_state(self):
+        if not hasattr(self, '_view_state_cache'):
+            user = self.request.user
+            project = self._get_project()
+            document_views = list_document_views(user, project)
+            selected_view = get_document_view(
+                user,
+                project,
+                self.request.GET.get('view'),
+            )
+
+            if selected_view is not None:
+                try:
+                    base_config = normalize_document_view_config(selected_view.config)
+                except ValueError:
+                    # Повреждённый JSON в БД не должен ронять страницу проекта.
+                    selected_view = None
+                    base_config = normalize_document_view_config({})
+            else:
+                base_config = normalize_document_view_config({})
+
+            if self.request.GET.get('apply'):
+                view_config = _config_from_filters(self.request, base_config)
+            else:
+                view_config = base_config
+
+            self._view_state_cache = (document_views, selected_view, view_config)
+        return self._view_state_cache
 
     def get_queryset(self):
-        return get_accessible_projects(self.request.user)
+        return get_project_documents_queryset(
+            self.request.user,
+            self._get_project(),
+            self._get_view_state()[2],
+        )
+
+    def get_table_data(self):
+        if hasattr(self, 'object_list'):
+            return self.object_list
+        filterset = self.get_filterset(self.filterset_class)
+        if filterset.is_valid():
+            return filterset.qs
+        return self.get_queryset()
+
+    def get(self, request, *args, **kwargs):
+        # Проверяем доступ к проекту до PaginationFixMixin, иначе его
+        # обработчик Http404 превращает 404 в редирект.
+        self._get_project()
+        return super().get(request, *args, **kwargs)
+
+    def get_filterset(self, filterset_class):
+        filterset = super().get_filterset(filterset_class)
+        section_field = filterset.form.fields.get('section')
+        if section_field is not None:
+            section_field.queryset = Section.objects.filter(
+                project=self._get_project()
+            )
+        return filterset
+
+    def get_filterset_kwargs(self, filterset_class):
+        kwargs = super().get_filterset_kwargs(filterset_class)
+        if not self.request.GET.get('apply'):
+            config = self._get_view_state()[2]
+            data = self.request.GET.copy()
+            changed = False
+            for key in ('section', 'doc_type', 'status'):
+                value = config['filters'].get(key)
+                if value and not data.get(key):
+                    data[key] = str(value)
+                    changed = True
+            if changed:
+                kwargs['data'] = data
+        return kwargs
+
+    def get_table_kwargs(self):
+        kwargs = super().get_table_kwargs()
+        visible = set(self._get_view_state()[2]['columns'])
+        kwargs['exclude'] = [
+            name
+            for name in DocumentTable.base_columns
+            if DOCUMENT_TABLE_COLUMN_MAP.get(name, name) not in visible
+        ]
+        return kwargs
+
+    def get_table(self, **kwargs):
+        table = super().get_table(**kwargs)
+        config = self._get_view_state()[2]
+        widths = config.get('widths') or {}
+
+        for column in table.columns:
+            key = DOCUMENT_TABLE_COLUMN_MAP.get(column.name, column.name)
+            column.config_key = key
+            column.width = widths.get(
+                key,
+                DEFAULT_COLUMN_WIDTHS.get(key, 120),
+            )
+
+        names = {column.name for column in table.columns}
+        ordering = []
+        for field in config['sort']:
+            name = DOCUMENT_SORT_COLUMN_MAP[field.lstrip('-')]
+            if name in names:
+                prefix = '-' if field.startswith('-') else ''
+                ordering.append(f'{prefix}{name}')
+        if self.request.GET.get('apply') or not self.request.GET.get('sort'):
+            table.order_by = ordering
+
+        return table
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         user = self.request.user
-        project = self.object
-
-        document_views = list_document_views(user, project)
-        selected_view = get_document_view(
-            user,
-            project,
-            self.request.GET.get('view'),
-        )
-
-        if selected_view is not None:
-            try:
-                base_config = normalize_document_view_config(selected_view.config)
-            except ValueError:
-                # Повреждённый JSON в БД не должен ронять страницу проекта.
-                selected_view = None
-                base_config = normalize_document_view_config({})
-        else:
-            base_config = normalize_document_view_config({})
-        if self.request.GET.get('apply'):
-            view_config = _config_from_filters(
-                self.request,
-                base_config,
-            )
-        else:
-            view_config = base_config
+        project = self._get_project()
+        document_views, selected_view, view_config = self._get_view_state()
 
         can_manage_participants = can_manage_project_participants(user, project)
         active_tab = 'documents'
@@ -198,6 +320,7 @@ class ProjectDetailView(LoginRequiredMixin, DetailView):
 
         column_defs = _document_column_defs(view_config)
         context.update({
+            'project': project,
             'sections': get_sections_with_counts(user, project),
             'recent_documents': _recent_documents(
                 self.request,

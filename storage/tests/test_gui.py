@@ -544,6 +544,67 @@ class GuiViewTests(GuiTestBase):
         self.assertNotContains(response, 'Перетащите файлы сюда')
         self.assertNotContains(response, 'upload-zone')
 
+    def test_scotty_table_filters(self):
+        self.client.force_login(self.user_gip)
+        response = self.client.get(
+            reverse('storage:project_detail', args=[self.project.pk]),
+            {'status': 'approved'},
+        )
+
+        table = response.context['table']
+        self.assertEqual(
+            [row.record.code for row in table.rows],
+            ['АР-02'],
+        )
+        self.assertEqual(table.paginator.per_page, 50)
+        self.assertContains(response, 'data-role="documents-table"')
+
+        response = self.client.get(
+            reverse('storage:project_detail', args=[self.project.pk]),
+            {'code': 'АР-01'},
+        )
+        self.assertEqual(
+            [row.record.code for row in response.context['table'].rows],
+            ['АР-01'],
+        )
+
+    def test_scotty_table_pagination(self):
+        Document.objects.bulk_create([
+            Document(
+                project=self.project,
+                section=self.section_ar,
+                code=f'P-{index:03}',
+                name=f'Документ {index}',
+                doc_type='drawing',
+                status='draft',
+                created_by=self.user_gip,
+            )
+            for index in range(51)
+        ])
+        self.client.force_login(self.user_gip)
+        response = self.client.get(
+            reverse('storage:project_detail', args=[self.project.pk])
+        )
+
+        table = response.context['table']
+        self.assertEqual(table.paginator.num_pages, 2)
+        self.assertEqual(len(table.paginated_rows), 50)
+        self.assertContains(response, 'data-role="pagination"')
+        self.assertContains(response, 'page=2')
+
+    def test_scotty_export_xlsx(self):
+        self.client.force_login(self.user_gip)
+        response = self.client.get(
+            reverse('storage:project_detail', args=[self.project.pk]),
+            {'_export': 'xlsx'},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(
+            'spreadsheetml',
+            response['Content-Type'],
+        )
+
     def test_save_view_via_post(self):
         self.client.force_login(self.user_engineer)
         response = self.client.post(

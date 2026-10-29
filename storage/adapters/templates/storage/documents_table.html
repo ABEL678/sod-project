@@ -1,0 +1,96 @@
+{% load django_tables2 %}
+{% load i18n %}
+<div class="table-container">
+    <table {% render_attrs table.attrs %}>
+        <colgroup>
+            {% for column in table.columns %}
+                <col data-column="{{ column.config_key }}" style="width: {{ column.width }}px;">
+            {% endfor %}
+            <col class="doc-filler">
+        </colgroup>
+        <thead>
+            <tr>
+                {% for column in table.columns %}
+                    <th data-column="{{ column.config_key }}"
+                        {% if column.config_key == 'code' %}class="doc-col-sticky"{% endif %}>
+                        {% if column.orderable %}
+                            <a href="{% querystring_replace table.prefixed_order_by_field=column.order_by_alias.next %}">{{ column.header }}</a>
+                        {% else %}
+                            {{ column.header }}
+                        {% endif %}
+                        <span class="col-resizer" data-column="{{ column.config_key }}" role="separator" aria-label="Изменить ширину столбца {{ column.header }}"></span>
+                    </th>
+                {% endfor %}
+                <th class="doc-filler" aria-hidden="true"></th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for row in table.paginated_rows %}
+                <tr data-row="document"
+                    data-search="{{ row.record.code|lower }} {{ row.record.name|lower }} {{ row.record.doc_type|default:''|lower }} {{ row.record.status|lower }} {{ row.record.created_by.get_full_name|default:row.record.created_by.username|lower }}">
+                    {% for column, cell in row.items %}
+                        <td data-column="{{ column.config_key }}"
+                            {% if column.config_key == 'code' %}class="doc-code doc-col-sticky"{% endif %}>
+                            {{ cell }}
+                        </td>
+                    {% endfor %}
+                    <td class="doc-filler" aria-hidden="true"></td>
+                </tr>
+            {% empty %}
+                <tr class="table-empty-row">
+                    <td colspan="{{ table.columns|length|add:1 }}">
+                        <div class="doc-empty">
+                            <i class="bi bi-folder2-open doc-empty-icon" aria-hidden="true"></i>
+                            <div class="doc-empty-title">Документов пока нет</div>
+                            <div class="doc-empty-hint">Загрузите первый файл, чтобы начать работу с проектом</div>
+                            <button type="button" class="btn btn-primary" data-empty-upload>
+                                <i class="bi bi-plus-lg" aria-hidden="true"></i>
+                                Загрузить первый документ
+                            </button>
+                        </div>
+                    </td>
+                </tr>
+            {% endfor %}
+            {% if table.paginated_rows %}
+                <tr class="table-empty" id="quickFilterEmpty" style="display: none;">
+                    <td colspan="{{ table.columns|length|add:1 }}">Ничего не найдено</td>
+                </tr>
+            {% endif %}
+        </tbody>
+    </table>
+
+    {% if table.page and table.paginator.num_pages > 1 %}
+        <div class="table-pagination" data-role="pagination">
+            <span class="text-muted small">
+                {{ table.page.start_index }}–{{ table.page.end_index }} из {{ table.paginator.count }}
+            </span>
+            <nav aria-label="Пагинация документов">
+                <ul class="pagination pagination-sm mb-0">
+                    <li class="page-item {% if not table.page.has_previous %}disabled{% endif %}">
+                        {% if table.page.has_previous %}
+                            <a class="page-link" href="{% querystring_replace table.prefixed_page_field=table.page.previous_page_number %}">←</a>
+                        {% else %}
+                            <span class="page-link">←</span>
+                        {% endif %}
+                    </li>
+                    {% for page_number in table.page|table_page_range:table.paginator %}
+                        <li class="page-item {% if page_number == table.page.number %}active{% endif %}">
+                            {% if page_number == '...' %}
+                                <span class="page-link">{{ page_number }}</span>
+                            {% else %}
+                                <a class="page-link" href="{% querystring_replace table.prefixed_page_field=page_number %}">{{ page_number }}</a>
+                            {% endif %}
+                        </li>
+                    {% endfor %}
+                    <li class="page-item {% if not table.page.has_next %}disabled{% endif %}">
+                        {% if table.page.has_next %}
+                            <a class="page-link" href="{% querystring_replace table.prefixed_page_field=table.page.next_page_number %}">→</a>
+                        {% else %}
+                            <span class="page-link">→</span>
+                        {% endif %}
+                    </li>
+                </ul>
+            </nav>
+        </div>
+    {% endif %}
+</div>

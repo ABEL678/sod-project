@@ -174,6 +174,35 @@ sod_project/
 | is_shared | BooleanField | Общий или личный |
 | created_at | DateTimeField | |
 
+#### Folder (T8-CORE)
+
+| Поле | Тип | Описание |
+|---|---|---|
+| id | PK | |
+| project | FK → Project, on_delete=CASCADE | Проект |
+| section | FK → Section, null=True | Раздел (если папка на уровне раздела) |
+| parent | FK → Folder, null=True | Родительская папка (для вложенности) |
+| name | CharField(255) | Название папки |
+| order | IntegerField | Порядок сортировки |
+| created_at | DateTimeField | |
+| created_by | FK → User | |
+
+**Правило:** папка может быть на уровне проекта (section=None) или внутри раздела (section=Section). Вложенность через parent.
+
+#### Document (дополнение к T8-CORE)
+
+Добавить поле:
+- `public_link_token` (UUIDField, null=True, blank=True, unique=True) — для генерации публичных ссылок на документ/версию.
+
+#### DocumentStatus (Enum для жизненного цикла)
+
+- `WIP` — в работе (черновик, не передан).
+- `SHARED` — передан смежникам (для координации).
+- `PUBLISHED` — выпущен заказчику (утверждён).
+- `ARCHIVED` — архив.
+
+**Правило:** статус меняется через сервис `update_document_status()`, а не напрямую.
+
 #### IssueComment (Этап 9)
 | Поле | Тип | Описание |
 |---|---|---|
@@ -311,6 +340,34 @@ def add_issue_comment(user: User, issue: Issue, text: str) -> IssueComment: ...
 def attach_file_to_issue(user: User, issue: Issue, file) -> IssueAttachment: ...
 def update_issue_status(user: User, issue: Issue, status: str) -> Issue: ...
 def get_my_issues(user: User, role: str = 'assignee') -> QuerySet[Issue]: ...
+
+### Модуль Folder (T8-CORE)
+
+def create_folder(
+    user: User,
+    project: Project,
+    name: str,
+    section: Section | None = None,
+    parent: Folder | None = None,
+) -> Folder: ...
+
+def move_document(
+    user: User,
+    document: Document,
+    folder: Folder,
+) -> Document: ...
+
+def get_folder_tree(user: User, project: Project) -> list[Folder]: ...
+
+def generate_share_link(user: User, document: Document) -> str: ...
+
+### Модуль Document (дополнение)
+
+def update_document_status(
+    user: User,
+    document: Document,
+    new_status: str,  # WIP, SHARED, PUBLISHED, ARCHIVED
+) -> Document: ...
 
 **Правило:** upload_document() — единственная точка создания версий. Ни views, ни почтовый модуль, ни ИИ не создают DocumentVersion напрямую.
 

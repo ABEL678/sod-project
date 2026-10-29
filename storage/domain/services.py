@@ -1,5 +1,5 @@
 from django.core.exceptions import PermissionDenied
-from django.db.models import Count, Max, Prefetch, Q
+from django.db.models import Count, Max, Prefetch, Q, QuerySet
 from django.db import transaction
 from django.utils import timezone
 
@@ -342,12 +342,12 @@ def get_sections_with_counts(user: User, project: Project):
     )
 
 
-def get_project_documents_for_view(
+def get_project_documents_queryset(
     user: User,
     project: Project,
     config: dict | None = None,
-) -> list[dict]:
-    """Документы проекта для таблицы с учётом сохранённого вида."""
+) -> QuerySet:
+    """Возвращает queryset документов проекта с учётом сохранённого вида."""
     _ensure_project_access(user, project)
 
     normalized_config = normalize_document_view_config(config or {})
@@ -374,12 +374,21 @@ def get_project_documents_for_view(
     if not ordering:
         ordering = ['section__order', 'code']
 
-    documents = queryset.select_related(
+    return queryset.select_related(
         'section',
         'current_version',
         'current_version__uploaded_by',
+        'created_by',
     ).order_by(*ordering)
 
+
+def get_project_documents_for_view(
+    user: User,
+    project: Project,
+    config: dict | None = None,
+) -> list[dict]:
+    """Документы проекта для таблицы с учётом сохранённого вида."""
+    documents = get_project_documents_queryset(user, project, config)
     return [_document_row(document) for document in documents]
 
 
@@ -700,8 +709,11 @@ def create_issue(
     y_ratio: float | None = None,
 ) -> Issue:
     """Создаёт замечание к документу с проверкой прав и валидацией координат пина."""
-    if not check_read_permission(user, document):
+    if not check_write_permission(user, document.section):
         raise PermissionDenied("Нет прав на добавление замечания к документу")
+
+    if page_number is None and (x_ratio is not None or y_ratio is not None):
+        raise ValueError("x_ratio и y_ratio требуют page_number")
 
     if page_number is not None:
         if page_number < 1:

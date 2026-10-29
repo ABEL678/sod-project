@@ -1,4 +1,5 @@
 {% load static %}
+{% load django_tables2 %}
 <!DOCTYPE html>
 <html lang="ru">
 <head>
@@ -11,59 +12,7 @@
 </head>
 <body class="app-body">
 <div class="app-shell" id="appShell">
-    <header class="app-topbar" data-role="topbar">
-        <div class="topbar-identity">
-            <a class="topbar-brand" href="{% url 'storage:project_list' %}">
-                <i class="bi bi-layers-half" aria-hidden="true"></i>
-                <span class="topbar-company">{{ user.userprofile.company.name|default:"Stream-CAD" }}</span>
-            </a>
-
-            <div class="topbar-project">
-                <span class="topbar-project-name" title="{{ project.name }}">{{ project.name }}</span>
-                <span class="topbar-code">{{ project.code }}</span>
-            </div>
-        </div>
-
-        <form class="topbar-search" method="get" action="{% url 'storage:search' project.pk %}" role="search">
-            <i class="bi bi-search" aria-hidden="true"></i>
-            <input type="search" name="q" placeholder="Поиск по шифру, названию, комментарию" aria-label="Поиск по проекту">
-        </form>
-
-        <div class="topbar-actions">
-            {% if recent_documents %}
-                <div class="dropdown" id="recent-documents">
-                    <button class="topbar-icon-btn" type="button" data-dropdown-toggle="#recentMenu" aria-haspopup="true" aria-expanded="false" title="Последние документы">
-                        <i class="bi bi-clock-history" aria-hidden="true"></i>
-                    </button>
-                    <div class="dropdown-menu dropdown-menu-end" id="recentMenu">
-                        <h6 class="dropdown-header">Последние документы</h6>
-                        {% for doc in recent_documents %}
-                            <a class="dropdown-item d-flex justify-content-between align-items-center gap-3" href="{% url 'storage:document_detail' doc.pk %}">
-                                <span class="text-truncate">
-                                    <span class="fw-semibold">{{ doc.code }}</span>
-                                    <span class="text-muted">— {{ doc.name }}</span>
-                                </span>
-                                <span class="small text-muted text-nowrap">
-                                    {% if doc.current_version %}v{{ doc.current_version.version_number }}{% else %}—{% endif %}
-                                </span>
-                            </a>
-                        {% endfor %}
-                    </div>
-                </div>
-            {% endif %}
-
-            <div class="topbar-user">
-                <span class="topbar-avatar" aria-hidden="true">{{ user.username|first|upper }}</span>
-                <span class="topbar-username" title="{{ user.get_full_name|default:user.username }}">{{ user.get_full_name|default:user.username }}</span>
-                <form method="post" action="{% url 'logout' %}" class="mb-0">
-                    {% csrf_token %}
-                    <button type="submit" class="topbar-icon-btn" title="Выйти" aria-label="Выйти">
-                        <i class="bi bi-box-arrow-right" aria-hidden="true"></i>
-                    </button>
-                </form>
-            </div>
-        </div>
-    </header>
+    {% include 'storage/_topbar.html' with topbar_project=project %}
 
     <div class="app-layout">
         <aside class="app-sidebar" id="projectSidebar" data-role="sidebar">
@@ -202,8 +151,8 @@
                 </div>
             {% else %}
                 <div class="toolbar" data-role="toolbar">
-                <div class="toolbar-main">
-                <form class="toolbar-filters" method="get" action="{% url 'storage:project_detail' project.pk %}" id="filtersForm">
+                <div class="toolbar-left">
+                <form class="filter-group" method="get" action="{% url 'storage:project_detail' project.pk %}" id="filtersForm">
                     <input type="hidden" name="tab" value="documents">
                     <input type="hidden" name="apply" value="1">
                     {% if selected_view %}
@@ -236,26 +185,11 @@
                             </div>
                         </div>
 
-                        <select name="section" id="filterSection" class="form-select toolbar-select" aria-label="Фильтр по разделу">
-                            <option value="">Все разделы</option>
-                            {% for section in sections %}
-                                <option value="{{ section.pk }}" {% if active_filters.section == section.pk %}selected{% endif %}>{{ section.code }}</option>
-                            {% endfor %}
-                        </select>
+                        {{ filter.form.section }}
 
-                        <select name="doc_type" id="filterType" class="form-select toolbar-select" aria-label="Фильтр по типу документа">
-                            <option value="">Все типы</option>
-                            {% for value, label in doc_type_choices %}
-                                <option value="{{ value }}" {% if active_filters.doc_type == value %}selected{% endif %}>{{ label }}</option>
-                            {% endfor %}
-                        </select>
+                        {{ filter.form.doc_type }}
 
-                        <select name="status" id="filterStatus" class="form-select toolbar-select" aria-label="Фильтр по статусу">
-                            <option value="">Все статусы</option>
-                            {% for value, label in status_choices %}
-                                <option value="{{ value }}" {% if active_filters.status == value %}selected{% endif %}>{{ label }}</option>
-                            {% endfor %}
-                        </select>
+                        {{ filter.form.status }}
 
                         <select name="sort" id="filterSort" class="form-select toolbar-select" aria-label="Сортировка">
                             <option value="" {% if not active_sort %}selected{% endif %}>По разделу</option>
@@ -271,90 +205,39 @@
                             </a>
                         {% endif %}
                 </form>
-
-                <div class="quick-filter">
-                    <i class="bi bi-search" aria-hidden="true"></i>
-                    <input type="search" id="quickFilter" class="form-control" placeholder="Быстрый фильтр по таблице" aria-label="Быстрый фильтр по таблице" data-role="quick-filter">
                 </div>
 
-                <span class="toolbar-count text-muted small text-nowrap">{{ documents|length }} док.</span>
+                <div class="toolbar-center">
+                    <div class="quick-filter">
+                        <i class="bi bi-search" aria-hidden="true"></i>
+                        <input type="search" id="quickFilter" class="form-control" placeholder="Быстрый фильтр по таблице" aria-label="Быстрый фильтр по таблице" data-role="quick-filter">
+                    </div>
                 </div>
 
-                <div class="toolbar-actions">
-                    <form method="post" action="{% url 'storage:simulate_mail_import' project.pk %}" class="mb-0">
-                        {% csrf_token %}
-                        <button type="submit" class="btn btn-outline-secondary" title="Импортировать из почты">
-                            <i class="bi bi-envelope-arrow-down" aria-hidden="true"></i>
-                            <span class="d-none d-xl-inline">Импорт</span>
+                <div class="toolbar-right">
+                    <span class="toolbar-count text-muted small text-nowrap">{{ documents|length }} док.</span>
+                    <div class="toolbar-actions">
+                        <form method="post" action="{% url 'storage:simulate_mail_import' project.pk %}" class="mb-0">
+                            {% csrf_token %}
+                            <button type="submit" class="btn btn-outline-secondary" title="Импортировать из почты">
+                                <i class="bi bi-envelope-arrow-down" aria-hidden="true"></i>
+                                <span class="d-none d-xl-inline">Импорт</span>
+                            </button>
+                        </form>
+                        <a class="btn btn-outline-secondary" href="{% export_url 'xlsx' %}" title="Экспорт таблицы в Excel">
+                            <i class="bi bi-file-earmark-excel" aria-hidden="true"></i>
+                            <span class="d-none d-xl-inline">Экспорт</span>
+                        </a>
+                        <button type="button" class="btn btn-outline-secondary settings-btn" id="openSettings" data-open-settings title="Настройки вида" aria-label="Настройки вида">
+                            <i class="bi bi-gear" aria-hidden="true"></i>
+                            <span class="d-none d-xxl-inline">Настройки</span>
                         </button>
-                    </form>
-                    <a class="btn btn-outline-secondary" href="{% url 'storage:export_vedomost' project.pk %}" title="Экспорт ведомости в Excel">
-                        <i class="bi bi-file-earmark-excel" aria-hidden="true"></i>
-                        <span class="d-none d-xl-inline">Экспорт</span>
-                    </a>
-                    <button type="button" class="btn btn-outline-secondary icon-btn" id="openSettings" data-open-settings title="Настройки вида" aria-label="Настройки вида">
-                        <i class="bi bi-gear" aria-hidden="true"></i>
-                    </button>
+                    </div>
                 </div>
                 </div>
 
                 <div class="doc-table-wrap" id="documentsTableWrap">
-                    <table class="doc-table" id="documentsTable" data-role="documents-table">
-                        <colgroup>
-                            {% for column in visible_columns %}
-                                <col data-column="{{ column.key }}" style="width: {{ column.width }}px;">
-                            {% endfor %}
-                            <col class="doc-filler">
-                        </colgroup>
-                        <thead>
-                            <tr>
-                                {% for column in visible_columns %}
-                                    <th data-column="{{ column.key }}" {% if column.key == 'code' %}class="doc-col-sticky"{% endif %}>
-                                        {{ column.label }}
-                                        <span class="col-resizer" data-column="{{ column.key }}" role="separator" aria-label="Изменить ширину столбца {{ column.label }}"></span>
-                                    </th>
-                                {% endfor %}
-                                <th class="doc-filler" aria-hidden="true"></th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                        {% for doc in documents %}
-                            <tr data-row="document" data-search="{{ doc.code|lower }} {{ doc.name|lower }} {{ doc.doc_type|lower }} {{ doc.status|lower }} {{ doc.author|lower }}">
-                                {% for column in visible_columns %}
-                                    {% if column.key == 'code' %}
-                                        <td data-column="code" class="doc-code doc-col-sticky" title="{{ doc.code }}">{{ doc.code }}</td>
-                                    {% elif column.key == 'name' %}
-                                        <td data-column="name" title="{{ doc.name }}">
-                                            <a href="{% url 'storage:document_detail' doc.id %}">{{ doc.name }}</a>
-                                        </td>
-                                    {% elif column.key == 'doc_type' %}
-                                        <td data-column="doc_type">{{ doc.doc_type }}</td>
-                                    {% elif column.key == 'status' %}
-                                        <td data-column="status">
-                                            <span class="doc-badge {% if doc.status_code == 'approved' %}doc-badge-approved{% elif doc.status_code == 'in_review' %}doc-badge-review{% elif doc.status_code == 'archived' %}doc-badge-archived{% else %}doc-badge-draft{% endif %}">
-                                                {{ doc.status }}
-                                            </span>
-                                        </td>
-                                    {% elif column.key == 'version' %}
-                                        <td data-column="version">{{ doc.version }}</td>
-                                    {% elif column.key == 'date' %}
-                                        <td data-column="date">{{ doc.date|date:"d.m.Y H:i" }}</td>
-                                    {% elif column.key == 'author' %}
-                                        <td data-column="author" title="{{ doc.author }}">{{ doc.author|default:"—" }}</td>
-                                    {% endif %}
-                                {% endfor %}
-                                <td class="doc-filler" aria-hidden="true"></td>
-                            </tr>
-                        {% empty %}
-                            <tr class="table-empty">
-                                <td colspan="{{ visible_columns|length|add:1 }}">Документов пока нет</td>
-                            </tr>
-                        {% endfor %}
-                            <tr class="table-empty" id="quickFilterEmpty" style="display: none;">
-                                <td colspan="{{ visible_columns|length|add:1 }}">Ничего не найдено</td>
-                            </tr>
-                        </tbody>
-                    </table>
+                    {% render_table table %}
                 </div>
             {% endif %}
         </main>
@@ -599,7 +482,8 @@
                 }
             });
             if (quickFilterEmpty) {
-                quickFilterEmpty.style.display = visible === 0 ? '' : 'none';
+                var totalRows = document.querySelectorAll('#documentsTable tr[data-row="document"]').length;
+                quickFilterEmpty.style.display = (totalRows > 0 && visible === 0) ? '' : 'none';
             }
         });
     }
@@ -806,6 +690,14 @@
             fileInput.click();
         });
     }
+
+    document.querySelectorAll('[data-empty-upload]').forEach(function (button) {
+        button.addEventListener('click', function () {
+            if (uploadButton) {
+                uploadButton.click();
+            }
+        });
+    });
 
     if (fileInput) {
         fileInput.addEventListener('change', function () {

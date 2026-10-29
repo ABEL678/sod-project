@@ -91,6 +91,27 @@ class ViewTests(TestCase):
         response = self.client.get(reverse('storage:project_list'))
         self.assertNotContains(response, 'P-FOREIGN')
 
+    def test_project_list_uses_shared_topbar(self):
+        self.client.force_login(self.user_gip)
+        response = self.client.get(reverse('storage:project_list'))
+        self.assertContains(response, 'class="app-topbar"')
+        self.assertContains(
+            response,
+            f'class="topbar-company">{self.company.name}</span>',
+        )
+        self.assertNotContains(response, 'navbar-dark')
+
+    def test_project_detail_company_fallback_without_profile(self):
+        superuser = User.objects.create_superuser('root', password='pass')
+        self.client.force_login(superuser)
+        response = self.client.get(
+            reverse('storage:project_detail', args=[self.project.pk])
+        )
+        self.assertContains(
+            response,
+            f'class="topbar-company">{self.company.name}</span>',
+        )
+
     def test_project_detail(self):
         self.client.force_login(self.user_gip)
         response = self.client.get(reverse('storage:project_detail', args=[self.project.pk]))
@@ -99,6 +120,8 @@ class ViewTests(TestCase):
         self.assertContains(response, 'АР')
         self.assertContains(response, 'data-role="sidebar"')
         self.assertContains(response, 'data-role="toolbar"')
+        self.assertContains(response, 'doc-empty')
+        self.assertContains(response, 'Загрузить первый документ')
         self.assertContains(response, 'upload-ajax')
 
     def test_project_detail_foreign_company_404(self):

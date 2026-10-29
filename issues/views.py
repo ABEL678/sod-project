@@ -1,4 +1,5 @@
 from django.contrib import messages
+from django.core.exceptions import PermissionDenied
 from django.http import HttpResponseForbidden
 from django.shortcuts import get_object_or_404, redirect
 from django.views import View
@@ -63,7 +64,9 @@ class IssueCreateView(CreateView):
                 x_ratio=x_ratio,
                 y_ratio=y_ratio,
             )
-        except (PermissionDenied, ValueError) as exc:
+        except PermissionDenied as exc:
+            return HttpResponseForbidden(str(exc))
+        except ValueError as exc:
             messages.error(self.request, str(exc))
             return redirect('storage:document_detail', pk=self.document.pk)
 

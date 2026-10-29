@@ -221,6 +221,34 @@ class IssueTests(TestCase):
         self.assertEqual(issue.x_ratio, 0.5)
         self.assertEqual(issue.y_ratio, 0.3)
 
+    def test_create_issue_x_y_without_page_number_raises(self):
+        with self.assertRaises(ValueError):
+            create_issue(
+                user=self.user_gip,
+                document=self.document,
+                description='Координаты без номера страницы',
+                page_number=None,
+                x_ratio=0.5,
+                y_ratio=0.5,
+            )
+
+    def test_create_issue_forbidden_for_viewer(self):
+        with self.assertRaises(PermissionDenied):
+            create_issue(
+                user=self.user_viewer,
+                document=self.document,
+                description='Замечание без прав на запись',
+            )
+
+    def test_create_issue_view_forbidden_for_viewer(self):
+        self.client.force_login(self.user_viewer)
+        response = self.client.post(
+            reverse('issues:issue_create', args=[self.document.pk]),
+            {'description': 'Замечание без прав на запись'},
+        )
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(Issue.objects.count(), 0)
+
     def test_create_issue_pin_coords_without_page_number(self):
         issue = create_issue(
             user=self.user_gip,
