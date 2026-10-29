@@ -6,13 +6,15 @@ from django.utils import timezone
 from storage.domain.models import (
     Company,
     Document,
-    DocumentView,
     DocumentVersion,
+    DocumentView,
+    MailRule,
     Project,
     ProjectMembership,
     Section,
     User,
 )
+from issues.models import Issue
 
 
 DOCUMENT_VIEW_COLUMNS = ('code', 'name', 'doc_type', 'status', 'version', 'date', 'author')
@@ -685,4 +687,43 @@ def search_documents(
             )
         )
         .order_by('section__order', 'code')
+    )
+
+
+def create_issue(
+    user: User,
+    document: Document,
+    description: str,
+    version: DocumentVersion | None = None,
+    page_number: int | None = None,
+    x_ratio: float | None = None,
+    y_ratio: float | None = None,
+) -> Issue:
+    """Создаёт замечание к документу с проверкой прав и валидацией координат пина."""
+    if not check_read_permission(user, document):
+        raise PermissionDenied("Нет прав на добавление замечания к документу")
+
+    if page_number is not None:
+        if page_number < 1:
+            raise ValueError("Номер страницы должен быть больше 0")
+        if x_ratio is None or y_ratio is None:
+            raise ValueError(
+                "При указании page_number необходимо указать x_ratio и y_ratio"
+            )
+    if x_ratio is not None and not (0.0 <= x_ratio <= 1.0):
+        raise ValueError("x_ratio должен быть в диапазоне 0.0 — 1.0")
+    if y_ratio is not None and not (0.0 <= y_ratio <= 1.0):
+        raise ValueError("y_ratio должен быть в диапазоне 0.0 — 1.0")
+
+    if version is not None and version.document_id != document.pk:
+        raise ValueError("Указанная версия не принадлежит данному документу")
+
+    return Issue.objects.create(
+        document=document,
+        version=version,
+        author=user,
+        description=description,
+        page_number=page_number,
+        x_ratio=x_ratio,
+        y_ratio=y_ratio,
     )

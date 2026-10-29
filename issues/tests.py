@@ -1,13 +1,14 @@
 import tempfile
 
 from django.contrib.auth import get_user_model
+from django.core.exceptions import PermissionDenied
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase, override_settings
 from django.urls import reverse
 
 from issues.models import Issue
 from storage.domain.models import Company, Document, Project, Section, UserProfile
-from storage.domain.services import upload_document
+from storage.domain.services import create_issue, upload_document
 
 
 User = get_user_model()
@@ -204,3 +205,81 @@ class IssueTests(TestCase):
         self.assertEqual(response.status_code, 404)
         issue.refresh_from_db()
         self.assertEqual(issue.status, 'open')
+
+    def test_create_issue_with_pin_coords(self):
+        self.client.force_login(self.user_gip)
+        issue = create_issue(
+            user=self.user_gip,
+            document=self.document,
+            description='Замечание на пине',
+            version=self.version,
+            page_number=1,
+            x_ratio=0.5,
+            y_ratio=0.3,
+        )
+        self.assertEqual(issue.page_number, 1)
+        self.assertEqual(issue.x_ratio, 0.5)
+        self.assertEqual(issue.y_ratio, 0.3)
+
+    def test_create_issue_pin_coords_without_page_number(self):
+        issue = create_issue(
+            user=self.user_gip,
+            document=self.document,
+            description='Без пина',
+        )
+        self.assertIsNone(issue.page_number)
+        self.assertIsNone(issue.x_ratio)
+        self.assertIsNone(issue.y_ratio)
+
+    def test_create_issue_missing_x_y_with_page_number(self):
+        with self.assertRaises(ValueError):
+            create_issue(
+                user=self.user_gip,
+                document=self.document,
+                description='Пин без координат',
+                page_number=1,
+            )
+
+    def test_create_issue_x_ratio_out_of_range(self):
+        with self.assertRaises(ValueError):
+            create_issue(
+                user=self.user_gip,
+                document=self.document,
+                description='Координата вне диапазона',
+                page_number=1,
+                x_ratio=1.5,
+                y_ratio=0.3,
+            )
+
+    def test_create_issue_version_not_from_document(self):
+        other_section = Section.objects.create(
+            project=self.project,
+            code='КР',
+            name='Конструктивные решения',
+            order=2,
+        )
+        other_document = Document.objects.create(
+            project=self.project,
+            section=other_section,
+            code='КР-99',
+            name='Чужой документ',
+            doc_type='drawing',
+            status='draft',
+            created_by=self.user_gip,
+        )
+        other_version = upload_document(
+            user=self.user_gip,
+            project=self.project,
+            section=other_section,
+            code='КР-99',
+            name='Чужой документ',
+            doc_type='drawing',
+            file=SimpleUploadedFile('other.pdf', b'data', content_type='application/pdf'),
+        )
+        with self.assertRaises(ValueError):
+            create_issue(
+                user=self.user_gip,
+                document=self.document,
+                description='Версия от другого документа',
+                version=other_version,
+            )

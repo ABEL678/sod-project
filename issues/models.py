@@ -1,5 +1,6 @@
 from django.contrib.auth.models import User
 from django.db import models
+from django.db.models import CheckConstraint, Q
 
 from storage.domain.models import Document, DocumentVersion
 
@@ -31,9 +32,21 @@ class Issue(models.Model):
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='open')
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+    page_number = models.PositiveIntegerField(null=True, blank=True)
+    x_ratio = models.FloatField(null=True, blank=True)
+    y_ratio = models.FloatField(null=True, blank=True)
 
     class Meta:
         ordering = ['-created_at']
+        constraints = [
+            CheckConstraint(
+                condition=Q(
+                    Q(page_number__isnull=True, x_ratio__isnull=True, y_ratio__isnull=True)
+                    | Q(page_number__isnull=False, x_ratio__isnull=False, y_ratio__isnull=False)
+                ),
+                name='issue_pin_coords_consistency',
+            )
+        ]
 
     def __str__(self):
         return f'Замечание #{self.pk} — {self.document.code} ({self.get_status_display()})'
