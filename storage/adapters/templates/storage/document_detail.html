@@ -10,10 +10,10 @@
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
     <link rel="stylesheet" href="{% static 'css/app.css' %}">
 </head>
-<body class="bg-light">
+<body class="bg-light d-flex flex-column" style="height: 100vh; overflow: hidden;">
 {% include 'storage/_topbar.html' with topbar_project=document.project %}
-<main>
-    <div class="container-fluid py-1 bg-white border-bottom small">
+<main class="d-flex flex-column flex-grow-1" style="min-height: 0;">
+    <div class="container-fluid py-1 bg-white border-bottom small flex-shrink-0">
         <div class="d-flex align-items-center gap-2">
             <span class="text-muted">{{ document.project.code }}</span> /
             <span class="fw-bold">{{ document.code }} — {{ document.name }}</span>
@@ -35,9 +35,9 @@
         {% endfor %}
     {% endif %}
 
-    <div id="main-splitter" class="d-flex w-100" style="height: calc(100vh - 110px); margin-bottom: 0 !important;">
-        <div id="pdf-panel" class="h-100 d-flex flex-column" style="width: 75%;">
-            <div class="bg-light border-bottom p-1 d-flex flex-wrap gap-1 align-items-center">
+    <div id="main-splitter" class="d-flex w-100 flex-grow-1" style="min-height: 0; margin-bottom: 0 !important;">
+        <div id="pdf-panel" class="h-100 d-flex flex-column overflow-hidden" style="width: 75%;">
+            <div class="bg-light border-bottom p-1 d-flex flex-wrap gap-1 align-items-center flex-shrink-0">
                 <button class="btn btn-sm btn-outline-secondary py-0 px-2" onclick="zoomIn()">+</button>
                 <button class="btn btn-sm btn-outline-secondary py-0 px-2" onclick="zoomOut()">−</button>
                 <div class="dropdown">
@@ -72,7 +72,8 @@
                 <a href="{% url 'storage:document_pdf_with_issues' document.pk %}" class="btn btn-sm btn-primary py-0 px-2">Скачать</a>
             </div>
 
-            <div class="pdf-viewer flex-grow-1 overflow-auto h-100" id="pdfViewer"
+            <div class="pdf-viewer flex-grow-1 overflow-auto h-100 d-flex flex-column align-items-center" id="pdfViewer"
+                 style="max-height: none; min-height: 0;"
                  data-pdf-url="{% url 'storage:document_download' document.current_version.pk %}"
                  data-worker-url="{% static 'js/pdfjs/pdf.worker.min.js' %}"
                  {% if can_create_issue %}data-issue-create-url="{% url 'issues:issue_create' document.pk %}"{% endif %}
@@ -83,7 +84,7 @@
 
         <div id="drag-divider" style="width: 5px; cursor: col-resize; background-color: #dee2e6; flex-shrink: 0;"></div>
 
-        <div id="issues-panel" class="h-100 d-flex flex-column bg-white" style="width: 25%; min-width: 280px; overflow-x: auto;">
+        <div id="issues-panel" class="h-100 d-flex flex-column bg-white" style="width: 25%; min-width: 280px; overflow: auto;">
             <div class="d-flex justify-content-between align-items-center p-2 border-bottom bg-light">
                 <h6 class="mb-0">Замечания ({{ issues|length }})</h6>
                 {% if not public_view and can_create_issue %}
