@@ -118,25 +118,56 @@
         <div id="drag-divider" style="width: 5px; cursor: col-resize; background-color: #e9ecef; flex-shrink: 0;"></div>
         <div id="issues-panel" style="width: 40%; overflow-y: auto;">
             <div class="card shadow-sm h-100" id="issuesPanel">
-                <div id="issues-list-view">
-                    <div class="card-header bg-white d-flex justify-content-between align-items-center">
-                        <span class="fw-semibold">Замечания (<span id="issuesCount">{{ issues|length }}</span>)</span>
+                <div id="issues-list-view" class="p-2" style="max-height: 60vh; overflow-y: auto;">
+                    <div class="d-flex justify-content-between align-items-center mb-3">
+                        <h5 class="mb-0">Замечания ({{ issues|length }})</h5>
                         {% if not public_view and can_create_issue %}
-                            <button type="button" class="btn btn-primary btn-sm" id="newIssueBtn">Создать замечание</button>
+                            <button type="button" class="btn btn-sm btn-primary" id="newIssueBtn">Создать</button>
                         {% endif %}
                     </div>
-                    <div class="card-body">
-                        <div style="max-height: 60vh; overflow-y: auto; overflow-x: hidden;" class="border rounded mb-3">
-                            {% render_table issue_table %}
+
+                    {% for issue in issues %}
+                        <div id="issue-row-{{ issue.pk }}"
+                             class="card mb-2 shadow-sm issue-row"
+                             data-issue-id="{{ issue.pk }}"
+                             style="cursor: pointer;"
+                             onclick="selectIssue(event, this.dataset.issueId)">
+                            <div class="card-body p-2">
+                                <div class="d-flex justify-content-between align-items-center mb-1">
+                                    <div>
+                                        <span class="fw-bold text-muted me-2">#{{ issue.pk }}</span>
+                                        <span class="badge {% if issue.status == 'NEW' %}bg-primary{% elif issue.status == 'DONE' %}bg-success{% elif issue.status == 'REJECTED' %}bg-danger{% else %}bg-secondary{% endif %}">
+                                            {{ issue.get_status_display }}
+                                        </span>
+                                    </div>
+                                    <span class="small text-muted">{{ issue.created_at|date:"d.m.Y" }}</span>
+                                </div>
+                                <div class="mb-2" style="font-size: 0.85rem; white-space: normal; word-wrap: break-word;">
+                                    {{ issue.description }}
+                                </div>
+                                <div class="d-flex justify-content-between align-items-center">
+                                    <span class="small text-muted">{{ issue.author.get_full_name|default:issue.author.username }}</span>
+                                    {% if not public_view %}
+                                        <button type="button" class="btn btn-sm btn-outline-primary"
+                                                hx-get="{% url 'issues:issue_detail_htmx' issue.pk %}"
+                                                hx-target="#issue-card-content"
+                                                hx-swap="innerHTML"
+                                                hx-indicator="#issue-detail-spinner"
+                                                onclick="showIssueCard()">Детали</button>
+                                    {% endif %}
+                                </div>
+                            </div>
                         </div>
-                        <div id="issue-detail-spinner" class="htmx-indicator text-muted small mb-1">Загрузка...</div>
-                    </div>
+                    {% empty %}
+                        <p class="text-muted text-center">Замечаний пока нет</p>
+                    {% endfor %}
                 </div>
                 <div id="issue-card-view" style="display: none;">
                     <div class="card-body">
                         <button type="button" class="btn btn-sm btn-link text-decoration-none mb-2 px-0" onclick="showIssueList()">
                             ← Назад к списку
                         </button>
+                        <div id="issue-detail-spinner" class="htmx-indicator text-muted small mb-1">Загрузка...</div>
                         <div id="issue-card-content"></div>
                     </div>
                 </div>

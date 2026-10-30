@@ -94,7 +94,6 @@ from storage.domain.services import (
 )
 
 from issues.models import Issue
-from issues.tables import IssueTable
 
 
 RECENT_DOCUMENTS_SESSION_KEY = 'recent_documents'
@@ -1432,11 +1431,6 @@ class DocumentDetailView(LoginRequiredMixin, DetailView):
                 ensure_ascii=False,
             )
         context['issues'] = issues
-        is_public = (
-            bool(self.request.GET.get('share'))
-            or not self.request.user.is_authenticated
-        )
-        context['issue_table'] = IssueTable(issues, is_public=is_public)
         payloads = []
         for issue in issues:
             payload = _issue_payload(issue)

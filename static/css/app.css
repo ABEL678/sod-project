@@ -2431,3 +2431,15 @@ body.modal-open {
 .table-sm th {
     padding: 0.25rem 0.5rem;
 }
+
+/* ---------- Issue cards list ---------- */
+
+.issue-row:hover {
+    background-color: #f8f9fa;
+    border-left: 4px solid #0d6efd;
+}
+
+.issue-row.table-active {
+    background-color: #fff3cd !important;
+    border-left: 4px solid #ffc107 !important;
+}

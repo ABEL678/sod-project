@@ -3,7 +3,7 @@ window.selectIssue = function (event, issueId) {
         return;
     }
 
-    document.querySelectorAll('.table tr').forEach(function (row) {
+    document.querySelectorAll('.issue-row').forEach(function (row) {
         row.classList.remove('table-active');
     });
     document.querySelectorAll('.pdf-markup').forEach(function (markup) {
@@ -25,7 +25,7 @@ window.selectIssue = function (event, issueId) {
 };
 
 window.selectIssueFromPdf = function (issueId) {
-    document.querySelectorAll('.table tr').forEach(function (row) {
+    document.querySelectorAll('.issue-row').forEach(function (row) {
         row.classList.remove('table-active');
     });
     document.querySelectorAll('.pdf-markup').forEach(function (markup) {
