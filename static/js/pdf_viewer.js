@@ -208,9 +208,44 @@
                     return;
                 }
 
-                const badge = document.createElement('button');
-                badge.type = 'button';
-                badge.className = 'pdf-pin pdf-markup pdf-issue-badge';
+                let x1 = issue.x1_ratio;
+                let y1 = issue.y1_ratio;
+                let x2 = issue.x2_ratio;
+                let y2 = issue.y2_ratio;
+                if (x1 == null || y1 == null || x2 == null || y2 == null) {
+                    x1 = Math.max(0, x - 0.02);
+                    y1 = Math.max(0, y - 0.02);
+                    x2 = Math.min(1, x + 0.02);
+                    y2 = Math.min(1, y + 0.02);
+                }
+
+                const frame = document.createElement('div');
+                frame.className = 'pdf-markup';
+                frame.dataset.issueId = issue.id;
+                frame.style.left = (x1 * 100) + '%';
+                frame.style.top = (y1 * 100) + '%';
+                frame.style.width = ((x2 - x1) * 100) + '%';
+                frame.style.height = ((y2 - y1) * 100) + '%';
+                frame.style.borderColor = statusColor(issue.status);
+                frame.style.backgroundColor = 'transparent';
+                frame.style.pointerEvents = 'auto';
+                frame.style.cursor = 'pointer';
+                frame.title = issue.description;
+                frame.addEventListener('click', function (event) {
+                    event.stopPropagation();
+                    if (window.selectIssueFromPdf) {
+                        window.selectIssueFromPdf(issue.id);
+                    }
+                });
+                frame.addEventListener('contextmenu', function (event) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    openContextMenu(event.clientX, event.clientY, issue.id);
+                });
+                page.layer.appendChild(frame);
+
+                const badge = document.createElement('div');
+                badge.className = 'pdf-pin pdf-issue-badge';
                 badge.dataset.issueId = issue.id;
                 badge.style.left = (x * 100) + '%';
                 badge.style.top = (y * 100) + '%';
@@ -889,7 +924,8 @@
 
     window.setZoom = function (scale) {
         currentScale = scale;
-        const button = document.getElementById('zoom-level-btn');
+        const button = document.getElementById('zoom-btn')
+            || document.getElementById('zoom-level-btn');
         if (button) {
             button.innerText = Math.round(scale * 100) + '%';
         }
