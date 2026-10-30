@@ -13,19 +13,19 @@
 <body class="bg-light d-flex flex-column" style="height: 100vh; overflow: hidden;">
 {% include 'storage/_topbar.html' with topbar_project=document.project %}
 <main class="d-flex flex-column flex-grow-1" style="min-height: 0;">
-    <nav aria-label="breadcrumb" class="py-1 px-2 flex-shrink-0">
-        <ol class="breadcrumb mb-0 small">
-            <li class="breadcrumb-item"><a href="{% url 'storage:project_list' %}">Проекты</a></li>
-            <li class="breadcrumb-item"><a href="{% url 'storage:project_detail' document.project.pk %}">{{ document.project.code }}</a></li>
-            <li class="breadcrumb-item active" aria-current="page">{{ document.code }}</li>
-        </ol>
-    </nav>
+    <div class="d-flex justify-content-between align-items-center py-1 px-2 border-bottom bg-white small flex-shrink-0" style="font-size: 0.85rem;">
+        <nav aria-label="breadcrumb" class="mb-0">
+            <ol class="breadcrumb mb-0">
+                <li class="breadcrumb-item"><a href="{% url 'storage:project_list' %}">Проекты</a></li>
+                <li class="breadcrumb-item"><a href="{% url 'storage:project_detail' document.project.pk %}">{{ document.project.code }}</a></li>
+                <li class="breadcrumb-item active" aria-current="page">{{ document.code }}</li>
+            </ol>
+        </nav>
 
-    <div class="d-flex justify-content-between align-items-center py-1 px-2 border-bottom bg-white flex-shrink-0">
-        <div class="small text-muted">{{ document.project.code }} / <strong>{{ document.code }} — {{ document.name }}</strong></div>
         <div class="d-flex align-items-center gap-2">
+            <span class="fw-bold">{{ document.name }}</span>
             <span class="badge bg-secondary">{{ document.get_status_display }}</span>
-            <span class="small text-muted">v{{ document.current_version.version_number }}</span>
+            <span class="text-muted">v{{ document.current_version.version_number }}</span>
         </div>
     </div>
 
