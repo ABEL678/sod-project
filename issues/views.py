@@ -243,3 +243,16 @@ def issue_detail_htmx(request, issue_id):
     if not check_read_permission(request.user, issue.document):
         return HttpResponseForbidden('Нет прав на просмотр замечания')
     return render(request, 'issues/_card.html', {'issue': issue})
+
+
+@login_required
+def issue_delete_crop(request, issue_id):
+    issue = get_object_or_404(Issue, pk=issue_id)
+    profile = getattr(request.user, 'userprofile', None)
+    is_admin = profile is not None and profile.role == 'admin'
+    if request.user == issue.author or is_admin or request.user.is_superuser:
+        if issue.crop_image:
+            issue.crop_image.delete(save=False)
+            issue.crop_image = None
+            issue.save()
+    return redirect(request.META.get('HTTP_REFERER', 'storage:project_list'))

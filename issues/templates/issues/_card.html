@@ -116,6 +116,13 @@
                         <ul class="dropdown-menu dropdown-menu-end">
                             <li><a class="dropdown-item" href="{{ issue.crop_image.url }}" target="_blank">Открыть</a></li>
                             <li><a class="dropdown-item" href="{{ issue.crop_image.url }}" download>Скачать</a></li>
+                            <li><hr class="dropdown-divider"></li>
+                            <li>
+                                <form method="post" action="{% url 'issues:issue_delete_crop' issue.pk %}" class="d-inline">
+                                    {% csrf_token %}
+                                    <button type="submit" class="dropdown-item text-danger">Удалить</button>
+                                </form>
+                            </li>
                         </ul>
                     </div>
                 </div>
