@@ -13,19 +13,14 @@
 <body class="bg-light">
 {% include 'storage/_topbar.html' with topbar_project=document.project %}
 <main class="container-fluid py-3 pb-5">
-    {% include 'storage/_breadcrumbs.html' %}
+    <div class="small py-1">
+        {% include 'storage/_breadcrumbs.html' %}
+    </div>
 
-    {% if not public_view %}
-        <a href="{% url 'storage:project_detail' document.project.pk %}" class="btn btn-sm btn-outline-secondary mb-3">
-            ← К проекту {{ document.project.code }}
-        </a>
-    {% else %}
+    {% if public_view %}
         <div class="alert alert-info py-2 small">
             <i class="bi bi-link-45deg me-1" aria-hidden="true"></i>
             Публичный просмотр документа. Доступ только на чтение.
-        </div>
-        <div class="mb-3">
-            <span class="text-muted">Проект: {{ document.project.name }} ({{ document.project.code }})</span>
         </div>
     {% endif %}
 
@@ -81,22 +76,23 @@
         </div>
     </div>
 
-    <div id="main-splitter" class="d-flex mb-4" style="height: calc(100vh - 150px);">
+    <div class="sticky-top bg-light border-bottom py-2 px-3 d-flex gap-2 flex-wrap" style="z-index: 1020; top: 56px;">
+        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="zoomIn()">+</button>
+        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="zoomOut()">−</button>
+        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="rotatePage()">⟲ Повернуть</button>
+        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="togglePan()">✋ Рука</button>
+        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="toggleSelect()">⍝ Выделение</button>
+        <span class="vr mx-1"></span>
+        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="window.print()">Печать</button>
+        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="copyText()">Копировать</button>
+        <a class="btn btn-sm btn-primary" href="{% url 'storage:document_pdf_with_issues' document.pk %}">Скачать</a>
+    </div>
+
+    <div id="main-splitter" class="d-flex" style="height: calc(100vh - 200px);">
         <div id="pdf-panel" style="width: 60%; overflow: hidden; border-right: 1px solid #dee2e6;">
             <div class="card shadow-sm h-100">
                 <div class="card-header bg-white d-flex justify-content-between align-items-center flex-wrap gap-2">
                     <span class="fw-semibold">PDF-просмотр</span>
-                    <div class="sticky-top bg-light border-bottom py-2 px-3 d-flex gap-2 flex-wrap" style="z-index: 1020; top: 56px;">
-                        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="zoomIn()">+</button>
-                        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="zoomOut()">−</button>
-                        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="rotatePage()">⟲ Повернуть</button>
-                        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="togglePan()">✋ Рука</button>
-                        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="toggleSelect()">⍝ Выделение</button>
-                        <span class="vr mx-1"></span>
-                        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="window.print()">Печать</button>
-                        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="copyText()">Копировать</button>
-                        <a class="btn btn-sm btn-primary" href="{% url 'storage:document_pdf_with_issues' document.pk %}">Скачать</a>
-                    </div>
                     {% if document.current_version %}
                         <span class="small text-muted">v{{ document.current_version.version_number }}</span>
                     {% endif %}
@@ -139,9 +135,9 @@
         </div>
     </div>
 
-    <div class="card shadow-sm" id="versions">
-        <div class="card-header bg-white d-flex justify-content-between align-items-center flex-wrap gap-2">
-            <span class="fw-semibold">История версий ({{ versions|length }})</span>
+    <div class="card shadow-sm mb-0" id="versions">
+        <div class="card-header bg-white py-2 d-flex justify-content-between align-items-center flex-wrap gap-2">
+            <span class="fw-semibold small">История версий ({{ versions|length }})</span>
             {% if versions and not public_view %}
                 <form class="d-flex align-items-center gap-2 mb-0">
                     <label for="versionSelect" class="small text-muted mb-0">Скачать версию:</label>
@@ -162,7 +158,7 @@
             {% endif %}
         </div>
         <div class="table-responsive">
-            <table class="table table-hover align-middle mb-0">
+            <table class="table table-sm table-hover align-middle small mb-0">
                 <thead class="table-light">
                     <tr>
                         <th>Версия</th>
