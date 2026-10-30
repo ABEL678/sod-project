@@ -44,18 +44,18 @@
 
     <div id="main-splitter" class="d-flex w-100 flex-grow-1" style="min-height: 0; margin-bottom: 0 !important;">
         <div id="pdf-panel" class="h-100 d-flex flex-column overflow-hidden" style="width: 75%;">
-            <div class="d-flex align-items-center gap-1 py-1 px-2 bg-light border-bottom flex-shrink-0 flex-nowrap" style="overflow-x: auto;">
+            <div class="d-flex align-items-center gap-1 py-1 px-2 bg-light border-bottom flex-shrink-0 flex-nowrap">
                 <button class="btn btn-sm btn-outline-secondary d-flex align-items-center py-0 px-2" style="height: 28px;" onclick="zoomIn()">+</button>
                 <button class="btn btn-sm btn-outline-secondary d-flex align-items-center py-0 px-2" style="height: 28px;" onclick="zoomOut()">−</button>
                 <div class="dropdown">
-                    <button class="btn btn-sm btn-outline-secondary d-flex align-items-center py-0 px-2 dropdown-toggle" style="height: 28px;" type="button" data-bs-toggle="dropdown">100%</button>
+                    <button class="btn btn-sm btn-outline-secondary d-flex align-items-center py-0 px-2 dropdown-toggle" style="height: 28px;" type="button" data-bs-toggle="dropdown" aria-expanded="false">100%</button>
                     <ul class="dropdown-menu">
                         <li><a class="dropdown-item" href="#" onclick="setZoom(0.5); return false;">50%</a></li>
                         <li><a class="dropdown-item" href="#" onclick="setZoom(1.0); return false;">100%</a></li>
                     </ul>
                 </div>
                 <div class="dropdown d-inline-block">
-                    <button class="btn btn-sm btn-outline-secondary d-flex align-items-center py-0 px-2 dropdown-toggle" style="height: 28px;" type="button" data-bs-toggle="dropdown">
+                    <button class="btn btn-sm btn-outline-secondary d-flex align-items-center py-0 px-2 dropdown-toggle" style="height: 28px;" type="button" data-bs-toggle="dropdown" aria-expanded="false">
                         Версии
                     </button>
                     <ul class="dropdown-menu">
