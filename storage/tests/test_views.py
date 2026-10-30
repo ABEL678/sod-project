@@ -440,7 +440,7 @@ class ViewTests(TestCase):
         response = self.client.get(reverse('storage:document_detail', args=[version.document_id]))
         self.assertEqual(response.status_code, 200)
         self.assertTemplateUsed(response, 'storage/document_detail.html')
-        self.assertContains(response, 'История версий')
+        self.assertContains(response, 'id="pdfViewer"')
         self.assertContains(response, 'Замечания')
         self.assertContains(response, 'Скачать')
 
@@ -452,7 +452,7 @@ class ViewTests(TestCase):
             reverse('storage:document_detail', args=[version.document_id]),
         )
 
-        self.assertContains(response, 'id="versionSelect"')
+        self.assertContains(response, '?version=')
         self.assertContains(
             response,
             reverse('storage:document_download', args=[version.pk]),

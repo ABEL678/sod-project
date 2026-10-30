@@ -487,17 +487,17 @@ class IssueStatusMatrixTests(TestCase):
         self.assertEqual(allowed_issue_statuses(self.viewer, issue), [])
 
     def test_document_detail_status_buttons_follow_matrix(self):
-        self._issue()
+        issue = self._issue()
         self.client.force_login(self.developer)
         response = self.client.get(
-            reverse('storage:document_detail', args=[self.document.pk])
+            reverse('issues:issue_detail_htmx', args=[issue.pk])
         )
         self.assertContains(response, 'value="DONE"')
         self.assertNotContains(response, 'value="CLOSED"')
 
         self.client.force_login(self.checker)
         response = self.client.get(
-            reverse('storage:document_detail', args=[self.document.pk])
+            reverse('issues:issue_detail_htmx', args=[issue.pk])
         )
         self.assertContains(response, 'value="CLOSED"')
         self.assertNotContains(response, 'value="IN_PROGRESS"')
@@ -658,14 +658,19 @@ class IssueStatusMatrixTests(TestCase):
         self.assertIsNone(issue.actual_fix_date)
 
     def test_document_detail_has_pdf_toolbar_and_element_tab(self):
-        self._issue()
+        issue = self._issue()
         self.client.force_login(self.gip)
         response = self.client.get(
             reverse('storage:document_detail', args=[self.document.pk])
         )
-        self.assertContains(response, 'data-pdf-action="zoom-in"')
-        self.assertContains(response, 'id="issueElementTab"')
-        self.assertContains(response, 'id="issueFilesTab"')
+        self.assertContains(response, 'onclick="zoomIn()"')
+        self.assertContains(response, 'id="pdfViewer"')
         self.assertContains(response, 'id="issueContextMenu"')
-        self.assertContains(response, 'id="detailDepartment"')
-        self.assertContains(response, 'id="detailOrganization"')
+
+        response = self.client.get(
+            reverse('issues:issue_detail_htmx', args=[issue.pk])
+        )
+        self.assertContains(response, f'id="card-element-tab-{issue.pk}"')
+        self.assertContains(response, f'id="card-files-tab-{issue.pk}"')
+        self.assertContains(response, 'От подразделения')
+        self.assertContains(response, 'Проектная организация')

@@ -14,11 +14,18 @@
 {% include 'storage/_topbar.html' with topbar_project=document.project %}
 <main class="d-flex flex-column flex-grow-1" style="min-height: 0;">
     <div class="d-flex align-items-center gap-2 py-1 px-2 border-bottom bg-white small flex-shrink-0" style="font-size: 0.85rem;">
-        <nav aria-label="breadcrumb" class="mb-0">
+        <nav aria-label="Хлебные крошки" class="mb-0">
             <ol class="breadcrumb mb-0">
                 <li class="breadcrumb-item"><a href="{% url 'storage:project_list' %}">Проекты</a></li>
-                <li class="breadcrumb-item"><a href="{% url 'storage:project_detail' document.project.pk %}">{{ document.project.code }}</a></li>
-                <li class="breadcrumb-item active" aria-current="page">{{ document.code }}</li>
+                {% for crumb in breadcrumbs %}
+                    <li class="breadcrumb-item{% if crumb.active %} active{% endif %}"{% if crumb.active %} aria-current="page"{% endif %}>
+                        {% if crumb.url %}
+                            <a href="{{ crumb.url }}">{{ crumb.label }}</a>
+                        {% else %}
+                            {{ crumb.label }}
+                        {% endif %}
+                    </li>
+                {% endfor %}
             </ol>
         </nav>
 
