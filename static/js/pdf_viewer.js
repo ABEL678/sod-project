@@ -1,6 +1,13 @@
 (function () {
     'use strict';
 
+    window.zoomIn = window.zoomIn || function () {};
+    window.zoomOut = window.zoomOut || function () {};
+    window.rotatePage = window.rotatePage || function () {};
+    window.togglePan = window.togglePan || function () {};
+    window.toggleSelect = window.toggleSelect || function () {};
+    window.copyText = window.copyText || function () {};
+
     const viewer = document.getElementById('pdfViewer');
     if (!viewer) {
         return;

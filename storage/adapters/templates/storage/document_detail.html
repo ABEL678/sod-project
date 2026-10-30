@@ -87,14 +87,14 @@
                 <div class="card-header bg-white d-flex justify-content-between align-items-center flex-wrap gap-2">
                     <span class="fw-semibold">PDF-просмотр</span>
                     <div class="sticky-top bg-light border-bottom py-2 px-3 d-flex gap-2 flex-wrap" style="z-index: 1020; top: 56px;">
-                        <button class="btn btn-sm btn-outline-secondary" onclick="zoomIn()">+</button>
-                        <button class="btn btn-sm btn-outline-secondary" onclick="zoomOut()">−</button>
-                        <button class="btn btn-sm btn-outline-secondary" onclick="rotatePage()">⟲ Повернуть</button>
-                        <button class="btn btn-sm btn-outline-secondary" onclick="togglePan()">✋ Рука</button>
-                        <button class="btn btn-sm btn-outline-secondary" onclick="toggleSelect()">⍝ Выделение</button>
+                        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="zoomIn()">+</button>
+                        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="zoomOut()">−</button>
+                        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="rotatePage()">⟲ Повернуть</button>
+                        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="togglePan()">✋ Рука</button>
+                        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="toggleSelect()">⍝ Выделение</button>
                         <span class="vr mx-1"></span>
-                        <button class="btn btn-sm btn-outline-secondary" onclick="window.print()">Печать</button>
-                        <button class="btn btn-sm btn-outline-secondary" onclick="copyText()">Копировать</button>
+                        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="window.print()">Печать</button>
+                        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="copyText()">Копировать</button>
                         <a class="btn btn-sm btn-primary" href="{% url 'storage:document_pdf_with_issues' document.pk %}">Скачать</a>
                     </div>
                     {% if document.current_version %}
@@ -300,7 +300,7 @@
     }, true);
 </script>
 <script src="{% static 'js/pdfjs/pdf.min.js' %}"></script>
-<script src="{% static 'js/pdf_viewer.js' %}"></script>
-<script src="{% static 'js/splitter.js' %}"></script>
+<script src="{% static 'js/pdf_viewer.js' %}?v=20261030-toolbar"></script>
+<script src="{% static 'js/splitter.js' %}?v=20261030-toolbar"></script>
 </body>
 </html>
