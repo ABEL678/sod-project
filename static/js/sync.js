@@ -49,3 +49,29 @@ window.selectIssueFromPdf = function (issueId) {
         markup.classList.add('border-danger');
     }
 };
+
+window.changeStatus = function (issueId, newStatus) {
+    const csrfInput = document.querySelector(
+        'input[name="csrfmiddlewaretoken"]'
+    );
+    const token = csrfInput ? csrfInput.value : '';
+    fetch('/issues/' + issueId + '/status/', {
+        method: 'POST',
+        headers: {
+            'X-CSRFToken': token,
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({status: newStatus}),
+        credentials: 'same-origin',
+    }).then(function (response) {
+        if (response.ok) {
+            window.location.reload();
+            return;
+        }
+        return response.json().then(function (data) {
+            throw new Error(data.error || 'Ошибка смены статуса');
+        });
+    }).catch(function (error) {
+        window.alert(error.message);
+    });
+};

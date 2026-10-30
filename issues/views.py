@@ -1,3 +1,5 @@
+import json
+
 from django.contrib import messages
 from django.contrib.auth import get_user_model
 from django.contrib.auth.decorators import login_required
@@ -169,6 +171,22 @@ class IssueUpdateStatusView(View):
 
         if not check_read_permission(request.user, issue.document):
             return HttpResponseForbidden('Нет прав на изменение замечания')
+
+        if request.content_type == 'application/json':
+            try:
+                payload = json.loads(request.body or b'{}')
+            except (TypeError, ValueError):
+                return JsonResponse(
+                    {'error': 'Некорректный JSON'}, status=400
+                )
+            status = (payload.get('status') or '').strip()
+            try:
+                update_issue_status(request.user, issue, status)
+            except PermissionDenied as exc:
+                return JsonResponse({'error': str(exc)}, status=403)
+            except ValueError as exc:
+                return JsonResponse({'error': str(exc)}, status=400)
+            return JsonResponse({'status': 'ok'})
 
         status = (request.POST.get('status') or '').strip()
         if not status:

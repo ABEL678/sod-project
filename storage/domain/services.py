@@ -1608,19 +1608,21 @@ def update_issue_status(user: User, issue: Issue, new_status: str) -> Issue:
     if new_status in ISSUE_CLOSED_STATUSES:
         issue.closed_at = timezone.now()
         issue.closed_by = user
-        update_fields.extend(['closed_at', 'closed_by'])
+        issue.actual_fix_date = timezone.localdate()
+        update_fields.extend(
+            ['closed_at', 'closed_by', 'actual_fix_date']
+        )
     else:
         issue.closed_at = None
         issue.closed_by = None
-        update_fields.extend(['closed_at', 'closed_by'])
+        issue.actual_fix_date = None
+        update_fields.extend(
+            ['closed_at', 'closed_by', 'actual_fix_date']
+        )
 
     if new_status == 'IN_PROGRESS' and issue.assignee_id is None:
         issue.assignee = user
         update_fields.append('assignee')
-
-    if new_status == 'DONE' and issue.actual_fix_date is None:
-        issue.actual_fix_date = timezone.localdate()
-        update_fields.append('actual_fix_date')
 
     issue.save(update_fields=update_fields)
     return issue

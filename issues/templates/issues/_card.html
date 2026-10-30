@@ -53,6 +53,11 @@
                 <dt class="col-sm-5">Ответ</dt>
                 <dd class="col-sm-7">
                     {% if issue.answer_text %}
+                        <div class="small text-muted mb-1">
+                            Ответ разработчика
+                            ({% if issue.assignee %}{{ issue.assignee.get_full_name|default:issue.assignee.username }}{% else %}Разработчик{% endif %},
+                            {{ issue.updated_at|date:"d.m.Y" }}):
+                        </div>
                         <div class="border rounded p-2" style="background:#d1e7dd;">
                             {{ issue.answer_text|linebreaksbr }}
                         </div>
@@ -86,19 +91,40 @@
 
                 <dt class="col-sm-5">Фактическая дата устранения</dt>
                 <dd class="col-sm-7">
-                    {% if issue.actual_fix_date %}{{ issue.actual_fix_date|date:"d.m.Y" }}{% else %}—{% endif %}
+                    {% if issue.status == 'CLOSED' or issue.status == 'CANCELLED' %}
+                        {% if issue.actual_fix_date %}{{ issue.actual_fix_date|date:"d.m.Y" }}{% else %}—{% endif %}
+                    {% else %}
+                        —
+                    {% endif %}
                 </dd>
 
                 <dt class="col-sm-5">Ревизия</dt>
                 <dd class="col-sm-7">{{ issue.revision|default:"—" }}</dd>
-
-                <dt class="col-sm-5">Статус</dt>
-                <dd class="col-sm-7">{{ issue.get_status_display }}</dd>
             </dl>
+
+            <div class="d-flex align-items-center mb-2">
+                <strong class="me-2">Статус:</strong>
+                <select class="form-select form-select-sm" style="width: auto;" onchange="changeStatus({{ issue.pk }}, this.value)">
+                    {% for value, label in issue.STATUS_CHOICES %}
+                        <option value="{{ value }}" {% if issue.status == value %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
 
             <hr class="my-3">
             <h6 class="mb-2">Переписка</h6>
             <div class="comments-list mb-2" style="max-height: 200px; overflow-y: auto;">
+                {% if issue.answer_text %}
+                    <div class="border rounded p-2 mb-1 bg-light">
+                        <div class="d-flex justify-content-between small text-muted mb-1">
+                            <span class="fw-bold">
+                                {% if issue.assignee %}{{ issue.assignee.get_full_name|default:issue.assignee.username }}{% else %}Разработчик{% endif %}
+                            </span>
+                            <span>{{ issue.updated_at|date:"d.m.Y H:i" }}</span>
+                        </div>
+                        <div style="font-size: 0.85rem;">{{ issue.answer_text }}</div>
+                    </div>
+                {% endif %}
                 {% for comment in issue.comments.all %}
                     <div class="border rounded p-2 mb-1 bg-light">
                         <div class="d-flex justify-content-between small text-muted mb-1">
@@ -108,7 +134,9 @@
                         <div style="font-size: 0.85rem;">{{ comment.text }}</div>
                     </div>
                 {% empty %}
-                    <p class="text-muted small">Нет комментариев</p>
+                    {% if not issue.answer_text %}
+                        <p class="text-muted small">Нет комментариев</p>
+                    {% endif %}
                 {% endfor %}
             </div>
 
