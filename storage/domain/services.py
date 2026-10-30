@@ -23,7 +23,7 @@ from storage.domain.models import (
     Section,
     User,
 )
-from issues.models import Issue
+from issues.models import Issue, IssueComment
 
 
 DOCUMENT_VIEW_COLUMNS = ('code', 'name', 'doc_type', 'status', 'zone', 'version', 'date', 'author')
@@ -1855,3 +1855,44 @@ def export_pdf_with_issues(user: User, document: Document) -> bytes:
         return buffer.getvalue()
     finally:
         pdf.close()
+
+
+def add_issue_comment(user: User, issue: Issue, text: str):
+    """Добавляет комментарий к замечанию с проверкой доступа и роли."""
+    if not check_read_permission(user, issue.document):
+        raise PermissionDenied('Нет доступа к этому замечанию')
+
+    if not user.is_superuser:
+        profile = getattr(user, 'userprofile', None)
+        if profile is None or profile.role == 'viewer':
+            raise PermissionDenied('Наблюдатели не могут комментировать')
+
+    text = (text or '').strip()
+    if not text:
+        return None
+    return IssueComment.objects.create(
+        issue=issue,
+        author=user,
+        text=text,
+    )
+
+
+def delete_issue_crop(user: User, issue: Issue) -> Issue:
+    """Удаляет прикреплённый маркап замечания с проверкой прав."""
+    if not check_read_permission(user, issue.document):
+        raise PermissionDenied('Нет доступа')
+
+    profile = getattr(user, 'userprofile', None)
+    is_admin = profile is not None and profile.role == 'admin'
+    if not (
+        user.is_superuser
+        or issue.author_id == user.pk
+        or is_admin
+    ):
+        raise PermissionDenied('Нет прав на удаление маркапа')
+
+    if issue.crop_image:
+        issue.crop_image.delete(save=False)
+        issue.crop_image = None
+        issue.save(update_fields=['crop_image'])
+    return issue

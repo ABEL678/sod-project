@@ -244,8 +244,15 @@ sod_project/
 - Из DONE developer может перевести только в DISCUSSION или IN_PROGRESS.
 - При переходе в IN_PROGRESS, если `assignee` пуст, назначается текущий пользователь.
 
-#### IssueComment / IssueAttachment (Этап 9)
-(Модели для обсуждения и вложений в замечаниях. Поля: issue, author, text, created_at / file, filename, uploaded_at).
+#### IssueComment
+| Поле | Тип | Описание |
+|---|---|---|
+| issue | FK → Issue, related_name='comments' | Замечание |
+| author | FK → User | Автор комментария |
+| text | TextField | Текст комментария |
+| created_at | DateTimeField, auto_now_add | Дата создания |
+
+`IssueAttachment` не создавался: маркап хранится в `Issue.crop_image`.
 
 ### 3.3. Связи
 
@@ -277,6 +284,9 @@ def create_issue(user, document, version, description, page_number, x_ratio, y_r
 def check_issue_permission(user, document) -> bool: ... (все ГОСТ-роли, кроме viewer)
 def allowed_issue_statuses(user, issue) -> list[str]: ... (статусы по матрице ролей)
 def update_issue_status(user, issue, new_status) -> Issue: ... (матрица переходов, closed_at/closed_by)
+def export_pdf_with_issues(user, document) -> bytes: ... (PDF с маркапами через PyMuPDF)
+def add_issue_comment(user, issue, text) -> IssueComment | None: ... (проверка чтения и роли)
+def delete_issue_crop(user, issue) -> Issue: ... (удаление маркапа с проверкой прав)
 def get_all_companies(platform_owner) -> QuerySet[Company]: ... (только для суперюзера)
 
 **Правило:** upload_document() — единственная точка создания версий.

@@ -51,6 +51,7 @@
     };
 
     const pages = new Map();
+    const pageCleanups = [];
     let pdfDocument = null;
     let currentScale = 1.0;
     let currentRotation = 0;
@@ -462,7 +463,7 @@
             event.preventDefault();
         });
 
-        window.addEventListener('mousemove', function (event) {
+        function handleMove(event) {
             if (!dragStart || !preview) {
                 return;
             }
@@ -473,9 +474,9 @@
             preview.style.top = (Math.min(dragStart.y, y) * 100) + '%';
             preview.style.width = (Math.abs(x - dragStart.x) * 100) + '%';
             preview.style.height = (Math.abs(y - dragStart.y) * 100) + '%';
-        });
+        }
 
-        window.addEventListener('mouseup', function (event) {
+        function handleUp(event) {
             if (!dragStart || !preview) {
                 return;
             }
@@ -504,6 +505,13 @@
                 {x: (rectangle.x1 + rectangle.x2) / 2, y: (rectangle.y1 + rectangle.y2) / 2},
                 crop
             );
+        }
+
+        window.addEventListener('mousemove', handleMove);
+        window.addEventListener('mouseup', handleUp);
+        pageCleanups.push(function () {
+            window.removeEventListener('mousemove', handleMove);
+            window.removeEventListener('mouseup', handleUp);
         });
     }
 
@@ -538,6 +546,9 @@
         if (!pdfDocument) {
             return;
         }
+        pageCleanups.splice(0).forEach(function (cleanup) {
+            cleanup();
+        });
         viewer.querySelectorAll('.pdf-page, .pdf-loading').forEach(function (node) {
             node.remove();
         });

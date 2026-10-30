@@ -27,6 +27,13 @@
 
 ## Журнал (Changelog)
 
+### 31.10.2026 — T12-UI-FINAL
+- Завершён T12-UI-FINAL: логотип компании, компактная двухстрочная шапка.
+- PDF-вьювер: зум, поворот, панорама, выделение текста, экспорт PDF с маркапами.
+- Карточка замечания: вкладки «Элемент»/«Файлы», переписка, вложения-маркапы.
+- Закрыты IDOR-дыры в комментариях и удалении маркапов.
+- Добавлены тесты безопасности (`issues/tests/test_security.py`).
+
 ### 30.10.2026 — T11-ROLES
 - ГОСТ-роли в `UserProfile.role`: admin, gip, developer, checker, normocontrol, customer, contractor, viewer.
 - Data-миграция `engineer` → `developer` (`UserProfile` и `ProjectMembership`).

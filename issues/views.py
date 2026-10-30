@@ -13,17 +13,19 @@ from django.views.generic import CreateView
 
 from storage.adapters.views import _issue_payload
 from storage.domain.services import (
+    add_issue_comment,
     allowed_issue_statuses,
     check_issue_permission,
     check_read_permission,
     get_accessible_documents,
     create_issue,
     delete_issue,
+    delete_issue_crop,
     update_issue_answer,
     update_issue_status,
 )
 
-from issues.models import Issue, IssueComment
+from issues.models import Issue
 
 
 STATUS_CODE_RE = re.compile(
@@ -301,13 +303,10 @@ def issue_delete_crop(request, issue_id):
     if issue.document not in get_accessible_documents(request.user):
         return HttpResponseForbidden('Нет доступа')
 
-    profile = getattr(request.user, 'userprofile', None)
-    is_admin = profile is not None and profile.role == 'admin'
-    if request.user == issue.author or is_admin or request.user.is_superuser:
-        if issue.crop_image:
-            issue.crop_image.delete(save=False)
-            issue.crop_image = None
-            issue.save()
+    try:
+        delete_issue_crop(request.user, issue)
+    except PermissionDenied as exc:
+        return HttpResponseForbidden(str(exc))
     return redirect(request.META.get('HTTP_REFERER', 'storage:project_list'))
 
 
@@ -317,19 +316,15 @@ def add_comment(request, issue_id):
     if issue.document not in get_accessible_documents(request.user):
         return HttpResponseForbidden('Нет доступа к этому замечанию')
 
-    if not request.user.is_superuser:
-        profile = getattr(request.user, 'userprofile', None)
-        if profile is None or profile.role == 'viewer':
-            return HttpResponseForbidden(
-                'Наблюдатели не могут комментировать'
-            )
-
     if request.method == 'POST':
-        text = request.POST.get('text', '').strip()
-        if text:
-            IssueComment.objects.create(
-                issue=issue, author=request.user, text=text
+        try:
+            add_issue_comment(
+                request.user,
+                issue,
+                request.POST.get('text', ''),
             )
+        except PermissionDenied as exc:
+            return HttpResponseForbidden(str(exc))
     return redirect(
         request.META.get('HTTP_REFERER', 'storage:project_list')
     )
