@@ -13,6 +13,10 @@
 <body class="bg-light">
 {% include 'storage/_topbar.html' with topbar_project=document.project %}
 <main class="container-fluid py-3 pb-5">
+    <div class="small py-1">
+        {% include 'storage/_breadcrumbs.html' %}
+    </div>
+
     <div class="d-flex align-items-center justify-content-between py-1 border-bottom bg-white" style="font-size: 0.85rem;">
         <div class="d-flex align-items-center gap-2 text-truncate">
             <span class="text-muted">{{ document.project.code }}</span>
