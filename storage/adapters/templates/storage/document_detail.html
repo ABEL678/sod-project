@@ -36,8 +36,9 @@
     {% endif %}
 
     <div class="d-flex align-items-center gap-2 py-1 px-2 bg-light border-bottom sticky-top" style="z-index: 1020; top: 0;">
+        <button class="btn btn-sm btn-outline-secondary py-0 px-2" style="font-size: 0.8rem;" onclick="zoomOut()">−</button>
         <div class="dropdown">
-            <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" id="zoom-btn">
+            <button class="btn btn-sm btn-outline-secondary dropdown-toggle py-0 px-2" style="font-size: 0.8rem;" type="button" data-bs-toggle="dropdown" id="zoom-btn">
                 100%
             </button>
             <ul class="dropdown-menu">
@@ -48,13 +49,14 @@
                 <li><a class="dropdown-item" href="#" onclick="setZoom(1.5); return false;">150%</a></li>
             </ul>
         </div>
-        <button class="btn btn-sm btn-outline-secondary" onclick="rotatePage()">⟲ Повернуть</button>
-        <button class="btn btn-sm btn-outline-secondary" onclick="togglePan()">✋ Рука</button>
-        <button class="btn btn-sm btn-outline-secondary" onclick="toggleSelect()">⍝ Выделение</button>
+        <button class="btn btn-sm btn-outline-secondary py-0 px-2" style="font-size: 0.8rem;" onclick="zoomIn()">+</button>
+        <button class="btn btn-sm btn-outline-secondary py-0 px-2" style="font-size: 0.8rem;" onclick="rotatePage()">⟲ Повернуть</button>
+        <button class="btn btn-sm btn-outline-secondary py-0 px-2" style="font-size: 0.8rem;" onclick="togglePan()">✋ Рука</button>
+        <button class="btn btn-sm btn-outline-secondary py-0 px-2" style="font-size: 0.8rem;" onclick="toggleSelect()">⍝ Выделение</button>
         <span class="vr mx-1"></span>
-        <button class="btn btn-sm btn-outline-secondary" onclick="window.print()">Печать</button>
-        <button class="btn btn-sm btn-outline-secondary" onclick="copyText()">Копировать</button>
-        <a class="btn btn-sm btn-primary" href="{% url 'storage:document_pdf_with_issues' document.pk %}">Скачать</a>
+        <a href="{{ document.current_version.file.url }}" target="_blank" class="btn btn-sm btn-outline-secondary py-0 px-2" style="font-size: 0.8rem;">Печать</a>
+        <button class="btn btn-sm btn-outline-secondary py-0 px-2" style="font-size: 0.8rem;" onclick="copyText()">Копировать</button>
+        <a class="btn btn-sm btn-primary py-0 px-2" style="font-size: 0.8rem;" href="{% url 'storage:document_pdf_with_issues' document.pk %}">Скачать</a>
     </div>
 
     <div id="main-splitter" class="d-flex w-100" style="height: calc(100vh - 100px);">

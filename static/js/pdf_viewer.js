@@ -245,25 +245,31 @@
                 page.layer.appendChild(frame);
 
                 const badge = document.createElement('div');
+                const badgeColor = statusColor(issue.status);
                 badge.className = 'pdf-pin pdf-issue-badge';
                 badge.dataset.issueId = issue.id;
-                badge.style.left = (x * 100) + '%';
-                badge.style.top = (y * 100) + '%';
+                badge.style.left = (x1 * 100) + '%';
+                badge.style.top = (y1 * 100) + '%';
                 badge.style.transform = 'translate(-50%, -50%)';
-                badge.style.backgroundColor = '#198754';
-                badge.style.color = '#fff';
+                badge.style.backgroundColor = badgeColor;
+                badge.style.color = ['IN_PROGRESS', 'DISCUSSION'].includes(issue.status)
+                    ? '#212529'
+                    : '#fff';
                 badge.style.border = '2px solid #fff';
-                badge.style.borderRadius = '20px';
-                badge.style.padding = '2px 8px';
-                badge.style.fontSize = '11px';
+                badge.style.borderRadius = '50%';
+                badge.style.padding = '0';
+                badge.style.fontSize = '10px';
                 badge.style.fontWeight = 'bold';
-                badge.style.lineHeight = '1.2';
-                badge.style.width = 'auto';
-                badge.style.height = 'auto';
-                badge.style.minWidth = '20px';
+                badge.style.lineHeight = '1';
+                badge.style.width = '24px';
+                badge.style.height = '16px';
+                badge.style.display = 'flex';
+                badge.style.alignItems = 'center';
+                badge.style.justifyContent = 'center';
                 badge.style.textAlign = 'center';
                 badge.style.boxShadow = '0 2px 4px rgba(0,0,0,0.2)';
                 badge.style.cursor = 'pointer';
+                badge.style.zIndex = '2';
                 badge.textContent = issue.id;
                 badge.title = issue.description;
                 badge.addEventListener('click', function (event) {
@@ -908,13 +914,11 @@
     }
 
     window.zoomIn = function () {
-        currentScale *= 1.2;
-        renderPages();
+        window.setZoom(currentScale * 1.2);
     };
 
     window.zoomOut = function () {
-        currentScale /= 1.2;
-        renderPages();
+        window.setZoom(currentScale / 1.2);
     };
 
     window.rotatePage = function () {
