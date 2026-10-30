@@ -81,8 +81,8 @@
         </div>
     </div>
 
-    <div class="row g-3 align-items-start mb-4">
-        <div class="col-lg-7">
+    <div id="main-splitter" class="d-flex mb-4" style="height: calc(100vh - 150px);">
+        <div id="pdf-panel" style="width: 60%; overflow: hidden; border-right: 1px solid #dee2e6;">
             <div class="card shadow-sm h-100">
                 <div class="card-header bg-white d-flex justify-content-between align-items-center flex-wrap gap-2">
                     <span class="fw-semibold">PDF-просмотр</span>
@@ -113,7 +113,8 @@
                 </div>
             </div>
         </div>
-        <div class="col-lg-5">
+        <div id="drag-divider" style="width: 5px; cursor: col-resize; background-color: #e9ecef; flex-shrink: 0;"></div>
+        <div id="issues-panel" style="width: 40%; overflow-y: auto;">
             <div class="card shadow-sm h-100" id="issuesPanel">
                 <div class="card-header bg-white d-flex justify-content-between align-items-center">
                     <span class="fw-semibold">Замечания (<span id="issuesCount">{{ issues|length }}</span>)</span>
@@ -296,5 +297,6 @@
 </script>
 <script src="{% static 'js/pdfjs/pdf.min.js' %}"></script>
 <script src="{% static 'js/pdf_viewer.js' %}"></script>
+<script src="{% static 'js/splitter.js' %}"></script>
 </body>
 </html>
