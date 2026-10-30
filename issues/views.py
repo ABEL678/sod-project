@@ -1,4 +1,5 @@
 import json
+import re
 
 from django.contrib import messages
 from django.contrib.auth import get_user_model
@@ -23,6 +24,19 @@ from storage.domain.services import (
 )
 
 from issues.models import Issue, IssueComment
+
+
+STATUS_CODE_RE = re.compile(
+    r'\b(NEW|IN_PROGRESS|REJECTED|DISCUSSION|DONE|CLOSED|CANCELLED)\b'
+)
+
+
+def _humanize_status_codes(text):
+    labels = dict(Issue.STATUS_CHOICES)
+    return STATUS_CODE_RE.sub(
+        lambda match: labels.get(match.group(1), match.group(1)),
+        text or '',
+    )
 
 
 def _to_float(value):
@@ -260,7 +274,29 @@ def issue_detail_htmx(request, issue_id):
     issue = get_object_or_404(issues, pk=issue_id)
     if not check_read_permission(request.user, issue.document):
         return HttpResponseForbidden('Нет прав на просмотр замечания')
-    return render(request, 'issues/_card.html', {'issue': issue})
+
+    allowed_statuses = allowed_issue_statuses(request.user, issue)
+    labels = dict(Issue.STATUS_CHOICES)
+    allowed_status_options = [
+        (code, labels[code]) for code in allowed_statuses
+    ]
+    comments = list(issue.comments.all())
+    for comment in comments:
+        comment.text_display = _humanize_status_codes(comment.text)
+
+    return render(
+        request,
+        'issues/_card.html',
+        {
+            'issue': issue,
+            'allowed_statuses': allowed_statuses,
+            'allowed_status_options': allowed_status_options,
+            'comments': comments,
+            'answer_text_display': _humanize_status_codes(
+                issue.answer_text
+            ),
+        },
+    )
 
 
 @login_required

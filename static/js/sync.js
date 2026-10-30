@@ -75,3 +75,22 @@ window.changeStatus = function (issueId, newStatus) {
         window.alert(error.message);
     });
 };
+
+function initTooltips(root) {
+    if (!window.bootstrap || !window.bootstrap.Tooltip) {
+        return;
+    }
+    (root || document).querySelectorAll('[data-bs-toggle="tooltip"]').forEach(function (el) {
+        if (!window.bootstrap.Tooltip.getInstance(el)) {
+            new window.bootstrap.Tooltip(el);
+        }
+    });
+}
+
+document.addEventListener('DOMContentLoaded', function () {
+    initTooltips(document);
+});
+
+document.body.addEventListener('htmx:afterSwap', function (event) {
+    initTooltips(event.target);
+});

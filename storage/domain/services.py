@@ -1558,6 +1558,12 @@ def allowed_issue_statuses(user: User, issue: Issue) -> list[str]:
     if profile is None:
         return []
 
+    if (
+        issue.status in ISSUE_CLOSED_STATUSES
+        and profile.role not in ('admin', 'gip')
+    ):
+        return []
+
     if profile.role in ('admin', 'gip'):
         return all_statuses
     if profile.role == 'developer':
