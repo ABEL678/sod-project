@@ -34,39 +34,46 @@
         {% endfor %}
     {% endif %}
 
-    <div class="card shadow-sm mb-4">
-        <div class="card-body">
-            <div class="d-flex justify-content-between align-items-start flex-wrap gap-3">
-                <div>
-                    <h1 class="h3 mb-1">{{ document.name }}</h1>
-                    <div class="text-muted">Шифр: {{ document.code }}</div>
-                </div>
-                {% if document.current_version %}
-                    <span class="badge bg-primary fs-6">Текущая версия: {{ document.current_version.version_number }}</span>
-                {% else %}
-                    <span class="badge bg-secondary fs-6">Версий нет</span>
-                {% endif %}
-            </div>
-            <hr>
-            <div class="row g-3">
-                <div class="col-md-3">
-                    <div class="text-muted small">Проект</div>
-                    <div>{{ document.project.code }} — {{ document.project.name }}</div>
-                </div>
-                <div class="col-md-3">
-                    <div class="text-muted small">Раздел</div>
-                    <div>{{ document.section.code }} — {{ document.section.name }}</div>
-                </div>
-                <div class="col-md-3">
-                    <div class="text-muted small">Тип документа</div>
-                    <div>{{ document.get_doc_type_display }}</div>
-                </div>
-                <div class="col-md-3">
-                    <div class="text-muted small">Статус</div>
-                    <div>
+    <div class="card mb-2 shadow-sm">
+        <div class="card-header py-1 px-3 d-flex justify-content-between align-items-center bg-light">
+            <span class="fw-bold small text-truncate">
+                {{ document.code }} — {{ document.name }}
+                <span class="badge bg-secondary ms-2">{{ document.get_status_display }}</span>
+            </span>
+            <button class="btn btn-sm btn-link text-decoration-none py-0" type="button"
+                    data-bs-toggle="collapse" data-bs-target="#docMetaDetails"
+                    aria-expanded="false" aria-controls="docMetaDetails">
+                Детали ▼
+            </button>
+        </div>
+        <div id="docMetaDetails" class="collapse">
+            <div class="card-body py-2 small">
+                <div class="row g-2">
+                    <div class="col-md-3">
+                        <span class="text-muted">Проект:</span>
+                        {{ document.project.code }} — {{ document.project.name }}
+                    </div>
+                    <div class="col-md-3">
+                        <span class="text-muted">Раздел:</span>
+                        {{ document.section.code }} — {{ document.section.name }}
+                    </div>
+                    <div class="col-md-3">
+                        <span class="text-muted">Тип:</span>
+                        {{ document.get_doc_type_display }}
+                    </div>
+                    <div class="col-md-3">
+                        <span class="text-muted">Статус:</span>
                         <span class="badge {% if document.status == 'approved' %}bg-success{% elif document.status == 'archived' %}bg-secondary{% else %}bg-warning text-dark{% endif %}">
                             {{ document.get_status_display }}
                         </span>
+                    </div>
+                    <div class="col-md-3">
+                        <span class="text-muted">Версия:</span>
+                        {% if document.current_version %}
+                            v{{ document.current_version.version_number }}
+                        {% else %}
+                            нет
+                        {% endif %}
                     </div>
                 </div>
             </div>

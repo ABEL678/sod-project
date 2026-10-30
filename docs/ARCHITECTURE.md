@@ -71,6 +71,7 @@ sod_project/
 |---|---|---|
 | id | PK | |
 | name | CharField(255) | Название компании |
+| logo | ImageField(upload_to='company_logos/', null=True, blank=True) | Логотип компании (24px в топбаре) |
 | is_private | BooleanField | Флаг приватности (скрывает данные от суперюзера) |
 | created_at | DateTimeField | |
 

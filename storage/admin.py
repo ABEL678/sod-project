@@ -9,6 +9,7 @@ from .domain.models import (
 class CompanyAdmin(admin.ModelAdmin):
     list_display = ('name', 'created_at')
     search_fields = ('name',)
+    fields = ('name', 'logo')
 
 
 @admin.register(Project)

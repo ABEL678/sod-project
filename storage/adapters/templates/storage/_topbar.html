@@ -1,7 +1,13 @@
 <header class="app-topbar" data-role="topbar">
     <div class="topbar-identity">
         <a class="topbar-brand" href="{% url 'storage:project_list' %}">
-            <i class="bi bi-layers-half" aria-hidden="true"></i>
+            {% if user.is_authenticated and user.userprofile.company.logo %}
+                <img src="{{ user.userprofile.company.logo.url }}"
+                     alt="{{ user.userprofile.company.name }}"
+                     style="height:24px; width:auto;" class="me-2">
+            {% else %}
+                <i class="bi bi-layers-half" aria-hidden="true"></i>
+            {% endif %}
             <span class="topbar-company">{% firstof user.userprofile.company.name topbar_project.company.name topbar_company.name "Stream-CAD" %}</span>
         </a>
 
