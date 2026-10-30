@@ -2423,6 +2423,8 @@ body.modal-open {
 
 .pdf-markup.border-danger {
     box-shadow: 0 0 0 3px rgba(220, 53, 69, 0.5);
+    outline: 3px solid rgba(220, 53, 69, 0.5);
+    outline-offset: 2px;
 }
 
 /* ---------- Compact issue table ---------- */

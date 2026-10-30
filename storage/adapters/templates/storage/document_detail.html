@@ -23,6 +23,9 @@
             <span class="text-muted">/</span>
             <span class="fw-bold text-truncate">{{ document.code }} — {{ document.name }}</span>
             <span class="badge bg-secondary">{{ document.get_status_display }}</span>
+            {% if document.current_version %}
+                <span class="badge bg-light text-dark">v{{ document.current_version.version_number }}</span>
+            {% endif %}
         </div>
         <div class="flex-shrink-0">
             <button class="btn btn-sm btn-link text-decoration-none py-0" type="button"
@@ -79,10 +82,26 @@
         {% endfor %}
     {% endif %}
 
-    <div class="sticky-top d-flex align-items-center justify-content-between py-1 bg-light border-bottom flex-shrink-0" style="z-index: 1020; top: 48px;">
+    <div class="sticky-top d-flex align-items-center py-1 bg-light border-bottom flex-shrink-0" style="z-index: 1020; top: 48px;">
         <div class="d-flex align-items-center gap-1 flex-nowrap" style="overflow-x: auto;">
-            <button type="button" class="btn btn-sm btn-outline-secondary" onclick="zoomIn()">+</button>
-            <button type="button" class="btn btn-sm btn-outline-secondary" onclick="zoomOut()">−</button>
+            <div class="dropdown d-inline-block">
+                <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" id="zoom-level-btn">
+                    100%
+                </button>
+                <ul class="dropdown-menu">
+                    <li><a class="dropdown-item" href="#" onclick="setZoom(0.5)">50%</a></li>
+                    <li><a class="dropdown-item" href="#" onclick="setZoom(0.75)">75%</a></li>
+                    <li><a class="dropdown-item active" href="#" onclick="setZoom(1.0)">100%</a></li>
+                    <li><a class="dropdown-item" href="#" onclick="setZoom(1.25)">125%</a></li>
+                    <li><a class="dropdown-item" href="#" onclick="setZoom(1.5)">150%</a></li>
+                    <li><a class="dropdown-item" href="#" onclick="setZoom(2.0)">200%</a></li>
+                    <li><a class="dropdown-item" href="#" onclick="setZoom(3.0)">300%</a></li>
+                    <li><a class="dropdown-item" href="#" onclick="setZoom(4.0)">400%</a></li>
+                    <li><hr class="dropdown-divider"></li>
+                    <li><a class="dropdown-item" href="#" onclick="setZoom(1.0)">Реальный размер</a></li>
+                    <li><a class="dropdown-item" href="#" onclick="fitToPage()">По размеру страницы</a></li>
+                </ul>
+            </div>
             <button type="button" class="btn btn-sm btn-outline-secondary text-nowrap" onclick="rotatePage()">⟲ Повернуть</button>
             <button type="button" class="btn btn-sm btn-outline-secondary text-nowrap" onclick="togglePan()">✋ Рука</button>
             <button type="button" class="btn btn-sm btn-outline-secondary text-nowrap" onclick="toggleSelect()">⍝ Выделение</button>
@@ -91,9 +110,6 @@
             <button type="button" class="btn btn-sm btn-outline-secondary text-nowrap" onclick="copyText()">Копировать</button>
             <a class="btn btn-sm btn-primary text-nowrap" href="{% url 'storage:document_pdf_with_issues' document.pk %}">Скачать</a>
         </div>
-        <span class="small text-muted me-2 text-nowrap">
-            PDF-просмотр{% if document.current_version %} (v{{ document.current_version.version_number }}){% endif %}
-        </span>
     </div>
 
     <div id="main-splitter" class="d-flex flex-grow-1" style="min-height: 0; overflow: hidden;">

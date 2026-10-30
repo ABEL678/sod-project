@@ -51,7 +51,7 @@
 
     const pages = new Map();
     let pdfDocument = null;
-    let currentScale = 1.5;
+    let currentScale = 1.0;
     let currentRotation = 0;
     let panMode = false;
     let textMode = false;
@@ -194,55 +194,55 @@
                 return Number(issue.page_number) === Number(pageNumber);
             })
             .forEach(function (issue) {
-                const color = statusColor(issue.status);
+                let x = issue.x_ratio;
+                let y = issue.y_ratio;
                 if (
-                    issue.x1_ratio != null && issue.y1_ratio != null
+                    x == null && y == null
+                    && issue.x1_ratio != null && issue.y1_ratio != null
                     && issue.x2_ratio != null && issue.y2_ratio != null
                 ) {
-                    const mark = document.createElement('div');
-                    mark.className = 'pdf-markup';
-                    mark.dataset.issueId = issue.id;
-                    mark.style.left = (issue.x1_ratio * 100) + '%';
-                    mark.style.top = (issue.y1_ratio * 100) + '%';
-                    mark.style.width = ((issue.x2_ratio - issue.x1_ratio) * 100) + '%';
-                    mark.style.height = ((issue.y2_ratio - issue.y1_ratio) * 100) + '%';
-                    mark.style.borderColor = color;
-                    mark.style.backgroundColor = withAlpha(color, 0.16);
-                    mark.title = issue.description;
-                    mark.addEventListener('click', function (event) {
-                        event.stopPropagation();
-                        if (window.selectIssueFromPdf) {
-                            window.selectIssueFromPdf(issue.id);
-                        }
-                    });
-                    mark.addEventListener('contextmenu', function (event) {
-                        event.preventDefault();
-                        event.stopPropagation();
-                        openContextMenu(event.clientX, event.clientY, issue.id);
-                    });
-                    page.layer.appendChild(mark);
-                } else if (issue.x_ratio != null && issue.y_ratio != null) {
-                    const pin = document.createElement('button');
-                    pin.type = 'button';
-                    pin.className = 'pdf-pin';
-                    pin.dataset.issueId = issue.id;
-                    pin.style.left = (issue.x_ratio * 100) + '%';
-                    pin.style.top = (issue.y_ratio * 100) + '%';
-                    pin.style.backgroundColor = color;
-                    pin.title = issue.description;
-                    pin.addEventListener('click', function (event) {
-                        event.stopPropagation();
-                        if (window.selectIssueFromPdf) {
-                            window.selectIssueFromPdf(issue.id);
-                        }
-                    });
-                    pin.addEventListener('contextmenu', function (event) {
-                        event.preventDefault();
-                        event.stopPropagation();
-                        openContextMenu(event.clientX, event.clientY, issue.id);
-                    });
-                    page.layer.appendChild(pin);
+                    x = (issue.x1_ratio + issue.x2_ratio) / 2;
+                    y = (issue.y1_ratio + issue.y2_ratio) / 2;
                 }
+                if (x == null || y == null) {
+                    return;
+                }
+
+                const badge = document.createElement('button');
+                badge.type = 'button';
+                badge.className = 'pdf-pin pdf-markup pdf-issue-badge';
+                badge.dataset.issueId = issue.id;
+                badge.style.left = (x * 100) + '%';
+                badge.style.top = (y * 100) + '%';
+                badge.style.transform = 'translate(-50%, -50%)';
+                badge.style.backgroundColor = '#198754';
+                badge.style.color = '#fff';
+                badge.style.border = '2px solid #fff';
+                badge.style.borderRadius = '20px';
+                badge.style.padding = '2px 8px';
+                badge.style.fontSize = '11px';
+                badge.style.fontWeight = 'bold';
+                badge.style.lineHeight = '1.2';
+                badge.style.width = 'auto';
+                badge.style.height = 'auto';
+                badge.style.minWidth = '20px';
+                badge.style.textAlign = 'center';
+                badge.style.boxShadow = '0 2px 4px rgba(0,0,0,0.2)';
+                badge.style.cursor = 'pointer';
+                badge.textContent = issue.id;
+                badge.title = issue.description;
+                badge.addEventListener('click', function (event) {
+                    event.stopPropagation();
+                    if (window.selectIssueFromPdf) {
+                        window.selectIssueFromPdf(issue.id);
+                    }
+                });
+                badge.addEventListener('contextmenu', function (event) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    openContextMenu(event.clientX, event.clientY, issue.id);
+                });
+                page.layer.appendChild(badge);
             });
         if (selectedIssueId != null) {
             document.querySelectorAll(
@@ -885,6 +885,29 @@
     window.rotatePage = function () {
         currentRotation = (currentRotation - 90 + 360) % 360;
         renderPages();
+    };
+
+    window.setZoom = function (scale) {
+        currentScale = scale;
+        const button = document.getElementById('zoom-level-btn');
+        if (button) {
+            button.innerText = Math.round(scale * 100) + '%';
+        }
+        renderPages();
+    };
+
+    window.fitToPage = function () {
+        if (!pdfDocument) {
+            return;
+        }
+        pdfDocument.getPage(1).then(function (page) {
+            const base = page.getViewport({
+                scale: 1,
+                rotation: currentRotation,
+            });
+            const available = Math.max(200, viewer.clientWidth - 24);
+            window.setZoom(available / base.width);
+        });
     };
 
     window.togglePan = function () {
