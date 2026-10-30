@@ -5,6 +5,7 @@ from io import BytesIO
 
 from django.contrib import messages
 from django.contrib.auth import get_user_model
+from django.contrib.auth.decorators import login_required
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.core.exceptions import PermissionDenied
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -59,6 +60,7 @@ from storage.domain.services import (
     delete_documents,
     delete_folder,
     empty_trash,
+    export_pdf_with_issues,
     generate_share_link,
     get_accessible_documents,
     get_accessible_projects,
@@ -1555,6 +1557,26 @@ class DocumentDownloadView(LoginRequiredMixin, View):
 
         filename = version.file.name.rsplit('/', 1)[-1]
         return FileResponse(file_handle, as_attachment=True, filename=filename)
+
+
+@login_required
+def document_pdf_with_issues(request, document_id):
+    document = get_object_or_404(
+        get_accessible_documents(request.user).select_related('current_version'),
+        pk=document_id,
+    )
+    try:
+        pdf_bytes = export_pdf_with_issues(request.user, document)
+    except PermissionDenied as exc:
+        return HttpResponseForbidden(str(exc))
+    except (ValueError, FileNotFoundError) as exc:
+        return HttpResponseNotFound(str(exc))
+
+    response = HttpResponse(pdf_bytes, content_type='application/pdf')
+    response['Content-Disposition'] = (
+        f'attachment; filename="{document.code}.pdf"'
+    )
+    return response
 
 
 class ExportVedomostView(LoginRequiredMixin, View):

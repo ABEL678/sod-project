@@ -1,6 +1,9 @@
 import base64
 from collections import defaultdict
+import io
 import uuid
+
+import fitz
 
 from django.core.exceptions import PermissionDenied
 from django.core.files.base import ContentFile
@@ -1779,3 +1782,70 @@ def delete_issue(user: User, issue: Issue) -> None:
     ):
         raise PermissionDenied("Нет прав на удаление замечания")
     issue.delete()
+
+
+PDF_ISSUE_COLORS = {
+    'NEW': (0.05, 0.43, 0.99),
+    'IN_PROGRESS': (0.05, 0.79, 0.94),
+    'DISCUSSION': (1.0, 0.76, 0.03),
+    'REJECTED': (0.86, 0.21, 0.27),
+    'DONE': (0.10, 0.53, 0.33),
+    'CLOSED': (0.42, 0.46, 0.49),
+    'CANCELLED': (0.13, 0.15, 0.16),
+}
+
+
+def export_pdf_with_issues(user: User, document: Document) -> bytes:
+    """Возвращает PDF текущей версии с наложенными маркапами замечаний."""
+    if not check_read_permission(user, document):
+        raise PermissionDenied('Нет прав на скачивание документа')
+
+    version = document.current_version
+    if version is None or not version.file:
+        raise ValueError('У документа нет текущей версии')
+    if not version.file.storage.exists(version.file.name):
+        raise ValueError('Файл текущей версии не найден')
+
+    issues = document.issues.filter(page_number__isnull=False).order_by('pk')
+    pdf = fitz.open(version.file.path)
+    try:
+        for issue in issues:
+            page_index = issue.page_number - 1
+            if page_index < 0 or page_index >= pdf.page_count:
+                continue
+            page = pdf[page_index]
+            page_rect = page.rect
+            color = PDF_ISSUE_COLORS.get(issue.status, PDF_ISSUE_COLORS['NEW'])
+
+            if (
+                issue.x1_ratio is not None and issue.y1_ratio is not None
+                and issue.x2_ratio is not None and issue.y2_ratio is not None
+            ):
+                x1 = page_rect.x0 + page_rect.width * min(issue.x1_ratio, issue.x2_ratio)
+                y1 = page_rect.y0 + page_rect.height * min(issue.y1_ratio, issue.y2_ratio)
+                x2 = page_rect.x0 + page_rect.width * max(issue.x1_ratio, issue.x2_ratio)
+                y2 = page_rect.y0 + page_rect.height * max(issue.y1_ratio, issue.y2_ratio)
+                rect = fitz.Rect(x1, y1, x2, y2)
+                page.draw_rect(rect, color=color, width=2)
+                page.insert_text(
+                    fitz.Point(rect.x0 + 3, max(rect.y0 - 3, 8)),
+                    f'#{issue.pk}',
+                    fontsize=8,
+                    color=color,
+                )
+            elif issue.x_ratio is not None and issue.y_ratio is not None:
+                x = page_rect.x0 + page_rect.width * issue.x_ratio
+                y = page_rect.y0 + page_rect.height * issue.y_ratio
+                page.draw_circle(fitz.Point(x, y), 9, color=color, width=2)
+                page.insert_text(
+                    fitz.Point(x + 12, max(y - 12, 8)),
+                    f'#{issue.pk}',
+                    fontsize=8,
+                    color=color,
+                )
+
+        buffer = io.BytesIO()
+        pdf.save(buffer)
+        return buffer.getvalue()
+    finally:
+        pdf.close()

@@ -494,12 +494,20 @@
                         scale: currentScale,
                         rotation: currentRotation,
                     });
+                    const outputScale = window.devicePixelRatio || 1;
                     const wrapper = document.createElement('div');
                     wrapper.className = 'pdf-page';
                     wrapper.dataset.page = String(number);
+                    wrapper.style.width = Math.floor(viewport.width) + 'px';
                     const canvas = document.createElement('canvas');
-                    canvas.width = viewport.width;
-                    canvas.height = viewport.height;
+                    canvas.width = Math.floor(viewport.width * outputScale);
+                    canvas.height = Math.floor(viewport.height * outputScale);
+                    canvas.style.width = Math.floor(viewport.width) + 'px';
+                    canvas.style.height = Math.floor(viewport.height) + 'px';
+                    const context = canvas.getContext('2d');
+                    context.setTransform(
+                        outputScale, 0, 0, outputScale, 0, 0
+                    );
                     const layer = document.createElement('div');
                     layer.className = 'pdf-pin-layer';
                     wrapper.appendChild(canvas);
@@ -509,7 +517,7 @@
                     pages.set(number, {wrapper: wrapper, canvas: canvas, layer: layer});
                     bindPageInteraction(wrapper, canvas);
                     return page.render({
-                        canvasContext: canvas.getContext('2d'),
+                        canvasContext: context,
                         viewport: viewport,
                     }).promise.then(function () {
                         drawMarks(number);
@@ -542,13 +550,13 @@
             }
             const action = button.dataset.pdfAction;
             if (action === 'zoom-in' && currentScale < 3) {
-                currentScale += 0.25;
+                currentScale *= 1.2;
                 renderPages();
             } else if (action === 'zoom-out' && currentScale > 0.5) {
-                currentScale -= 0.25;
+                currentScale /= 1.2;
                 renderPages();
             } else if (action === 'rotate') {
-                currentRotation = (currentRotation + 90) % 360;
+                currentRotation = (currentRotation - 90 + 360) % 360;
                 renderPages();
             } else if (action === 'pan') {
                 panMode = !panMode;
@@ -827,6 +835,43 @@
             });
         });
     }
+
+    window.zoomIn = function () {
+        currentScale *= 1.2;
+        renderPages();
+    };
+
+    window.zoomOut = function () {
+        currentScale /= 1.2;
+        renderPages();
+    };
+
+    window.rotatePage = function () {
+        currentRotation = (currentRotation - 90 + 360) % 360;
+        renderPages();
+    };
+
+    window.togglePan = function () {
+        panMode = !panMode;
+        textMode = false;
+        viewer.classList.toggle('is-pan', panMode);
+        viewer.classList.remove('text-mode');
+    };
+
+    window.toggleSelect = function () {
+        textMode = !textMode;
+        panMode = false;
+        viewer.classList.toggle('text-mode', textMode);
+        viewer.classList.remove('is-pan');
+    };
+
+    window.copyText = function () {
+        if (navigator.clipboard) {
+            navigator.clipboard.writeText(window.getSelection().toString());
+        }
+    };
+
+    window.renderPage = renderPages;
 
     initToolbar();
     initContextMenu();
