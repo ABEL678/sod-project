@@ -61,9 +61,10 @@ class IssueTable(tables.Table):
             'hx-get': lambda record: reverse(
                 'issues:issue_detail_htmx', args=[record.pk]
             ),
-            'hx-target': '#issue-detail-container',
+            'hx-target': '#issue-card-content',
             'hx-swap': 'innerHTML',
             'hx-indicator': '#issue-detail-spinner',
+            'hx-on::after-request': 'showIssueCard()',
             'style': 'cursor: pointer;',
         }
 
