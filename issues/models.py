@@ -77,3 +77,30 @@ class Issue(models.Model):
 
     def __str__(self):
         return f'Замечание #{self.pk} — {self.document.code} ({self.get_status_display()})'
+
+
+class IssueComment(models.Model):
+    issue = models.ForeignKey(
+        Issue,
+        on_delete=models.CASCADE,
+        related_name='comments',
+        verbose_name='Замечание',
+    )
+    author = models.ForeignKey(
+        'auth.User',
+        on_delete=models.CASCADE,
+        verbose_name='Автор',
+    )
+    text = models.TextField(verbose_name='Текст комментария')
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+        verbose_name='Дата создания',
+    )
+
+    class Meta:
+        ordering = ['created_at']
+        verbose_name = 'Комментарий'
+        verbose_name_plural = 'Комментарии'
+
+    def __str__(self):
+        return f'Комментарий от {self.author.username} к #{self.issue.pk}'

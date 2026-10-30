@@ -20,7 +20,7 @@ from storage.domain.services import (
     update_issue_status,
 )
 
-from issues.models import Issue
+from issues.models import Issue, IssueComment
 
 
 def _to_float(value):
@@ -256,3 +256,17 @@ def issue_delete_crop(request, issue_id):
             issue.crop_image = None
             issue.save()
     return redirect(request.META.get('HTTP_REFERER', 'storage:project_list'))
+
+
+@login_required
+def add_comment(request, issue_id):
+    issue = get_object_or_404(Issue, pk=issue_id)
+    if request.method == 'POST':
+        text = request.POST.get('text', '').strip()
+        if text:
+            IssueComment.objects.create(
+                issue=issue, author=request.user, text=text
+            )
+    return redirect(
+        request.META.get('HTTP_REFERER', 'storage:project_list')
+    )

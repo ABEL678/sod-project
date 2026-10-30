@@ -95,6 +95,30 @@
                 <dt class="col-sm-5">Статус</dt>
                 <dd class="col-sm-7">{{ issue.get_status_display }}</dd>
             </dl>
+
+            <hr class="my-3">
+            <h6 class="mb-2">Переписка</h6>
+            <div class="comments-list mb-2" style="max-height: 200px; overflow-y: auto;">
+                {% for comment in issue.comments.all %}
+                    <div class="border rounded p-2 mb-1 bg-light">
+                        <div class="d-flex justify-content-between small text-muted mb-1">
+                            <span class="fw-bold">{{ comment.author.username }}</span>
+                            <span>{{ comment.created_at|date:"d.m.Y H:i" }}</span>
+                        </div>
+                        <div style="font-size: 0.85rem;">{{ comment.text }}</div>
+                    </div>
+                {% empty %}
+                    <p class="text-muted small">Нет комментариев</p>
+                {% endfor %}
+            </div>
+
+            <form method="post" action="{% url 'issues:add_comment' issue.pk %}" class="mt-2">
+                {% csrf_token %}
+                <div class="input-group input-group-sm">
+                    <input type="text" name="text" class="form-control" placeholder="Написать комментарий..." required>
+                    <button class="btn btn-primary" type="submit">Отправить</button>
+                </div>
+            </form>
         </div>
 
         <div class="tab-pane fade" id="card-files-{{ issue.pk }}" role="tabpanel">
