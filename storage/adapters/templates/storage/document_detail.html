@@ -122,7 +122,7 @@
                     {% endif %}
                 </div>
                 <div class="card-body">
-                    <div style="max-height: 40vh; overflow-y: auto;" class="border rounded mb-3">
+                    <div style="max-height: 40vh; overflow-y: auto; overflow-x: hidden;" class="border rounded mb-3">
                         {% render_table issue_table %}
                     </div>
                     <div id="issue-detail-spinner" class="htmx-indicator text-muted small mb-1">Загрузка...</div>

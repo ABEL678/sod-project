@@ -35,7 +35,9 @@ class IssueTable(tables.Table):
 
     id = tables.Column(accessor='pk', verbose_name='ID', orderable=False)
     description = tables.TemplateColumn(
-        '<span title="{{ record.description }}">'
+        '<span title="{{ record.description }}" '
+        'style="display:inline-block; max-width:250px; text-overflow:ellipsis; '
+        'overflow:hidden; white-space:nowrap; vertical-align:middle;">'
         '{{ record.description|truncatechars:30 }}</span>',
         verbose_name='Текст',
         orderable=False,
@@ -50,6 +52,7 @@ class IssueTable(tables.Table):
 
     class Meta:
         model = Issue
+        fields = ('id', 'description', 'status', 'created_at', 'author')
         empty_text = 'Замечаний пока нет'
         attrs = {
             'class': 'table table-sm table-hover align-middle mb-0',
