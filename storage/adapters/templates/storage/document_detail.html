@@ -83,7 +83,7 @@
         <button type="button" class="btn btn-sm btn-outline-secondary" onclick="togglePan()">✋ Рука</button>
         <button type="button" class="btn btn-sm btn-outline-secondary" onclick="toggleSelect()">⍝ Выделение</button>
         <span class="vr mx-1"></span>
-        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="window.print()">Печать</button>
+        <a href="{% url 'storage:document_pdf_with_issues' document.pk %}" target="_blank" rel="noopener" class="btn btn-sm btn-outline-secondary">Печать</a>
         <button type="button" class="btn btn-sm btn-outline-secondary" onclick="copyText()">Копировать</button>
         <a class="btn btn-sm btn-primary" href="{% url 'storage:document_pdf_with_issues' document.pk %}">Скачать</a>
     </div>
