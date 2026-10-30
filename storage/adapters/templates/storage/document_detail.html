@@ -36,7 +36,7 @@
     {% endif %}
 
     <div id="main-splitter" class="d-flex w-100" style="height: calc(100vh - 110px); margin-bottom: 0 !important;">
-        <div id="pdf-panel" class="h-100 bg-secondary d-flex flex-column" style="width: 60%;">
+        <div id="pdf-panel" class="h-100 bg-secondary d-flex flex-column" style="width: 75%;">
             <div class="bg-light border-bottom p-1 d-flex flex-wrap gap-1 align-items-center">
                 <button class="btn btn-sm btn-outline-secondary py-0 px-2" onclick="zoomIn()">+</button>
                 <button class="btn btn-sm btn-outline-secondary py-0 px-2" onclick="zoomOut()">−</button>
@@ -67,7 +67,7 @@
 
         <div id="drag-divider" style="width: 5px; cursor: col-resize; background-color: #dee2e6; flex-shrink: 0;"></div>
 
-        <div id="issues-panel" class="h-100 d-flex flex-column bg-white" style="width: 40%;">
+        <div id="issues-panel" class="h-100 d-flex flex-column bg-white" style="width: 25%; min-width: 280px; overflow-x: auto;">
             <div class="d-flex justify-content-between align-items-center p-2 border-bottom bg-light">
                 <h6 class="mb-0">Замечания ({{ issues|length }})</h6>
                 {% if not public_view and can_create_issue %}
