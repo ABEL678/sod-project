@@ -1,7 +1,9 @@
+import base64
 from collections import defaultdict
 import uuid
 
 from django.core.exceptions import PermissionDenied
+from django.core.files.base import ContentFile
 from django.db.models import Count, Max, Prefetch, Q, QuerySet
 from django.db import transaction
 from django.utils import timezone
@@ -1613,8 +1615,57 @@ def update_issue_status(user: User, issue: Issue, new_status: str) -> Issue:
         issue.assignee = user
         update_fields.append('assignee')
 
+    if new_status == 'DONE' and issue.actual_fix_date is None:
+        issue.actual_fix_date = timezone.localdate()
+        update_fields.append('actual_fix_date')
+
     issue.save(update_fields=update_fields)
     return issue
+
+
+def get_issues_for_version(
+    document: Document,
+    version: DocumentVersion | None = None,
+):
+    """Замечания документа; при указании версии — только для неё."""
+    queryset = document.issues.select_related('author', 'assignee', 'version')
+    if version is not None:
+        queryset = queryset.filter(version=version)
+    return queryset.order_by('-created_at')
+
+
+def get_issue_assignees(user: User, document: Document):
+    """Разработчики проекта, которых можно назначить ответственным."""
+    if not check_read_permission(user, document):
+        return User.objects.none()
+    return (
+        User.objects.filter(
+            projectmembership__project=document.project,
+            projectmembership__role_in_project='developer',
+            is_active=True,
+        )
+        .distinct()
+        .order_by('last_name', 'username')
+    )
+
+
+def _decode_crop_image(crop_image_base64: str | None):
+    if not crop_image_base64:
+        return None
+    payload = crop_image_base64
+    if ',' in payload:
+        payload = payload.split(',', 1)[1]
+    try:
+        decoded = base64.b64decode(payload)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Некорректное изображение маркапа") from exc
+    if not decoded:
+        raise ValueError("Пустое изображение маркапа")
+    if len(decoded) > 5 * 1024 * 1024:
+        raise ValueError("Изображение маркапа слишком большое")
+    if not decoded.startswith(b'\xff\xd8'):
+        raise ValueError("Маркап должен быть JPEG-изображением")
+    return ContentFile(decoded, name=f'issue_crop_{uuid.uuid4().hex}.jpg')
 
 
 def create_issue(
@@ -1625,10 +1676,39 @@ def create_issue(
     page_number: int | None = None,
     x_ratio: float | None = None,
     y_ratio: float | None = None,
+    assignee: User | None = None,
+    x1_ratio: float | None = None,
+    y1_ratio: float | None = None,
+    x2_ratio: float | None = None,
+    y2_ratio: float | None = None,
+    crop_image_base64: str | None = None,
+    department: str = '',
+    project_organization: str = '',
+    answer_text: str = '',
+    due_date=None,
+    actual_fix_date=None,
+    revision: str = '',
 ) -> Issue:
-    """Создаёт замечание к документу с проверкой прав и валидацией координат пина."""
+    """Создаёт замечание к документу с проверкой прав и валидацией координат."""
     if not check_issue_permission(user, document):
         raise PermissionDenied("Нет прав на добавление замечания к документу")
+
+    markup = (x1_ratio, y1_ratio, x2_ratio, y2_ratio)
+    has_markup = any(value is not None for value in markup)
+    if has_markup:
+        if any(value is None for value in markup):
+            raise ValueError("Для маркапа нужны все четыре координаты")
+        for value in markup:
+            if not (0.0 <= value <= 1.0):
+                raise ValueError("Координаты маркапа должны быть в диапазоне 0.0 — 1.0")
+        if x1_ratio >= x2_ratio or y1_ratio >= y2_ratio:
+            raise ValueError("Координаты маркапа заданы некорректно")
+        if page_number is None:
+            raise ValueError("Для маркапа нужен номер страницы")
+        if x_ratio is None:
+            x_ratio = (x1_ratio + x2_ratio) / 2
+        if y_ratio is None:
+            y_ratio = (y1_ratio + y2_ratio) / 2
 
     if page_number is None and (x_ratio is not None or y_ratio is not None):
         raise ValueError("x_ratio и y_ratio требуют page_number")
@@ -1648,13 +1728,54 @@ def create_issue(
     if version is not None and version.document_id != document.pk:
         raise ValueError("Указанная версия не принадлежит данному документу")
 
+    if assignee is not None:
+        if not document.project.memberships.filter(
+            user=assignee, role_in_project='developer'
+        ).exists():
+            raise ValueError("Ответственный должен быть разработчиком проекта")
+
+    crop_image = _decode_crop_image(crop_image_base64)
+
     return Issue.objects.create(
         document=document,
         version=version,
         author=user,
+        assignee=assignee,
         description=description,
         status='NEW',
         page_number=page_number,
         x_ratio=x_ratio,
         y_ratio=y_ratio,
+        x1_ratio=x1_ratio,
+        y1_ratio=y1_ratio,
+        x2_ratio=x2_ratio,
+        y2_ratio=y2_ratio,
+        crop_image=crop_image,
+        department=department,
+        project_organization=project_organization,
+        answer_text=answer_text,
+        due_date=due_date,
+        actual_fix_date=actual_fix_date,
+        revision=revision,
     )
+
+
+def update_issue_answer(user: User, issue: Issue, answer_text: str) -> Issue:
+    """Сохраняет текст ответа на замечание."""
+    if not check_read_permission(user, issue.document):
+        raise PermissionDenied("Нет прав на изменение замечания")
+    issue.answer_text = answer_text
+    issue.save(update_fields=['answer_text', 'updated_at'])
+    return issue
+
+
+def delete_issue(user: User, issue: Issue) -> None:
+    """Удаляет замечание: автор, администратор или суперпользователь."""
+    profile = getattr(user, 'userprofile', None)
+    if not (
+        user.is_superuser
+        or issue.author_id == user.pk
+        or (profile is not None and profile.role == 'admin')
+    ):
+        raise PermissionDenied("Нет прав на удаление замечания")
+    issue.delete()

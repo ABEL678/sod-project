@@ -1,4 +1,5 @@
 {% load static %}
+{% load django_tables2 %}
 <!DOCTYPE html>
 <html lang="ru">
 <head>
@@ -80,6 +81,59 @@
         </div>
     </div>
 
+    <div class="row g-3 align-items-start mb-4">
+        <div class="col-lg-7">
+            <div class="card shadow-sm h-100">
+                <div class="card-header bg-white d-flex justify-content-between align-items-center flex-wrap gap-2">
+                    <span class="fw-semibold">PDF-просмотр</span>
+                    <div class="pdf-toolbar" id="pdfToolbar">
+                        <button type="button" class="btn btn-sm btn-outline-secondary" data-pdf-action="zoom-in" title="Увеличить">+</button>
+                        <button type="button" class="btn btn-sm btn-outline-secondary" data-pdf-action="zoom-out" title="Уменьшить">−</button>
+                        <button type="button" class="btn btn-sm btn-outline-secondary" data-pdf-action="rotate" title="Повернуть">⟳</button>
+                        <button type="button" class="btn btn-sm btn-outline-secondary" data-pdf-action="pan" title="Рука">✋</button>
+                        <button type="button" class="btn btn-sm btn-outline-secondary" data-pdf-action="text" title="Выделение текста">T</button>
+                    </div>
+                    {% if document.current_version %}
+                        <span class="small text-muted">v{{ document.current_version.version_number }}</span>
+                    {% endif %}
+                </div>
+                <div class="card-body p-0">
+                    {% if document.current_version %}
+                        <div id="pdfViewer"
+                             class="pdf-viewer"
+                             data-pdf-url="{% url 'storage:document_download' document.current_version.pk %}"
+                             data-worker-url="{% static 'js/pdfjs/pdf.worker.min.js' %}"
+                             {% if can_create_issue %}data-issue-create-url="{% url 'issues:issue_create' document.pk %}"{% endif %}
+                             data-can-create="{% if can_create_issue %}1{% else %}0{% endif %}">
+                            <div class="pdf-loading text-muted small p-3">Загрузка PDF…</div>
+                        </div>
+                    {% else %}
+                        <div class="p-3 text-muted">Нет текущей версии для просмотра.</div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-5">
+            <div class="card shadow-sm h-100" id="issuesPanel">
+                <div class="card-header bg-white d-flex justify-content-between align-items-center">
+                    <span class="fw-semibold">Замечания (<span id="issuesCount">{{ issues|length }}</span>)</span>
+                    {% if not public_view and can_create_issue %}
+                        <button type="button" class="btn btn-primary btn-sm" id="newIssueBtn">Создать замечание</button>
+                    {% endif %}
+                </div>
+                <div class="card-body">
+                    <div style="max-height: 40vh; overflow-y: auto;" class="border rounded mb-3">
+                        {% render_table issue_table %}
+                    </div>
+                    <div id="issue-detail-spinner" class="htmx-indicator text-muted small mb-1">Загрузка...</div>
+                    <div id="issue-detail-container" class="border rounded p-3 bg-white shadow-sm" style="min-height: 300px;">
+                        <p class="text-muted text-center mt-5">Выберите замечание из списка</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <div class="card shadow-sm" id="versions">
         <div class="card-header bg-white d-flex justify-content-between align-items-center flex-wrap gap-2">
             <span class="fw-semibold">История версий ({{ versions|length }})</span>
@@ -141,64 +195,106 @@
         </div>
     </div>
 
-    <div class="card shadow-sm mt-4">
-        <div class="card-header bg-white fw-semibold">Замечания ({{ issues|length }})</div>
-        <div class="card-body">
-            {% if not public_view and can_create_issue %}
-                <form method="post" action="{% url 'issues:issue_create' document.pk %}" class="mb-4">
+    <div class="modal fade" id="issueModal" tabindex="-1" aria-labelledby="issueModalLabel" aria-hidden="true">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <form id="issueForm">
                     {% csrf_token %}
+                    <input type="hidden" name="page_number" id="issuePageNumber">
+                    <input type="hidden" name="x_ratio" id="issueXRatio">
+                    <input type="hidden" name="y_ratio" id="issueYRatio">
+                    <input type="hidden" name="x1_ratio" id="issueX1Ratio">
+                    <input type="hidden" name="y1_ratio" id="issueY1Ratio">
+                    <input type="hidden" name="x2_ratio" id="issueX2Ratio">
+                    <input type="hidden" name="y2_ratio" id="issueY2Ratio">
+                    <input type="hidden" name="crop_image_base64" id="issueCropImage">
                     {% if document.current_version %}
                         <input type="hidden" name="version_id" value="{{ document.current_version.pk }}">
                     {% endif %}
-                    <div class="mb-2">
-                        <textarea name="description" class="form-control" rows="3" placeholder="Опишите замечание" required></textarea>
+                    <div class="modal-header">
+                        <h5 class="modal-title" id="issueModalLabel">Новое замечание</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрыть"></button>
                     </div>
-                    <button type="submit" class="btn btn-primary btn-sm">Добавить</button>
-                </form>
-            {% endif %}
-
-            {% for issue in issues %}
-                <div class="border rounded p-3 mb-2">
-                    <div class="d-flex justify-content-between align-items-start gap-3">
-                        <div>
-                            <div class="mb-1">
-                                <span class="badge {% if issue.status == 'NEW' %}bg-danger{% elif issue.status == 'IN_PROGRESS' %}bg-warning text-dark{% elif issue.status == 'REJECTED' %}bg-secondary{% elif issue.status == 'DISCUSSION' %}bg-info text-dark{% elif issue.status == 'DONE' %}bg-primary{% elif issue.status == 'CLOSED' %}bg-success{% else %}bg-dark{% endif %}">
-                                    {{ issue.get_status_display }}
-                                </span>
-                                {% if issue.version %}
-                                    <span class="text-muted small">к версии v{{ issue.version.version_number }}</span>
-                                {% endif %}
-                                <span class="text-muted small">· {{ issue.author.get_full_name|default:issue.author.username }}</span>
-                                <span class="text-muted small">· {{ issue.created_at|date:"d.m.Y H:i" }}</span>
-                                {% if issue.assignee %}
-                                    <span class="text-muted small">· адресат: {{ issue.assignee.get_full_name|default:issue.assignee.username }}</span>
-                                {% endif %}
+                    <div class="modal-body">
+                        <div class="alert alert-danger d-none" id="issueFormError"></div>
+                        <div class="mb-3">
+                            <label for="issueDescription" class="form-label">Текст замечания</label>
+                            <textarea id="issueDescription" name="description" class="form-control" rows="4" required></textarea>
+                        </div>
+                        <div class="mb-0">
+                            <label for="issueAssignee" class="form-label">Ответственный</label>
+                            <select id="issueAssignee" name="assignee" class="form-select">
+                                <option value="">— не назначен —</option>
+                                {% for assignee in issue_assignees %}
+                                    <option value="{{ assignee.pk }}">{{ assignee.get_full_name|default:assignee.username }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="row g-2 mt-1">
+                            <div class="col-6">
+                                <label for="issueDepartment" class="form-label small">От подразделения</label>
+                                <input type="text" id="issueDepartment" name="department" class="form-control form-control-sm">
                             </div>
-                            <div>{{ issue.description|linebreaksbr }}</div>
+                            <div class="col-6">
+                                <label for="issueOrganization" class="form-label small">Проектная организация</label>
+                                <input type="text" id="issueOrganization" name="project_organization" class="form-control form-control-sm">
+                            </div>
+                            <div class="col-6">
+                                <label for="issueDueDate" class="form-label small">Срок ответа</label>
+                                <input type="date" id="issueDueDate" name="due_date" class="form-control form-control-sm">
+                            </div>
+                            <div class="col-6">
+                                <label for="issueRevision" class="form-label small">Ревизия</label>
+                                <input type="text" id="issueRevision" name="revision" class="form-control form-control-sm">
+                            </div>
                         </div>
-                        <div class="flex-shrink-0">
-                            {% if not public_view and issue.allowed_status_options %}
-                                <div class="d-flex flex-wrap gap-1 justify-content-end">
-                                    {% for code, label in issue.allowed_status_options %}
-                                        <form method="post" action="{% url 'issues:issue_status' issue.pk %}">
-                                            {% csrf_token %}
-                                            <input type="hidden" name="status" value="{{ code }}">
-                                            <button type="submit" class="btn btn-sm {% if code == 'CLOSED' %}btn-outline-success{% elif code == 'CANCELLED' %}btn-outline-dark{% elif code == 'REJECTED' %}btn-outline-danger{% elif code == 'IN_PROGRESS' %}btn-outline-warning{% elif code == 'DONE' %}btn-outline-primary{% else %}btn-outline-secondary{% endif %}">
-                                                {{ label }}
-                                            </button>
-                                        </form>
-                                    {% endfor %}
-                                </div>
-                            {% endif %}
+                        <div class="mt-2">
+                            <label for="issueAnswerText" class="form-label small">Ответ</label>
+                            <textarea id="issueAnswerText" name="answer_text" class="form-control form-control-sm" rows="2"></textarea>
                         </div>
+                        <div class="form-text mt-2" id="issueCoordinates"></div>
                     </div>
-                </div>
-            {% empty %}
-                <div class="text-muted">Замечаний пока нет</div>
-            {% endfor %}
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Отмена</button>
+                        <button type="submit" class="btn btn-primary">Сохранить</button>
+                    </div>
+                </form>
+            </div>
         </div>
     </div>
+    <div id="issueContextMenu" class="issue-context-menu d-none">
+        <button type="button" class="context-item" data-action="answer">Ответить</button>
+        <div class="context-label">Изменить статус</div>
+        <div id="contextStatuses"></div>
+        <button type="button" class="context-item" data-action="copy-link">Скопировать ссылку</button>
+        <button type="button" class="context-item" data-action="delete">Удалить</button>
+        <button type="button" class="context-item" data-action="show-mark">Показать маркап</button>
+        <button type="button" class="context-item" data-action="download">Скачать вложение</button>
+    </div>
+    {{ issues_json|json_script:"issues-data" }}
 </main>
 <script src="{% static 'js/vendor/bootstrap.bundle.min.js' %}"></script>
+<script src="{% static 'js/vendor/htmx.min.js' %}"></script>
+<script>
+    document.addEventListener('click', function (event) {
+        const mark = event.target.closest('.pdf-markup, .pdf-pin');
+        if (!mark || !window.htmx) {
+            return;
+        }
+        const issueId = mark.dataset.issueId;
+        if (!issueId) {
+            return;
+        }
+        const detailUrl = '{% url "issues:issue_detail_htmx" 0 %}'.replace(
+            '/0/', '/' + issueId + '/'
+        );
+        htmx.ajax('GET', detailUrl, {
+            target: '#issue-detail-container',
+            swap: 'innerHTML'
+        });
+    }, true);
+</script>
+<script src="{% static 'js/pdfjs/pdf.min.js' %}"></script>
+<script src="{% static 'js/pdf_viewer.js' %}"></script>
 </body>
 </html>

@@ -1,0 +1,104 @@
+<div class="issue-card-detail" data-issue-id="{{ issue.pk }}">
+    <div class="d-flex justify-content-between align-items-center mb-2">
+        <div class="fw-semibold small">ИД: {{ issue.pk }}</div>
+        <span class="badge {% if issue.status == 'NEW' %}bg-danger{% elif issue.status == 'IN_PROGRESS' %}bg-warning text-dark{% elif issue.status == 'DISCUSSION' %}bg-info text-dark{% elif issue.status == 'REJECTED' %}bg-secondary{% elif issue.status == 'DONE' %}bg-primary{% elif issue.status == 'CLOSED' %}bg-success{% else %}bg-dark{% endif %}">
+            {{ issue.get_status_display }}
+        </span>
+    </div>
+
+    <ul class="nav nav-tabs mb-3" role="tablist">
+        <li class="nav-item" role="presentation">
+            <button class="nav-link active" id="card-element-tab-{{ issue.pk }}"
+                    data-bs-toggle="tab" data-bs-target="#card-element-{{ issue.pk }}"
+                    type="button" role="tab" aria-controls="card-element-{{ issue.pk }}"
+                    aria-selected="true">
+                Элемент
+            </button>
+        </li>
+        <li class="nav-item" role="presentation">
+            <button class="nav-link" id="card-files-tab-{{ issue.pk }}"
+                    data-bs-toggle="tab" data-bs-target="#card-files-{{ issue.pk }}"
+                    type="button" role="tab" aria-controls="card-files-{{ issue.pk }}"
+                    aria-selected="false">
+                Файлы
+            </button>
+        </li>
+    </ul>
+
+    <div class="tab-content">
+        <div class="tab-pane fade show active" id="card-element-{{ issue.pk }}" role="tabpanel">
+            <dl class="row small mb-0">
+                <dt class="col-sm-5">Элемент проекта</dt>
+                <dd class="col-sm-7">
+                    <a href="{% url 'storage:document_detail' issue.document.pk %}">
+                        {{ issue.document.name }}
+                    </a>
+                </dd>
+
+                <dt class="col-sm-5">Текст замечания</dt>
+                <dd class="col-sm-7">
+                    <div class="bg-light border rounded p-2">{{ issue.description|linebreaksbr }}</div>
+                </dd>
+
+                <dt class="col-sm-5">Маркап</dt>
+                <dd class="col-sm-7">
+                    {% if issue.page_number %}Стр. {{ issue.page_number }}{% else %}—{% endif %}
+                </dd>
+
+                <dt class="col-sm-5">Срок ответа</dt>
+                <dd class="col-sm-7">
+                    {% if issue.due_date %}{{ issue.due_date|date:"d.m.Y" }}{% else %}—{% endif %}
+                </dd>
+
+                <dt class="col-sm-5">Ответ</dt>
+                <dd class="col-sm-7">
+                    {% if issue.answer_text %}
+                        <div class="border rounded p-2" style="background:#d1e7dd;">
+                            {{ issue.answer_text|linebreaksbr }}
+                        </div>
+                    {% else %}
+                        —
+                    {% endif %}
+                </dd>
+
+                <dt class="col-sm-5">Автор замечания</dt>
+                <dd class="col-sm-7">{{ issue.author.get_full_name|default:issue.author.username }}</dd>
+
+                <dt class="col-sm-5">От подразделения</dt>
+                <dd class="col-sm-7">{{ issue.department|default:"—" }}</dd>
+
+                <dt class="col-sm-5">Ответственный</dt>
+                <dd class="col-sm-7">
+                    {% if issue.assignee %}
+                        {{ issue.assignee.get_full_name|default:issue.assignee.username }}
+                    {% else %}
+                        —
+                    {% endif %}
+                </dd>
+
+                <dt class="col-sm-5">Проектная организация</dt>
+                <dd class="col-sm-7">{{ issue.project_organization|default:"—" }}</dd>
+
+                <dt class="col-sm-5">Версия файла</dt>
+                <dd class="col-sm-7">
+                    {% if issue.version %}v{{ issue.version.version_number }}{% else %}—{% endif %}
+                </dd>
+
+                <dt class="col-sm-5">Фактическая дата устранения</dt>
+                <dd class="col-sm-7">
+                    {% if issue.actual_fix_date %}{{ issue.actual_fix_date|date:"d.m.Y" }}{% else %}—{% endif %}
+                </dd>
+
+                <dt class="col-sm-5">Ревизия</dt>
+                <dd class="col-sm-7">{{ issue.revision|default:"—" }}</dd>
+
+                <dt class="col-sm-5">Статус</dt>
+                <dd class="col-sm-7">{{ issue.get_status_display }}</dd>
+            </dl>
+        </div>
+
+        <div class="tab-pane fade" id="card-files-{{ issue.pk }}" role="tabpanel">
+            <p class="text-muted small mb-0">Список файлов маркапов будет доступен позже.</p>
+        </div>
+    </div>
+</div>

@@ -2210,3 +2210,202 @@ body.modal-open {
     text-decoration: none;
     cursor: default;
 }
+
+/* ---------- T12-PDF: PDF viewer and pins ---------- */
+
+.pdf-viewer {
+    background: #525659;
+    min-height: 320px;
+    max-height: 80vh;
+    overflow: auto;
+    padding: 12px;
+}
+
+.pdf-page {
+    position: relative;
+    width: 100%;
+    margin: 0 auto 12px;
+    background: #fff;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, .25);
+}
+
+.pdf-page canvas {
+    display: block;
+    width: 100%;
+    height: auto;
+}
+
+.pdf-pin-layer {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+}
+
+.pdf-pin {
+    position: absolute;
+    width: 18px;
+    height: 18px;
+    padding: 0;
+    border: 2px solid #fff;
+    border-radius: 50%;
+    transform: translate(-50%, -50%);
+    pointer-events: auto;
+    cursor: pointer;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, .45);
+}
+
+.pdf-pin--open { background: #dc3545; }
+.pdf-pin--work { background: #f0ad4e; }
+.pdf-pin--closed { background: #198754; }
+.pdf-pin--cancelled { background: #6c757d; }
+
+.pdf-pin.is-active {
+    outline: 3px solid #0d6efd;
+    outline-offset: 2px;
+    transform: translate(-50%, -50%) scale(1.25);
+}
+
+.issues-panel-body {
+    max-height: 80vh;
+    overflow-y: auto;
+}
+
+.issue-card.is-active {
+    border-color: #0d6efd;
+    box-shadow: 0 0 0 .2rem rgba(13, 110, 253, .2);
+}
+
+/* ---------- T12-PDF-FINAL: markup, toolbar, details, context menu ---------- */
+
+.pdf-toolbar {
+    display: flex;
+    gap: .25rem;
+    flex-wrap: wrap;
+}
+
+.pdf-toolbar .btn {
+    min-width: 34px;
+}
+
+.pdf-viewer {
+    position: relative;
+    cursor: crosshair;
+}
+
+.pdf-viewer.is-pan,
+.pdf-viewer.is-pan .pdf-page {
+    cursor: grab;
+}
+
+.pdf-markup {
+    position: absolute;
+    border: 2px solid #0d6efd;
+    border-radius: 2px;
+    pointer-events: auto;
+    cursor: pointer;
+}
+
+.pdf-markup-preview {
+    pointer-events: none;
+    border-style: dashed;
+}
+
+.pdf-markup.is-active {
+    box-shadow: 0 0 0 2px #0d6efd, 0 0 12px rgba(13, 110, 253, .7);
+}
+
+.textLayer {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+    opacity: 0;
+    line-height: 1;
+    pointer-events: none;
+}
+
+.textLayer span,
+.textLayer br {
+    color: transparent;
+    position: absolute;
+    white-space: pre;
+    transform-origin: 0% 0%;
+}
+
+.pdf-viewer.text-mode .textLayer {
+    opacity: 1;
+    pointer-events: auto;
+    user-select: text;
+}
+
+.pdf-viewer.text-mode .textLayer ::selection {
+    background: rgba(13, 110, 253, .35);
+}
+
+.issues-panel-body {
+    max-height: 60vh;
+    overflow-y: auto;
+}
+
+.issue-details-body {
+    max-height: 52vh;
+    overflow-y: auto;
+}
+
+.issue-crop-thumb {
+    max-width: 100%;
+    max-height: 90px;
+    border: 1px solid #dee2e6;
+    border-radius: 4px;
+}
+
+.issue-context-menu {
+    position: fixed;
+    z-index: 1090;
+    min-width: 220px;
+    max-width: 280px;
+    padding: .35rem 0;
+    background: #fff;
+    border: 1px solid rgba(0, 0, 0, .15);
+    border-radius: .5rem;
+    box-shadow: 0 .5rem 1.5rem rgba(0, 0, 0, .2);
+}
+
+.issue-context-menu .context-item {
+    display: block;
+    width: 100%;
+    padding: .35rem .9rem;
+    border: 0;
+    background: transparent;
+    text-align: left;
+    font-size: .875rem;
+    color: #212529;
+}
+
+.issue-context-menu .context-item:hover {
+    background: #eef2ff;
+}
+
+.issue-context-menu .context-label {
+    padding: .35rem .9rem .15rem;
+    font-size: .72rem;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+    color: #6c757d;
+}
+
+.issue-context-menu #contextStatuses {
+    max-height: 160px;
+    overflow-y: auto;
+}
+
+/* ---------- T2: HTMX master-detail ---------- */
+
+.htmx-indicator {
+    opacity: 0;
+    transition: opacity 200ms ease-in;
+}
+
+.htmx-request .htmx-indicator,
+.htmx-request.htmx-indicator {
+    opacity: 1;
+}

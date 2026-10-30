@@ -1,4 +1,6 @@
+import base64
 import tempfile
+from datetime import date
 
 from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied
@@ -19,6 +21,9 @@ from storage.domain.services import (
     allowed_issue_statuses,
     check_read_permission,
     create_issue,
+    delete_issue,
+    get_issues_for_version,
+    update_issue_answer,
     update_issue_status,
     upload_document,
 )
@@ -535,3 +540,132 @@ class IssueStatusMatrixTests(TestCase):
             update_issue_status(self.developer, issue, target)
             issue.refresh_from_db()
             self.assertEqual(issue.status, target)
+
+    def test_ajax_create_issue_returns_issue_with_pin(self):
+        self.client.force_login(self.customer)
+        response = self.client.post(
+            reverse('issues:issue_create', args=[self.document.pk]),
+            {
+                'description': 'Замечание с пина',
+                'page_number': '1',
+                'x_ratio': '0.25',
+                'y_ratio': '0.75',
+                'assignee': str(self.developer.pk),
+            },
+            HTTP_X_REQUESTED_WITH='XMLHttpRequest',
+        )
+        self.assertEqual(response.status_code, 201)
+        payload = response.json()
+        self.assertEqual(payload['status'], 'ok')
+        issue = Issue.objects.get(pk=payload['issue']['id'])
+        self.assertEqual(issue.page_number, 1)
+        self.assertAlmostEqual(issue.x_ratio, 0.25)
+        self.assertAlmostEqual(issue.y_ratio, 0.75)
+        self.assertEqual(issue.assignee, self.developer)
+        self.assertEqual(payload['issue']['status'], 'NEW')
+
+    def test_get_issues_for_version_filters(self):
+        version = self.document.current_version
+        versioned = create_issue(
+            user=self.gip,
+            document=self.document,
+            description='К версии',
+            version=version,
+        )
+        create_issue(
+            user=self.gip,
+            document=self.document,
+            description='Без версии',
+        )
+        ids = list(
+            get_issues_for_version(self.document, version).values_list('pk', flat=True)
+        )
+        self.assertEqual(ids, [versioned.pk])
+
+    def test_create_issue_with_markup_crop_and_details(self):
+        crop = 'data:image/jpeg;base64,' + base64.b64encode(b'\xff\xd8\xff\xd9').decode()
+        issue = create_issue(
+            user=self.gip,
+            document=self.document,
+            description='Маркап',
+            version=self.document.current_version,
+            page_number=1,
+            x1_ratio=0.1,
+            y1_ratio=0.2,
+            x2_ratio=0.4,
+            y2_ratio=0.5,
+            crop_image_base64=crop,
+            department='АР',
+            project_organization='ООО Проект',
+            answer_text='Ответ проектировщика',
+            due_date=date(2026, 11, 1),
+            revision='R2',
+        )
+        issue.refresh_from_db()
+        self.assertAlmostEqual(issue.x1_ratio, 0.1)
+        self.assertAlmostEqual(issue.x2_ratio, 0.4)
+        self.assertAlmostEqual(issue.x_ratio, 0.25)
+        self.assertAlmostEqual(issue.y_ratio, 0.35)
+        self.assertEqual(issue.department, 'АР')
+        self.assertEqual(issue.project_organization, 'ООО Проект')
+        self.assertEqual(issue.answer_text, 'Ответ проектировщика')
+        self.assertEqual(issue.due_date, date(2026, 11, 1))
+        self.assertEqual(issue.revision, 'R2')
+        self.assertTrue(issue.crop_image)
+        self.assertTrue(issue.crop_image.storage.exists(issue.crop_image.name))
+
+    def test_ajax_create_with_markup_and_crop(self):
+        self.client.force_login(self.customer)
+        crop = 'data:image/jpeg;base64,' + base64.b64encode(b'\xff\xd8\xff\xd9').decode()
+        response = self.client.post(
+            reverse('issues:issue_create', args=[self.document.pk]),
+            {
+                'description': 'Маркап заказчика',
+                'page_number': '1',
+                'x1_ratio': '0.2',
+                'y1_ratio': '0.2',
+                'x2_ratio': '0.5',
+                'y2_ratio': '0.6',
+                'crop_image_base64': crop,
+                'department': 'Заказчик',
+                'project_organization': 'ООО Заказчик',
+            },
+            HTTP_X_REQUESTED_WITH='XMLHttpRequest',
+        )
+        self.assertEqual(response.status_code, 201)
+        payload = response.json()['issue']
+        self.assertEqual(payload['department'], 'Заказчик')
+        self.assertEqual(payload['project_organization'], 'ООО Заказчик')
+        self.assertTrue(payload['crop_image_url'])
+        self.assertIn('status_options', payload)
+
+    def test_answer_update_and_delete_permissions(self):
+        issue = self._issue()
+        update_issue_answer(self.checker, issue, 'Ответ проверяющего')
+        issue.refresh_from_db()
+        self.assertEqual(issue.answer_text, 'Ответ проверяющего')
+
+        with self.assertRaises(PermissionDenied):
+            delete_issue(self.checker, issue)
+
+        delete_issue(self.gip, issue)
+        self.assertFalse(Issue.objects.filter(pk=issue.pk).exists())
+
+    def test_done_sets_actual_fix_date(self):
+        issue = self._issue()
+        update_issue_status(self.developer, issue, 'DONE')
+        issue.refresh_from_db()
+        self.assertIsNotNone(issue.actual_fix_date)
+
+    def test_document_detail_has_pdf_toolbar_and_element_tab(self):
+        self._issue()
+        self.client.force_login(self.gip)
+        response = self.client.get(
+            reverse('storage:document_detail', args=[self.document.pk])
+        )
+        self.assertContains(response, 'data-pdf-action="zoom-in"')
+        self.assertContains(response, 'id="issueElementTab"')
+        self.assertContains(response, 'id="issueFilesTab"')
+        self.assertContains(response, 'id="issueContextMenu"')
+        self.assertContains(response, 'id="detailDepartment"')
+        self.assertContains(response, 'id="detailOrganization"')

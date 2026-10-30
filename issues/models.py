@@ -47,6 +47,21 @@ class Issue(models.Model):
     page_number = models.PositiveIntegerField(null=True, blank=True)
     x_ratio = models.FloatField(null=True, blank=True)
     y_ratio = models.FloatField(null=True, blank=True)
+    x1_ratio = models.FloatField(null=True, blank=True)
+    y1_ratio = models.FloatField(null=True, blank=True)
+    x2_ratio = models.FloatField(null=True, blank=True)
+    y2_ratio = models.FloatField(null=True, blank=True)
+    crop_image = models.ImageField(
+        upload_to='issues/crops/%Y/%m/',
+        null=True,
+        blank=True,
+    )
+    department = models.CharField(max_length=255, blank=True)
+    project_organization = models.CharField(max_length=255, blank=True)
+    due_date = models.DateField(null=True, blank=True)
+    actual_fix_date = models.DateField(null=True, blank=True)
+    revision = models.CharField(max_length=100, blank=True)
+    answer_text = models.TextField(blank=True)
 
     class Meta:
         ordering = ['-created_at']

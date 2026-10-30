@@ -67,6 +67,8 @@ from storage.domain.services import (
     get_flat_folders,
     get_folder_documents,
     get_folder_tree,
+    get_issue_assignees,
+    get_issues_for_version,
     get_project_documents_for_view,
     get_project_documents_queryset,
     get_project_membership,
@@ -90,6 +92,7 @@ from storage.domain.services import (
 )
 
 from issues.models import Issue
+from issues.tables import IssueTable
 
 
 RECENT_DOCUMENTS_SESSION_KEY = 'recent_documents'
@@ -1321,6 +1324,42 @@ class SearchView(LoginRequiredMixin, TemplateView):
         return context
 
 
+def _issue_payload(issue):
+    document_url = reverse(
+        'storage:document_detail', args=[issue.document_id]
+    )
+    return {
+        'id': issue.pk,
+        'page_number': issue.page_number,
+        'x_ratio': issue.x_ratio,
+        'y_ratio': issue.y_ratio,
+        'x1_ratio': issue.x1_ratio,
+        'y1_ratio': issue.y1_ratio,
+        'x2_ratio': issue.x2_ratio,
+        'y2_ratio': issue.y2_ratio,
+        'status': issue.status,
+        'status_label': issue.get_status_display(),
+        'description': issue.description,
+        'author': issue.author.get_full_name() or issue.author.username,
+        'assignee': (
+            issue.assignee.get_full_name() or issue.assignee.username
+            if issue.assignee else ''
+        ),
+        'version': issue.version.version_number if issue.version else None,
+        'department': issue.department,
+        'project_organization': issue.project_organization,
+        'due_date': issue.due_date.isoformat() if issue.due_date else '',
+        'actual_fix_date': (
+            issue.actual_fix_date.isoformat() if issue.actual_fix_date else ''
+        ),
+        'revision': issue.revision,
+        'answer_text': issue.answer_text,
+        'crop_image_url': issue.crop_image.url if issue.crop_image else '',
+        'document_url': document_url,
+        'status_options': [],
+    }
+
+
 class DocumentDetailView(LoginRequiredMixin, DetailView):
     model = Document
     template_name = 'storage/document_detail.html'
@@ -1376,17 +1415,38 @@ class DocumentDetailView(LoginRequiredMixin, DetailView):
         context = super().get_context_data(**kwargs)
         context['breadcrumbs'] = _document_breadcrumbs(self.object)
         context['versions'] = self.object.versions.select_related('uploaded_by').order_by('-version_number')
-        issues = list(
-            self.object.issues.select_related('author', 'assignee', 'version')
-            .order_by('-created_at')
-        )
+        issues = list(get_issues_for_version(self.object))
         status_labels = dict(Issue.STATUS_CHOICES)
         for issue in issues:
             issue.allowed_status_options = [
                 (code, status_labels[code])
                 for code in allowed_issue_statuses(self.request.user, issue)
             ]
+            issue.allowed_status_json = json.dumps(
+                [
+                    {'code': code, 'label': label}
+                    for code, label in issue.allowed_status_options
+                ],
+                ensure_ascii=False,
+            )
         context['issues'] = issues
+        is_public = (
+            bool(self.request.GET.get('share'))
+            or not self.request.user.is_authenticated
+        )
+        context['issue_table'] = IssueTable(issues, is_public=is_public)
+        payloads = []
+        for issue in issues:
+            payload = _issue_payload(issue)
+            payload['status_options'] = [
+                {'code': code, 'label': label}
+                for code, label in issue.allowed_status_options
+            ]
+            payloads.append(payload)
+        context['issues_json'] = payloads
+        context['issue_assignees'] = get_issue_assignees(
+            self.request.user, self.object
+        )
         context['can_create_issue'] = check_issue_permission(
             self.request.user, self.object
         )
