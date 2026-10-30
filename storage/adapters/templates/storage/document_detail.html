@@ -13,8 +13,53 @@
 <body class="bg-light">
 {% include 'storage/_topbar.html' with topbar_project=document.project %}
 <main class="container-fluid py-3 pb-5">
-    <div class="small py-1">
-        {% include 'storage/_breadcrumbs.html' %}
+    <div class="d-flex align-items-center justify-content-between py-1 border-bottom bg-white" style="font-size: 0.85rem;">
+        <div class="d-flex align-items-center gap-2 text-truncate">
+            <span class="text-muted">{{ document.project.code }}</span>
+            <span class="text-muted">/</span>
+            <span class="fw-bold text-truncate">{{ document.code }} — {{ document.name }}</span>
+            <span class="badge bg-secondary">{{ document.get_status_display }}</span>
+        </div>
+        <div class="flex-shrink-0">
+            <button class="btn btn-sm btn-link text-decoration-none py-0" type="button"
+                    data-bs-toggle="collapse" data-bs-target="#docMetaDetails"
+                    aria-expanded="false" aria-controls="docMetaDetails">
+                Детали ▼
+            </button>
+        </div>
+    </div>
+
+    <div id="docMetaDetails" class="collapse">
+        <div class="card-body py-2 small">
+            <div class="row g-2">
+                <div class="col-md-3">
+                    <span class="text-muted">Проект:</span>
+                    {{ document.project.code }} — {{ document.project.name }}
+                </div>
+                <div class="col-md-3">
+                    <span class="text-muted">Раздел:</span>
+                    {{ document.section.code }} — {{ document.section.name }}
+                </div>
+                <div class="col-md-3">
+                    <span class="text-muted">Тип:</span>
+                    {{ document.get_doc_type_display }}
+                </div>
+                <div class="col-md-3">
+                    <span class="text-muted">Статус:</span>
+                    <span class="badge {% if document.status == 'approved' %}bg-success{% elif document.status == 'archived' %}bg-secondary{% else %}bg-warning text-dark{% endif %}">
+                        {{ document.get_status_display }}
+                    </span>
+                </div>
+                <div class="col-md-3">
+                    <span class="text-muted">Версия:</span>
+                    {% if document.current_version %}
+                        v{{ document.current_version.version_number }}
+                    {% else %}
+                        нет
+                    {% endif %}
+                </div>
+            </div>
+        </div>
     </div>
 
     {% if public_view %}
@@ -30,73 +75,26 @@
         {% endfor %}
     {% endif %}
 
-    <div class="card mb-2 shadow-sm">
-        <div class="card-header py-1 px-3 d-flex justify-content-between align-items-center bg-light">
-            <span class="fw-bold small text-truncate">
-                {{ document.code }} — {{ document.name }}
-                <span class="badge bg-secondary ms-2">{{ document.get_status_display }}</span>
-            </span>
-            <button class="btn btn-sm btn-link text-decoration-none py-0" type="button"
-                    data-bs-toggle="collapse" data-bs-target="#docMetaDetails"
-                    aria-expanded="false" aria-controls="docMetaDetails">
-                Детали ▼
-            </button>
+    <div class="d-flex align-items-center justify-content-between py-1 bg-light border-bottom">
+        <div class="d-flex align-items-center gap-1 flex-nowrap" style="overflow-x: auto;">
+            <button type="button" class="btn btn-sm btn-outline-secondary" onclick="zoomIn()">+</button>
+            <button type="button" class="btn btn-sm btn-outline-secondary" onclick="zoomOut()">−</button>
+            <button type="button" class="btn btn-sm btn-outline-secondary text-nowrap" onclick="rotatePage()">⟲ Повернуть</button>
+            <button type="button" class="btn btn-sm btn-outline-secondary text-nowrap" onclick="togglePan()">✋ Рука</button>
+            <button type="button" class="btn btn-sm btn-outline-secondary text-nowrap" onclick="toggleSelect()">⍝ Выделение</button>
+            <span class="vr mx-1"></span>
+            <a href="{% url 'storage:document_pdf_with_issues' document.pk %}" target="_blank" rel="noopener" class="btn btn-sm btn-outline-secondary text-nowrap">Печать</a>
+            <button type="button" class="btn btn-sm btn-outline-secondary text-nowrap" onclick="copyText()">Копировать</button>
+            <a class="btn btn-sm btn-primary text-nowrap" href="{% url 'storage:document_pdf_with_issues' document.pk %}">Скачать</a>
         </div>
-        <div id="docMetaDetails" class="collapse">
-            <div class="card-body py-2 small">
-                <div class="row g-2">
-                    <div class="col-md-3">
-                        <span class="text-muted">Проект:</span>
-                        {{ document.project.code }} — {{ document.project.name }}
-                    </div>
-                    <div class="col-md-3">
-                        <span class="text-muted">Раздел:</span>
-                        {{ document.section.code }} — {{ document.section.name }}
-                    </div>
-                    <div class="col-md-3">
-                        <span class="text-muted">Тип:</span>
-                        {{ document.get_doc_type_display }}
-                    </div>
-                    <div class="col-md-3">
-                        <span class="text-muted">Статус:</span>
-                        <span class="badge {% if document.status == 'approved' %}bg-success{% elif document.status == 'archived' %}bg-secondary{% else %}bg-warning text-dark{% endif %}">
-                            {{ document.get_status_display }}
-                        </span>
-                    </div>
-                    <div class="col-md-3">
-                        <span class="text-muted">Версия:</span>
-                        {% if document.current_version %}
-                            v{{ document.current_version.version_number }}
-                        {% else %}
-                            нет
-                        {% endif %}
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <div class="sticky-top bg-light border-bottom py-2 px-3 d-flex gap-2 flex-wrap" style="z-index: 1020; top: 56px;">
-        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="zoomIn()">+</button>
-        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="zoomOut()">−</button>
-        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="rotatePage()">⟲ Повернуть</button>
-        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="togglePan()">✋ Рука</button>
-        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="toggleSelect()">⍝ Выделение</button>
-        <span class="vr mx-1"></span>
-        <a href="{% url 'storage:document_pdf_with_issues' document.pk %}" target="_blank" rel="noopener" class="btn btn-sm btn-outline-secondary">Печать</a>
-        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="copyText()">Копировать</button>
-        <a class="btn btn-sm btn-primary" href="{% url 'storage:document_pdf_with_issues' document.pk %}">Скачать</a>
+        <span class="small text-muted me-2 text-nowrap">
+            PDF-просмотр{% if document.current_version %} (v{{ document.current_version.version_number }}){% endif %}
+        </span>
     </div>
 
     <div id="main-splitter" class="d-flex" style="height: calc(100vh - 200px);">
         <div id="pdf-panel" style="width: 60%; overflow: hidden; border-right: 1px solid #dee2e6;">
             <div class="card shadow-sm h-100">
-                <div class="card-header bg-white d-flex justify-content-between align-items-center flex-wrap gap-2">
-                    <span class="fw-semibold">PDF-просмотр</span>
-                    {% if document.current_version %}
-                        <span class="small text-muted">v{{ document.current_version.version_number }}</span>
-                    {% endif %}
-                </div>
                 <div class="card-body p-0">
                     {% if document.current_version %}
                         <div id="pdfViewer"
