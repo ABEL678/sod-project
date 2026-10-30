@@ -211,7 +211,9 @@
                     mark.title = issue.description;
                     mark.addEventListener('click', function (event) {
                         event.stopPropagation();
-                        selectIssue(issue.id);
+                        if (window.selectIssueFromPdf) {
+                            window.selectIssueFromPdf(issue.id);
+                        }
                     });
                     mark.addEventListener('contextmenu', function (event) {
                         event.preventDefault();
@@ -230,7 +232,9 @@
                     pin.title = issue.description;
                     pin.addEventListener('click', function (event) {
                         event.stopPropagation();
-                        selectIssue(issue.id);
+                        if (window.selectIssueFromPdf) {
+                            window.selectIssueFromPdf(issue.id);
+                        }
                     });
                     pin.addEventListener('contextmenu', function (event) {
                         event.preventDefault();

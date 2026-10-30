@@ -72,7 +72,10 @@ class IssueTable(tables.Table):
             'class': 'table table-sm table-hover align-middle mb-0',
         }
         row_attrs = {
+            'id': lambda record: f'issue-row-{record.pk}',
+            'data-issue-id': lambda record: record.pk,
             'style': 'cursor: pointer;',
+            'onclick': 'selectIssue(event, this.dataset.issueId)',
         }
 
     def render_status(self, value, record):

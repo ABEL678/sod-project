@@ -2409,3 +2409,18 @@ body.modal-open {
 .htmx-request.htmx-indicator {
     opacity: 1;
 }
+
+/* ---------- T2: table <-> PDF sync ---------- */
+
+.table-active {
+    background-color: #fff3cd !important;
+    border-left: 4px solid #ffc107;
+}
+
+.pdf-markup {
+    transition: box-shadow 0.2s;
+}
+
+.pdf-markup.border-danger {
+    box-shadow: 0 0 0 3px rgba(220, 53, 69, 0.5);
+}

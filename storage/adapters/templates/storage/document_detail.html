@@ -296,27 +296,10 @@
         document.getElementById('issue-card-view').style.display = 'none';
     }
 
-    document.addEventListener('click', function (event) {
-        const mark = event.target.closest('.pdf-markup, .pdf-pin');
-        if (!mark || !window.htmx) {
-            return;
-        }
-        const issueId = mark.dataset.issueId;
-        if (!issueId) {
-            return;
-        }
-        const detailUrl = '{% url "issues:issue_detail_htmx" 0 %}'.replace(
-            '/0/', '/' + issueId + '/'
-        );
-        showIssueCard();
-        htmx.ajax('GET', detailUrl, {
-            target: '#issue-card-content',
-            swap: 'innerHTML'
-        });
-    }, true);
 </script>
 <script src="{% static 'js/pdfjs/pdf.min.js' %}"></script>
-<script src="{% static 'js/pdf_viewer.js' %}?v=20261030-toolbar"></script>
+<script src="{% static 'js/sync.js' %}?v=20261030-sync"></script>
+<script src="{% static 'js/pdf_viewer.js' %}?v=20261030-sync"></script>
 <script src="{% static 'js/splitter.js' %}?v=20261030-toolbar"></script>
 </body>
 </html>
