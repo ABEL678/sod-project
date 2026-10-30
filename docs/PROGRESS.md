@@ -27,6 +27,14 @@
 
 ## Журнал (Changelog)
 
+### 30.10.2026 — T10-LIFECYCLE
+- Добавлена модель `Folder.zone` (WIP, SHARED, PUBLISHED, ARCHIVE).
+- Автосоздание 4 зон при старте проекта.
+- Связь статуса документа и зоны (move_document).
+- Права по зонам (check_zone_permission).
+- Иконки зон в дереве (карандаш, люди, щит, замок).
+- 233 теста зелёные.
+
 ### 29.10.2026 — T7-ui-final (django-scotty)
 - Установлен django-scotty и зависимости (django-cotton, django-tables2, django-filters, htmx).
 - Созданы `storage/adapters/tables.py` (DocumentTable) и `filters.py` (DocumentFilter).

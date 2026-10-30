@@ -2177,3 +2177,36 @@ body.modal-open {
 .doc-row-menu .dropdown-item:hover {
     background: #eff6ff;
 }
+
+/* ---------- T10-LIFECYCLE: zone visualization ---------- */
+
+.folder-zone-icon {
+    flex: 0 0 auto;
+    width: 16px;
+    text-align: center;
+    font-size: 12px;
+    opacity: .7;
+}
+
+/* Фон только для канонических зон (root папки с zone) */
+.folder-row-zone[data-zone="WIP"] {
+    background: linear-gradient(90deg, rgba(59,130,246,.06) 0%, transparent 50%);
+}
+
+.folder-row-zone[data-zone="SHARED"] {
+    background: linear-gradient(90deg, rgba(245,158,11,.06) 0%, transparent 50%);
+}
+
+.folder-row-zone[data-zone="PUBLISHED"] {
+    background: linear-gradient(90deg, rgba(34,197,94,.06) 0%, transparent 50%);
+}
+
+.folder-row-zone[data-zone="ARCHIVE"] {
+    background: linear-gradient(90deg, rgba(100,116,139,.06) 0%, transparent 50%);
+}
+
+.folder-row-zone[data-zone="ARCHIVE"] .folder-name:hover {
+    color: inherit;
+    text-decoration: none;
+    cursor: default;
+}

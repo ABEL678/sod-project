@@ -44,6 +44,7 @@ from storage.domain.models import (
 )
 from storage.domain.services import (
     DOCUMENT_VIEW_COLUMNS,
+    CANONICAL_ZONE_NAMES,
     can_create_project,
     can_manage_project_participants,
     can_purge_trash,
@@ -95,6 +96,7 @@ DOCUMENT_VIEW_COLUMN_LABELS = {
     'name': 'Название',
     'doc_type': 'Тип',
     'status': 'Статус',
+    'zone': 'Зона',
     'version': 'Версия',
     'date': 'Дата',
     'author': 'Автор',
@@ -106,6 +108,7 @@ DEFAULT_COLUMN_WIDTHS = {
     'name': 315,
     'doc_type': 100,
     'status': 100,
+    'zone': 120,
     'version': 70,
     'date': 130,
     'author': 120,
@@ -117,6 +120,7 @@ DOCUMENT_TABLE_COLUMN_MAP = {
     'name': 'name',
     'doc_type': 'doc_type',
     'status': 'status',
+    'zone': 'zone',
     'current_version': 'version',
     'updated_at': 'date',
     'created_by': 'author',
@@ -621,6 +625,7 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
             'can_purge_trash': can_purge_trash(user, project),
             'doc_type_choices': Document.DOC_TYPE_CHOICES,
             'status_choices': Document.STATUS_CHOICES,
+            'CANONICAL_ZONE_NAMES': CANONICAL_ZONE_NAMES,
         })
 
         if can_manage_participants:

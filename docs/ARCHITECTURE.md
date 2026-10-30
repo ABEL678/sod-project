@@ -108,10 +108,26 @@ sod_project/
 | parent | FK → Folder, null=True | Родительская папка (для вложенности) |
 | name | CharField(255) | Название папки |
 | order | IntegerField | Порядок сортировки |
+| zone | CharField(20), choices | WIP, SHARED, PUBLISHED, ARCHIVE (зона жизненного цикла) |
 | is_deleted | BooleanField | Мягкое удаление (корзина) |
 | deleted_at | DateTimeField, null=True | Дата помещения в корзину |
 | created_at | DateTimeField | |
 | created_by | FK → User | |
+| zone | CharField(20), choices | WIP (В работе), SHARED (На согласовании), PUBLISHED (Опубликовано), ARCHIVE (Архив). Default: WIP |
+
+**Правило:** При создании проекта автоматически создаются 4 корневые папки-зоны: «01. В работе», «02. На согласовании», «03. Опубликовано», «04. Архив».
+
+**Связь с Document.status:**
+- Перемещение в WIP → status = draft.
+- Перемещение в SHARED → status = in_review.
+- Перемещение в PUBLISHED → status = approved.
+- Перемещение в ARCHIVE → status = archived.
+
+**Права по зонам (check_zone_permission):**
+- WIP: developer, gip, admin, contractor.
+- SHARED: gip, admin.
+- PUBLISHED: admin.
+- ARCHIVE: только чтение (никто не может загружать новые версии, даже админ).
 
 **Правило:** папка может быть на уровне проекта (section=None) или внутри раздела (section=Section). Вложенность через parent.
 

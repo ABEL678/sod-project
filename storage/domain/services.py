@@ -21,11 +21,46 @@ from storage.domain.models import (
 from issues.models import Issue
 
 
-DOCUMENT_VIEW_COLUMNS = ('code', 'name', 'doc_type', 'status', 'version', 'date', 'author')
+DOCUMENT_VIEW_COLUMNS = ('code', 'name', 'doc_type', 'status', 'zone', 'version', 'date', 'author')
 DOCUMENT_VIEW_FILTERS = ('section', 'doc_type', 'status', 'code', 'name')
 DOCUMENT_VIEW_SORT_FIELDS = ('code', 'name', 'date', 'version')
 DOCUMENT_VIEW_MIN_WIDTH = 50
 DOCUMENT_VIEW_MAX_WIDTH = 800
+
+CANONICAL_ZONE_NAMES = {
+    '01. В работе',
+    '02. На согласовании',
+    '03. Опубликовано',
+    '04. Архив',
+}
+
+ZONE_STATUS_MAP = {
+    'WIP': 'draft',
+    'SHARED': 'in_review',
+    'PUBLISHED': 'approved',
+    'ARCHIVE': 'archived',
+}
+
+
+def _status_for_zone(folder: Folder | None) -> str | None:
+    if not _is_canonical_zone_folder(folder):
+        return None
+    return ZONE_STATUS_MAP.get(folder.zone)
+
+
+def _is_canonical_zone_folder(folder: Folder | None) -> bool:
+    """Проверяет, является ли папка канонической зоной проекта.
+
+    Каноническая зона — это корневая папка (parent=None, section=None)
+    с одним из 4 канонических имён.
+    """
+    if folder is None:
+        return False
+    return (
+        folder.parent is None
+        and folder.section is None
+        and folder.name in CANONICAL_ZONE_NAMES
+    )
 
 
 def _document_row(document: Document) -> dict:
@@ -35,6 +70,12 @@ def _document_row(document: Document) -> dict:
     if version is not None:
         author = version.uploaded_by.get_full_name() or version.uploaded_by.username
 
+    zone_code = ''
+    zone_name = ''
+    if document.folder:
+        zone_code = document.folder.zone
+        zone_name = document.folder.get_zone_display()
+
     return {
         'id': document.pk,
         'code': document.code,
@@ -43,6 +84,8 @@ def _document_row(document: Document) -> dict:
         'doc_type_code': document.doc_type,
         'status': document.get_status_display(),
         'status_code': document.status,
+        'zone_code': zone_code,
+        'zone_name': zone_name,
         'version': version.version_number if version else '-',
         'version_id': document.current_version_id,
         'date': version.uploaded_at if version else '',
@@ -459,6 +502,73 @@ def _validate_gip_role(user: User | None) -> None:
         raise ValueError("Назначаемый ГИП должен иметь роль ГИП или администратора")
 
 
+def _create_default_zones(project: Project, created_by: User) -> None:
+    """Создаёт 4 корневые папки-зоны для проекта."""
+    zone_configs = [
+        ('WIP', '01. В работе'),
+        ('SHARED', '02. На согласовании'),
+        ('PUBLISHED', '03. Опубликовано'),
+        ('ARCHIVE', '04. Архив'),
+    ]
+    for idx, (zone, name) in enumerate(zone_configs, 1):
+        Folder.objects.create(
+            project=project,
+            section=None,
+            parent=None,
+            name=name,
+            order=idx,
+            zone=zone,
+            created_by=created_by,
+        )
+
+
+def _ensure_project_zones(project: Project, user: User | None = None) -> bool:
+    """Создаёт зоны для проекта, если не все 4 канонические зоны существуют.
+
+    Проверяет наличие всех 4 канонических зон (WIP, SHARED, PUBLISHED, ARCHIVE).
+    Создаёт только отсутствующие. Идемпотентно — не создаёт дубликаты.
+
+    Возвращает True, если зоны были созданы (проект был без зон).
+    """
+    existing_zones = set(
+        Folder.objects.filter(
+            project=project,
+            zone__in=dict(Folder.ZONE_CHOICES),
+            parent__isnull=True,
+            section__isnull=True,
+        ).values_list('zone', flat=True)
+    )
+    required_zones = {code for code, _ in Folder.ZONE_CHOICES}
+    missing_zones = required_zones - existing_zones
+    if not missing_zones:
+        return False
+
+    zone_name_map = {
+        'WIP': '01. В работе',
+        'SHARED': '02. На согласовании',
+        'PUBLISHED': '03. Опубликовано',
+        'ARCHIVE': '04. Архив',
+    }
+    zone_order_map = {
+        'WIP': 1,
+        'SHARED': 2,
+        'PUBLISHED': 3,
+        'ARCHIVE': 4,
+    }
+    actor = user or project.created_by
+    for zone in missing_zones:
+        Folder.objects.create(
+            project=project,
+            section=None,
+            parent=None,
+            name=zone_name_map[zone],
+            order=zone_order_map[zone],
+            zone=zone,
+            created_by=actor,
+        )
+    return True
+
+
 def create_project(
     company: Company,
     code: str,
@@ -491,7 +601,7 @@ def create_project(
     if gip is not None and not _check_company_access(gip, company.pk):
         raise PermissionDenied("ГИП должен принадлежать компании проекта")
 
-    return Project.objects.create(
+    project = Project.objects.create(
         company=company,
         code=code,
         name=name,
@@ -500,6 +610,10 @@ def create_project(
         status='active',
         created_by=actor,
     )
+
+    _create_default_zones(project, actor)
+
+    return project
 
 
 def can_create_project(user: User) -> bool:
@@ -658,6 +772,16 @@ def move_document(user: User, document: Document, folder: Folder | None) -> Docu
     if document.is_deleted:
         raise ValueError("Нельзя перемещать документ из корзины")
 
+    # Проверка прав на покидание текущей зоны
+    current_zone = getattr(document.folder, 'zone', None) if document.folder else None
+    if current_zone in ('ARCHIVE', 'PUBLISHED', 'SHARED'):
+        profile = getattr(user, 'userprofile', None)
+        if profile is None or profile.role != 'admin':
+            zone_name = document.folder.get_zone_display() if document.folder else 'зона'
+            raise PermissionDenied(
+                f"Документ в зоне «{zone_name}» — перемещение только для администратора"
+            )
+
     if folder is not None:
         if folder.project_id != document.project_id:
             raise ValueError("Папка относится к другому проекту")
@@ -666,8 +790,21 @@ def move_document(user: User, document: Document, folder: Folder | None) -> Docu
         if folder.section_id is not None and folder.section_id != document.section_id:
             raise ValueError("Папка относится к другому разделу")
 
+        # Проверка прав на запись в целевую зону
+        if not check_zone_permission(user, folder, document.section):
+            zone_name = folder.get_zone_display()
+            raise PermissionDenied(f"Нет прав на запись в зону «{zone_name}»")
+
     document.folder = folder
-    document.save(update_fields=['folder', 'updated_at'])
+    update_fields = ['folder', 'updated_at']
+
+    # Автоматическое изменение статуса только для канонических зон
+    target_status = _status_for_zone(folder)
+    if target_status is not None and target_status != document.status:
+        document.status = target_status
+        update_fields.append('status')
+
+    document.save(update_fields=update_fields)
     return document
 
 
@@ -737,6 +874,11 @@ def copy_document(
             raise ValueError("Нельзя скопировать документ в удалённую папку")
         if folder.section_id is not None and folder.section_id != target_section.pk:
             raise ValueError("Папка относится к другому разделу")
+
+        # Проверка прав по зоне
+        if not check_zone_permission(user, folder, target_section):
+            zone_name = folder.get_zone_display()
+            raise PermissionDenied(f"Нет прав на запись в зону «{zone_name}»")
 
     versions = list(document.versions.order_by('version_number'))
     with transaction.atomic():
@@ -1054,6 +1196,81 @@ def check_write_permission(user: User, section: Section) -> bool:
     return False
 
 
+def check_zone_permission(
+    user: User,
+    folder: Folder | None,
+    section: Section | None = None,
+) -> bool:
+    """Проверка прав записи с учётом зоны папки.
+
+    Правила зон:
+    - WIP: инженеры, ГИП, админ (через check_write_permission).
+    - SHARED: только ГИП и админ.
+    - PUBLISHED: только админ.
+    - ARCHIVE: никто не может писать (только чтение).
+    - folder=None: используются стандартные правила check_write_permission.
+    """
+    if folder is None:
+        # Нет папки — стандартная проверка по секции
+        if section is not None:
+            return check_write_permission(user, section)
+        return True
+
+    zone = folder.zone
+    if user.is_superuser:
+        return True
+
+    profile = getattr(user, 'userprofile', None)
+    if profile is None:
+        return False
+
+    # ARCHIVE — админ может перемещать документы (архивировать)
+    # Но загрузка новых версий в документ из ARCHIVE блокируется отдельно в upload_document
+    if zone == 'ARCHIVE':
+        return profile.role == 'admin'
+
+    # PUBLISHED — только админ компании
+    if zone == 'PUBLISHED':
+        return profile.role == 'admin'
+
+    # SHARED — только ГИП проекта и админ
+    if zone == 'SHARED':
+        if profile.role == 'admin':
+            return True
+        if profile.role == 'gip':
+            project = folder.project
+            if project.gip_id == user.id:
+                return True
+            if project.memberships.filter(
+                user=user, role_in_project='gip'
+            ).exists():
+                return True
+        return False
+
+    # WIP — стандартные правила записи
+    if profile.role in ('viewer', 'contractor'):
+        return False
+    if profile.role == 'admin':
+        return True
+    if profile.role == 'gip':
+        project = folder.project
+        if project.gip_id == user.id:
+            return True
+        if project.memberships.filter(
+            user=user, role_in_project='gip'
+        ).exists():
+            return True
+        return False
+    if profile.role == 'engineer':
+        # Инженер может писать в WIP, если у него есть доступ к секции
+        if section is not None:
+            return section in profile.allowed_sections.all()
+        # Если секции нет (проектная папка), разрешаем
+        return True
+
+    return False
+
+
 def check_read_permission(user: User, document: Document) -> bool:
     """Проверка права на чтение документа.
 
@@ -1121,6 +1338,7 @@ def upload_document(
     """Единственная точка создания версий документа.
 
     - Проверка прав через check_write_permission.
+    - Проверка прав по зоне через check_zone_permission.
     - Проверка соответствия section.project == project.
     - Поиск/создание документа.
     - Автоинкремент номера версии.
@@ -1133,6 +1351,23 @@ def upload_document(
     if section.project != project:
         raise ValueError("Раздел не относится к указанному проекту")
 
+    # Проверяем текущую зону документа (если документ уже существует и имеет папку)
+    existing_doc = Document.objects.filter(
+        project=project,
+        section=section,
+        code=code,
+    ).select_related('folder').first()
+    if existing_doc is not None and existing_doc.folder is not None:
+        if existing_doc.folder.zone == 'ARCHIVE':
+            raise PermissionDenied(
+                "Документ в архиве — загрузка новых версий запрещена"
+            )
+        if not check_zone_permission(user, existing_doc.folder, section):
+            zone_name = existing_doc.folder.get_zone_display()
+            raise PermissionDenied(
+                f"Нет прав на запись в текущую зону «{zone_name}»"
+            )
+
     if folder is not None:
         if folder.project_id != project.pk:
             raise ValueError("Папка относится к другому проекту")
@@ -1140,6 +1375,13 @@ def upload_document(
             raise ValueError("Нельзя загрузить файл в удалённую папку")
         if folder.section_id is not None and folder.section_id != section.pk:
             raise ValueError("Папка относится к другому разделу")
+
+        # Проверка прав по целевой зоне
+        if not check_zone_permission(user, folder, section):
+            zone_name = folder.get_zone_display()
+            raise PermissionDenied(
+                f"Нет прав на запись в зону «{zone_name}»"
+            )
 
     # Валидация doc_type
     if doc_type not in dict(Document.DOC_TYPE_CHOICES):
@@ -1168,6 +1410,10 @@ def upload_document(
             if folder is not None:
                 doc.folder = folder
                 update_fields.append('folder')
+                target_status = _status_for_zone(folder)
+                if target_status is not None and target_status != doc.status:
+                    doc.status = target_status
+                    update_fields.append('status')
             doc.save(update_fields=update_fields)
 
         # Вычисляем следующую версию

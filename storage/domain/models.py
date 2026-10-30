@@ -113,6 +113,12 @@ class Document(models.Model):
 
 
 class Folder(models.Model):
+    ZONE_CHOICES = [
+        ('WIP', 'В работе'),
+        ('SHARED', 'На согласовании'),
+        ('PUBLISHED', 'Опубликовано'),
+        ('ARCHIVE', 'Архив'),
+    ]
     project = models.ForeignKey(
         Project,
         on_delete=models.CASCADE,
@@ -137,6 +143,12 @@ class Folder(models.Model):
     )
     name = models.CharField(max_length=255, verbose_name="Название")
     order = models.IntegerField(default=0, verbose_name="Порядок сортировки")
+    zone = models.CharField(
+        max_length=20,
+        choices=ZONE_CHOICES,
+        default='WIP',
+        verbose_name="Зона жизненного цикла",
+    )
     is_deleted = models.BooleanField(default=False, verbose_name="Удалена")
     deleted_at = models.DateTimeField(null=True, blank=True, verbose_name="Дата удаления")
     deleted_with_parent = models.BooleanField(

@@ -53,6 +53,11 @@ class DocumentTable(tables.Table):
     name = tables.Column(verbose_name='Название', attrs=_column_attrs('name'))
     doc_type = tables.Column(verbose_name='Тип', attrs=_column_attrs('doc_type'))
     status = tables.Column(verbose_name='Статус', attrs=_column_attrs('status'))
+    zone = tables.Column(
+        verbose_name='Зона',
+        attrs=_column_attrs('zone'),
+        order_by=('folder__zone',),
+    )
     current_version = tables.Column(
         verbose_name='Версия',
         order_by=('current_version__version_number',),
@@ -74,6 +79,7 @@ class DocumentTable(tables.Table):
             'name',
             'doc_type',
             'status',
+            'zone',
             'current_version',
             'updated_at',
             'created_by',
@@ -137,6 +143,28 @@ class DocumentTable(tables.Table):
             STATUS_BADGE_CLASSES.get(record.status, 'doc-badge-draft'),
             record.get_status_display(),
         )
+
+    def render_zone(self, record):
+        if record.folder and record.folder.zone:
+            zone_icons = {
+                'WIP': 'bi-pencil-square',
+                'SHARED': 'bi-people',
+                'PUBLISHED': 'bi-shield-check',
+                'ARCHIVE': 'bi-lock',
+            }
+            icon = zone_icons.get(record.folder.zone, 'bi-folder')
+            zone_name = record.folder.get_zone_display()
+            zone_class = {
+                'WIP': 'text-primary',
+                'SHARED': 'text-warning',
+                'PUBLISHED': 'text-success',
+                'ARCHIVE': 'text-secondary',
+            }.get(record.folder.zone, '')
+            return format_html(
+                '<i class="bi {} {} me-1" title="{}" aria-hidden="true"></i>{}',
+                icon, zone_class, zone_name, zone_name,
+            )
+        return '—'
 
     def render_current_version(self, record):
         if record.current_version is None:

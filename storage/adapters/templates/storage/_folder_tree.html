@@ -1,8 +1,9 @@
 {% load static %}
 <div class="folder-node" data-folder-id="{{ folder.pk }}" data-section-id="{{ folder.section_id|default:'' }}" data-folder-name="{{ folder.name }}">
-    <div class="folder-row list-group-item d-flex align-items-center gap-1{% if selected_folder.pk == folder.pk %} folder-selected{% endif %}"
+    <div class="folder-row list-group-item d-flex align-items-center gap-1{% if selected_folder.pk == folder.pk %} folder-selected{% endif %}{% if folder.parent is None and folder.section is None and folder.name in CANONICAL_ZONE_NAMES %} folder-row-zone{% endif %}"
          data-folder-id="{{ folder.pk }}"
          data-folder-row
+         data-zone="{{ folder.zone }}"
          data-drop-folder="{{ folder.pk }}"
          data-drop-name="{{ folder.name }}"
          draggable="true"
@@ -22,6 +23,15 @@
         {% endif %}
 
         <i class="bi bi-folder2 folder-icon" aria-hidden="true"></i>
+        {% if folder.zone == 'WIP' %}
+            <i class="bi bi-pencil-square folder-zone-icon text-primary" title="Зона: В работе" aria-hidden="true"></i>
+        {% elif folder.zone == 'SHARED' %}
+            <i class="bi bi-people folder-zone-icon text-warning" title="Зона: На согласовании" aria-hidden="true"></i>
+        {% elif folder.zone == 'PUBLISHED' %}
+            <i class="bi bi-shield-check folder-zone-icon text-success" title="Зона: Опубликовано" aria-hidden="true"></i>
+        {% elif folder.zone == 'ARCHIVE' %}
+            <i class="bi bi-lock folder-zone-icon text-secondary" title="Зона: Архив" aria-hidden="true"></i>
+        {% endif %}
         <a class="folder-name flex-grow-1 text-truncate"
            href="{% url 'storage:project_detail' project.pk %}?folder={{ folder.pk }}{% if selected_view %}&amp;view={{ selected_view.pk }}{% endif %}"
            title="{{ folder.name }}">{{ folder.name }}</a>

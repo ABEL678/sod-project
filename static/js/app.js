@@ -531,6 +531,14 @@
         dragFolderId = null;
     }
 
+    function isArchiveZone(target) {
+        var folderRow = target.closest('[data-folder-row]');
+        if (folderRow && folderRow.dataset.zone === 'ARCHIVE') {
+            return true;
+        }
+        return false;
+    }
+
     function showDndToast(text, isError) {
         var toast = document.getElementById('dndToast');
         if (!toast) {
@@ -671,6 +679,12 @@
         document.addEventListener('drop', function (event) {
             var target = event.target.closest('[data-drop-folder], [data-drop-section]');
             if (!target || !isTreeDrag(event)) {
+                return;
+            }
+            // Блокировка drop в зону ARCHIVE
+            if (isDocumentDrag(event) && isArchiveZone(target)) {
+                showDndToast('Нельзя переместить файл в архив', true);
+                event.preventDefault();
                 return;
             }
             event.preventDefault();

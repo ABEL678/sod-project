@@ -698,7 +698,7 @@ class GuiViewTests(GuiTestBase):
 
         self.assertEqual(response.status_code, 200)
         self.assertIsNone(response.context['selected_view'])
-        self.assertEqual(len(response.context['visible_columns']), 7)
+        self.assertEqual(len(response.context['visible_columns']), 8)
 
     def test_saved_view_applied_columns(self):
         view = save_document_view(
@@ -762,7 +762,7 @@ class GuiViewTests(GuiTestBase):
         )
 
         self.assertIsNone(response.context['selected_view'])
-        self.assertEqual(len(response.context['visible_columns']), 7)
+        self.assertEqual(len(response.context['visible_columns']), 8)
 
     def test_membership_role_update_view(self):
         self.client.force_login(self.user_gip)
