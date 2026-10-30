@@ -208,11 +208,14 @@ class UserProfile(models.Model):
         verbose_name="Компания",
     )
     ROLE_CHOICES = [
-        ('admin', 'Админ'),
+        ('admin', 'Администратор'),
         ('gip', 'ГИП'),
-        ('engineer', 'Инженер'),
+        ('developer', 'Разработчик'),
+        ('checker', 'Проверяющий'),
+        ('normocontrol', 'Нормоконтроль'),
+        ('customer', 'Заказчик'),
+        ('contractor', 'Смежник'),
         ('viewer', 'Наблюдатель'),
-        ('contractor', 'Контрактор'),
     ]
     role = models.CharField(max_length=20, choices=ROLE_CHOICES, verbose_name="Роль")
     allowed_sections = models.ManyToManyField(Section, blank=True, verbose_name="Доступные разделы")
@@ -230,9 +233,12 @@ class ProjectMembership(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE, verbose_name="Пользователь")
     ROLE_IN_PROJECT_CHOICES = [
         ('gip', 'ГИП'),
-        ('engineer', 'Инженер'),
+        ('developer', 'Разработчик'),
+        ('checker', 'Проверяющий'),
+        ('normocontrol', 'Нормоконтроль'),
+        ('customer', 'Заказчик'),
+        ('contractor', 'Смежник'),
         ('viewer', 'Наблюдатель'),
-        ('contractor', 'Контрактор'),
     ]
     role_in_project = models.CharField(max_length=20, choices=ROLE_IN_PROJECT_CHOICES, verbose_name="Роль в проекте")
 

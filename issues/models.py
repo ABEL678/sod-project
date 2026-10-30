@@ -7,9 +7,13 @@ from storage.domain.models import Document, DocumentVersion
 
 class Issue(models.Model):
     STATUS_CHOICES = [
-        ('open', 'Открыто'),
-        ('in_progress', 'В работе'),
-        ('closed', 'Закрыто'),
+        ('NEW', 'Новое'),
+        ('IN_PROGRESS', 'Принято в работу'),
+        ('REJECTED', 'Не принято'),
+        ('DISCUSSION', 'К обсуждению'),
+        ('DONE', 'Выполнено'),
+        ('CLOSED', 'Закрыто'),
+        ('CANCELLED', 'Аннулировано'),
     ]
 
     document = models.ForeignKey(Document, on_delete=models.CASCADE, related_name='issues')
@@ -29,9 +33,17 @@ class Issue(models.Model):
         related_name='assigned_issues',
     )
     description = models.TextField()
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='open')
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='NEW')
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+    closed_at = models.DateTimeField(null=True, blank=True)
+    closed_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='closed_issues',
+    )
     page_number = models.PositiveIntegerField(null=True, blank=True)
     x_ratio = models.FloatField(null=True, blank=True)
     y_ratio = models.FloatField(null=True, blank=True)

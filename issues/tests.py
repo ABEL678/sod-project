@@ -7,8 +7,21 @@ from django.test import TestCase, override_settings
 from django.urls import reverse
 
 from issues.models import Issue
-from storage.domain.models import Company, Document, Project, Section, UserProfile
-from storage.domain.services import create_issue, upload_document
+from storage.domain.models import (
+    Company,
+    Document,
+    Project,
+    ProjectMembership,
+    Section,
+    UserProfile,
+)
+from storage.domain.services import (
+    allowed_issue_statuses,
+    check_read_permission,
+    create_issue,
+    update_issue_status,
+    upload_document,
+)
 
 
 User = get_user_model()
@@ -68,7 +81,7 @@ class IssueTests(TestCase):
         self.assertEqual(issue.document, self.document)
         self.assertEqual(issue.version, self.version)
         self.assertEqual(issue.author, self.user_gip)
-        self.assertEqual(issue.status, 'open')
+        self.assertEqual(issue.status, 'NEW')
 
     def test_create_issue_sets_current_version_by_default(self):
         self.client.force_login(self.user_gip)
@@ -134,21 +147,25 @@ class IssueTests(TestCase):
 
         response = self.client.post(
             reverse('issues:issue_status', args=[issue.pk]),
-            {'action': 'close'},
+            {'status': 'CLOSED'},
         )
         self.assertRedirects(
             response,
             reverse('storage:document_detail', args=[self.document.pk]),
         )
         issue.refresh_from_db()
-        self.assertEqual(issue.status, 'closed')
+        self.assertEqual(issue.status, 'CLOSED')
+        self.assertIsNotNone(issue.closed_at)
+        self.assertEqual(issue.closed_by, self.user_gip)
 
         self.client.post(
             reverse('issues:issue_status', args=[issue.pk]),
-            {'action': 'open'},
+            {'status': 'NEW'},
         )
         issue.refresh_from_db()
-        self.assertEqual(issue.status, 'open')
+        self.assertEqual(issue.status, 'NEW')
+        self.assertIsNone(issue.closed_at)
+        self.assertIsNone(issue.closed_by)
 
     def test_status_change_forbidden_for_stranger(self):
         issue = Issue.objects.create(
@@ -164,7 +181,7 @@ class IssueTests(TestCase):
         )
         self.assertEqual(response.status_code, 403)
         issue.refresh_from_db()
-        self.assertEqual(issue.status, 'open')
+        self.assertEqual(issue.status, 'NEW')
 
     def test_status_change_contractor_foreign_section_not_found(self):
         other_section = Section.objects.create(
@@ -204,7 +221,7 @@ class IssueTests(TestCase):
 
         self.assertEqual(response.status_code, 404)
         issue.refresh_from_db()
-        self.assertEqual(issue.status, 'open')
+        self.assertEqual(issue.status, 'NEW')
 
     def test_create_issue_with_pin_coords(self):
         self.client.force_login(self.user_gip)
@@ -311,3 +328,210 @@ class IssueTests(TestCase):
                 description='Версия от другого документа',
                 version=other_version,
             )
+
+@override_settings(MEDIA_ROOT=tempfile.mkdtemp())
+class IssueStatusMatrixTests(TestCase):
+    """T11: матрица статусов замечаний по ГОСТ-ролям."""
+
+    def setUp(self):
+        self.company = Company.objects.create(name='Матрица')
+        self.gip = self._user('gip', 'gip')
+        self.membership_gip = self._user('membership_gip', 'gip')
+        self.developer = self._user('developer', 'developer')
+        self.checker = self._user('checker', 'checker')
+        self.normocontrol = self._user('normocontrol', 'normocontrol')
+        self.customer = self._user('customer', 'customer')
+        self.contractor = self._user('contractor', 'contractor')
+        self.viewer = self._user('viewer', 'viewer')
+
+        self.project = Project.objects.create(
+            company=self.company,
+            code='MATRIX-1',
+            name='Матрица',
+            status='active',
+            gip=self.gip,
+            created_by=self.gip,
+        )
+        self.section = Section.objects.create(
+            project=self.project,
+            code='АР',
+            name='Архитектурные решения',
+            order=1,
+        )
+        ProjectMembership.objects.create(
+            project=self.project,
+            user=self.developer,
+            role_in_project='developer',
+        )
+        ProjectMembership.objects.create(
+            project=self.project,
+            user=self.membership_gip,
+            role_in_project='gip',
+        )
+        self.developer.userprofile.allowed_sections.add(self.section)
+        self.contractor.userprofile.allowed_sections.add(self.section)
+
+        self.document = upload_document(
+            user=self.gip,
+            project=self.project,
+            section=self.section,
+            code='АР-01',
+            name='План',
+            doc_type='drawing',
+            file=SimpleUploadedFile('plan.pdf', b'data', content_type='application/pdf'),
+        ).document
+
+    def _user(self, username, role):
+        user = User.objects.create_user(username, password='pass')
+        UserProfile.objects.create(user=user, role=role, company=self.company)
+        return user
+
+    def _issue(self):
+        return create_issue(
+            user=self.gip,
+            document=self.document,
+            description='Замечание',
+        )
+
+    def test_developer_can_set_work_statuses(self):
+        for status in ('IN_PROGRESS', 'DISCUSSION', 'DONE'):
+            issue = self._issue()
+            update_issue_status(self.developer, issue, status)
+            issue.refresh_from_db()
+            self.assertEqual(issue.status, status)
+
+    def test_developer_cannot_close_or_annul(self):
+        for status in ('CLOSED', 'CANCELLED', 'REJECTED', 'NEW'):
+            issue = self._issue()
+            with self.assertRaises(PermissionDenied):
+                update_issue_status(self.developer, issue, status)
+
+    def test_developer_in_progress_assigns_issue(self):
+        issue = self._issue()
+        update_issue_status(self.developer, issue, 'IN_PROGRESS')
+        issue.refresh_from_db()
+        self.assertEqual(issue.assignee, self.developer)
+
+    def test_checker_cannot_set_in_progress(self):
+        issue = self._issue()
+        with self.assertRaises(PermissionDenied):
+            update_issue_status(self.checker, issue, 'IN_PROGRESS')
+
+    def test_checker_can_reject_close_and_cancel(self):
+        for status in ('REJECTED', 'CLOSED', 'CANCELLED'):
+            issue = self._issue()
+            update_issue_status(self.checker, issue, status)
+            issue.refresh_from_db()
+            self.assertEqual(issue.status, status)
+            if status in ('CLOSED', 'CANCELLED'):
+                self.assertIsNotNone(issue.closed_at)
+                self.assertEqual(issue.closed_by, self.checker)
+
+    def test_normocontrol_can_close(self):
+        issue = self._issue()
+        update_issue_status(self.normocontrol, issue, 'CLOSED')
+        issue.refresh_from_db()
+        self.assertEqual(issue.status, 'CLOSED')
+
+    def test_customer_can_create_issue(self):
+        issue = create_issue(
+            user=self.customer,
+            document=self.document,
+            description='Замечание заказчика',
+        )
+        self.assertEqual(issue.author, self.customer)
+        self.assertEqual(issue.status, 'NEW')
+
+    def test_customer_cannot_upload_files(self):
+        with self.assertRaises(PermissionDenied):
+            upload_document(
+                user=self.customer,
+                project=self.project,
+                section=self.section,
+                code='АР-02',
+                name='План 2',
+                doc_type='drawing',
+                file=SimpleUploadedFile('plan2.pdf', b'data', content_type='application/pdf'),
+            )
+
+    def test_contractor_can_create_issue_in_allowed_section(self):
+        issue = create_issue(
+            user=self.contractor,
+            document=self.document,
+            description='Замечание смежника',
+        )
+        self.assertEqual(issue.author, self.contractor)
+
+    def test_gip_can_set_any_status(self):
+        for status, _ in Issue.STATUS_CHOICES:
+            issue = self._issue()
+            update_issue_status(self.gip, issue, status)
+            issue.refresh_from_db()
+            self.assertEqual(issue.status, status)
+
+    def test_allowed_statuses_for_roles(self):
+        issue = self._issue()
+        self.assertEqual(
+            set(allowed_issue_statuses(self.developer, issue)),
+            {'IN_PROGRESS', 'DISCUSSION', 'DONE'},
+        )
+        self.assertEqual(
+            set(allowed_issue_statuses(self.checker, issue)),
+            {'REJECTED', 'CLOSED', 'CANCELLED'},
+        )
+        self.assertEqual(allowed_issue_statuses(self.viewer, issue), [])
+
+    def test_document_detail_status_buttons_follow_matrix(self):
+        self._issue()
+        self.client.force_login(self.developer)
+        response = self.client.get(
+            reverse('storage:document_detail', args=[self.document.pk])
+        )
+        self.assertContains(response, 'value="DONE"')
+        self.assertNotContains(response, 'value="CLOSED"')
+
+        self.client.force_login(self.checker)
+        response = self.client.get(
+            reverse('storage:document_detail', args=[self.document.pk])
+        )
+        self.assertContains(response, 'value="CLOSED"')
+        self.assertNotContains(response, 'value="IN_PROGRESS"')
+
+    def test_viewer_does_not_see_issue_create_form(self):
+        self.client.force_login(self.viewer)
+        response = self.client.get(
+            reverse('storage:document_detail', args=[self.document.pk])
+        )
+        self.assertNotContains(
+            response,
+            reverse('issues:issue_create', args=[self.document.pk]),
+        )
+
+    def test_membership_gip_can_read_and_change_issue_status(self):
+        self.assertTrue(check_read_permission(self.membership_gip, self.document))
+        issue = self._issue()
+        update_issue_status(self.membership_gip, issue, 'CLOSED')
+        issue.refresh_from_db()
+        self.assertEqual(issue.status, 'CLOSED')
+        self.assertEqual(issue.closed_by, self.membership_gip)
+
+    def test_developer_cannot_reopen_closed_issue(self):
+        issue = self._issue()
+        update_issue_status(self.gip, issue, 'CLOSED')
+        with self.assertRaises(PermissionDenied):
+            update_issue_status(self.developer, issue, 'IN_PROGRESS')
+        issue.refresh_from_db()
+        self.assertEqual(issue.status, 'CLOSED')
+
+        update_issue_status(self.gip, issue, 'IN_PROGRESS')
+        issue.refresh_from_db()
+        self.assertEqual(issue.status, 'IN_PROGRESS')
+        self.assertIsNone(issue.closed_at)
+
+    def test_developer_done_transitions(self):
+        for target in ('DISCUSSION', 'IN_PROGRESS'):
+            issue = self._issue()
+            update_issue_status(self.developer, issue, 'DONE')
+            update_issue_status(self.developer, issue, target)
+            issue.refresh_from_db()
+            self.assertEqual(issue.status, target)

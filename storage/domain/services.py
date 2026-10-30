@@ -1155,11 +1155,11 @@ def get_folder_documents(user: User, folder: Folder) -> QuerySet:
 def check_write_permission(user: User, section: Section) -> bool:
     """Проверка права на запись в раздел.
 
-    Правила (всего 3 должности):
     - admin — всегда может писать в своей компании.
     - gip — может писать только в свои проекты (через Project.gip или ProjectMembership).
-    - engineer — может писать только в разрешенные разделы (allowed_sections).
-    - viewer и contractor — не могут писать.
+    - developer — может писать только в разрешенные разделы (allowed_sections).
+    - contractor — может писать только в выданные разделы (allowed_sections).
+    - checker, normocontrol, customer, viewer — только чтение.
 
     Любая запись ограничена компанией пользователя.
     """
@@ -1189,10 +1189,10 @@ def check_write_permission(user: User, section: Section) -> bool:
             return True
         return False
 
-    if role == 'engineer':
+    if role in ('developer', 'contractor'):
         return section in profile.allowed_sections.all()
 
-    # viewer, contractor и прочие — не могут писать
+    # checker, normocontrol, customer, viewer и прочие — не могут писать
     return False
 
 
@@ -1204,7 +1204,7 @@ def check_zone_permission(
     """Проверка прав записи с учётом зоны папки.
 
     Правила зон:
-    - WIP: инженеры, ГИП, админ (через check_write_permission).
+    - WIP: разработчики, смежники, ГИП, админ (через check_write_permission).
     - SHARED: только ГИП и админ.
     - PUBLISHED: только админ.
     - ARCHIVE: никто не может писать (только чтение).
@@ -1248,7 +1248,7 @@ def check_zone_permission(
         return False
 
     # WIP — стандартные правила записи
-    if profile.role in ('viewer', 'contractor'):
+    if profile.role in ('viewer', 'checker', 'normocontrol', 'customer'):
         return False
     if profile.role == 'admin':
         return True
@@ -1261,11 +1261,10 @@ def check_zone_permission(
         ).exists():
             return True
         return False
-    if profile.role == 'engineer':
-        # Инженер может писать в WIP, если у него есть доступ к секции
+    if profile.role in ('developer', 'contractor'):
+        # Разработчик и смежник пишут в WIP только в выданные разделы
         if section is not None:
             return section in profile.allowed_sections.all()
-        # Если секции нет (проектная папка), разрешаем
         return True
 
     return False
@@ -1275,8 +1274,8 @@ def check_read_permission(user: User, document: Document) -> bool:
     """Проверка права на чтение документа.
 
     - admin и gip (в своих проектах) читают всё.
-    - engineer читает всё в своих проектах.
-    - viewer читает всё в своей компании.
+    - developer читает всё в своих проектах.
+    - checker, normocontrol, customer, viewer читают всё в своей компании.
     - contractor читает только если раздел документа в allowed_sections.
     """
     if user.is_superuser:
@@ -1292,29 +1291,22 @@ def check_read_permission(user: User, document: Document) -> bool:
     role = profile.role
     project = document.project
 
-    if role in ('admin', 'gip'):
-        if role == 'gip' and project.gip_id != user.id:
-            # gip читает только свои проекты
-            return False
+    if role == 'admin':
         return True
 
-    if role == 'engineer':
-        # engineer читает всё в своих проектах
-        # (тут упрощённо: engineer может читать документ, если его проект
-        # пересекается с проектами, где у него есть membership gip/engineer,
-        # но по §3.2 engineer читает «всего в своих проектах».
-        # Для простоты и соответствия §3.2 считаем, что engineer читает
-        #документ, если он принадлежит проекту, где у пользователя membership
-        #с ролью gip или engineer.
-        # В текущей реализации проверяем через memberships:
-        from storage.domain.models import ProjectMembership
-        if project.memberships.filter(
-            user=user, role_in_project__in=('gip', 'engineer')
-        ).exists():
+    if role == 'gip':
+        if project.gip_id == user.id:
             return True
-        return False
+        return project.memberships.filter(
+            user=user, role_in_project='gip'
+        ).exists()
 
-    if role == 'viewer':
+    if role == 'developer':
+        return project.memberships.filter(
+            user=user, role_in_project__in=('gip', 'developer')
+        ).exists()
+
+    if role in ('checker', 'normocontrol', 'customer', 'viewer'):
         return True
 
     if role == 'contractor':
@@ -1519,6 +1511,112 @@ def search_documents(
     )
 
 
+ISSUE_DEVELOPER_STATUSES = ('IN_PROGRESS', 'DISCUSSION', 'DONE')
+ISSUE_REVIEWER_STATUSES = ('REJECTED', 'CLOSED', 'CANCELLED')
+ISSUE_CLOSED_STATUSES = ('CLOSED', 'CANCELLED')
+ISSUE_CREATOR_ROLES = (
+    'admin',
+    'gip',
+    'developer',
+    'checker',
+    'normocontrol',
+    'customer',
+    'contractor',
+)
+
+
+def check_issue_permission(user: User, document: Document) -> bool:
+    """Право на создание замечания: все ГОСТ-роли, кроме viewer."""
+    if user.is_superuser:
+        return True
+    if not check_read_permission(user, document):
+        return False
+
+    profile = getattr(user, 'userprofile', None)
+    if profile is None or profile.role not in ISSUE_CREATOR_ROLES:
+        return False
+    if profile.role == 'contractor':
+        return document.section in profile.allowed_sections.all()
+    return True
+
+
+def allowed_issue_statuses(user: User, issue: Issue) -> list[str]:
+    """Статусы, которые пользователь может выставить по матрице ролей."""
+    if not check_read_permission(user, issue.document):
+        return []
+
+    all_statuses = [code for code, _ in Issue.STATUS_CHOICES]
+    if user.is_superuser:
+        return all_statuses
+
+    profile = getattr(user, 'userprofile', None)
+    if profile is None:
+        return []
+
+    if profile.role in ('admin', 'gip'):
+        return all_statuses
+    if profile.role == 'developer':
+        return [code for code in all_statuses if code in ISSUE_DEVELOPER_STATUSES]
+    if profile.role in ('checker', 'normocontrol', 'customer'):
+        return [code for code in all_statuses if code in ISSUE_REVIEWER_STATUSES]
+    return []
+
+
+def update_issue_status(user: User, issue: Issue, new_status: str) -> Issue:
+    """Меняет статус замечания по матрице ГОСТ-ролей."""
+    if new_status not in dict(Issue.STATUS_CHOICES):
+        raise ValueError("Неверный статус замечания")
+
+    allowed = allowed_issue_statuses(user, issue)
+    if new_status not in allowed:
+        raise PermissionDenied("Нет прав на установку этого статуса")
+
+    if new_status == issue.status:
+        return issue
+
+    profile = getattr(user, 'userprofile', None)
+    role = profile.role if profile is not None else None
+    current_status = issue.status
+
+    if (
+        current_status in ISSUE_CLOSED_STATUSES
+        and not user.is_superuser
+        and role not in ('admin', 'gip')
+    ):
+        raise PermissionDenied(
+            "Закрытое или аннулированное замечание может изменить только ГИП или администратор"
+        )
+
+    if (
+        current_status == 'DONE'
+        and role == 'developer'
+        and new_status not in ('DISCUSSION', 'IN_PROGRESS')
+    ):
+        raise PermissionDenied(
+            "Из статуса «Выполнено» разработчик может перевести замечание "
+            "только в «К обсуждению» или «Принято в работу»"
+        )
+
+    issue.status = new_status
+    update_fields = ['status', 'updated_at']
+
+    if new_status in ISSUE_CLOSED_STATUSES:
+        issue.closed_at = timezone.now()
+        issue.closed_by = user
+        update_fields.extend(['closed_at', 'closed_by'])
+    else:
+        issue.closed_at = None
+        issue.closed_by = None
+        update_fields.extend(['closed_at', 'closed_by'])
+
+    if new_status == 'IN_PROGRESS' and issue.assignee_id is None:
+        issue.assignee = user
+        update_fields.append('assignee')
+
+    issue.save(update_fields=update_fields)
+    return issue
+
+
 def create_issue(
     user: User,
     document: Document,
@@ -1529,7 +1627,7 @@ def create_issue(
     y_ratio: float | None = None,
 ) -> Issue:
     """Создаёт замечание к документу с проверкой прав и валидацией координат пина."""
-    if not check_write_permission(user, document.section):
+    if not check_issue_permission(user, document):
         raise PermissionDenied("Нет прав на добавление замечания к документу")
 
     if page_number is None and (x_ratio is not None or y_ratio is not None):
@@ -1555,6 +1653,7 @@ def create_issue(
         version=version,
         author=user,
         description=description,
+        status='NEW',
         page_number=page_number,
         x_ratio=x_ratio,
         y_ratio=y_ratio,

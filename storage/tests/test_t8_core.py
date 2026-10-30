@@ -46,10 +46,10 @@ class T8CoreTestBase(TestCase):
     def setUp(self):
         self.company = Company.objects.create(name='Test Company')
         self.user_gip = User.objects.create_user('gip', password='pass')
-        self.user_engineer = User.objects.create_user('engineer', password='pass')
+        self.user_developer = User.objects.create_user('developer', password='pass')
         self.user_viewer = User.objects.create_user('viewer', password='pass')
         UserProfile.objects.create(user=self.user_gip, role='gip', company=self.company)
-        UserProfile.objects.create(user=self.user_engineer, role='engineer', company=self.company)
+        UserProfile.objects.create(user=self.user_developer, role='developer', company=self.company)
         UserProfile.objects.create(user=self.user_viewer, role='viewer', company=self.company)
         self.project = Project.objects.create(
             company=self.company,

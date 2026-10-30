@@ -235,7 +235,7 @@
                                     </div>
                                 </td>
                                 <td>
-                                    <span class="role-badge {% if membership.role_in_project == 'gip' %}role-gip{% elif membership.role_in_project == 'engineer' %}role-engineer{% elif membership.role_in_project == 'contractor' %}role-contractor{% else %}role-viewer{% endif %}">
+                                    <span class="role-badge {% if membership.role_in_project == 'gip' %}role-gip{% elif membership.role_in_project == 'developer' %}role-developer{% elif membership.role_in_project == 'contractor' %}role-contractor{% else %}role-viewer{% endif %}">
                                         {{ membership.get_role_in_project_display }}
                                     </span>
                                 </td>

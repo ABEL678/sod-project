@@ -33,13 +33,13 @@ class ServiceTests(TestCase):
 
         self.user_admin = User.objects.create_user('admin', 'admin@test.com', 'adminpass')
         self.user_gip = User.objects.create_user('gip', 'gip@test.com', 'gippass')
-        self.user_engineer = User.objects.create_user('engineer', 'eng@test.com', 'engpass')
+        self.user_developer = User.objects.create_user('developer', 'eng@test.com', 'engpass')
         self.user_viewer = User.objects.create_user('viewer', 'view@test.com', 'viewpass')
         self.user_contractor = User.objects.create_user('contr', 'con@test.com', 'conpass')
 
         UserProfile.objects.create(user=self.user_admin, role='admin', company=self.company)
         UserProfile.objects.create(user=self.user_gip, role='gip', company=self.company)
-        UserProfile.objects.create(user=self.user_engineer, role='engineer', company=self.company)
+        UserProfile.objects.create(user=self.user_developer, role='developer', company=self.company)
         UserProfile.objects.create(user=self.user_viewer, role='viewer', company=self.company)
         UserProfile.objects.create(user=self.user_contractor, role='contractor', company=self.company)
 
@@ -94,7 +94,7 @@ class ServiceTests(TestCase):
             role_in_project='gip',
         )
 
-        self.user_engineer.userprofile.allowed_sections.add(self.section_own)
+        self.user_developer.userprofile.allowed_sections.add(self.section_own)
 
         self.document = Document.objects.create(
             project=self.project_own,
@@ -112,8 +112,8 @@ class ServiceTests(TestCase):
         self.assertTrue(check_write_permission(self.user_gip, self.section_own))
         self.assertFalse(check_write_permission(self.user_gip, self.section_other))
 
-        self.assertTrue(check_write_permission(self.user_engineer, self.section_own))
-        self.assertFalse(check_write_permission(self.user_engineer, self.section_other))
+        self.assertTrue(check_write_permission(self.user_developer, self.section_own))
+        self.assertFalse(check_write_permission(self.user_developer, self.section_other))
 
         self.assertFalse(check_write_permission(self.user_viewer, self.section_own))
 
@@ -235,7 +235,7 @@ class ServiceTests(TestCase):
     def test_upload_document_permission_denied(self):
         with self.assertRaises(PermissionDenied):
             upload_document(
-                user=self.user_engineer,
+                user=self.user_developer,
                 project=self.project_own,
                 section=self.section_other,
                 code='ДО-002',

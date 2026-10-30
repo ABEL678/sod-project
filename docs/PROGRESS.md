@@ -1,6 +1,6 @@
 # PROGRESS.md — Статус проекта
 
-**Дата обновления:** 29.10.2026
+**Дата обновления:** 30.10.2026
 
 ## Текущий этап
 **T8-CORE: Фундамент СОД (папки, проекты, ссылки, корзина).** 
@@ -26,6 +26,16 @@
 - [x] **Документация:** ARCHITECTURE.md, MASTER_SPEC.md, CONTEXT.md, PROGRESS.md обновлены.
 
 ## Журнал (Changelog)
+
+### 30.10.2026 — T11-ROLES
+- ГОСТ-роли в `UserProfile.role`: admin, gip, developer, checker, normocontrol, customer, contractor, viewer.
+- Data-миграция `engineer` → `developer` (`UserProfile` и `ProjectMembership`).
+- Права на файлы: developer и contractor пишут в allowed_sections (WIP); checker, normocontrol, customer, viewer — только чтение.
+- Статусы `Issue`: NEW, IN_PROGRESS, REJECTED, DISCUSSION, DONE, CLOSED, CANCELLED; поля `closed_at`, `closed_by`.
+- Матрица переходов в `update_issue_status()`, `check_issue_permission()`.
+- UI карточки замечания: цветной бейдж и кнопки статусов только по матрице; ГОСТ-названия ролей.
+- Data-миграция статусов Issue: open/in_progress/closed → NEW/IN_PROGRESS/CLOSED.
+- Добавлены тесты матрицы статусов и ролей; все тесты зелёные.
 
 ### 30.10.2026 — T10-LIFECYCLE
 - Добавлена модель `Folder.zone` (WIP, SHARED, PUBLISHED, ARCHIVE).

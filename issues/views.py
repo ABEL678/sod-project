@@ -6,9 +6,11 @@ from django.views import View
 from django.views.generic import CreateView
 
 from storage.domain.services import (
+    check_issue_permission,
     check_read_permission,
     get_accessible_documents,
     create_issue,
+    update_issue_status,
 )
 
 from issues.models import Issue
@@ -24,7 +26,7 @@ class IssueCreateView(CreateView):
             get_accessible_documents(request.user),
             pk=kwargs['document_id'],
         )
-        if not check_read_permission(request.user, self.document):
+        if not check_issue_permission(request.user, self.document):
             return HttpResponseForbidden('Нет прав на добавление замечания')
         return super().dispatch(request, *args, **kwargs)
 
@@ -92,37 +94,18 @@ class IssueUpdateStatusView(View):
         if not check_read_permission(request.user, issue.document):
             return HttpResponseForbidden('Нет прав на изменение замечания')
 
-        if not self._can_manage(request.user, issue):
-            return HttpResponseForbidden('Нет прав на изменение замечания')
+        status = (request.POST.get('status') or '').strip()
+        if not status:
+            action = request.POST.get('action')
+            status = {'open': 'NEW', 'close': 'CLOSED'}.get(action, '')
 
-        action = request.POST.get('action')
-        if action == 'open':
-            issue.status = 'open'
-        elif action == 'close':
-            issue.status = 'closed'
-        else:
-            issue.status = 'closed' if issue.status != 'closed' else 'open'
+        try:
+            update_issue_status(request.user, issue, status)
+        except PermissionDenied as exc:
+            return HttpResponseForbidden(str(exc))
+        except ValueError as exc:
+            messages.error(request, str(exc))
+            return redirect('storage:document_detail', pk=issue.document_id)
 
-        issue.save(update_fields=['status', 'updated_at'])
         messages.success(request, 'Статус замечания обновлён.')
         return redirect('storage:document_detail', pk=issue.document_id)
-
-    @staticmethod
-    def _can_manage(user, issue):
-        if user.pk in (issue.author_id, issue.assignee_id):
-            return True
-
-        profile = getattr(user, 'userprofile', None)
-        if profile is None:
-            return False
-
-        if profile.role == 'admin':
-            return True
-
-        if profile.role == 'gip':
-            project = issue.document.project
-            if project.gip_id == user.pk:
-                return True
-            return project.memberships.filter(user=user, role_in_project='gip').exists()
-
-        return False

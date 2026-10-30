@@ -137,7 +137,7 @@
     <div class="card shadow-sm mt-4">
         <div class="card-header bg-white fw-semibold">Замечания ({{ issues|length }})</div>
         <div class="card-body">
-            {% if not public_view %}
+            {% if not public_view and can_create_issue %}
                 <form method="post" action="{% url 'issues:issue_create' document.pk %}" class="mb-4">
                     {% csrf_token %}
                     {% if document.current_version %}
@@ -155,7 +155,7 @@
                     <div class="d-flex justify-content-between align-items-start gap-3">
                         <div>
                             <div class="mb-1">
-                                <span class="badge {% if issue.status == 'open' %}bg-danger{% elif issue.status == 'in_progress' %}bg-warning text-dark{% else %}bg-success{% endif %}">
+                                <span class="badge {% if issue.status == 'NEW' %}bg-danger{% elif issue.status == 'IN_PROGRESS' %}bg-warning text-dark{% elif issue.status == 'REJECTED' %}bg-secondary{% elif issue.status == 'DISCUSSION' %}bg-info text-dark{% elif issue.status == 'DONE' %}bg-primary{% elif issue.status == 'CLOSED' %}bg-success{% else %}bg-dark{% endif %}">
                                     {{ issue.get_status_display }}
                                 </span>
                                 {% if issue.version %}
@@ -170,17 +170,18 @@
                             <div>{{ issue.description|linebreaksbr }}</div>
                         </div>
                         <div class="flex-shrink-0">
-                            {% if not public_view %}
-                                <form method="post" action="{% url 'issues:issue_status' issue.pk %}">
-                                    {% csrf_token %}
-                                    {% if issue.status == 'closed' %}
-                                        <input type="hidden" name="action" value="open">
-                                        <button type="submit" class="btn btn-sm btn-outline-secondary">Открыть</button>
-                                    {% else %}
-                                        <input type="hidden" name="action" value="close">
-                                        <button type="submit" class="btn btn-sm btn-outline-danger">Закрыть</button>
-                                    {% endif %}
-                                </form>
+                            {% if not public_view and issue.allowed_status_options %}
+                                <div class="d-flex flex-wrap gap-1 justify-content-end">
+                                    {% for code, label in issue.allowed_status_options %}
+                                        <form method="post" action="{% url 'issues:issue_status' issue.pk %}">
+                                            {% csrf_token %}
+                                            <input type="hidden" name="status" value="{{ code }}">
+                                            <button type="submit" class="btn btn-sm {% if code == 'CLOSED' %}btn-outline-success{% elif code == 'CANCELLED' %}btn-outline-dark{% elif code == 'REJECTED' %}btn-outline-danger{% elif code == 'IN_PROGRESS' %}btn-outline-warning{% elif code == 'DONE' %}btn-outline-primary{% else %}btn-outline-secondary{% endif %}">
+                                                {{ label }}
+                                            </button>
+                                        </form>
+                                    {% endfor %}
+                                </div>
                             {% endif %}
                         </div>
                     </div>

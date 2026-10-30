@@ -35,8 +35,8 @@ def _create_test_data():
     gip = User.objects.create_user(username='gip', password='pass123')
     gip_profile = UserProfile.objects.create(user=gip, role='gip', company=company)
     
-    engineer = User.objects.create_user(username='eng', password='pass123')
-    engineer_profile = UserProfile.objects.create(user=engineer, role='engineer', company=company)
+    developer = User.objects.create_user(username='eng', password='pass123')
+    developer_profile = UserProfile.objects.create(user=developer, role='developer', company=company)
     
     viewer = User.objects.create_user(username='viewer', password='pass123')
     UserProfile.objects.create(user=viewer, role='viewer', company=company)
@@ -54,13 +54,13 @@ def _create_test_data():
         project=project, code='АР', name='Архитектурные решения', order=1
     )
     # Добавляем section в allowed_sections инженера
-    engineer_profile.allowed_sections.add(section)
+    developer_profile.allowed_sections.add(section)
     
     return {
         'company': company,
         'admin': admin,
         'gip': gip,
-        'engineer': engineer,
+        'developer': developer,
         'viewer': viewer,
         'project': project,
         'section': section,
@@ -204,7 +204,7 @@ class ZonePermissionTest(TestCase):
         data = _create_test_data()
         self.admin = data['admin']
         self.gip = data['gip']
-        self.engineer = data['engineer']
+        self.developer = data['developer']
         self.viewer = data['viewer']
         self.project = data['project']
         self.section = data['section']
@@ -216,10 +216,10 @@ class ZonePermissionTest(TestCase):
         )
         self.archive_folder = Folder.objects.get(project=self.project, zone='ARCHIVE')
 
-    def test_wip_engineer_can_write(self):
-        """Инженер может писать в WIP."""
+    def test_wip_developer_can_write(self):
+        """Разработчик может писать в WIP."""
         self.assertTrue(
-            check_zone_permission(self.engineer, self.wip_folder, self.section)
+            check_zone_permission(self.developer, self.wip_folder, self.section)
         )
 
     def test_wip_gip_can_write(self):
@@ -245,7 +245,7 @@ class ZonePermissionTest(TestCase):
             check_zone_permission(self.admin, self.shared_folder, self.section)
         )
         self.assertFalse(
-            check_zone_permission(self.engineer, self.shared_folder, self.section)
+            check_zone_permission(self.developer, self.shared_folder, self.section)
         )
         self.assertFalse(
             check_zone_permission(self.viewer, self.shared_folder, self.section)
@@ -260,7 +260,7 @@ class ZonePermissionTest(TestCase):
             check_zone_permission(self.gip, self.published_folder, self.section)
         )
         self.assertFalse(
-            check_zone_permission(self.engineer, self.published_folder, self.section)
+            check_zone_permission(self.developer, self.published_folder, self.section)
         )
         self.assertFalse(
             check_zone_permission(self.viewer, self.published_folder, self.section)
@@ -275,7 +275,7 @@ class ZonePermissionTest(TestCase):
             check_zone_permission(self.gip, self.archive_folder, self.section)
         )
         self.assertFalse(
-            check_zone_permission(self.engineer, self.archive_folder, self.section)
+            check_zone_permission(self.developer, self.archive_folder, self.section)
         )
         self.assertFalse(
             check_zone_permission(self.viewer, self.archive_folder, self.section)
@@ -284,7 +284,7 @@ class ZonePermissionTest(TestCase):
     def test_none_folder_uses_standard_permissions(self):
         """При folder=None используются стандартные правила."""
         self.assertTrue(
-            check_zone_permission(self.engineer, None, self.section)
+            check_zone_permission(self.developer, None, self.section)
         )
         self.assertFalse(
             check_zone_permission(self.viewer, None, self.section)
@@ -298,7 +298,7 @@ class ZoneUploadPermissionTest(TestCase):
         data = _create_test_data()
         self.admin = data['admin']
         self.gip = data['gip']
-        self.engineer = data['engineer']
+        self.developer = data['developer']
         self.project = data['project']
         self.section = data['section']
 
@@ -316,11 +316,11 @@ class ZoneUploadPermissionTest(TestCase):
             'test.pdf', b'%PDF-1.4 test content', content_type='application/pdf'
         )
 
-    def test_engineer_cannot_upload_to_published(self):
-        """Инженер не может загружать в PUBLISHED."""
+    def test_developer_cannot_upload_to_published(self):
+        """Разработчик не может загружать в PUBLISHED."""
         with self.assertRaises(PermissionDenied):
             upload_document(
-                user=self.engineer,
+                user=self.developer,
                 project=self.project,
                 section=self.section,
                 code='TEST-002',
@@ -330,11 +330,11 @@ class ZoneUploadPermissionTest(TestCase):
                 folder=self.published_folder,
             )
 
-    def test_engineer_cannot_upload_to_archive(self):
-        """Инженер не может загружать в ARCHIVE."""
+    def test_developer_cannot_upload_to_archive(self):
+        """Разработчик не может загружать в ARCHIVE."""
         with self.assertRaises(PermissionDenied):
             upload_document(
-                user=self.engineer,
+                user=self.developer,
                 project=self.project,
                 section=self.section,
                 code='TEST-003',
@@ -480,7 +480,7 @@ class MoveDocumentZoneCheckTest(TestCase):
         data = _create_test_data()
         self.admin = data['admin']
         self.gip = data['gip']
-        self.engineer = data['engineer']
+        self.developer = data['developer']
         self.project = data['project']
         self.section = data['section']
 
@@ -511,23 +511,23 @@ class MoveDocumentZoneCheckTest(TestCase):
             project=self.project, section=self.section, code='TEST-MOVE'
         )
 
-    def test_engineer_cannot_move_to_archive(self):
-        """Инженер не может переместить документ в ARCHIVE."""
+    def test_developer_cannot_move_to_archive(self):
+        """Разработчик не может переместить документ в ARCHIVE."""
         doc = self._create_document(self.wip_folder)
         with self.assertRaises(PermissionDenied):
-            move_document(self.engineer, doc, self.archive_folder)
+            move_document(self.developer, doc, self.archive_folder)
 
-    def test_engineer_cannot_move_to_published(self):
-        """Инженер не может переместить документ в PUBLISHED."""
+    def test_developer_cannot_move_to_published(self):
+        """Разработчик не может переместить документ в PUBLISHED."""
         doc = self._create_document(self.wip_folder)
         with self.assertRaises(PermissionDenied):
-            move_document(self.engineer, doc, self.published_folder)
+            move_document(self.developer, doc, self.published_folder)
 
-    def test_engineer_cannot_move_to_shared(self):
-        """Инженер не может переместить документ в SHARED."""
+    def test_developer_cannot_move_to_shared(self):
+        """Разработчик не может переместить документ в SHARED."""
         doc = self._create_document(self.wip_folder)
         with self.assertRaises(PermissionDenied):
-            move_document(self.engineer, doc, self.shared_folder)
+            move_document(self.developer, doc, self.shared_folder)
 
     def test_archive_document_only_admin_can_move(self):
         """Документ в ARCHIVE может переместить только админ."""
@@ -535,9 +535,9 @@ class MoveDocumentZoneCheckTest(TestCase):
         # ГИП не может
         with self.assertRaises(PermissionDenied):
             move_document(self.gip, doc, self.wip_folder)
-        # Инженер не может
+        # Разработчик не может
         with self.assertRaises(PermissionDenied):
-            move_document(self.engineer, doc, self.wip_folder)
+            move_document(self.developer, doc, self.wip_folder)
         # Админ может
         move_document(self.admin, doc, self.wip_folder)
         doc.refresh_from_db()
@@ -550,7 +550,7 @@ class UploadDocumentZoneCheckTest(TestCase):
     def setUp(self):
         data = _create_test_data()
         self.admin = data['admin']
-        self.engineer = data['engineer']
+        self.developer = data['developer']
         self.project = data['project']
         self.section = data['section']
 
@@ -580,12 +580,12 @@ class UploadDocumentZoneCheckTest(TestCase):
             project=self.project, section=self.section, code='TEST-UPLOAD'
         )
 
-    def test_engineer_cannot_upload_to_archive_document(self):
-        """Инженер не может загрузить версию в документ из ARCHIVE."""
+    def test_developer_cannot_upload_to_archive_document(self):
+        """Разработчик не может загрузить версию в документ из ARCHIVE."""
         doc = self._create_document_in_archive()
         with self.assertRaises(PermissionDenied):
             upload_document(
-                user=self.engineer,
+                user=self.developer,
                 project=self.project,
                 section=self.section,
                 code='TEST-UPLOAD',  # тот же code → обновит существующий
@@ -602,7 +602,7 @@ class CopyDocumentZoneCheckTest(TestCase):
     def setUp(self):
         data = _create_test_data()
         self.admin = data['admin']
-        self.engineer = data['engineer']
+        self.developer = data['developer']
         self.project = data['project']
         self.section = data['section']
 
@@ -637,28 +637,28 @@ class CopyDocumentZoneCheckTest(TestCase):
             project=self.project, section=self.section, code='TEST-COPY'
         )
 
-    def test_engineer_cannot_copy_to_archive(self):
-        """Инженер не может копировать документ в ARCHIVE."""
+    def test_developer_cannot_copy_to_archive(self):
+        """Разработчик не может копировать документ в ARCHIVE."""
         from storage.domain.services import copy_document
 
         doc = self._create_document()
         with self.assertRaises(PermissionDenied):
             copy_document(
-                user=self.engineer,
+                user=self.developer,
                 document=doc,
                 folder=self.archive_folder,
                 section=None,
                 file_storage=None,
             )
 
-    def test_engineer_cannot_copy_to_published(self):
-        """Инженер не может копировать документ в PUBLISHED."""
+    def test_developer_cannot_copy_to_published(self):
+        """Разработчик не может копировать документ в PUBLISHED."""
         from storage.domain.services import copy_document
 
         doc = self._create_document()
         with self.assertRaises(PermissionDenied):
             copy_document(
-                user=self.engineer,
+                user=self.developer,
                 document=doc,
                 folder=self.published_folder,
                 section=None,
@@ -742,7 +742,7 @@ class ArchiveEscapePreventionTest(TestCase):
     def setUp(self):
         data = _create_test_data()
         self.admin = data['admin']
-        self.engineer = data['engineer']
+        self.developer = data['developer']
         self.project = data['project']
         self.section = data['section']
 
@@ -780,8 +780,8 @@ class ArchiveEscapePreventionTest(TestCase):
         doc.refresh_from_db()
         return doc
 
-    def test_engineer_cannot_upload_to_archive_via_wip_folder(self):
-        """Инженер не может загрузить версию в документ из ARCHICE через folder=WIP.
+    def test_developer_cannot_upload_to_archive_via_wip_folder(self):
+        """Разработчик не может загрузить версию в документ из ARCHICE через folder=WIP.
 
         Документ уже в ARCHIVE, инженер пытается передать folder=WIP.
         upload_document должен проверить текущую зону документа и запретить.
@@ -790,10 +790,10 @@ class ArchiveEscapePreventionTest(TestCase):
         self.assertEqual(doc.folder, self.archive_folder)
         self.assertEqual(doc.status, 'archived')
 
-        # Инженер пытается загрузить версию с folder=WIP
+        # Разработчик пытается загрузить версию с folder=WIP
         with self.assertRaises(PermissionDenied):
             upload_document(
-                user=self.engineer,
+                user=self.developer,
                 project=self.project,
                 section=self.section,
                 code='TEST-ESCAPE',  # тот же code → обновит существующий

@@ -1,7 +1,7 @@
 # ARCHITECTURE.md — СОД для проектной компании
 
-**Версия:** 1.3
-**Дата:** 2026-10-29
+**Версия:** 1.4
+**Дата:** 2026-10-30
 **Статус:** Принято, обязательно к соблюдению при генерации кода
 
 ## 1. Контекст
@@ -113,7 +113,6 @@ sod_project/
 | deleted_at | DateTimeField, null=True | Дата помещения в корзину |
 | created_at | DateTimeField | |
 | created_by | FK → User | |
-| zone | CharField(20), choices | WIP (В работе), SHARED (На согласовании), PUBLISHED (Опубликовано), ARCHIVE (Архив). Default: WIP |
 
 **Правило:** При создании проекта автоматически создаются 4 корневые папки-зоны: «01. В работе», «02. На согласовании», «03. Опубликовано», «04. Архив».
 
@@ -124,10 +123,10 @@ sod_project/
 - Перемещение в ARCHIVE → status = archived.
 
 **Права по зонам (check_zone_permission):**
-- WIP: developer, gip, admin, contractor.
+- WIP: developer, contractor (только allowed_sections), gip, admin.
 - SHARED: gip, admin.
 - PUBLISHED: admin.
-- ARCHIVE: только чтение (никто не может загружать новые версии, даже админ).
+- ARCHIVE: только чтение. Перемещать документ в/из ARCHIVE может админ, но загружать новые версии в документ из ARCHIVE запрещено всем, включая админа.
 
 **Правило:** папка может быть на уровне проекта (section=None) или внутри раздела (section=Section). Вложенность через parent.
 
@@ -172,22 +171,27 @@ sod_project/
 |---|---|---|
 | user | OneToOne → User | |
 | company | FK → Company, null=True, on_delete=SET_NULL | Компания пользователя |
-| role | CharField(20), choices | admin, gip, engineer, viewer, contractor |
+| role | CharField(20), choices | admin, gip, developer, checker, normocontrol, customer, contractor, viewer |
 | allowed_sections | ManyToMany → Section, blank | Разделы, куда можно писать |
 
-**Правила ролей:**
-- admin — всё (в рамках своей компании).
-- gip — всё в своих проектах.
-- engineer — пишет только в allowed_sections, читает всё в своих проектах.
-- viewer — только чтение.
-- contractor — читает только разделы из allowed_sections.
+**Правила ролей (ГОСТ, T11-ROLES):**
+- admin (Администратор) — всё (в рамках своей компании).
+- gip (ГИП) — всё в своих проектах.
+- developer (Разработчик) — пишет только в allowed_sections (WIP), читает всё в своих проектах.
+- checker (Проверяющий) — только чтение, создаёт и закрывает замечания.
+- normocontrol (Нормоконтроль) — только чтение, создаёт и закрывает замечания.
+- customer (Заказчик) — только чтение файлов, создаёт и закрывает замечания.
+- contractor (Смежник) — пишет и читает только разделы из allowed_sections, создаёт замечания.
+- viewer (Наблюдатель) — только чтение, замечания не создаёт и не меняет.
+
+**Миграция ролей:** data-миграция `storage.0013` переводит `engineer` → `developer` в `UserProfile` и `ProjectMembership`.
 
 #### ProjectMembership
 | Поле | Тип | Описание |
 |---|---|---|
 | project | FK → Project | |
 | user | FK → User | |
-| role_in_project | CharField(20) | gip, engineer, viewer, contractor |
+| role_in_project | CharField(20) | gip, developer, checker, normocontrol, customer, contractor, viewer |
 
 **Уникальность:** (project, user).
 
@@ -202,10 +206,45 @@ sod_project/
 | is_shared | BooleanField | Общий или личный |
 | created_at | DateTimeField | |
 
+#### Issue (T11-ROLES)
+| Поле | Тип | Описание |
+|---|---|---|
+| id | PK | |
+| document | FK → Document, related_name=issues | Документ |
+| version | FK → DocumentVersion, null=True | Версия, к которой относится замечание |
+| author | FK → User, PROTECT | Создатель замечания |
+| assignee | FK → User, null=True | Ответственный-разработчик |
+| description | TextField | Текст замечания |
+| status | CharField(20), choices | NEW, IN_PROGRESS, REJECTED, DISCUSSION, DONE, CLOSED, CANCELLED |
+| closed_at | DateTimeField, null=True | Дата закрытия/аннулирования |
+| closed_by | FK → User, null=True | Кто закрыл/аннулировал |
+| page_number | PositiveIntegerField, null=True | Страница PDF |
+| x_ratio / y_ratio | FloatField, null=True | Координаты пина (0.0–1.0) |
+| created_at / updated_at | DateTimeField | |
+
+**Constraint:** `issue_pin_coords_consistency` — координаты задаются только вместе с `page_number`.
+
+**Матрица статусов (T11-ROLES):**
+
+| Статус | Кто может установить |
+|---|---|
+| NEW | Создаётся автоматически при создании (checker, customer, normocontrol и др.) |
+| IN_PROGRESS | developer |
+| DISCUSSION | developer |
+| DONE | developer |
+| REJECTED | checker, customer, normocontrol |
+| CLOSED | checker, customer, normocontrol |
+| CANCELLED | checker, customer, normocontrol |
+
+- gip и admin — арбитры: могут установить любой статус.
+- contractor и viewer — не могут менять статус.
+- При переходе в CLOSED/CANCELLED заполняются `closed_at` и `closed_by`; при возврате в другой статус — очищаются.
+- Из CLOSED/CANCELLED может вывести только gip/admin (переоткрытие); developer не может.
+- Из DONE developer может перевести только в DISCUSSION или IN_PROGRESS.
+- При переходе в IN_PROGRESS, если `assignee` пуст, назначается текущий пользователь.
+
 #### IssueComment / IssueAttachment (Этап 9)
 (Модели для обсуждения и вложений в замечаниях. Поля: issue, author, text, created_at / file, filename, uploaded_at).
-
-**Изменения в Issue (Этап 8-9):** добавлены `page_number`, `x_ratio`, `y_ratio`, `assignee`, `due_date`. Constraint на согласованность координат.
 
 ### 3.3. Связи
 
@@ -234,6 +273,9 @@ def empty_trash(user, project, file_storage) -> dict: ... (безвозврат�
 def can_purge_trash(user, project) -> bool: ... (только admin компании / superuser)
 def update_document_status(user, document, new_status) -> Document: ...
 def create_issue(user, document, version, description, page_number, x_ratio, y_ratio) -> Issue: ...
+def check_issue_permission(user, document) -> bool: ... (все ГОСТ-роли, кроме viewer)
+def allowed_issue_statuses(user, issue) -> list[str]: ... (статусы по матрице ролей)
+def update_issue_status(user, issue, new_status) -> Issue: ... (матрица переходов, closed_at/closed_by)
 def get_all_companies(platform_owner) -> QuerySet[Company]: ... (только для суперюзера)
 
 **Правило:** upload_document() — единственная точка создания версий.

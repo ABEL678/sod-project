@@ -45,8 +45,10 @@ from storage.domain.models import (
 from storage.domain.services import (
     DOCUMENT_VIEW_COLUMNS,
     CANONICAL_ZONE_NAMES,
+    allowed_issue_statuses,
     can_create_project,
     can_manage_project_participants,
+    check_issue_permission,
     can_purge_trash,
     check_read_permission,
     copy_document,
@@ -86,6 +88,8 @@ from storage.domain.services import (
     update_project_member_role,
     upload_document,
 )
+
+from issues.models import Issue
 
 
 RECENT_DOCUMENTS_SESSION_KEY = 'recent_documents'
@@ -1372,7 +1376,20 @@ class DocumentDetailView(LoginRequiredMixin, DetailView):
         context = super().get_context_data(**kwargs)
         context['breadcrumbs'] = _document_breadcrumbs(self.object)
         context['versions'] = self.object.versions.select_related('uploaded_by').order_by('-version_number')
-        context['issues'] = self.object.issues.select_related('author', 'assignee', 'version').order_by('-created_at')
+        issues = list(
+            self.object.issues.select_related('author', 'assignee', 'version')
+            .order_by('-created_at')
+        )
+        status_labels = dict(Issue.STATUS_CHOICES)
+        for issue in issues:
+            issue.allowed_status_options = [
+                (code, status_labels[code])
+                for code in allowed_issue_statuses(self.request.user, issue)
+            ]
+        context['issues'] = issues
+        context['can_create_issue'] = check_issue_permission(
+            self.request.user, self.object
+        )
         return context
 
 

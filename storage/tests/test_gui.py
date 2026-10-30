@@ -37,14 +37,14 @@ class GuiTestBase(TestCase):
 
         self.user_admin = User.objects.create_user('admin', password='pass')
         self.user_gip = User.objects.create_user('gip', password='pass')
-        self.user_engineer = User.objects.create_user('engineer', password='pass')
+        self.user_developer = User.objects.create_user('developer', password='pass')
         self.user_viewer = User.objects.create_user('viewer', password='pass')
         self.user_contractor = User.objects.create_user('contractor', password='pass')
         self.user_foreign_gip = User.objects.create_user('foreign_gip', password='pass')
 
         UserProfile.objects.create(user=self.user_admin, role='admin', company=self.company)
         UserProfile.objects.create(user=self.user_gip, role='gip', company=self.company)
-        UserProfile.objects.create(user=self.user_engineer, role='engineer', company=self.company)
+        UserProfile.objects.create(user=self.user_developer, role='developer', company=self.company)
         UserProfile.objects.create(user=self.user_viewer, role='viewer', company=self.company)
         UserProfile.objects.create(user=self.user_contractor, role='contractor', company=self.company)
         UserProfile.objects.create(
@@ -111,10 +111,10 @@ class GuiTestBase(TestCase):
             created_by=self.user_gip,
         )
 
-        self.membership_engineer = ProjectMembership.objects.create(
+        self.membership_developer = ProjectMembership.objects.create(
             project=self.project,
-            user=self.user_engineer,
-            role_in_project='engineer',
+            user=self.user_developer,
+            role_in_project='developer',
         )
         self.membership_viewer = ProjectMembership.objects.create(
             project=self.project,
@@ -128,7 +128,7 @@ class GuiTestBase(TestCase):
 class DocumentViewServiceTests(GuiTestBase):
     def test_save_and_list_personal_view(self):
         view = save_document_view(
-            self.user_engineer,
+            self.user_developer,
             self.project,
             'Мой вид',
             {
@@ -139,17 +139,17 @@ class DocumentViewServiceTests(GuiTestBase):
         )
 
         self.assertFalse(view.is_shared)
-        self.assertEqual(view.user, self.user_engineer)
+        self.assertEqual(view.user, self.user_developer)
         self.assertEqual(view.config['columns'], ['code', 'status'])
         self.assertEqual(view.config['filters'], {'status': 'draft'})
         self.assertEqual(view.config['sort'], ['-date'])
 
-        views = list_document_views(self.user_engineer, self.project)
+        views = list_document_views(self.user_developer, self.project)
         self.assertIn(view, views)
 
     def test_personal_view_hidden_from_other_user(self):
         view = save_document_view(
-            self.user_engineer,
+            self.user_developer,
             self.project,
             'Личный',
             {'columns': ['code']},
@@ -169,16 +169,16 @@ class DocumentViewServiceTests(GuiTestBase):
 
         self.assertTrue(view.is_shared)
         self.assertIsNone(view.user)
-        self.assertIn(view, list_document_views(self.user_engineer, self.project))
+        self.assertIn(view, list_document_views(self.user_developer, self.project))
         self.assertEqual(
-            get_document_view(self.user_engineer, self.project, view.pk),
+            get_document_view(self.user_developer, self.project, view.pk),
             view,
         )
 
     def test_shared_view_requires_gip_or_admin(self):
         with self.assertRaises(PermissionDenied):
             save_document_view(
-                self.user_engineer,
+                self.user_developer,
                 self.project,
                 'Общий',
                 {'columns': ['code']},
@@ -196,13 +196,13 @@ class DocumentViewServiceTests(GuiTestBase):
 
     def test_repeated_save_updates_existing_view(self):
         first = save_document_view(
-            self.user_engineer,
+            self.user_developer,
             self.project,
             'Мой вид',
             {'columns': ['code']},
         )
         second = save_document_view(
-            self.user_engineer,
+            self.user_developer,
             self.project,
             'Мой вид',
             {'columns': ['name', 'status']},
@@ -210,7 +210,7 @@ class DocumentViewServiceTests(GuiTestBase):
 
         self.assertEqual(first.pk, second.pk)
         self.assertEqual(
-            DocumentView.objects.filter(user=self.user_engineer, name='Мой вид').count(),
+            DocumentView.objects.filter(user=self.user_developer, name='Мой вид').count(),
             1,
         )
         second.refresh_from_db()
@@ -231,7 +231,7 @@ class DocumentViewServiceTests(GuiTestBase):
                     normalize_document_view_config(config)
 
         with self.assertRaises(ValueError):
-            save_document_view(self.user_engineer, self.project, ' ', {'columns': ['code']})
+            save_document_view(self.user_developer, self.project, ' ', {'columns': ['code']})
 
     def test_widths_validated_in_config(self):
         config = normalize_document_view_config({
@@ -241,7 +241,7 @@ class DocumentViewServiceTests(GuiTestBase):
         self.assertEqual(config['widths'], {'code': 120, 'name': 300})
 
         view = save_document_view(
-            self.user_engineer,
+            self.user_developer,
             self.project,
             'С ширинами',
             {
@@ -333,24 +333,24 @@ class DocumentViewServiceTests(GuiTestBase):
     def test_can_manage_participants(self):
         self.assertTrue(can_manage_project_participants(self.user_admin, self.project))
         self.assertTrue(can_manage_project_participants(self.user_gip, self.project))
-        self.assertFalse(can_manage_project_participants(self.user_engineer, self.project))
+        self.assertFalse(can_manage_project_participants(self.user_developer, self.project))
         self.assertFalse(can_manage_project_participants(self.user_viewer, self.project))
         self.assertFalse(can_manage_project_participants(self.user_foreign_gip, self.project))
 
     def test_update_member_role(self):
         update_project_member_role(
             self.user_gip,
-            self.membership_engineer,
+            self.membership_developer,
             'viewer',
         )
-        self.membership_engineer.refresh_from_db()
-        self.assertEqual(self.membership_engineer.role_in_project, 'viewer')
+        self.membership_developer.refresh_from_db()
+        self.assertEqual(self.membership_developer.role_in_project, 'viewer')
 
         with self.assertRaises(PermissionDenied):
             update_project_member_role(
-                self.user_engineer,
+                self.user_developer,
                 self.membership_viewer,
-                'engineer',
+                'developer',
             )
 
         with self.assertRaises(ValueError):
@@ -364,7 +364,7 @@ class DocumentViewServiceTests(GuiTestBase):
         with self.assertRaises(IntegrityError), transaction.atomic():
             DocumentView.objects.create(
                 project=self.project,
-                user=self.user_engineer,
+                user=self.user_developer,
                 name='Общий с владельцем',
                 is_shared=True,
             )
@@ -448,21 +448,21 @@ class DocumentViewServiceTests(GuiTestBase):
             get_project_membership(
                 self.user_gip,
                 self.project,
-                self.membership_engineer.pk,
+                self.membership_developer.pk,
             ),
-            self.membership_engineer,
+            self.membership_developer,
         )
         self.assertIsNone(
             get_project_membership(self.user_gip, self.project, 999999),
         )
 
         with self.assertRaises(PermissionDenied):
-            list_project_participants(self.user_engineer, self.project)
+            list_project_participants(self.user_developer, self.project)
         with self.assertRaises(PermissionDenied):
             get_project_membership(
-                self.user_engineer,
+                self.user_developer,
                 self.project,
-                self.membership_engineer.pk,
+                self.membership_developer.pk,
             )
 
 
@@ -496,13 +496,13 @@ class GuiViewTests(GuiTestBase):
                 'storage:membership_role_update',
                 args=[self.project.pk, self.membership_viewer.pk],
             ),
-            {'role': 'engineer'},
+            {'role': 'developer'},
         )
         self.membership_viewer.refresh_from_db()
-        self.assertEqual(self.membership_viewer.role_in_project, 'engineer')
+        self.assertEqual(self.membership_viewer.role_in_project, 'developer')
 
     def test_participants_tab_hidden_for_non_managers(self):
-        for user in (self.user_engineer, self.user_viewer, self.user_contractor):
+        for user in (self.user_developer, self.user_viewer, self.user_contractor):
             with self.subTest(user=user.username):
                 self.client.force_login(user)
                 response = self.client.get(
@@ -608,7 +608,7 @@ class GuiViewTests(GuiTestBase):
         )
 
     def test_save_view_via_post(self):
-        self.client.force_login(self.user_engineer)
+        self.client.force_login(self.user_developer)
         response = self.client.post(
             reverse('storage:document_view_save', args=[self.project.pk]),
             {
@@ -621,7 +621,7 @@ class GuiViewTests(GuiTestBase):
 
         view = DocumentView.objects.get(
             project=self.project,
-            user=self.user_engineer,
+            user=self.user_developer,
             name='Только шифры',
         )
         self.assertFalse(view.is_shared)
@@ -633,8 +633,8 @@ class GuiViewTests(GuiTestBase):
             f"{reverse('storage:project_detail', args=[self.project.pk])}?view={view.pk}",
         )
 
-    def test_shared_view_post_forbidden_for_engineer(self):
-        self.client.force_login(self.user_engineer)
+    def test_shared_view_post_forbidden_for_developer(self):
+        self.client.force_login(self.user_developer)
         response = self.client.post(
             reverse('storage:document_view_save', args=[self.project.pk]),
             {
@@ -685,12 +685,12 @@ class GuiViewTests(GuiTestBase):
     def test_corrupted_saved_view_config_falls_back(self):
         view = DocumentView.objects.create(
             project=self.project,
-            user=self.user_engineer,
+            user=self.user_developer,
             name='Сломанный вид',
             config={'columns': ['unknown']},
             is_shared=False,
         )
-        self.client.force_login(self.user_engineer)
+        self.client.force_login(self.user_developer)
         response = self.client.get(
             reverse('storage:project_detail', args=[self.project.pk]),
             {'view': view.pk},
@@ -702,12 +702,12 @@ class GuiViewTests(GuiTestBase):
 
     def test_saved_view_applied_columns(self):
         view = save_document_view(
-            self.user_engineer,
+            self.user_developer,
             self.project,
             'Только шифры',
             {'columns': ['code']},
         )
-        self.client.force_login(self.user_engineer)
+        self.client.force_login(self.user_developer)
         response = self.client.get(
             reverse('storage:project_detail', args=[self.project.pk]),
             {'view': view.pk},
@@ -732,12 +732,12 @@ class GuiViewTests(GuiTestBase):
 
     def test_saved_view_applied_filters(self):
         view = save_document_view(
-            self.user_engineer,
+            self.user_developer,
             self.project,
             'Утверждённые',
             {'columns': ['code'], 'filters': {'status': 'approved'}},
         )
-        self.client.force_login(self.user_engineer)
+        self.client.force_login(self.user_developer)
         response = self.client.get(
             reverse('storage:project_detail', args=[self.project.pk]),
             {'view': view.pk},
@@ -750,7 +750,7 @@ class GuiViewTests(GuiTestBase):
 
     def test_foreign_users_view_is_not_applied(self):
         view = save_document_view(
-            self.user_engineer,
+            self.user_developer,
             self.project,
             'Личный',
             {'columns': ['code']},
@@ -769,23 +769,23 @@ class GuiViewTests(GuiTestBase):
         response = self.client.post(
             reverse(
                 'storage:membership_role_update',
-                args=[self.project.pk, self.membership_engineer.pk],
+                args=[self.project.pk, self.membership_developer.pk],
             ),
             {'role': 'viewer'},
         )
 
         self.assertEqual(response.status_code, 302)
-        self.membership_engineer.refresh_from_db()
-        self.assertEqual(self.membership_engineer.role_in_project, 'viewer')
+        self.membership_developer.refresh_from_db()
+        self.assertEqual(self.membership_developer.role_in_project, 'viewer')
 
-    def test_membership_role_update_forbidden_for_engineer(self):
-        self.client.force_login(self.user_engineer)
+    def test_membership_role_update_forbidden_for_developer(self):
+        self.client.force_login(self.user_developer)
         response = self.client.post(
             reverse(
                 'storage:membership_role_update',
                 args=[self.project.pk, self.membership_viewer.pk],
             ),
-            {'role': 'engineer'},
+            {'role': 'developer'},
         )
 
         self.assertEqual(response.status_code, 403)
@@ -819,7 +819,7 @@ class GuiViewTests(GuiTestBase):
                 'storage:membership_role_update',
                 args=[self.project.pk, self.membership_viewer.pk],
             ),
-            {'role': 'engineer'},
+            {'role': 'developer'},
         )
 
         self.assertEqual(response.status_code, 403)
