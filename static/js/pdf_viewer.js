@@ -929,7 +929,8 @@
     window.setZoom = function (scale) {
         currentScale = scale;
         const button = document.getElementById('zoom-btn')
-            || document.getElementById('zoom-level-btn');
+            || document.getElementById('zoom-level-btn')
+            || document.querySelector('#pdf-panel .dropdown-toggle');
         if (button) {
             button.innerText = Math.round(scale * 100) + '%';
         }
