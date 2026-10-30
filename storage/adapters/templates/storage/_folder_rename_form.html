@@ -1,0 +1,18 @@
+<form method="post" action="{% url 'storage:folder_rename' folder.pk %}">
+    {% csrf_token %}
+    <div class="modal-body">
+        <label for="folderRenameInput" class="form-label">Название папки</label>
+        <input type="text"
+               class="form-control"
+               id="folderRenameInput"
+               name="name"
+               maxlength="255"
+               required
+               autofocus
+               value="{{ folder.name }}">
+    </div>
+    <div class="modal-footer">
+        <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-dismiss="modal">Отмена</button>
+        <button type="submit" class="btn btn-primary btn-sm">Сохранить</button>
+    </div>
+</form>

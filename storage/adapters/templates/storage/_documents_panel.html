@@ -1,0 +1,159 @@
+{% load django_tables2 %}
+<div id="documentsPanel"
+     data-project-id="{{ project.pk }}"
+     data-view-id="{% if selected_view %}{{ selected_view.pk }}{% else %}none{% endif %}"
+     data-upload-url="{% url 'storage:document_upload_ajax' project.pk %}"
+     data-move-url-template="{% url 'storage:document_move' 0 %}"
+     data-copy-url-template="{% url 'storage:document_copy' 0 %}"
+     data-folder-move-url-template="{% url 'storage:folder_move' 0 %}"
+     data-target-name="{{ upload_target_name }}">
+
+    {% include 'storage/_breadcrumbs.html' %}
+
+    <form id="filtersForm"
+          class="filter-panel"
+          method="get"
+          action="{% url 'storage:project_detail' project.pk %}"
+          hx-get="{% url 'storage:project_detail' project.pk %}"
+          hx-target="#documentsPanel"
+          hx-select="#documentsPanel"
+          hx-swap="outerHTML"
+          hx-push-url="true"
+          hx-trigger="change, submit, keyup changed delay:350ms from:#quickFilter">
+        <input type="hidden" name="tab" value="documents">
+        {% if selected_view %}
+            <input type="hidden" name="view" value="{{ selected_view.pk }}">
+        {% endif %}
+        {% if selected_folder %}
+            <input type="hidden" name="folder" value="{{ selected_folder.pk }}">
+        {% endif %}
+        <input type="hidden" name="sort" value="{{ active_sort|default:'' }}">
+
+        <div class="filter-panel-main">
+            <div class="dropdown filter-view">
+                <button class="btn btn-outline-secondary btn-sm dropdown-toggle"
+                        type="button"
+                        data-bs-toggle="dropdown"
+                        aria-expanded="false">
+                    <i class="bi bi-layout-text-window-reverse me-1" aria-hidden="true"></i>
+                    <span class="text-muted">Вид:</span>
+                    <span class="fw-semibold">{{ selected_view.name|default:"все документы" }}</span>
+                </button>
+                <ul class="dropdown-menu view-menu">
+                    <li>
+                        <a class="dropdown-item {% if not selected_view %}active{% endif %}"
+                           href="{% url 'storage:project_detail' project.pk %}">
+                            <i class="bi bi-inbox me-2" aria-hidden="true"></i>Все документы
+                        </a>
+                    </li>
+                    {% for view in document_views %}
+                        <li>
+                            <a class="dropdown-item {% if selected_view.pk == view.pk %}active{% endif %}"
+                               href="{% url 'storage:project_detail' project.pk %}?view={{ view.pk }}">
+                                <span class="text-truncate">{{ view.name }}</span>
+                                {% if view.is_shared %}<span class="badge text-bg-light border ms-2">общий</span>{% endif %}
+                            </a>
+                        </li>
+                    {% empty %}
+                        <li><span class="dropdown-item-text text-muted small">Сохранённых видов пока нет</span></li>
+                    {% endfor %}
+                    <li><hr class="dropdown-divider"></li>
+                    <li>
+                        <button type="button" class="dropdown-item"
+                                data-bs-toggle="modal"
+                                data-bs-target="#viewSettingsModal">
+                            <i class="bi bi-sliders me-2" aria-hidden="true"></i>Настроить и сохранить вид…
+                        </button>
+                    </li>
+                </ul>
+            </div>
+
+            <div class="filter-field">
+                <label class="form-label" for="{{ filter.form.section.id_for_label }}">Раздел</label>
+                {{ filter.form.section }}
+            </div>
+            <div class="filter-field">
+                <label class="form-label" for="{{ filter.form.doc_type.id_for_label }}">Тип</label>
+                {{ filter.form.doc_type }}
+            </div>
+            <div class="filter-field">
+                <label class="form-label" for="{{ filter.form.status.id_for_label }}">Статус</label>
+                {{ filter.form.status }}
+            </div>
+            <div class="filter-field filter-search">
+                <label class="form-label" for="{{ filter.form.q.id_for_label }}">Поиск</label>
+                {{ filter.form.q }}
+            </div>
+            <div class="filter-actions">
+                <button type="submit" class="btn btn-primary btn-sm">
+                    <i class="bi bi-search me-1" aria-hidden="true"></i>Найти
+                </button>
+                <a href="{% url 'storage:project_detail' project.pk %}"
+                   class="btn btn-outline-secondary btn-sm"
+                   title="Сбросить фильтры">Сбросить</a>
+            </div>
+        </div>
+    </form>
+
+    <div class="toolbar" data-role="toolbar">
+        <div class="toolbar-left">
+            <span class="toolbar-count text-muted small text-nowrap">
+                {% if table.paginator %}{{ table.paginator.count }}{% else %}{{ documents|length }}{% endif %} док.
+            </span>
+            <span class="drag-hint text-muted small">
+                <i class="bi bi-grip-vertical" aria-hidden="true"></i>
+                Перетащите строку в папку · Ctrl — копировать
+            </span>
+            {% if active_search %}
+                <span class="badge text-bg-light border">Поиск: {{ active_search }}</span>
+            {% endif %}
+        </div>
+        <div class="toolbar-spacer"></div>
+        <div class="toolbar-actions">
+            <form method="post" action="{% url 'storage:simulate_mail_import' project.pk %}" class="mb-0">
+                {% csrf_token %}
+                <button type="submit" class="btn btn-outline-secondary btn-sm" title="Импортировать из почты">
+                    <i class="bi bi-envelope-arrow-down" aria-hidden="true"></i>
+                    <span class="d-none d-xl-inline">Импорт</span>
+                </button>
+            </form>
+            <a class="btn btn-outline-secondary btn-sm" href="{% export_url 'xlsx' %}" title="Экспорт таблицы в Excel">
+                <i class="bi bi-file-earmark-excel" aria-hidden="true"></i>
+                <span class="d-none d-xl-inline">Экспорт</span>
+            </a>
+            <button type="button"
+                    class="btn btn-outline-secondary btn-sm"
+                    id="openSettings"
+                    data-bs-toggle="modal"
+                    data-bs-target="#viewSettingsModal"
+                    title="Настройки вида"
+                    aria-label="Настройки вида">
+                <i class="bi bi-gear" aria-hidden="true"></i>
+                <span class="d-none d-xxl-inline">Настройки</span>
+            </button>
+        </div>
+    </div>
+
+    <div class="bulk-bar bulk-bar-floating d-none" id="bulkBar" data-role="bulk-bar">
+        <span class="fw-semibold">Выбрано <span id="bulkCount">0</span> файлов</span>
+        <button type="submit" name="action" value="download" form="bulkForm" class="btn btn-sm btn-outline-secondary">
+            <i class="bi bi-file-earmark-zip me-1" aria-hidden="true"></i>Скачать выбранные (ZIP)
+        </button>
+        <button type="submit" name="action" value="delete" form="bulkForm" class="btn btn-sm btn-outline-danger">
+            <i class="bi bi-trash3 me-1" aria-hidden="true"></i>В корзину
+        </button>
+    </div>
+
+    <div class="doc-table-wrap{% if not table.paginated_rows %} is-empty{% endif %}" id="documentsTableWrap">
+        <form id="bulkForm" method="post" action="{% url 'storage:document_bulk_action' project.pk %}">
+            {% csrf_token %}
+            {% render_table table %}
+        </form>
+        <div class="doc-drop-overlay" id="docDropOverlay" hidden>
+            <div class="doc-drop-card">
+                <i class="bi bi-cloud-arrow-up" aria-hidden="true"></i>
+                <span>Отпустите файл, чтобы загрузить в <strong id="dropTargetName">{{ upload_target_name }}</strong></span>
+            </div>
+        </div>
+    </div>
+</div>

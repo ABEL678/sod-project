@@ -15,7 +15,11 @@
     <div class="d-flex justify-content-between align-items-center mb-3">
         <h1 class="h3 mb-0">Проекты</h1>
         {% if can_create_project %}
-            <button type="button" class="btn btn-primary btn-sm" id="openCreateProject">
+            <button type="button"
+                    class="btn btn-primary btn-sm"
+                    id="openCreateProject"
+                    data-bs-toggle="modal"
+                    data-bs-target="#createProjectModal">
                 <i class="bi bi-plus-lg me-1" aria-hidden="true"></i>Создать проект
             </button>
         {% endif %}
@@ -71,7 +75,7 @@
                     {% csrf_token %}
                     <div class="modal-header">
                         <h5 class="modal-title">Новый проект</h5>
-                        <button type="button" class="btn-close" data-project-modal-close aria-label="Закрыть"></button>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрыть"></button>
                     </div>
                     <div class="modal-body">
                         <div class="row g-2">
@@ -99,45 +103,14 @@
                         </div>
                     </div>
                     <div class="modal-footer">
-                        <button type="button" class="btn btn-outline-secondary btn-sm" data-project-modal-close>Отмена</button>
+                        <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-dismiss="modal">Отмена</button>
                         <button type="submit" class="btn btn-primary btn-sm">Создать проект</button>
                     </div>
                 </form>
             </div>
         </div>
     </div>
-    <script>
-    (function () {
-        'use strict';
-        var modal = document.getElementById('createProjectModal');
-        var open = document.getElementById('openCreateProject');
-        if (!modal || !open) { return; }
-        function show() {
-            modal.classList.add('show');
-            modal.style.display = 'block';
-            modal.setAttribute('aria-hidden', 'false');
-            document.body.classList.add('modal-open');
-            var input = document.getElementById('projectCode');
-            if (input) { input.focus(); }
-        }
-        function hide() {
-            modal.classList.remove('show');
-            modal.style.display = 'none';
-            modal.setAttribute('aria-hidden', 'true');
-            document.body.classList.remove('modal-open');
-        }
-        open.addEventListener('click', show);
-        modal.querySelectorAll('[data-project-modal-close]').forEach(function (button) {
-            button.addEventListener('click', hide);
-        });
-        modal.addEventListener('click', function (event) {
-            if (event.target === modal) { hide(); }
-        });
-        document.addEventListener('keydown', function (event) {
-            if (event.key === 'Escape' && modal.classList.contains('show')) { hide(); }
-        });
-    })();
-    </script>
+    <script src="{% static 'js/vendor/bootstrap.bundle.min.js' %}"></script>
 {% endif %}
 </body>
 </html>

@@ -1545,3 +1545,635 @@ body.modal-open {
         min-width: 88px;
     }
 }
+
+/* ---------- T8-CORE-ULTIMATE: navigation, table header, drop zone ---------- */
+
+.app-layout {
+    position: relative;
+}
+
+.sidebar-resizer {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: var(--app-sidebar-w);
+    z-index: 25;
+    width: 7px;
+    margin-left: -3px;
+    cursor: col-resize;
+    background: transparent;
+    touch-action: none;
+}
+
+.sidebar-resizer:hover,
+.sidebar-resizer.is-active {
+    background: rgba(59, 130, 246, .35);
+}
+
+.app-shell.sidebar-collapsed .sidebar-resizer {
+    display: none;
+}
+
+.app-breadcrumbs {
+    flex: 0 0 auto;
+    padding: 5px 12px;
+    border-bottom: 1px solid var(--app-border);
+    background: #fff;
+}
+
+.app-breadcrumbs .breadcrumb {
+    --bs-breadcrumb-divider: "›";
+    margin: 0;
+    font-size: 12px;
+}
+
+.app-breadcrumbs .breadcrumb-item + .breadcrumb-item::before {
+    color: #cbd5e1;
+}
+
+.app-breadcrumbs .breadcrumb-item a {
+    color: #2563eb;
+    text-decoration: none;
+}
+
+.app-breadcrumbs .breadcrumb-item a:hover {
+    text-decoration: underline;
+}
+
+.app-breadcrumbs .breadcrumb-item.active {
+    color: #475569;
+    font-weight: 600;
+}
+
+.section-item,
+.folder-name {
+    text-decoration: none;
+}
+
+.folder-name:hover {
+    text-decoration: underline;
+}
+
+.th-content {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    min-width: 0;
+}
+
+.th-sort-link {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.th-filter {
+    position: relative;
+    flex: 0 0 auto;
+}
+
+.th-filter summary {
+    list-style: none;
+}
+
+.th-filter summary::-webkit-details-marker {
+    display: none;
+}
+
+.th-filter-toggle {
+    width: 20px;
+    height: 20px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 4px;
+    color: #94a3b8;
+    font-size: 11px;
+    cursor: pointer;
+}
+
+.th-filter-toggle:hover,
+.th-filter[open] .th-filter-toggle,
+.th-filter.is-active .th-filter-toggle {
+    background: #e0e7ff;
+    color: #1d4ed8;
+}
+
+.th-filter.is-active .th-filter-toggle {
+    box-shadow: inset 0 0 0 1px #93c5fd;
+}
+
+.th-filter-menu {
+    position: absolute;
+    top: calc(100% + 5px);
+    left: 0;
+    z-index: 60;
+    width: 240px;
+    padding: 10px;
+    border: 1px solid var(--app-border);
+    border-radius: 8px;
+    background: #fff;
+    box-shadow: 0 10px 28px rgba(15, 23, 42, .18);
+    white-space: normal;
+    font-weight: 400;
+    text-transform: none;
+    letter-spacing: 0;
+}
+
+.th-filter-title {
+    margin-bottom: 6px;
+    color: #475569;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+}
+
+.th-filter-menu .form-select,
+.th-filter-menu .form-control {
+    width: 100%;
+    height: 30px;
+    min-height: 30px;
+    font-size: 12.5px;
+}
+
+.th-filter-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 8px;
+}
+
+.th-filter-actions .btn-link {
+    margin-left: auto;
+    color: var(--app-muted);
+    font-size: 12px;
+}
+
+.col-drag {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    color: #cbd5e1;
+    font-size: 11px;
+    cursor: grab;
+}
+
+.col-drag:active {
+    cursor: grabbing;
+}
+
+.doc-table thead th.is-column-dragging {
+    opacity: .45;
+}
+
+.doc-table thead th.is-column-drop-target {
+    box-shadow: inset 3px 0 0 #3b82f6;
+}
+
+.doc-table thead th {
+    height: 44px;
+    overflow: visible;
+}
+
+.filters-form {
+    display: none;
+}
+
+.doc-table-wrap.is-empty {
+    outline: 2px dashed #cbd5e1;
+    outline-offset: -8px;
+}
+
+.doc-drop-overlay {
+    position: absolute;
+    inset: 8px;
+    z-index: 80;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 2px dashed #3b82f6;
+    border-radius: 8px;
+    background: rgba(239, 246, 255, .88);
+    pointer-events: none;
+}
+
+.doc-drop-overlay[hidden] {
+    display: none;
+}
+
+.doc-drop-card {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 16px 22px;
+    border-radius: 10px;
+    background: #fff;
+    color: #1e3a8a;
+    font-size: 14px;
+    box-shadow: 0 10px 30px rgba(37, 99, 235, .18);
+}
+
+.doc-drop-card > .bi {
+    color: #3b82f6;
+    font-size: 26px;
+}
+
+.bulk-bar-floating {
+    position: fixed;
+    left: 50%;
+    bottom: 22px;
+    z-index: 1055;
+    transform: translateX(-50%);
+    min-height: 46px;
+    max-width: calc(100vw - 40px);
+    border: 1px solid #93c5fd;
+    border-radius: 999px;
+    background: #eff6ff;
+    box-shadow: 0 12px 34px rgba(15, 23, 42, .22);
+}
+
+.doc-row-new td {
+    animation: doc-row-highlight 2.4s ease-out 1;
+    background: #fef9c3 !important;
+}
+
+@keyframes doc-row-highlight {
+    0%, 30% {
+        background: #fde68a;
+    }
+    100% {
+        background: #fff;
+    }
+}
+
+@media (max-width: 820px) {
+    .sidebar-resizer {
+        display: none;
+    }
+
+    .th-filter-menu {
+        width: 210px;
+    }
+}
+
+/* ---------- T9-UI-V2: Bootstrap 5 panels and standard table ---------- */
+
+#documentsPanel {
+    display: flex;
+    flex-direction: column;
+    flex: 1 1 auto;
+    min-height: 0;
+}
+
+.filter-panel {
+    flex: 0 0 auto;
+    padding: 8px 12px 9px;
+    border-bottom: 1px solid var(--app-border);
+    background: #f8fafc;
+}
+
+.filter-panel-main {
+    display: flex;
+    align-items: flex-end;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.filter-view {
+    flex: 0 0 auto;
+}
+
+.filter-field {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 132px;
+}
+
+.filter-field .form-label {
+    margin: 0;
+    color: #64748b;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: .05em;
+    text-transform: uppercase;
+}
+
+.filter-field .form-select,
+.filter-field .form-control {
+    min-width: 132px;
+    height: 31px;
+}
+
+.filter-search {
+    flex: 1 1 240px;
+    min-width: 220px;
+}
+
+.filter-search .form-control {
+    width: 100%;
+    min-width: 0;
+}
+
+.filter-actions {
+    display: flex;
+    gap: 6px;
+    padding-bottom: 0;
+}
+
+.toolbar {
+    flex: 0 0 auto;
+}
+
+.doc-table-wrap {
+    min-height: 360px;
+}
+
+.doc-table {
+    table-layout: auto;
+}
+
+.doc-table thead th {
+    vertical-align: middle;
+}
+
+.doc-table thead th a {
+    color: inherit;
+}
+
+.doc-table .doc-select-col {
+    width: 42px;
+    padding-left: 14px !important;
+    padding-right: 6px !important;
+    text-align: left !important;
+}
+
+.doc-table .doc-select-col .form-check-input {
+    margin: 0;
+    float: none;
+}
+
+.doc-table tbody td {
+    vertical-align: middle;
+}
+
+.sidebar-scroll .list-group {
+    margin: 0;
+}
+
+.sidebar-scroll .list-group-item {
+    padding: 0;
+    border: 0;
+    background: transparent;
+}
+
+.section-node.list-group-item {
+    margin-bottom: 2px;
+}
+
+.section-row {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+}
+
+.section-row .section-item {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.section-item {
+    text-decoration: none;
+}
+
+.section-item:hover {
+    text-decoration: none;
+}
+
+.folder-tree-list {
+    margin-left: 15px;
+    padding-left: 3px;
+    border-left: 1px solid #e2e8f0;
+}
+
+.folder-tree-list .folder-children-list {
+    margin-left: 10px;
+}
+
+.folder-row.list-group-item {
+    display: flex;
+    padding: 4px 5px 4px 2px;
+    border-radius: 5px;
+    color: #475569;
+    font-size: 12px;
+}
+
+.folder-row.list-group-item:hover {
+    background: #eef2f7;
+}
+
+.folder-row.folder-selected {
+    background: #dbeafe;
+    color: #1e3a8a;
+}
+
+.folder-toggle {
+    width: 16px;
+    height: 18px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border: 0;
+    color: #94a3b8;
+    font-size: 10px;
+    text-decoration: none;
+}
+
+.folder-toggle[aria-expanded="true"] .bi-chevron-down {
+    transform: rotate(0deg);
+}
+
+.folder-toggle[aria-expanded="false"] .bi-chevron-down {
+    transform: rotate(-90deg);
+}
+
+.folder-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: inherit;
+    text-decoration: none;
+}
+
+.folder-name:hover {
+    color: #1d4ed8;
+    text-decoration: underline;
+}
+
+.folder-add-child,
+.folder-menu-btn {
+    flex: 0 0 auto;
+    width: 22px;
+    height: 22px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border: 0;
+    border-radius: 4px;
+    color: #94a3b8;
+    font-size: 12px;
+    text-decoration: none;
+}
+
+.folder-add-child:hover,
+.folder-menu-btn:hover {
+    background: #e2e8f0;
+    color: #475569;
+}
+
+.folder-menu {
+    min-width: 220px;
+    font-size: 12.5px;
+}
+
+.folder-menu form {
+    margin: 0;
+}
+
+.sidebar-footer .btn {
+    height: 32px;
+    font-size: 12.5px;
+}
+
+.sidebar-resizer {
+    display: block;
+}
+
+.app-shell.sidebar-collapsed .sidebar-resizer {
+    display: none;
+}
+
+.doc-empty {
+    padding: 22px 10px;
+}
+
+.doc-empty .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+
+@media (max-width: 900px) {
+    .filter-view {
+        width: 100%;
+    }
+
+    .filter-search {
+        flex-basis: 100%;
+    }
+}
+
+/* ---------- T9-FIX-DND: drag document rows onto folders/sections ---------- */
+
+#documentsTable tbody tr[draggable="true"] {
+    cursor: grab;
+}
+
+#documentsTable tbody tr.is-dragging td {
+    opacity: .45;
+    background: #e2e8f0 !important;
+}
+
+.folder-row.is-dnd-over,
+.section-item.is-dnd-over {
+    background: #dbeafe !important;
+    outline: 2px dashed #2563eb;
+    outline-offset: -2px;
+    border-radius: 5px;
+}
+
+.section-item.is-dnd-over {
+    color: #1e3a8a !important;
+}
+
+.dnd-toast {
+    position: fixed;
+    right: 20px;
+    bottom: 82px;
+    z-index: 1090;
+    max-width: 360px;
+    padding: 10px 14px;
+    border: 1px solid #86efac;
+    border-radius: 8px;
+    background: #f0fdf4;
+    color: #166534;
+    font-size: 13px;
+    box-shadow: 0 10px 24px rgba(15, 23, 42, .18);
+}
+
+.dnd-toast.is-error {
+    border-color: #fca5a5;
+    background: #fef2f2;
+    color: #b91c1c;
+}
+
+/* ---------- T9-FIX-DND-BUG: folder drag and copy hint ---------- */
+
+.folder-row[draggable="true"] {
+    cursor: grab;
+}
+
+.folder-row.is-dragging-folder {
+    opacity: .5;
+    background: #e2e8f0 !important;
+}
+
+#documentsTable tbody a,
+#documentsTable tbody button,
+[data-folder-row] a,\n.folder-row a {
+    -webkit-user-drag: none;
+}
+
+.drag-hint {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding-left: 10px;
+    border-left: 1px solid #e2e8f0;
+    white-space: nowrap;
+}
+
+/* ---------- T9-FIX-DELEGATION: row context menu ---------- */
+
+.doc-row-menu {
+    position: fixed;
+    z-index: 1095;
+    display: none;
+    min-width: 232px;
+    padding: 5px 0;
+    border: 1px solid var(--app-border);
+    border-radius: 8px;
+    background: #fff;
+    box-shadow: 0 12px 30px rgba(15, 23, 42, .22);
+}
+
+.doc-row-menu.show {
+    display: block;
+}
+
+.doc-row-menu .dropdown-item {
+    display: flex;
+    align-items: center;
+    padding: 7px 14px;
+    font-size: 13px;
+}
+
+.doc-row-menu .dropdown-item:hover {
+    background: #eff6ff;
+}

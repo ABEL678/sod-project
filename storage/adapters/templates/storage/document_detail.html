@@ -12,6 +12,8 @@
 <body class="bg-light">
 {% include 'storage/_topbar.html' with topbar_project=document.project %}
 <main class="container-fluid py-3 pb-5">
+    {% include 'storage/_breadcrumbs.html' %}
+
     {% if not public_view %}
         <a href="{% url 'storage:project_detail' document.project.pk %}" class="btn btn-sm btn-outline-secondary mb-3">
             ← К проекту {{ document.project.code }}
@@ -189,5 +191,6 @@
         </div>
     </div>
 </main>
+<script src="{% static 'js/vendor/bootstrap.bundle.min.js' %}"></script>
 </body>
 </html>

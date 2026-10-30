@@ -22,7 +22,7 @@ from issues.models import Issue
 
 
 DOCUMENT_VIEW_COLUMNS = ('code', 'name', 'doc_type', 'status', 'version', 'date', 'author')
-DOCUMENT_VIEW_FILTERS = ('section', 'doc_type', 'status')
+DOCUMENT_VIEW_FILTERS = ('section', 'doc_type', 'status', 'code', 'name')
 DOCUMENT_VIEW_SORT_FIELDS = ('code', 'name', 'date', 'version')
 DOCUMENT_VIEW_MIN_WIDTH = 50
 DOCUMENT_VIEW_MAX_WIDTH = 800
@@ -165,6 +165,12 @@ def normalize_document_view_config(config: dict) -> dict:
             if not isinstance(value, str) or value not in dict(Document.STATUS_CHOICES):
                 raise ValueError("Неверный статус документа")
             filters[key] = value
+        else:
+            if not isinstance(value, str):
+                raise ValueError(f"Неверное значение фильтра: {key}")
+            value = value.strip()
+            if value:
+                filters[key] = value
 
     raw_sort = config.get('sort')
     if raw_sort in (None, ''):
@@ -354,12 +360,24 @@ def get_project_documents_queryset(
     user: User,
     project: Project,
     config: dict | None = None,
+    folder: Folder | None = None,
 ) -> QuerySet:
-    """Возвращает queryset документов проекта с учётом сохранённого вида."""
+    """Возвращает queryset документов проекта с учётом сохранённого вида.
+
+    ``folder`` ограничивает выборку документами конкретной папки: навигация
+    по дереву папок не должна подмешивать документы соседних папок.
+    """
     _ensure_project_access(user, project)
 
     normalized_config = normalize_document_view_config(config or {})
     queryset = get_accessible_documents(user).filter(project=project)
+
+    if folder is not None:
+        if folder.project_id != project.pk:
+            raise ValueError("Папка относится к другому проекту")
+        if folder.is_deleted:
+            raise ValueError("Папка находится в корзине")
+        queryset = queryset.filter(folder=folder)
 
     filters = normalized_config['filters']
     if 'section' in filters:
@@ -368,6 +386,10 @@ def get_project_documents_queryset(
         queryset = queryset.filter(doc_type=filters['doc_type'])
     if 'status' in filters:
         queryset = queryset.filter(status=filters['status'])
+    if 'code' in filters:
+        queryset = queryset.filter(code__icontains=filters['code'])
+    if 'name' in filters:
+        queryset = queryset.filter(name__icontains=filters['name'])
 
     sort_mapping = {
         'code': 'code',
@@ -394,9 +416,10 @@ def get_project_documents_for_view(
     user: User,
     project: Project,
     config: dict | None = None,
+    folder: Folder | None = None,
 ) -> list[dict]:
-    """Документы проекта для таблицы с учётом сохранённого вида."""
-    documents = get_project_documents_queryset(user, project, config)
+    """Документы проекта для таблицы с учётом сохранённого вида и папки."""
+    documents = get_project_documents_queryset(user, project, config, folder=folder)
     return [_document_row(document) for document in documents]
 
 
@@ -599,6 +622,17 @@ def get_folder_tree(user: User, project: Project) -> list[Folder]:
         by_parent[folder.parent_id].append(folder)
     for folder in folders:
         folder.children_tree = by_parent[folder.pk]
+
+    def _fill_subtree_counts(node: Folder) -> int:
+        total = node.document_count
+        for child in node.children_tree:
+            total += _fill_subtree_counts(child)
+        node.subtree_document_count = total
+        return total
+
+    for folder in by_parent[None]:
+        _fill_subtree_counts(folder)
+
     return by_parent[None]
 
 
@@ -641,6 +675,149 @@ def move_documents(user: User, documents, folder: Folder | None) -> list[Documen
     """Перемещает несколько документов, проверяя права для каждого."""
     with transaction.atomic():
         return [move_document(user, document, folder) for document in documents]
+
+
+def move_document_to_section(user: User, document: Document, section: Section) -> Document:
+    """Перемещает документ в корень другого раздела проекта."""
+    if document.is_deleted:
+        raise ValueError("Нельзя перемещать документ из корзины")
+    if section.project_id != document.project_id:
+        raise ValueError("Раздел относится к другому проекту")
+    if not check_write_permission(user, document.section):
+        raise PermissionDenied("Нет прав на перемещение документа")
+    if not check_write_permission(user, section):
+        raise PermissionDenied("Нет прав на запись в целевой раздел")
+
+    document.section = section
+    document.folder = None
+    document.save(update_fields=['section', 'folder', 'updated_at'])
+    return document
+
+
+def _unique_copy_code(document: Document, section: Section) -> str:
+    base = f'{document.code} (копия)'
+    candidate = base[:100]
+    counter = 2
+    while Document.objects.filter(
+        project=document.project,
+        section=section,
+        code=candidate,
+    ).exists():
+        suffix = f' (копия {counter})'
+        candidate = f'{document.code[:max(1, 100 - len(suffix))]}{suffix}'
+        counter += 1
+    return candidate
+
+
+def copy_document(
+    user: User,
+    document: Document,
+    folder: Folder | None,
+    section: Section | None,
+    file_storage,
+) -> Document:
+    """Создаёт копию документа со всеми версиями и файлами."""
+    if document.is_deleted:
+        raise ValueError("Нельзя копировать документ из корзины")
+    if not check_read_permission(user, document):
+        raise PermissionDenied("Нет прав на копирование документа")
+
+    target_section = section or (
+        folder.section if folder is not None and folder.section_id else document.section
+    )
+    if target_section.project_id != document.project_id:
+        raise ValueError("Раздел относится к другому проекту")
+    if not check_write_permission(user, target_section):
+        raise PermissionDenied("Нет прав на запись в целевой раздел")
+
+    if folder is not None:
+        if folder.project_id != document.project_id:
+            raise ValueError("Папка относится к другому проекту")
+        if folder.is_deleted:
+            raise ValueError("Нельзя скопировать документ в удалённую папку")
+        if folder.section_id is not None and folder.section_id != target_section.pk:
+            raise ValueError("Папка относится к другому разделу")
+
+    versions = list(document.versions.order_by('version_number'))
+    with transaction.atomic():
+        copied = Document.objects.create(
+            project=document.project,
+            section=target_section,
+            folder=folder,
+            code=_unique_copy_code(document, target_section),
+            name=f'{document.name} (копия)'[:255],
+            doc_type=document.doc_type,
+            status=document.status,
+            created_by=user,
+        )
+        current_copy = None
+        for version in versions:
+            extension = version.file.name.rsplit('.', 1)
+            suffix = f'.{extension[1]}' if len(extension) == 2 else ''
+            target_path = (
+                f'documents/{timezone.now():%Y/%m}/'
+                f'{uuid.uuid4().hex}{suffix}'
+            )
+            copied_path = file_storage.copy(version.file.name, target_path)
+            copied_version = DocumentVersion.objects.create(
+                document=copied,
+                version_number=version.version_number,
+                file=copied_path,
+                file_size=version.file_size,
+                file_hash=version.file_hash,
+                comment=version.comment,
+                uploaded_by=user,
+            )
+            if document.current_version_id == version.pk:
+                current_copy = copied_version
+
+        if current_copy is not None:
+            copied.current_version = current_copy
+            copied.save(update_fields=['current_version'])
+
+    return copied
+
+
+def move_folder(
+    user: User,
+    folder: Folder,
+    parent: Folder | None = None,
+    section: Section | None = None,
+) -> Folder:
+    """Перемещает папку в другую папку или в корень раздела."""
+    _ensure_content_manager(user, folder.project)
+    if folder.is_deleted:
+        raise ValueError("Нельзя перемещать папку из корзины")
+
+    if parent is not None:
+        if parent.project_id != folder.project_id:
+            raise ValueError("Папка относится к другому проекту")
+        if parent.is_deleted:
+            raise ValueError("Нельзя переместить папку в удалённую папку")
+        if parent.pk == folder.pk:
+            raise ValueError("Нельзя переместить папку в саму себя")
+        if parent.pk in _folder_subtree_ids(folder):
+            raise ValueError("Нельзя переместить папку в собственный потомок")
+        if (
+            folder.section_id is not None
+            and parent.section_id is not None
+            and folder.section_id != parent.section_id
+        ):
+            raise ValueError("Нельзя перемещать папку между разделами")
+        new_section = parent.section if parent.section_id else folder.section
+    elif section is not None:
+        if section.project_id != folder.project_id:
+            raise ValueError("Раздел относится к другому проекту")
+        if folder.section_id is not None and folder.section_id != section.pk:
+            raise ValueError("Нельзя перемещать папку между разделами")
+        new_section = section
+    else:
+        new_section = folder.section
+
+    folder.parent = parent
+    folder.section = new_section
+    folder.save(update_fields=['parent', 'section'])
+    return folder
 
 
 def delete_document(user: User, document: Document) -> Document:
@@ -762,6 +939,46 @@ def get_trash(user: User, project: Project) -> dict:
             is_deleted=True,
         ).select_related('section', 'parent').order_by('-deleted_at'),
     }
+
+
+def can_purge_trash(user: User, project: Project) -> bool:
+    """Очищать корзину может только администратор компании (или superuser)."""
+    if user.is_superuser:
+        return True
+
+    profile = getattr(user, 'userprofile', None)
+    if profile is None or profile.role != 'admin':
+        return False
+
+    return _check_company_access(user, project.company_id)
+
+
+def empty_trash(user: User, project: Project, file_storage) -> dict:
+    """Безвозвратно удаляет корзину проекта.
+
+    Физические файлы удаляются через порт ``FileStorage``, затем записи
+    версий, документов и папок удаляются из базы данных.
+    """
+    _ensure_project_access(user, project)
+    if not can_purge_trash(user, project):
+        raise PermissionDenied("Очистить корзину может только администратор")
+
+    documents = Document.objects.filter(project=project, is_deleted=True)
+    document_count = documents.count()
+    folder_count = Folder.objects.filter(project=project, is_deleted=True).count()
+
+    versions = list(
+        DocumentVersion.objects.filter(document__in=documents).only('file')
+    )
+    for version in versions:
+        if version.file:
+            file_storage.delete(version.file.name)
+
+    with transaction.atomic():
+        Document.objects.filter(project=project, is_deleted=True).delete()
+        Folder.objects.filter(project=project, is_deleted=True).delete()
+
+    return {'documents': document_count, 'folders': folder_count}
 
 
 def get_documents_for_archive(user: User, document_ids) -> QuerySet:

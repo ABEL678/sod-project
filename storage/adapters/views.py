@@ -21,6 +21,7 @@ from django.http import (
 from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse
 from django.utils import timezone
+from django.utils.safestring import mark_safe
 from django.utils.text import get_valid_filename
 from django.views import View
 from django.views.generic import DetailView, ListView, TemplateView
@@ -29,6 +30,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Font
 
 from storage.adapters.filters import DocumentFilter
+from storage.adapters.local_storage import LocalFileStorage
 from storage.adapters.tables import DocumentTable
 from storage.domain.models import (
     Company,
@@ -44,12 +46,16 @@ from storage.domain.services import (
     DOCUMENT_VIEW_COLUMNS,
     can_create_project,
     can_manage_project_participants,
+    can_purge_trash,
     check_read_permission,
+    copy_document,
     create_folder,
     create_project,
     create_section,
+    delete_document,
     delete_documents,
     delete_folder,
+    empty_trash,
     generate_share_link,
     get_accessible_documents,
     get_accessible_projects,
@@ -66,7 +72,10 @@ from storage.domain.services import (
     get_user_company,
     list_document_views,
     list_project_participants,
+    move_document,
+    move_document_to_section,
     move_documents,
+    move_folder,
     normalize_document_view_config,
     rename_folder,
     restore_document,
@@ -115,12 +124,16 @@ DOCUMENT_TABLE_COLUMN_MAP = {
 
 ALWAYS_VISIBLE_TABLE_COLUMNS = {'selection'}
 
+FILTER_QUERY_KEYS = ('section', 'doc_type', 'status', 'code', 'name')
+
 DOCUMENT_SORT_COLUMN_MAP = {
     'code': 'code',
     'name': 'name',
     'date': 'updated_at',
     'version': 'current_version',
 }
+
+HIGHLIGHT_ROW_SECONDS = 5
 
 
 def _document_column_defs(config):
@@ -137,25 +150,126 @@ def _document_column_defs(config):
     ]
 
 
-def _config_from_filters(request, base_config):
+def _overlay_request_filters(request, base_config, folder=None):
+    """Накладывает GET-параметры на сохранённый вид таблицы.
+
+    GET-параметры ``section``, ``folder`` и фильтры в шапке таблицы
+    применяются автоматически, без отдельной кнопки «Применить».
+    """
     config = {
         'columns': base_config['columns'],
         'widths': base_config.get('widths', {}),
-        'filters': {
-            'section': request.GET.get('section', ''),
-            'doc_type': request.GET.get('doc_type', ''),
-            'status': request.GET.get('status', ''),
-        },
-        'sort': request.GET.get('sort', ''),
+        'filters': dict(base_config['filters']),
+        'sort': list(base_config['sort']),
     }
+    requested = False
+
+    for key in FILTER_QUERY_KEYS:
+        if key not in request.GET:
+            continue
+        requested = True
+        value = (request.GET.get(key) or '').strip()
+        if value:
+            config['filters'][key] = value
+        else:
+            config['filters'].pop(key, None)
+
+    if 'sort' in request.GET:
+        requested = True
+        requested_sort = (request.GET.get('sort') or '').strip()
+        if not requested_sort:
+            config['sort'] = []
+        elif requested_sort.lstrip('-') in DOCUMENT_SORT_COLUMN_MAP:
+            config['sort'] = [requested_sort]
+
+    if folder is not None:
+        requested = True
+        if folder.section_id:
+            config['filters']['section'] = folder.section_id
+        else:
+            config['filters'].pop('section', None)
+
+    if not requested:
+        return base_config
+
     try:
         return normalize_document_view_config(config)
     except ValueError:
         # Некорректные GET-параметры не должны ронять страницу проекта.
-        return normalize_document_view_config({
-            'columns': base_config['columns'],
-            'widths': base_config.get('widths', {}),
+        return base_config
+
+
+def _folder_chain(folder):
+    """Возвращает путь папки от корня до текущей."""
+    chain = []
+    current = folder
+    seen = set()
+    while current is not None and current.pk not in seen:
+        chain.append(current)
+        seen.add(current.pk)
+        current = current.parent
+    return list(reversed(chain))
+
+
+def _project_breadcrumbs(project, section=None, folder=None):
+    """Хлебные крошки страницы проекта: Проект > Раздел > Папка."""
+    project_url = reverse('storage:project_detail', args=[project.pk])
+    crumbs = [{
+        'label': project.name,
+        'url': project_url,
+        'active': section is None and folder is None,
+    }]
+
+    if folder is not None:
+        if folder.section_id:
+            crumbs.append({
+                'label': f'{folder.section.code} — {folder.section.name}',
+                'url': f'{project_url}?section={folder.section_id}',
+                'active': False,
+            })
+        chain = _folder_chain(folder)
+        for index, node in enumerate(chain):
+            crumbs.append({
+                'label': node.name,
+                'url': f'{project_url}?folder={node.pk}',
+                'active': index == len(chain) - 1,
+            })
+    elif section is not None:
+        crumbs.append({
+            'label': f'{section.code} — {section.name}',
+            'url': f'{project_url}?section={section.pk}',
+            'active': True,
         })
+
+    return crumbs
+
+
+def _document_breadcrumbs(document):
+    """Хлебные крошки документа: Проект > Раздел > Папка > Документ."""
+    project_url = reverse('storage:project_detail', args=[document.project_id])
+    crumbs = [{
+        'label': document.project.name,
+        'url': project_url,
+        'active': False,
+    }]
+    section = document.section
+    crumbs.append({
+        'label': f'{section.code} — {section.name}',
+        'url': f'{project_url}?section={section.pk}',
+        'active': False,
+    })
+    for node in _folder_chain(document.folder):
+        crumbs.append({
+            'label': node.name,
+            'url': f'{project_url}?folder={node.pk}',
+            'active': False,
+        })
+    crumbs.append({
+        'label': document.code,
+        'url': '',
+        'active': True,
+    })
+    return crumbs
 
 
 def _remember_document(request, document_id):
@@ -230,6 +344,19 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
     show_filter_line = False
     show_bulk_actions = False
     table_show_download_link = False
+    table_empty_text = mark_safe(
+        '<div class="doc-empty">'
+        '<i class="bi bi-folder2-open doc-empty-icon" aria-hidden="true"></i>'
+        '<div class="doc-empty-title">Документов пока нет</div>'
+        '<div class="doc-empty-hint">'
+        'Перетащите файл в таблицу или загрузите его кнопкой «Загрузить»'
+        '</div>'
+        '<label for="fileInput" class="btn btn-primary btn-sm">'
+        '<i class="bi bi-plus-lg" aria-hidden="true"></i> '
+        'Загрузить первый документ'
+        '</label>'
+        '</div>'
+    )
 
     def _get_project(self):
         if not hasattr(self, '_project_cache'):
@@ -238,6 +365,55 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
                 pk=self.kwargs['pk'],
             )
         return self._project_cache
+
+    def _get_selected_folder(self):
+        if not hasattr(self, '_selected_folder_cache'):
+            folder = None
+            raw_folder = (self.request.GET.get('folder') or '').strip()
+            if raw_folder:
+                try:
+                    folder_id = int(raw_folder)
+                except (TypeError, ValueError):
+                    folder_id = None
+                if folder_id is not None:
+                    folder = get_flat_folders(
+                        self.request.user,
+                        self._get_project(),
+                    ).filter(pk=folder_id).select_related('section', 'parent').first()
+
+            # Выбор раздела в панели фильтров отменяет фильтр папки,
+            # если пользователь переключился на другой раздел.
+            raw_section = (self.request.GET.get('section') or '').strip()
+            if folder is not None and raw_section:
+                try:
+                    section_id = int(raw_section)
+                except (TypeError, ValueError):
+                    section_id = None
+                if section_id is not None and section_id != folder.section_id:
+                    folder = None
+            self._selected_folder_cache = folder
+        return self._selected_folder_cache
+
+    def _get_selected_section(self):
+        if not hasattr(self, '_selected_section_cache'):
+            folder = self._get_selected_folder()
+            if folder is not None and folder.section_id:
+                self._selected_section_cache = folder.section
+            else:
+                section = None
+                raw_section = (self.request.GET.get('section') or '').strip()
+                if raw_section:
+                    try:
+                        section_id = int(raw_section)
+                    except (TypeError, ValueError):
+                        section_id = None
+                    if section_id is not None:
+                        section = get_accessible_sections(
+                            self.request.user,
+                            self._get_project(),
+                        ).filter(pk=section_id).first()
+                self._selected_section_cache = section
+        return self._selected_section_cache
 
     def _get_view_state(self):
         if not hasattr(self, '_view_state_cache'):
@@ -260,10 +436,11 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
             else:
                 base_config = normalize_document_view_config({})
 
-            if self.request.GET.get('apply'):
-                view_config = _config_from_filters(self.request, base_config)
-            else:
-                view_config = base_config
+            view_config = _overlay_request_filters(
+                self.request,
+                base_config,
+                folder=self._get_selected_folder(),
+            )
 
             self._view_state_cache = (document_views, selected_view, view_config)
         return self._view_state_cache
@@ -273,6 +450,7 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
             self.request.user,
             self._get_project(),
             self._get_view_state()[2],
+            folder=self._get_selected_folder(),
         )
 
     def get_table_data(self):
@@ -300,17 +478,16 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
 
     def get_filterset_kwargs(self, filterset_class):
         kwargs = super().get_filterset_kwargs(filterset_class)
-        if not self.request.GET.get('apply'):
-            config = self._get_view_state()[2]
-            data = self.request.GET.copy()
-            changed = False
-            for key in ('section', 'doc_type', 'status'):
-                value = config['filters'].get(key)
-                if value and not data.get(key):
-                    data[key] = str(value)
-                    changed = True
-            if changed:
-                kwargs['data'] = data
+        config = self._get_view_state()[2]
+        data = self.request.GET.copy()
+        changed = False
+        for key in FILTER_QUERY_KEYS:
+            value = config['filters'].get(key)
+            if value and not data.get(key):
+                data[key] = str(value)
+                changed = True
+        if changed:
+            kwargs['data'] = data
         return kwargs
 
     def get_table_kwargs(self):
@@ -324,18 +501,14 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
         ]
         return kwargs
 
+    def get_template_names(self):
+        if getattr(self.request, 'htmx', False):
+            return ['storage/_documents_panel.html']
+        return [self.template_name]
+
     def get_table(self, **kwargs):
         table = super().get_table(**kwargs)
         config = self._get_view_state()[2]
-        widths = config.get('widths') or {}
-
-        for column in table.columns:
-            key = DOCUMENT_TABLE_COLUMN_MAP.get(column.name, column.name)
-            column.config_key = key
-            column.width = widths.get(
-                key,
-                DEFAULT_COLUMN_WIDTHS.get(key, 120),
-            )
 
         names = {column.name for column in table.columns}
         ordering = []
@@ -346,6 +519,9 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
                 ordering.append(f'{prefix}{name}')
         if self.request.GET.get('apply') or not self.request.GET.get('sort'):
             table.order_by = ordering
+
+        raw_highlight = (self.request.GET.get('highlight') or '').strip()
+        table.highlight_id = int(raw_highlight) if raw_highlight.isdigit() else None
 
         return table
 
@@ -373,7 +549,38 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
         for section in sections:
             section.folder_nodes = folders_by_section.get(section.pk, [])
 
+        selected_folder = self._get_selected_folder()
+        selected_section = self._get_selected_section()
+
         column_defs = _document_column_defs(view_config)
+        documents = get_project_documents_for_view(
+            user,
+            project,
+            view_config,
+            folder=selected_folder,
+        )
+        active_search = (self.request.GET.get('q') or '').strip()
+        if active_search:
+            needle = active_search.lower()
+            documents = [
+                document
+                for document in documents
+                if needle in document['code'].lower()
+                or needle in document['name'].lower()
+            ]
+
+        highlight_id = None
+        raw_highlight = (self.request.GET.get('highlight') or '').strip()
+        if raw_highlight.isdigit():
+            highlight_id = int(raw_highlight)
+
+        if selected_folder is not None:
+            upload_target_name = selected_folder.name
+        elif selected_section is not None:
+            upload_target_name = f'раздел {selected_section.code}'
+        else:
+            upload_target_name = 'выбранный раздел'
+
         context.update({
             'project': project,
             'sections': sections,
@@ -385,18 +592,33 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
                 user,
                 project,
             ),
-            'documents': get_project_documents_for_view(user, project, view_config),
+            'documents': documents,
             'document_views': document_views,
             'selected_view': selected_view,
+            'selected_folder': selected_folder,
+            'selected_section': selected_section,
+            'breadcrumbs': _project_breadcrumbs(
+                project,
+                section=selected_section,
+                folder=selected_folder,
+            ),
+            'upload_target_name': upload_target_name,
+            'highlight_id': highlight_id,
+            'highlight_seconds': HIGHLIGHT_ROW_SECONDS,
+            'active_search': active_search,
             'view_config': view_config,
             'widths_json': json.dumps(view_config['widths']),
             'active_filters': view_config['filters'],
             'column_defs': column_defs,
             'visible_columns': [column for column in column_defs if column['visible']],
-            'active_sort': view_config['sort'][0] if view_config['sort'] else '',
+            'active_sort': (
+                self.request.GET.get('sort')
+                or (view_config['sort'][0] if view_config['sort'] else '')
+            ),
             'active_tab': active_tab,
             'can_manage_participants': can_manage_participants,
             'can_manage_structure': can_manage_participants,
+            'can_purge_trash': can_purge_trash(user, project),
             'doc_type_choices': Document.DOC_TYPE_CHOICES,
             'status_choices': Document.STATUS_CHOICES,
         })
@@ -545,6 +767,63 @@ class FolderCreateView(LoginRequiredMixin, View):
         return redirect('storage:project_detail', pk=project.pk)
 
 
+class FolderCreateFormView(LoginRequiredMixin, TemplateView):
+    """HTML-фрагмент формы создания папки для Bootstrap modal (HTMX)."""
+
+    template_name = 'storage/_folder_create_form.html'
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        project = get_object_or_404(
+            get_accessible_projects(self.request.user),
+            pk=self.kwargs['project_id'],
+        )
+        if not can_manage_project_participants(self.request.user, project):
+            raise PermissionDenied("Недостаточно прав для создания папки")
+
+        parent = None
+        parent_id = (self.request.GET.get('parent') or '').strip()
+        if parent_id.isdigit():
+            parent = Folder.objects.filter(
+                project=project,
+                pk=int(parent_id),
+                is_deleted=False,
+            ).select_related('section').first()
+
+        section = parent.section if parent is not None else None
+        section_id = (self.request.GET.get('section') or '').strip()
+        if section is None and section_id.isdigit():
+            section = Section.objects.filter(
+                project=project,
+                pk=int(section_id),
+            ).first()
+
+        context.update({
+            'project': project,
+            'parent': parent,
+            'section': section,
+        })
+        return context
+
+
+class FolderRenameFormView(LoginRequiredMixin, TemplateView):
+    """HTML-фрагмент формы переименования папки для Bootstrap modal (HTMX)."""
+
+    template_name = 'storage/_folder_rename_form.html'
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        folder = get_object_or_404(
+            Folder.objects.select_related('project', 'section', 'parent'),
+            pk=self.kwargs['folder_id'],
+            project__in=get_accessible_projects(self.request.user),
+        )
+        if not can_manage_project_participants(self.request.user, folder.project):
+            raise PermissionDenied("Недостаточно прав для переименования папки")
+        context.update({'folder': folder, 'project': folder.project})
+        return context
+
+
 class FolderRenameView(LoginRequiredMixin, View):
     def post(self, request, folder_id):
         folder = get_object_or_404(
@@ -605,6 +884,193 @@ class DocumentShareLinkView(LoginRequiredMixin, View):
             reverse('storage:document_detail', args=[document.pk])
         )
         return JsonResponse({'token': token, 'url': f'{url}?share={token}'})
+
+
+class DocumentMoveView(LoginRequiredMixin, View):
+    """AJAX-перемещение документа при drag-and-drop на папку или раздел."""
+
+    def post(self, request, document_id):
+        document = get_object_or_404(
+            get_accessible_documents(request.user),
+            pk=document_id,
+            is_deleted=False,
+        )
+        folder_id = (request.POST.get('folder_id') or '').strip()
+        section_id = (request.POST.get('section_id') or '').strip()
+
+        try:
+            if folder_id:
+                folder = Folder.objects.filter(
+                    project=document.project,
+                    pk=folder_id,
+                    is_deleted=False,
+                ).first()
+                if folder is None:
+                    raise ValueError('Папка не найдена.')
+                move_document(request.user, document, folder)
+            elif section_id:
+                section = get_object_or_404(
+                    get_accessible_sections(request.user, document.project),
+                    pk=section_id,
+                )
+                move_document_to_section(request.user, document, section)
+            else:
+                move_document(request.user, document, None)
+        except PermissionDenied as exc:
+            return JsonResponse(
+                {'status': 'error', 'error': str(exc)},
+                status=403,
+            )
+        except ValueError as exc:
+            return JsonResponse(
+                {'status': 'error', 'error': str(exc)},
+                status=400,
+            )
+
+        return JsonResponse({
+            'status': 'ok',
+            'document_id': document.pk,
+            'folder_id': document.folder_id,
+            'section_id': document.section_id,
+        })
+
+
+class DocumentDeleteView(LoginRequiredMixin, View):
+    """AJAX-отправка документа в корзину из контекстного меню."""
+
+    def post(self, request, document_id):
+        document = get_object_or_404(
+            get_accessible_documents(request.user),
+            pk=document_id,
+            is_deleted=False,
+        )
+        try:
+            delete_document(request.user, document)
+        except PermissionDenied as exc:
+            return JsonResponse(
+                {'status': 'error', 'error': str(exc)},
+                status=403,
+            )
+        except ValueError as exc:
+            return JsonResponse(
+                {'status': 'error', 'error': str(exc)},
+                status=400,
+            )
+        return JsonResponse({
+            'status': 'ok',
+            'document_id': document.pk,
+        })
+
+
+class DocumentCopyView(LoginRequiredMixin, View):
+    """AJAX-копирование документа при drop с зажатым Ctrl."""
+
+    def post(self, request, document_id):
+        document = get_object_or_404(
+            get_accessible_documents(request.user),
+            pk=document_id,
+            is_deleted=False,
+        )
+        folder_id = (request.POST.get('folder_id') or '').strip()
+        section_id = (request.POST.get('section_id') or '').strip()
+        folder = None
+        section = None
+
+        try:
+            if folder_id:
+                folder = Folder.objects.filter(
+                    project=document.project,
+                    pk=folder_id,
+                    is_deleted=False,
+                ).first()
+                if folder is None:
+                    raise ValueError('Папка не найдена.')
+            elif section_id:
+                section = get_object_or_404(
+                    get_accessible_sections(request.user, document.project),
+                    pk=section_id,
+                )
+            else:
+                folder = document.folder
+                section = document.section
+
+            copied = copy_document(
+                request.user,
+                document,
+                folder,
+                section,
+                LocalFileStorage(),
+            )
+        except PermissionDenied as exc:
+            return JsonResponse(
+                {'status': 'error', 'error': str(exc)},
+                status=403,
+            )
+        except ValueError as exc:
+            return JsonResponse(
+                {'status': 'error', 'error': str(exc)},
+                status=400,
+            )
+
+        return JsonResponse({
+            'status': 'ok',
+            'document_id': copied.pk,
+            'code': copied.code,
+            'folder_id': copied.folder_id,
+            'section_id': copied.section_id,
+        })
+
+
+class FolderMoveView(LoginRequiredMixin, View):
+    """AJAX-перемещение папки в другую папку или раздел."""
+
+    def post(self, request, folder_id):
+        folder = get_object_or_404(
+            Folder.objects.select_related('project', 'section', 'parent'),
+            pk=folder_id,
+            project__in=get_accessible_projects(request.user),
+            is_deleted=False,
+        )
+        parent_id = (request.POST.get('parent_id') or '').strip()
+        section_id = (request.POST.get('section_id') or '').strip()
+        parent = None
+        section = None
+
+        try:
+            if parent_id:
+                parent = Folder.objects.filter(
+                    project=folder.project,
+                    pk=parent_id,
+                    is_deleted=False,
+                ).first()
+                if parent is None:
+                    raise ValueError('Целевая папка не найдена.')
+            elif section_id:
+                section = Section.objects.filter(
+                    project=folder.project,
+                    pk=section_id,
+                ).first()
+                if section is None:
+                    raise ValueError('Целевой раздел не найден.')
+
+            move_folder(request.user, folder, parent=parent, section=section)
+        except PermissionDenied as exc:
+            return JsonResponse(
+                {'status': 'error', 'error': str(exc)},
+                status=403,
+            )
+        except ValueError as exc:
+            return JsonResponse(
+                {'status': 'error', 'error': str(exc)},
+                status=400,
+            )
+
+        return JsonResponse({
+            'status': 'ok',
+            'folder_id': folder.pk,
+            'parent_id': folder.parent_id,
+            'section_id': folder.section_id,
+        })
 
 
 class DocumentBulkActionView(LoginRequiredMixin, View):
@@ -684,6 +1150,29 @@ class TrashRestoreView(LoginRequiredMixin, View):
             messages.error(request, str(exc))
         else:
             messages.success(request, 'Элемент восстановлен.')
+        return redirect(f"{reverse('storage:project_detail', args=[project.pk])}?tab=trash")
+
+
+class TrashClearView(LoginRequiredMixin, View):
+    """Безвозвратная очистка корзины проекта (только администратор)."""
+
+    def post(self, request, project_id):
+        project = get_object_or_404(
+            get_accessible_projects(request.user),
+            pk=project_id,
+        )
+        try:
+            result = empty_trash(request.user, project, LocalFileStorage())
+        except PermissionDenied as exc:
+            return HttpResponseForbidden(str(exc))
+        except ValueError as exc:
+            messages.error(request, str(exc))
+        else:
+            messages.success(
+                request,
+                'Корзина очищена: удалено документов — '
+                f"{result['documents']}, папок — {result['folders']}.",
+            )
         return redirect(f"{reverse('storage:project_detail', args=[project.pk])}?tab=trash")
 
 
@@ -876,6 +1365,7 @@ class DocumentDetailView(LoginRequiredMixin, DetailView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
+        context['breadcrumbs'] = _document_breadcrumbs(self.object)
         context['versions'] = self.object.versions.select_related('uploaded_by').order_by('-version_number')
         context['issues'] = self.object.issues.select_related('author', 'assignee', 'version').order_by('-created_at')
         return context
@@ -946,10 +1436,12 @@ class DocumentUploadAjaxView(LoginRequiredMixin, View):
         except (PermissionDenied, ValueError) as exc:
             return JsonResponse({'error': str(exc)}, status=400)
 
-        return JsonResponse({
+        response = JsonResponse({
             'status': 'ok',
             'version': version.version_number,
         })
+        response['X-Document-Id'] = str(version.document_id)
+        return response
 
 
 class DocumentDownloadView(LoginRequiredMixin, View):

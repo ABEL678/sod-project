@@ -1,5 +1,4 @@
 {% load static %}
-{% load django_tables2 %}
 <!DOCTYPE html>
 <html lang="ru">
 <head>
@@ -14,17 +13,27 @@
 <div class="app-shell" id="appShell">
     {% include 'storage/_topbar.html' with topbar_project=project %}
 
-    <div class="app-layout">
+    <div class="app-layout" id="appLayout">
         <aside class="app-sidebar" id="projectSidebar" data-role="sidebar">
             <div class="sidebar-header">
                 <span>РАЗДЕЛЫ</span>
                 <div class="sidebar-header-actions">
                     {% if can_manage_structure %}
-                        <button type="button" class="btn btn-sm btn-primary" id="openSectionModal" title="Добавить раздел" aria-label="Добавить раздел">
-                            + Раздел
+                        <button type="button"
+                                class="btn btn-sm btn-primary"
+                                id="openSectionModal"
+                                data-bs-toggle="modal"
+                                data-bs-target="#sectionCreateModal"
+                                title="Добавить раздел"
+                                aria-label="Добавить раздел">
+                            <i class="bi bi-plus-lg" aria-hidden="true"></i> Раздел
                         </button>
                     {% endif %}
-                    <button type="button" class="btn btn-sm btn-light border-0 px-1 py-0" id="sidebarCollapse" title="Скрыть панель" aria-label="Скрыть панель">
+                    <button type="button"
+                            class="btn btn-sm btn-light border-0 px-1 py-0"
+                            id="sidebarCollapse"
+                            title="Скрыть панель"
+                            aria-label="Скрыть панель">
                         <i class="bi bi-chevron-left" aria-hidden="true"></i>
                     </button>
                 </div>
@@ -33,34 +42,97 @@
             <div class="sidebar-scroll" id="sectionList" data-role="section-list">
                 {% if project_folders %}
                     <div class="sidebar-label">Папки проекта</div>
-                    {% for folder in project_folders %}
-                        {% include 'storage/_folder_tree.html' with folder=folder %}
-                    {% endfor %}
+                    <div class="list-group list-group-flush folder-tree-list">
+                        {% for folder in project_folders %}
+                            {% include 'storage/_folder_tree.html' with folder=folder %}
+                        {% endfor %}
+                    </div>
                 {% endif %}
 
                 {% for section in sections %}
-                    <div class="section-node" data-section-node="{{ section.pk }}">
+                    <div class="section-node list-group-item" data-section-node="{{ section.pk }}">
                         <div class="section-row">
-                            <button
-                                type="button"
-                                class="section-item"
-                                data-role="section-item"
-                                data-id="{{ section.pk }}"
-                                data-code="{{ section.code }}"
-                            >
+                            <a class="section-item list-group-item-action {% if selected_section.pk == section.pk and not selected_folder %}active{% endif %}"
+                               href="{% url 'storage:project_detail' project.pk %}?section={{ section.pk }}{% if selected_view %}&amp;view={{ selected_view.pk }}{% endif %}"
+                               data-role="section-item"
+                               data-id="{{ section.pk }}"
+                               data-code="{{ section.code }}"
+                               data-name="{{ section.name }}"
+                               data-drop-section="{{ section.pk }}"
+                               data-drop-name="{{ section.code }} — {{ section.name }}">
                                 <i class="bi bi-folder2" aria-hidden="true"></i>
                                 <span class="fw-semibold section-code">{{ section.code }}</span>
                                 <span class="section-name" title="{{ section.name }}">{{ section.name }}</span>
                                 <span class="section-count" data-section-id="{{ section.pk }}" data-role="section-count">{{ section.document_count }}</span>
-                            </button>
-                            {% if can_manage_structure %}
-                                <button type="button" class="section-add-folder" data-section="{{ section.pk }}" title="Добавить папку в раздел" aria-label="Добавить папку в раздел">
+                            </a>
+<div id="dndToast" class="dnd-toast d-none" role="status" aria-live="polite"></div>
+
+<div id="docRowMenu" class="dropdown-menu doc-row-menu" role="menu" aria-hidden="true">
+    <button type="button" class="dropdown-item" role="menuitem" data-doc-action="open">
+        <i class="bi bi-box-arrow-up-right me-2" aria-hidden="true"></i>Открыть
+    </button>
+    <button type="button" class="dropdown-item" role="menuitem" data-doc-action="versions">
+        <i class="bi bi-clock-history me-2" aria-hidden="true"></i>История версий
+    </button>
+    <button type="button" class="dropdown-item" role="menuitem" data-doc-action="share">
+        <i class="bi bi-link-45deg me-2" aria-hidden="true"></i>Скопировать ссылку
+    </button>
+    <button type="button" class="dropdown-item" role="menuitem" data-doc-action="move">
+        <i class="bi bi-folder-symlink me-2" aria-hidden="true"></i>Переместить в…
+    </button>
+    <div class="dropdown-divider"></div>
+    <button type="button" class="dropdown-item text-danger" role="menuitem" data-doc-action="delete">
+        <i class="bi bi-trash3 me-2" aria-hidden="true"></i>Удалить в корзину
+    </button>
+</div>
+
+<div class="modal fade" id="documentMoveModal" tabindex="-1" aria-labelledby="documentMoveTitle" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <form id="documentMoveForm">
+                {% csrf_token %}
+                <input type="hidden" name="document_id" id="documentMoveId">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="documentMoveTitle">Переместить документ</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрыть"></button>
+                </div>
+                <div class="modal-body">
+                    <label for="documentMoveFolder" class="form-label">Целевая папка</label>
+                    <select class="form-select" id="documentMoveFolder" name="folder_id">
+                        <option value="">Корень текущего раздела</option>
+                        {% for folder in all_folders %}
+                            <option value="{{ folder.pk }}">{{ folder.section.code|default:"Проект" }} / {{ folder.name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-dismiss="modal">Отмена</button>
+                    <button type="submit" class="btn btn-primary btn-sm">
+                        <i class="bi bi-folder-symlink me-1" aria-hidden="true"></i>Переместить
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+{% if can_manage_structure %}
+                                <button type="button"
+                                        class="btn btn-sm btn-link section-add-folder"
+                                        title="Создать папку в разделе"
+                                        aria-label="Создать папку в разделе"
+                                        hx-get="{% url 'storage:folder_create_form' project.pk %}?section={{ section.pk }}"
+                                        hx-target="#folderCreateModalBody"
+                                        hx-swap="innerHTML"
+                                        data-bs-toggle="modal"
+                                        data-bs-target="#folderCreateModal">
                                     <i class="bi bi-folder-plus" aria-hidden="true"></i>
                                 </button>
                             {% endif %}
                         </div>
+
                         {% if section.folder_nodes %}
-                            <div class="folder-tree">
+                            <div class="folder-tree-list ms-2">
                                 {% for folder in section.folder_nodes %}
                                     {% include 'storage/_folder_tree.html' with folder=folder %}
                                 {% endfor %}
@@ -73,17 +145,31 @@
             </div>
 
             <div class="sidebar-footer">
-                <div class="upload-target" id="uploadTarget">Файл попадёт в выбранный раздел</div>
+                <div class="upload-target" id="uploadTarget">Загрузка в {{ upload_target_name }}</div>
                 <input type="file" id="fileInput" multiple hidden>
-                <button type="button" class="btn btn-primary upload-btn" id="uploadBtn" data-role="upload-button">
+                <label for="fileInput"
+                       class="btn btn-primary btn-sm w-100"
+                       id="uploadBtn"
+                       data-role="upload-button">
                     <i class="bi bi-plus-lg" aria-hidden="true"></i>
                     Загрузить
-                </button>
-                <div id="uploadStatus" class="upload-status d-none">Загрузка...</div>
+                </label>
+                <div id="uploadStatus" class="upload-status d-none">Загрузка…</div>
             </div>
         </aside>
 
-        <button type="button" class="sidebar-restore" id="sidebarRestore" title="Показать панель" aria-label="Показать панель">
+        <div class="sidebar-resizer"
+             id="sidebarResizer"
+             role="separator"
+             aria-orientation="vertical"
+             aria-label="Изменить ширину панели разделов"
+             title="Изменить ширину панели"></div>
+
+        <button type="button"
+                class="sidebar-restore"
+                id="sidebarRestore"
+                title="Показать панель"
+                aria-label="Показать панель">
             <i class="bi bi-chevron-right" aria-hidden="true"></i>
         </button>
 
@@ -98,16 +184,19 @@
 
             {% if can_manage_participants %}
                 <nav class="app-tabs" aria-label="Разделы проекта">
-                    <a class="app-tab {% if active_tab == 'documents' %}active{% endif %}" href="{% url 'storage:project_detail' project.pk %}{% if selected_view %}?view={{ selected_view.pk }}{% endif %}">
+                    <a class="app-tab {% if active_tab == 'documents' %}active{% endif %}"
+                       href="{% url 'storage:project_detail' project.pk %}{% if selected_view %}?view={{ selected_view.pk }}{% endif %}">
                         <i class="bi bi-table" aria-hidden="true"></i>
                         Документы
                         <span class="badge text-bg-light border">{{ documents|length }}</span>
                     </a>
-                    <a class="app-tab {% if active_tab == 'participants' %}active{% endif %}" href="{% url 'storage:project_detail' project.pk %}?tab=participants">
+                    <a class="app-tab {% if active_tab == 'participants' %}active{% endif %}"
+                       href="{% url 'storage:project_detail' project.pk %}?tab=participants">
                         <i class="bi bi-people" aria-hidden="true"></i>
                         Участники
                     </a>
-                    <a class="app-tab {% if active_tab == 'trash' %}active{% endif %}" href="{% url 'storage:project_detail' project.pk %}?tab=trash">
+                    <a class="app-tab {% if active_tab == 'trash' %}active{% endif %}"
+                       href="{% url 'storage:project_detail' project.pk %}?tab=trash">
                         <i class="bi bi-trash3" aria-hidden="true"></i>
                         Корзина
                     </a>
@@ -125,8 +214,8 @@
                 </div>
 
                 <div class="participants-wrap">
-                    <table class="participant-table" data-role="participants-table">
-                        <thead>
+                    <table class="table table-hover align-middle participant-table" data-role="participants-table">
+                        <thead class="table-light">
                             <tr>
                                 <th>Пользователь</th>
                                 <th style="width: 170px;">Роль в проекте</th>
@@ -151,28 +240,19 @@
                                     </span>
                                 </td>
                                 <td>
-                                    <div class="role-edit-cell">
-                                        <button
-                                            type="button"
-                                            class="btn btn-sm btn-outline-secondary icon-btn"
-                                            data-role-toggle="role-editor-{{ membership.pk }}"
-                                            title="Изменить роль"
-                                            aria-label="Изменить роль"
-                                        >
-                                            <i class="bi bi-pencil" aria-hidden="true"></i>
+                                    <form method="post"
+                                          action="{% url 'storage:membership_role_update' project.pk membership.pk %}"
+                                          class="d-flex gap-1 justify-content-end">
+                                        {% csrf_token %}
+                                        <select name="role" class="form-select form-select-sm" aria-label="Роль участника {{ membership.user.username }}">
+                                            {% for value, label in membership_role_choices %}
+                                                <option value="{{ value }}" {% if membership.role_in_project == value %}selected{% endif %}>{{ label }}</option>
+                                            {% endfor %}
+                                        </select>
+                                        <button type="submit" class="btn btn-sm btn-primary" title="Сохранить роль" aria-label="Сохранить роль">
+                                            <i class="bi bi-check-lg" aria-hidden="true"></i>
                                         </button>
-                                        <form method="post" action="{% url 'storage:membership_role_update' project.pk membership.pk %}" class="role-editor" id="role-editor-{{ membership.pk }}">
-                                            {% csrf_token %}
-                                            <select name="role" class="form-select" aria-label="Роль участника {{ membership.user.username }}">
-                                                {% for value, label in membership_role_choices %}
-                                                    <option value="{{ value }}" {% if membership.role_in_project == value %}selected{% endif %}>{{ label }}</option>
-                                                {% endfor %}
-                                            </select>
-                                            <button type="submit" class="btn btn-sm btn-primary icon-btn" title="Сохранить роль" aria-label="Сохранить роль">
-                                                <i class="bi bi-check-lg" aria-hidden="true"></i>
-                                            </button>
-                                        </form>
-                                    </div>
+                                    </form>
                                 </td>
                             </tr>
                         {% empty %}
@@ -188,181 +268,165 @@
                     <span class="fw-semibold"><i class="bi bi-trash3 me-2" aria-hidden="true"></i>Корзина</span>
                     <span class="badge text-bg-light border">{{ trash.documents|length }} док. / {{ trash.folders|length }} папок</span>
                     <span class="toolbar-spacer"></span>
+                    {% if can_purge_trash %}
+                        <form method="post"
+                              action="{% url 'storage:trash_clear' project.pk %}"
+                              class="mb-0"
+                              onsubmit="return confirm('Файлы будут удалены с диска безвозвратно. Очистить корзину?');">
+                            {% csrf_token %}
+                            <button type="submit" class="btn btn-sm btn-outline-danger" id="trashClearButton">
+                                <i class="bi bi-trash3-fill me-1" aria-hidden="true"></i>Очистить корзину
+                            </button>
+                        </form>
+                    {% endif %}
                     <span class="text-muted small">Удалённые элементы можно восстановить</span>
                 </div>
                 <div class="trash-wrap">
                     <h6 class="trash-title">Документы</h6>
-                    <table class="participant-table trash-table">
-                        <thead><tr><th>Шифр</th><th>Название</th><th>Раздел</th><th>Удалён</th><th class="text-end">Действие</th></tr></thead>
-                        <tbody>
-                        {% for document in trash.documents %}
-                            <tr>
-                                <td class="fw-semibold">{{ document.code }}</td>
-                                <td>{{ document.name }}</td>
-                                <td>{{ document.section.code }}</td>
-                                <td class="text-muted small">{{ document.deleted_at|date:"d.m.Y H:i" }}</td>
-                                <td class="text-end">
-                                    <form method="post" action="{% url 'storage:trash_restore' project.pk %}" class="d-inline">
-                                        {% csrf_token %}
-                                        <input type="hidden" name="item_type" value="document">
-                                        <input type="hidden" name="item_id" value="{{ document.pk }}">
-                                        <button type="submit" class="btn btn-sm btn-outline-primary">
-                                            <i class="bi bi-arrow-counterclockwise me-1" aria-hidden="true"></i>Восстановить
-                                        </button>
-                                    </form>
-                                </td>
-                            </tr>
-                        {% empty %}
-                            <tr><td colspan="5" class="text-center text-muted py-4">Документов в корзине нет</td></tr>
-                        {% endfor %}
-                        </tbody>
-                    </table>
+                    <div class="table-responsive">
+                        <table class="table table-hover table-bordered align-middle trash-table mb-3">
+                            <thead class="table-light">
+                                <tr>
+                                    <th>Шифр</th>
+                                    <th>Название</th>
+                                    <th>Раздел</th>
+                                    <th>Удалён</th>
+                                    <th class="text-end">Действие</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                            {% for document in trash.documents %}
+                                <tr>
+                                    <td class="fw-semibold">{{ document.code }}</td>
+                                    <td>{{ document.name }}</td>
+                                    <td>{{ document.section.code }}</td>
+                                    <td class="text-muted small">{{ document.deleted_at|date:"d.m.Y H:i" }}</td>
+                                    <td class="text-end">
+                                        <form method="post" action="{% url 'storage:trash_restore' project.pk %}" class="d-inline">
+                                            {% csrf_token %}
+                                            <input type="hidden" name="item_type" value="document">
+                                            <input type="hidden" name="item_id" value="{{ document.pk }}">
+                                            <button type="submit" class="btn btn-sm btn-outline-primary">
+                                                <i class="bi bi-arrow-counterclockwise me-1" aria-hidden="true"></i>Восстановить
+                                            </button>
+                                        </form>
+                                    </td>
+                                </tr>
+                            {% empty %}
+                                <tr><td colspan="5" class="text-center text-muted py-4">Документов в корзине нет</td></tr>
+                            {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
 
                     <h6 class="trash-title mt-4">Папки</h6>
-                    <table class="participant-table trash-table">
-                        <thead><tr><th>Название</th><th>Раздел</th><th>Удалена</th><th class="text-end">Действие</th></tr></thead>
-                        <tbody>
-                        {% for folder in trash.folders %}
-                            <tr>
-                                <td class="fw-semibold"><i class="bi bi-folder2 me-2" aria-hidden="true"></i>{{ folder.name }}</td>
-                                <td>{{ folder.section.code|default:"Проект" }}</td>
-                                <td class="text-muted small">{{ folder.deleted_at|date:"d.m.Y H:i" }}</td>
-                                <td class="text-end">
-                                    <form method="post" action="{% url 'storage:trash_restore' project.pk %}" class="d-inline">
-                                        {% csrf_token %}
-                                        <input type="hidden" name="item_type" value="folder">
-                                        <input type="hidden" name="item_id" value="{{ folder.pk }}">
-                                        <button type="submit" class="btn btn-sm btn-outline-primary">
-                                            <i class="bi bi-arrow-counterclockwise me-1" aria-hidden="true"></i>Восстановить
-                                        </button>
-                                    </form>
-                                </td>
-                            </tr>
-                        {% empty %}
-                            <tr><td colspan="4" class="text-center text-muted py-4">Папок в корзине нет</td></tr>
-                        {% endfor %}
-                        </tbody>
-                    </table>
+                    <div class="table-responsive">
+                        <table class="table table-hover table-bordered align-middle trash-table mb-0">
+                            <thead class="table-light">
+                                <tr>
+                                    <th>Название</th>
+                                    <th>Раздел</th>
+                                    <th>Удалена</th>
+                                    <th class="text-end">Действие</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                            {% for folder in trash.folders %}
+                                <tr>
+                                    <td class="fw-semibold"><i class="bi bi-folder2 me-2" aria-hidden="true"></i>{{ folder.name }}</td>
+                                    <td>{{ folder.section.code|default:"Проект" }}</td>
+                                    <td class="text-muted small">{{ folder.deleted_at|date:"d.m.Y H:i" }}</td>
+                                    <td class="text-end">
+                                        <form method="post" action="{% url 'storage:trash_restore' project.pk %}" class="d-inline">
+                                            {% csrf_token %}
+                                            <input type="hidden" name="item_type" value="folder">
+                                            <input type="hidden" name="item_id" value="{{ folder.pk }}">
+                                            <button type="submit" class="btn btn-sm btn-outline-primary">
+                                                <i class="bi bi-arrow-counterclockwise me-1" aria-hidden="true"></i>Восстановить
+                                            </button>
+                                        </form>
+                                    </td>
+                                </tr>
+                            {% empty %}
+                                <tr><td colspan="4" class="text-center text-muted py-4">Папок в корзине нет</td></tr>
+                            {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
             {% else %}
-                <div class="toolbar" data-role="toolbar">
-                <div class="toolbar-left">
-                <form class="filter-group" method="get" action="{% url 'storage:project_detail' project.pk %}" id="filtersForm">
-                    <input type="hidden" name="tab" value="documents">
-                    <input type="hidden" name="apply" value="1">
-                    {% if selected_view %}
-                        <input type="hidden" name="view" value="{{ selected_view.pk }}">
-                    {% endif %}
-
-                        <div class="dropdown">
-                            <button class="btn btn-outline-secondary" type="button" data-dropdown-toggle="#viewsMenu" aria-haspopup="true" aria-expanded="false">
-                                <i class="bi bi-layout-text-window-reverse" aria-hidden="true"></i>
-                                <span class="d-none d-lg-inline">Вид:</span>
-                                <span class="fw-semibold toolbar-view-name">{{ selected_view.name|default:"все документы" }}</span>
-                                <i class="bi bi-chevron-down small" aria-hidden="true"></i>
-                            </button>
-                            <div class="dropdown-menu view-menu" id="viewsMenu">
-                                <a class="dropdown-item {% if not selected_view %}active{% endif %}" href="{% url 'storage:project_detail' project.pk %}">
-                                    <span><i class="bi bi-inbox me-2" aria-hidden="true"></i>Все документы</span>
-                                </a>
-                                {% for view in document_views %}
-                                    <a class="dropdown-item {% if selected_view.pk == view.pk %}active{% endif %}" href="{% url 'storage:project_detail' project.pk %}?view={{ view.pk }}">
-                                        <span class="text-truncate">{{ view.name }}</span>
-                                        {% if view.is_shared %}<span class="badge text-bg-light border">общий</span>{% endif %}
-                                    </a>
-                                {% empty %}
-                                    <div class="view-menu-empty">Сохранённых видов пока нет</div>
-                                {% endfor %}
-                                <div class="dropdown-divider"></div>
-                                <button type="button" class="dropdown-item" data-open-settings>
-                                    <span><i class="bi bi-sliders me-2" aria-hidden="true"></i>Настроить и сохранить вид…</span>
-                                </button>
-                            </div>
-                        </div>
-
-                        {{ filter.form.section }}
-
-                        {{ filter.form.doc_type }}
-
-                        {{ filter.form.status }}
-
-                        <select name="sort" id="filterSort" class="form-select toolbar-select" aria-label="Сортировка">
-                            <option value="" {% if not active_sort %}selected{% endif %}>По разделу</option>
-                            <option value="code" {% if active_sort == 'code' %}selected{% endif %}>Шифр</option>
-                            <option value="name" {% if active_sort == 'name' %}selected{% endif %}>Название</option>
-                            <option value="-date" {% if active_sort == '-date' %}selected{% endif %}>Дата</option>
-                            <option value="-version" {% if active_sort == '-version' %}selected{% endif %}>Версия</option>
-                        </select>
-
-                        {% if selected_view or active_filters or active_sort %}
-                            <a href="{% url 'storage:project_detail' project.pk %}" class="btn btn-link text-muted px-1" title="Сбросить фильтры" aria-label="Сбросить фильтры">
-                                <i class="bi bi-x-lg" aria-hidden="true"></i>
-                            </a>
-                        {% endif %}
-                </form>
-                </div>
-
-                <div class="toolbar-center">
-                    <div class="quick-filter">
-                        <i class="bi bi-search" aria-hidden="true"></i>
-                        <input type="search" id="quickFilter" class="form-control" placeholder="Быстрый фильтр по таблице" aria-label="Быстрый фильтр по таблице" data-role="quick-filter">
-                    </div>
-                </div>
-
-                <div class="toolbar-right">
-                    <span class="toolbar-count text-muted small text-nowrap">{{ documents|length }} док.</span>
-                    <div class="toolbar-actions">
-                        <form method="post" action="{% url 'storage:simulate_mail_import' project.pk %}" class="mb-0">
-                            {% csrf_token %}
-                            <button type="submit" class="btn btn-outline-secondary" title="Импортировать из почты">
-                                <i class="bi bi-envelope-arrow-down" aria-hidden="true"></i>
-                                <span class="d-none d-xl-inline">Импорт</span>
-                            </button>
-                        </form>
-                        <a class="btn btn-outline-secondary" href="{% export_url 'xlsx' %}" title="Экспорт таблицы в Excel">
-                            <i class="bi bi-file-earmark-excel" aria-hidden="true"></i>
-                            <span class="d-none d-xl-inline">Экспорт</span>
-                        </a>
-                        <button type="button" class="btn btn-outline-secondary settings-btn" id="openSettings" data-open-settings title="Настройки вида" aria-label="Настройки вида">
-                            <i class="bi bi-gear" aria-hidden="true"></i>
-                            <span class="d-none d-xxl-inline">Настройки</span>
-                        </button>
-                    </div>
-                </div>
-                </div>
-
-                <div class="bulk-bar d-none" id="bulkBar" data-role="bulk-bar">
-                    <span class="fw-semibold"><span id="bulkCount">0</span> выбрано</span>
-                    <select name="folder" form="bulkForm" class="form-select toolbar-select" aria-label="Папка для перемещения">
-                        <option value="">Без папки</option>
-                        {% for folder in all_folders %}
-                            <option value="{{ folder.pk }}">{{ folder.section.code|default:"Проект" }} / {{ folder.name }}</option>
-                        {% endfor %}
-                    </select>
-                    <button type="submit" name="action" value="move" form="bulkForm" class="btn btn-sm btn-outline-secondary">
-                        <i class="bi bi-folder-symlink me-1" aria-hidden="true"></i>Переместить
-                    </button>
-                    <button type="submit" name="action" value="download" form="bulkForm" class="btn btn-sm btn-outline-secondary">
-                        <i class="bi bi-file-earmark-zip me-1" aria-hidden="true"></i>Скачать выбранные (ZIP)
-                    </button>
-                    <button type="submit" name="action" value="delete" form="bulkForm" class="btn btn-sm btn-outline-danger">
-                        <i class="bi bi-trash3 me-1" aria-hidden="true"></i>В корзину
-                    </button>
-                </div>
-
-                <div class="doc-table-wrap" id="documentsTableWrap">
-                    <form id="bulkForm" method="post" action="{% url 'storage:document_bulk_action' project.pk %}">
-                        {% csrf_token %}
-                        {% render_table table %}
-                    </form>
-                </div>
+                {% include 'storage/_documents_panel.html' %}
             {% endif %}
         </main>
     </div>
 </div>
 
+{% if can_manage_structure %}
+    <div class="modal fade" id="sectionCreateModal" tabindex="-1" aria-labelledby="sectionCreateTitle" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <form method="post" action="{% url 'storage:section_create' project.pk %}">
+                    {% csrf_token %}
+                    <div class="modal-header">
+                        <h5 class="modal-title" id="sectionCreateTitle">Новый раздел</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрыть"></button>
+                    </div>
+                    <div class="modal-body">
+                        <div class="row g-2">
+                            <div class="col-4">
+                                <label class="form-label small" for="sectionCodeInput">Код</label>
+                                <input class="form-control form-control-sm" id="sectionCodeInput" name="code" maxlength="20" required placeholder="АР">
+                            </div>
+                            <div class="col-8">
+                                <label class="form-label small" for="sectionNameInput">Название</label>
+                                <input class="form-control form-control-sm" id="sectionNameInput" name="name" maxlength="255" required placeholder="Архитектурные решения">
+                            </div>
+                            <div class="col-4">
+                                <label class="form-label small" for="sectionOrderInput">Порядок</label>
+                                <input class="form-control form-control-sm" id="sectionOrderInput" name="order" type="number" value="0">
+                            </div>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-dismiss="modal">Отмена</button>
+                        <button type="submit" class="btn btn-primary btn-sm">Создать раздел</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal fade" id="folderCreateModal" tabindex="-1" aria-labelledby="folderCreateTitle" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="folderCreateTitle">Новая папка</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрыть"></button>
+                </div>
+                <div id="folderCreateModalBody">
+                    <div class="modal-body text-muted small">Загрузка формы…</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal fade" id="folderRenameModal" tabindex="-1" aria-labelledby="folderRenameTitle" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="folderRenameTitle">Переименовать папку</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрыть"></button>
+                </div>
+                <div id="folderRenameModalBody">
+                    <div class="modal-body text-muted small">Загрузка формы…</div>
+                </div>
+            </div>
+        </div>
+    </div>
+{% endif %}
+
 {% if active_tab != 'participants' %}
-    <div class="modal fade settings-modal" id="viewSettingsModal" tabindex="-1" aria-labelledby="viewSettingsTitle" aria-hidden="true" data-role="settings-modal">
+    <div class="modal fade" id="viewSettingsModal" tabindex="-1" aria-labelledby="viewSettingsTitle" aria-hidden="true" data-role="settings-modal">
         <div class="modal-dialog modal-dialog-centered">
             <div class="modal-content">
                 <form method="post" action="{% url 'storage:document_view_save' project.pk %}" id="viewSettingsForm">
@@ -371,22 +435,20 @@
                         <h5 class="modal-title" id="viewSettingsTitle">
                             <i class="bi bi-sliders me-1" aria-hidden="true"></i>Настройки вида
                         </h5>
-                        <button type="button" class="btn-close" data-modal-close aria-label="Закрыть"></button>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрыть"></button>
                     </div>
                     <div class="modal-body">
                         <div class="settings-section-title">Столбцы таблицы</div>
                         <div class="settings-columns">
                             {% for column in column_defs %}
                                 <div class="form-check">
-                                    <input
-                                        class="form-check-input column-toggle"
-                                        type="checkbox"
-                                        name="columns"
-                                        value="{{ column.key }}"
-                                        id="column-{{ column.key }}"
-                                        data-column="{{ column.key }}"
-                                        {% if column.visible %}checked{% endif %}
-                                    >
+                                    <input class="form-check-input column-toggle"
+                                           type="checkbox"
+                                           name="columns"
+                                           value="{{ column.key }}"
+                                           id="column-{{ column.key }}"
+                                           data-column="{{ column.key }}"
+                                           {% if column.visible %}checked{% endif %}>
                                     <label class="form-check-label" for="column-{{ column.key }}">{{ column.label }}</label>
                                 </div>
                             {% endfor %}
@@ -411,7 +473,7 @@
                         <input type="hidden" name="widths" id="viewWidthsInput" value="{}">
                     </div>
                     <div class="modal-footer">
-                        <button type="button" class="btn btn-outline-secondary btn-sm" data-modal-close>Отмена</button>
+                        <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-dismiss="modal">Отмена</button>
                         <button type="submit" class="btn btn-primary btn-sm">
                             <i class="bi bi-check2 me-1" aria-hidden="true"></i>Сохранить вид
                         </button>
@@ -422,873 +484,9 @@
     </div>
 {% endif %}
 
-{% if can_manage_structure %}
-    <div class="modal fade settings-modal" id="sectionCreateModal" tabindex="-1" aria-hidden="true" data-role="section-modal">
-        <div class="modal-dialog modal-dialog-centered">
-            <div class="modal-content">
-                <form method="post" action="{% url 'storage:section_create' project.pk %}">
-                    {% csrf_token %}
-                    <div class="modal-header">
-                        <h5 class="modal-title">Добавить раздел</h5>
-                        <button type="button" class="btn-close" data-modal-close aria-label="Закрыть"></button>
-                    </div>
-                    <div class="modal-body">
-                        <div class="row g-2">
-                            <div class="col-4">
-                                <label class="form-label small" for="sectionCode">Код</label>
-                                <input class="form-control form-control-sm" id="sectionCode" name="code" required maxlength="20" placeholder="АР">
-                            </div>
-                            <div class="col-8">
-                                <label class="form-label small" for="sectionName">Название</label>
-                                <input class="form-control form-control-sm" id="sectionName" name="name" required placeholder="Архитектурные решения">
-                            </div>
-                            <div class="col-4">
-                                <label class="form-label small" for="sectionOrder">Порядок</label>
-                                <input class="form-control form-control-sm" id="sectionOrder" name="order" type="number" value="0">
-                            </div>
-                        </div>
-                    </div>
-                    <div class="modal-footer">
-                        <button type="button" class="btn btn-outline-secondary btn-sm" data-modal-close>Отмена</button>
-                        <button type="submit" class="btn btn-primary btn-sm">Создать раздел</button>
-                    </div>
-                </form>
-            </div>
-        </div>
-    </div>
-
-    <div class="modal fade settings-modal" id="folderCreateModal" tabindex="-1" aria-hidden="true" data-role="folder-modal">
-        <div class="modal-dialog modal-dialog-centered">
-            <div class="modal-content">
-                <form method="post" action="{% url 'storage:folder_create' project.pk %}" id="folderCreateForm">
-                    {% csrf_token %}
-                    <input type="hidden" name="section" id="folderSectionInput">
-                    <input type="hidden" name="parent" id="folderParentInput">
-                    <div class="modal-header">
-                        <h5 class="modal-title">Создать папку</h5>
-                        <button type="button" class="btn-close" data-modal-close aria-label="Закрыть"></button>
-                    </div>
-                    <div class="modal-body">
-                        <label class="form-label small" for="folderNameInput">Название папки</label>
-                        <input class="form-control form-control-sm" id="folderNameInput" name="name" required maxlength="255" placeholder="Например, Рабочая документация">
-                    </div>
-                    <div class="modal-footer">
-                        <button type="button" class="btn btn-outline-secondary btn-sm" data-modal-close>Отмена</button>
-                        <button type="submit" class="btn btn-primary btn-sm">Создать папку</button>
-                    </div>
-                </form>
-            </div>
-        </div>
-    </div>
-
-    <div class="modal fade settings-modal" id="folderRenameModal" tabindex="-1" aria-hidden="true" data-role="folder-rename-modal">
-        <div class="modal-dialog modal-dialog-centered">
-            <div class="modal-content">
-                <form method="post" action="" id="folderRenameForm">
-                    {% csrf_token %}
-                    <div class="modal-header">
-                        <h5 class="modal-title">Переименовать папку</h5>
-                        <button type="button" class="btn-close" data-modal-close aria-label="Закрыть"></button>
-                    </div>
-                    <div class="modal-body">
-                        <label class="form-label small" for="folderRenameInput">Новое название</label>
-                        <input class="form-control form-control-sm" id="folderRenameInput" name="name" required maxlength="255">
-                    </div>
-                    <div class="modal-footer">
-                        <button type="button" class="btn btn-outline-secondary btn-sm" data-modal-close>Отмена</button>
-                        <button type="submit" class="btn btn-primary btn-sm">Сохранить</button>
-                    </div>
-                </form>
-            </div>
-        </div>
-    </div>
-{% endif %}
-
-<form id="csrfForm" class="d-none">{% csrf_token %}</form>
-<script id="viewConfig" type="application/json">{"widths": {{ widths_json|safe }}}</script>
-
-<script>
-(function () {
-    'use strict';
-
-    var csrfInput = document.querySelector('#csrfForm [name=csrfmiddlewaretoken]');
-    var csrftoken = csrfInput ? csrfInput.value : '';
-    var projectId = '{{ project.pk }}';
-    var uploadUrl = "{% url 'storage:document_upload_ajax' project.pk %}";
-    var shell = document.getElementById('appShell');
-
-    /* Sidebar collapse */
-    var SIDEBAR_KEY = 'sod:sidebar:collapsed';
-    function setSidebarCollapsed(collapsed) {
-        shell.classList.toggle('sidebar-collapsed', collapsed);
-        try {
-            localStorage.setItem(SIDEBAR_KEY, collapsed ? '1' : '0');
-        } catch (error) { /* storage may be unavailable */ }
-    }
-    try {
-        if (localStorage.getItem(SIDEBAR_KEY) === '1') {
-            shell.classList.add('sidebar-collapsed');
-        }
-    } catch (error) { /* ignore */ }
-
-    var collapseButton = document.getElementById('sidebarCollapse');
-    var restoreButton = document.getElementById('sidebarRestore');
-    if (collapseButton) {
-        collapseButton.addEventListener('click', function () {
-            setSidebarCollapsed(true);
-        });
-    }
-    if (restoreButton) {
-        restoreButton.addEventListener('click', function () {
-            setSidebarCollapsed(false);
-        });
-    }
-
-    /* Dropdowns (Bootstrap markup, vanilla toggling) */
-    var dropdownButtons = Array.prototype.slice.call(
-        document.querySelectorAll('[data-dropdown-toggle]')
-    );
-
-    function closeDropdowns(except) {
-        document.querySelectorAll('.dropdown-menu.show').forEach(function (menu) {
-            if (menu !== except) {
-                menu.classList.remove('show');
-                var toggle = document.querySelector('[data-dropdown-toggle="#' + menu.id + '"]');
-                if (toggle) {
-                    toggle.setAttribute('aria-expanded', 'false');
-                }
-            }
-        });
-    }
-
-    dropdownButtons.forEach(function (button) {
-        button.addEventListener('click', function (event) {
-            event.preventDefault();
-            event.stopPropagation();
-            var selector = button.getAttribute('data-dropdown-toggle');
-            var menu = document.querySelector(selector);
-            if (!menu) {
-                return;
-            }
-            var willOpen = !menu.classList.contains('show');
-            closeDropdowns(menu);
-            menu.classList.toggle('show', willOpen);
-            button.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
-        });
-    });
-
-    document.querySelectorAll('.dropdown-menu').forEach(function (menu) {
-        menu.addEventListener('click', function (event) {
-            event.stopPropagation();
-        });
-    });
-
-    document.addEventListener('click', function () {
-        closeDropdowns(null);
-    });
-
-    /* Settings modal */
-    var modal = document.getElementById('viewSettingsModal');
-    var widthsInput = document.getElementById('viewWidthsInput');
-
-    function openModal() {
-        if (!modal) {
-            return;
-        }
-        closeDropdowns(null);
-        updateWidthsInput();
-        modal.classList.add('show');
-        modal.style.display = 'block';
-        modal.setAttribute('aria-hidden', 'false');
-        document.body.classList.add('modal-open');
-        var nameInput = document.getElementById('viewName');
-        if (nameInput) {
-            nameInput.focus();
-        }
-    }
-
-    function closeModal() {
-        if (!modal) {
-            return;
-        }
-        modal.classList.remove('show');
-        modal.style.display = 'none';
-        modal.setAttribute('aria-hidden', 'true');
-        document.body.classList.remove('modal-open');
-    }
-
-    document.querySelectorAll('[data-open-settings]').forEach(function (button) {
-        button.addEventListener('click', function (event) {
-            event.preventDefault();
-            openModal();
-        });
-    });
-
-    document.querySelectorAll('#viewSettingsModal [data-modal-close]').forEach(function (button) {
-        button.addEventListener('click', closeModal);
-    });
-
-    if (modal) {
-        modal.addEventListener('click', function (event) {
-            if (event.target === modal) {
-                closeModal();
-            }
-        });
-        document.addEventListener('keydown', function (event) {
-            if (event.key === 'Escape' && modal.classList.contains('show')) {
-                closeModal();
-            }
-        });
-    }
-
-    /* Column visibility live preview */
-    document.querySelectorAll('.column-toggle').forEach(function (checkbox) {
-        checkbox.addEventListener('change', function () {
-            var column = checkbox.dataset.column;
-            document.querySelectorAll('#documentsTable [data-column="' + column + '"]').forEach(function (cell) {
-                cell.classList.toggle('d-none', !checkbox.checked);
-            });
-            document.querySelectorAll('col[data-column="' + column + '"]').forEach(function (col) {
-                col.classList.toggle('d-none', !checkbox.checked);
-            });
-            applyWidths();
-        });
-    });
-
-    /* Filters auto-submit */
-    var filtersForm = document.getElementById('filtersForm');
-    if (filtersForm) {
-        filtersForm.querySelectorAll('select').forEach(function (select) {
-            select.addEventListener('change', function () {
-                filtersForm.submit();
-            });
-        });
-    }
-
-    /* Quick client-side filter */
-    var quickFilter = document.getElementById('quickFilter');
-    var quickFilterEmpty = document.getElementById('quickFilterEmpty');
-    if (quickFilter) {
-        quickFilter.addEventListener('input', function () {
-            var needle = quickFilter.value.trim().toLowerCase();
-            var visible = 0;
-            document.querySelectorAll('#documentsTable tr[data-row="document"]').forEach(function (row) {
-                var haystack = (row.dataset.search || '').toLowerCase();
-                var matches = !needle || haystack.indexOf(needle) !== -1;
-                row.classList.toggle('row-hidden', !matches);
-                if (matches) {
-                    visible += 1;
-                }
-            });
-            if (quickFilterEmpty) {
-                var totalRows = document.querySelectorAll('#documentsTable tr[data-row="document"]').length;
-                quickFilterEmpty.style.display = (totalRows > 0 && visible === 0) ? '' : 'none';
-            }
-        });
-    }
-
-    /* Column widths: server config <- localStorage -> drag */
-    var table = document.getElementById('documentsTable');
-    var configElement = document.getElementById('viewConfig');
-    var serverWidths = {};
-    if (configElement) {
-        try {
-            serverWidths = JSON.parse(configElement.textContent).widths || {};
-        } catch (error) {
-            serverWidths = {};
-        }
-    }
-
-    var viewId = '{% if selected_view %}{{ selected_view.pk }}{% else %}none{% endif %}';
-    var WIDTHS_KEY = 'sod:widths:' + projectId + ':' + viewId;
-    var storedWidths = {};
-    try {
-        storedWidths = JSON.parse(localStorage.getItem(WIDTHS_KEY) || '{}') || {};
-    } catch (error) {
-        storedWidths = {};
-    }
-
-    var widths = Object.assign({}, serverWidths, storedWidths);
-
-    function currentColumnWidth(column) {
-        var col = document.querySelector('#documentsTable col[data-column="' + column + '"]');
-        if (!col) {
-            return null;
-        }
-        var inline = parseInt(col.style.width, 10);
-        if (!isNaN(inline) && inline > 0) {
-            return inline;
-        }
-        var th = document.querySelector('#documentsTable th[data-column="' + column + '"]');
-        return th ? Math.round(th.getBoundingClientRect().width) : null;
-    }
-
-    function applyWidths() {
-        if (!table) {
-            return;
-        }
-        var total = 0;
-        document.querySelectorAll('#documentsTable col[data-column]').forEach(function (col) {
-            if (col.classList.contains('d-none')) {
-                return;
-            }
-            var column = col.dataset.column;
-            var value = parseInt(widths[column], 10);
-            if (isNaN(value)) {
-                return;
-            }
-            value = Math.max(50, Math.min(800, value));
-            widths[column] = value;
-            col.style.width = value + 'px';
-            total += value;
-        });
-        var available = table.parentElement ? table.parentElement.clientWidth : 0;
-        table.style.width = available > 0 && total > available ? total + 'px' : '100%';
-    }
-
-    function persistWidths() {
-        try {
-            localStorage.setItem(WIDTHS_KEY, JSON.stringify(widths));
-        } catch (error) { /* ignore */ }
-        updateWidthsInput();
-    }
-
-    function updateWidthsInput() {
-        if (widthsInput) {
-            widthsInput.value = JSON.stringify(widths);
-        }
-    }
-
-    applyWidths();
-    updateWidthsInput();
-    window.addEventListener('resize', applyWidths);
-
-    document.querySelectorAll('.col-resizer').forEach(function (handle) {
-        handle.addEventListener('click', function (event) {
-            event.preventDefault();
-            event.stopPropagation();
-        });
-        handle.addEventListener('mousedown', function (event) {
-            event.preventDefault();
-            event.stopPropagation();
-            var column = handle.dataset.column;
-            var startX = event.clientX;
-            var startWidth = currentColumnWidth(column) || 120;
-            handle.classList.add('is-active');
-            document.body.style.cursor = 'col-resize';
-            document.body.style.userSelect = 'none';
-
-            function onMove(moveEvent) {
-                var next = startWidth + (moveEvent.clientX - startX);
-                next = Math.max(50, Math.min(800, Math.round(next)));
-                widths[column] = next;
-                var col = document.querySelector('#documentsTable col[data-column="' + column + '"]');
-                if (col) {
-                    col.style.width = next + 'px';
-                }
-                applyWidths();
-            }
-
-            function onUp() {
-                handle.classList.remove('is-active');
-                document.body.style.cursor = '';
-                document.body.style.userSelect = '';
-                document.removeEventListener('mousemove', onMove);
-                document.removeEventListener('mouseup', onUp);
-                persistWidths();
-            }
-
-            document.addEventListener('mousemove', onMove);
-            document.addEventListener('mouseup', onUp);
-        });
-    });
-
-    if (modal) {
-        modal.addEventListener('submit', function () {
-            updateWidthsInput();
-        });
-    }
-
-    /* Upload: click, file picker and drag&drop on a section */
-    var sectionList = document.getElementById('sectionList');
-    var fileInput = document.getElementById('fileInput');
-    var uploadButton = document.getElementById('uploadBtn');
-    var uploadStatus = document.getElementById('uploadStatus');
-    var uploadTarget = document.getElementById('uploadTarget');
-    var sectionItems = [];
-    var selectedSectionId = null;
-    var selectedFolderId = null;
-
-    function setStatus(text, isError) {
-        if (!uploadStatus) {
-            return;
-        }
-        uploadStatus.textContent = text || '';
-        uploadStatus.classList.toggle('d-none', !text);
-        uploadStatus.classList.toggle('is-error', !!isError);
-    }
-
-    function selectSection(item) {
-        sectionItems.forEach(function (other) {
-            other.classList.remove('active');
-        });
-        item.classList.add('active');
-        selectedSectionId = item.dataset.id;
-        if (uploadTarget) {
-            uploadTarget.textContent = 'Выбран раздел ' + item.dataset.code;
-            uploadTarget.title = 'Файл попадёт в раздел ' + item.dataset.code;
-        }
-    }
-
-    function clearFolderSelection() {
-        selectedFolderId = null;
-        document.querySelectorAll('.folder-row.folder-selected').forEach(function (row) {
-            row.classList.remove('folder-selected');
-        });
-    }
-
-    if (sectionList) {
-        sectionItems = Array.prototype.slice.call(sectionList.querySelectorAll('.section-item'));
-        var initialSection = '{{ active_filters.section|default:"" }}';
-
-        if (sectionItems.length) {
-            var preselected = null;
-            if (initialSection) {
-                preselected = sectionItems.find(function (item) {
-                    return item.dataset.id === initialSection;
-                }) || null;
-            }
-            selectSection(preselected || sectionItems[0]);
-        }
-
-        sectionItems.forEach(function (item) {
-            item.addEventListener('click', function () {
-                clearFolderSelection();
-                selectSection(item);
-            });
-            item.addEventListener('dragenter', function (event) {
-                event.preventDefault();
-                item.classList.add('dragover');
-            });
-            item.addEventListener('dragover', function (event) {
-                event.preventDefault();
-                event.dataTransfer.dropEffect = 'copy';
-                item.classList.add('dragover');
-            });
-            item.addEventListener('dragleave', function () {
-                item.classList.remove('dragover');
-            });
-            item.addEventListener('drop', function (event) {
-                event.preventDefault();
-                event.stopPropagation();
-                item.classList.remove('dragover');
-                clearFolderSelection();
-                selectSection(item);
-                if (event.dataTransfer.files.length) {
-                    handleFiles(event.dataTransfer.files);
-                }
-            });
-        });
-    }
-
-    function selectFolder(row) {
-        var node = row.closest('.folder-node');
-        if (!node) {
-            return;
-        }
-        clearFolderSelection();
-        row.classList.add('folder-selected');
-        selectedFolderId = node.dataset.folderId;
-
-        var sectionId = node.dataset.sectionId;
-        if (sectionId) {
-            var sectionItem = sectionItems.find(function (item) {
-                return item.dataset.id === sectionId;
-            });
-            if (sectionItem) {
-                selectSection(sectionItem);
-            }
-        }
-
-        var name = row.querySelector('.folder-name');
-        if (uploadTarget) {
-            uploadTarget.textContent = 'Выбрана папка ' + (name ? name.textContent.trim() : '');
-            uploadTarget.title = 'Файл попадёт в выбранную папку';
-        }
-    }
-
-    document.querySelectorAll('[data-folder-row]').forEach(function (row) {
-        row.addEventListener('click', function (event) {
-            if (event.target.closest('.folder-menu-btn, .folder-toggle, .folder-menu')) {
-                return;
-            }
-            selectFolder(row);
-        });
-        row.addEventListener('dragenter', function (event) {
-            event.preventDefault();
-            event.stopPropagation();
-            row.classList.add('dragover');
-        });
-        row.addEventListener('dragover', function (event) {
-            event.preventDefault();
-            event.stopPropagation();
-            event.dataTransfer.dropEffect = 'copy';
-            row.classList.add('dragover');
-        });
-        row.addEventListener('dragleave', function () {
-            row.classList.remove('dragover');
-        });
-        row.addEventListener('drop', function (event) {
-            event.preventDefault();
-            event.stopPropagation();
-            row.classList.remove('dragover');
-            selectFolder(row);
-            if (event.dataTransfer.files.length) {
-                handleFiles(event.dataTransfer.files);
-            }
-        });
-    });
-
-    var mainArea = document.querySelector('.app-main');
-    var dragCounter = 0;
-    if (mainArea) {
-        mainArea.addEventListener('dragenter', function (event) {
-            event.preventDefault();
-            dragCounter += 1;
-            mainArea.classList.add('drag-over');
-        });
-        mainArea.addEventListener('dragover', function (event) {
-            event.preventDefault();
-            event.dataTransfer.dropEffect = 'copy';
-            mainArea.classList.add('drag-over');
-        });
-        mainArea.addEventListener('dragleave', function (event) {
-            dragCounter = Math.max(0, dragCounter - 1);
-            if (dragCounter === 0 || !mainArea.contains(event.relatedTarget)) {
-                dragCounter = 0;
-                mainArea.classList.remove('drag-over');
-            }
-        });
-        mainArea.addEventListener('drop', function (event) {
-            event.preventDefault();
-            event.stopPropagation();
-            dragCounter = 0;
-            mainArea.classList.remove('drag-over');
-            if (!selectedSectionId) {
-                setStatus('Сначала выберите раздел', true);
-                return;
-            }
-            if (event.dataTransfer.files.length) {
-                handleFiles(event.dataTransfer.files);
-            }
-        });
-    }
-
-    if (uploadButton && fileInput) {
-        uploadButton.addEventListener('click', function () {
-            if (!selectedSectionId) {
-                setStatus('Сначала выберите раздел', true);
-                return;
-            }
-            fileInput.click();
-        });
-    }
-
-    document.querySelectorAll('[data-empty-upload]').forEach(function (button) {
-        button.addEventListener('click', function () {
-            if (uploadButton) {
-                uploadButton.click();
-            }
-        });
-    });
-
-    if (fileInput) {
-        fileInput.addEventListener('change', function () {
-            if (!selectedSectionId) {
-                setStatus('Сначала выберите раздел', true);
-                fileInput.value = '';
-                return;
-            }
-            if (fileInput.files.length) {
-                handleFiles(fileInput.files);
-            }
-        });
-    }
-
-    var uploading = false;
-
-    async function handleFiles(files) {
-        if (uploading || !selectedSectionId) {
-            return;
-        }
-        uploading = true;
-        setStatus('Загрузка ' + files.length + ' файл(ов)…', false);
-
-        var uploaded = 0;
-        var errors = [];
-
-        for (var index = 0; index < files.length; index += 1) {
-            var file = files[index];
-            var formData = new FormData();
-            formData.append('section_id', selectedSectionId);
-            if (selectedFolderId) {
-                formData.append('folder_id', selectedFolderId);
-            }
-            formData.append('file', file);
-            formData.append('code', file.name.replace(/\.[^.]+$/, ''));
-            formData.append('name', file.name);
-
-            try {
-                var response = await fetch(uploadUrl, {
-                    method: 'POST',
-                    headers: { 'X-CSRFToken': csrftoken },
-                    body: formData
-                });
-                var data = await response.json();
-                if (!response.ok) {
-                    errors.push((data.error || 'Ошибка загрузки') + ': ' + file.name);
-                } else {
-                    uploaded += 1;
-                }
-            } catch (error) {
-                errors.push(error.message + ': ' + file.name);
-            }
-        }
-
-        if (errors.length) {
-            setStatus(errors.join('; '), true);
-        }
-        if (uploaded > 0) {
-            location.reload();
-            return;
-        }
-
-        uploading = false;
-        if (fileInput) {
-            fileInput.value = '';
-        }
-        if (!errors.length) {
-            setStatus('', false);
-        }
-    }
-
-    document.addEventListener('dragover', function (event) {
-        event.preventDefault();
-    });
-    document.addEventListener('drop', function (event) {
-        event.preventDefault();
-    });
-
-    /* Folder tree, structure modals, bulk actions, share links */
-    function openDialog(dialog) {
-        if (!dialog) {
-            return;
-        }
-        closeDropdowns(null);
-        dialog.classList.add('show');
-        dialog.style.display = 'block';
-        dialog.setAttribute('aria-hidden', 'false');
-        document.body.classList.add('modal-open');
-    }
-
-    function closeDialog(dialog) {
-        if (!dialog) {
-            return;
-        }
-        dialog.classList.remove('show');
-        dialog.style.display = 'none';
-        dialog.setAttribute('aria-hidden', 'true');
-        if (!document.querySelector('.modal.show')) {
-            document.body.classList.remove('modal-open');
-        }
-    }
-
-    ['sectionCreateModal', 'folderCreateModal', 'folderRenameModal'].forEach(function (id) {
-        var dialog = document.getElementById(id);
-        if (!dialog) {
-            return;
-        }
-        dialog.querySelectorAll('[data-modal-close]').forEach(function (button) {
-            button.addEventListener('click', function () {
-                closeDialog(dialog);
-            });
-        });
-        dialog.addEventListener('click', function (event) {
-            if (event.target === dialog) {
-                closeDialog(dialog);
-            }
-        });
-    });
-
-    document.addEventListener('keydown', function (event) {
-        if (event.key === 'Escape') {
-            document.querySelectorAll('.modal.show').forEach(closeDialog);
-        }
-    });
-
-    var sectionModal = document.getElementById('sectionCreateModal');
-    var openSectionModal = document.getElementById('openSectionModal');
-    if (openSectionModal && sectionModal) {
-        openSectionModal.addEventListener('click', function () {
-            openDialog(sectionModal);
-            var input = document.getElementById('sectionCode');
-            if (input) {
-                input.focus();
-            }
-        });
-    }
-
-    var folderCreateModal = document.getElementById('folderCreateModal');
-    function openFolderCreate(sectionId, parentId) {
-        if (!folderCreateModal) {
-            return;
-        }
-        document.getElementById('folderSectionInput').value = sectionId || '';
-        document.getElementById('folderParentInput').value = parentId || '';
-        document.getElementById('folderNameInput').value = '';
-        openDialog(folderCreateModal);
-        document.getElementById('folderNameInput').focus();
-    }
-
-    document.querySelectorAll('.section-add-folder').forEach(function (button) {
-        button.addEventListener('click', function (event) {
-            event.stopPropagation();
-            openFolderCreate(button.dataset.section, '');
-        });
-    });
-    document.querySelectorAll('[data-folder-create]').forEach(function (button) {
-        button.addEventListener('click', function () {
-            openFolderCreate(button.dataset.section, button.dataset.folderCreate);
-        });
-    });
-
-    var folderRenameModal = document.getElementById('folderRenameModal');
-    var folderRenameForm = document.getElementById('folderRenameForm');
-    document.querySelectorAll('[data-folder-rename]').forEach(function (button) {
-        button.addEventListener('click', function () {
-            if (!folderRenameModal || !folderRenameForm) {
-                return;
-            }
-            folderRenameForm.action = button.dataset.renameUrl;
-            document.getElementById('folderRenameInput').value = button.dataset.folderName || '';
-            openDialog(folderRenameModal);
-            document.getElementById('folderRenameInput').focus();
-        });
-    });
-
-    document.querySelectorAll('[data-folder-toggle]').forEach(function (button) {
-        button.addEventListener('click', function (event) {
-            event.stopPropagation();
-            var node = button.closest('.folder-node');
-            var children = node ? node.querySelector(':scope > .folder-children') : null;
-            var icon = button.querySelector('i');
-            if (!children) {
-                return;
-            }
-            children.classList.toggle('d-none');
-            if (icon) {
-                icon.classList.toggle('bi-chevron-down');
-                icon.classList.toggle('bi-chevron-right');
-            }
-        });
-    });
-
-    document.querySelectorAll('[data-folder-row]').forEach(function (row) {
-        row.addEventListener('contextmenu', function (event) {
-            var button = row.querySelector('.folder-menu-btn');
-            if (!button) {
-                return;
-            }
-            event.preventDefault();
-            button.click();
-        });
-    });
-
-    var bulkBar = document.getElementById('bulkBar');
-    var bulkCount = document.getElementById('bulkCount');
-    var bulkForm = document.getElementById('bulkForm');
-    var selectAll = document.getElementById('selectAllDocuments');
-
-    function updateBulkBar() {
-        if (!bulkForm || !bulkBar) {
-            return;
-        }
-        var selected = bulkForm.querySelectorAll('.doc-select:checked').length;
-        if (bulkCount) {
-            bulkCount.textContent = selected;
-        }
-        bulkBar.classList.toggle('d-none', selected === 0);
-        if (selectAll) {
-            var all = bulkForm.querySelectorAll('.doc-select');
-            selectAll.checked = all.length > 0 && selected === all.length;
-            selectAll.indeterminate = selected > 0 && selected < all.length;
-        }
-    }
-
-    if (bulkForm) {
-        bulkForm.addEventListener('change', function (event) {
-            if (event.target.classList.contains('doc-select')) {
-                updateBulkBar();
-            }
-        });
-        updateBulkBar();
-    }
-    if (selectAll && bulkForm) {
-        selectAll.addEventListener('change', function () {
-            bulkForm.querySelectorAll('.doc-select').forEach(function (checkbox) {
-                checkbox.checked = selectAll.checked;
-            });
-            updateBulkBar();
-        });
-    }
-
-    document.querySelectorAll('.doc-share-btn').forEach(function (button) {
-        button.addEventListener('click', function (event) {
-            event.preventDefault();
-            var originalTitle = button.title;
-            fetch(button.dataset.shareUrl, {
-                headers: { 'X-Requested-With': 'XMLHttpRequest' }
-            })
-                .then(function (response) {
-                    if (!response.ok) {
-                        throw new Error('Не удалось создать ссылку');
-                    }
-                    return response.json();
-                })
-                .then(function (data) {
-                    var url = data.url;
-                    if (navigator.clipboard && window.isSecureContext) {
-                        return navigator.clipboard.writeText(url).then(function () {
-                            return url;
-                        });
-                    }
-                    window.prompt('Скопируйте ссылку:', url);
-                    return url;
-                })
-                .then(function () {
-                    button.classList.add('is-copied');
-                    button.title = 'Ссылка скопирована';
-                    setTimeout(function () {
-                        button.classList.remove('is-copied');
-                        button.title = originalTitle;
-                    }, 1800);
-                })
-                .catch(function (error) {
-                    window.alert(error.message || 'Не удалось скопировать ссылку');
-                });
-        });
-    });
-
-    /* Participants role editor */
-    document.querySelectorAll('[data-role-toggle]').forEach(function (button) {
-        button.addEventListener('click', function () {
-            var target = document.getElementById(button.dataset.roleToggle);
-            if (target) {
-                target.classList.toggle('show');
-            }
-        });
-    });
-})();
-</script>
+<script src="{% static 'js/vendor/bootstrap.bundle.min.js' %}"></script>
+<script src="{% static 'js/vendor/htmx.min.js' %}"></script>
+<script src="{% static 'js/vendor/Sortable.min.js' %}"></script>
+<script src="{% static 'js/app.js' %}"></script>
 </body>
 </html>

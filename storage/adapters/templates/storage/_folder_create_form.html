@@ -1,0 +1,33 @@
+<form method="post" action="{% url 'storage:folder_create' project.pk %}">
+    {% csrf_token %}
+    <div class="modal-body">
+        <input type="hidden" name="section" value="{{ section.pk|default:'' }}">
+        <input type="hidden" name="parent" value="{{ parent.pk|default:'' }}">
+
+        {% if parent %}
+            <p class="small text-muted mb-2">
+                Вложенная папка в «{{ parent.name }}»
+            </p>
+        {% elif section %}
+            <p class="small text-muted mb-2">
+                Папка в разделе {{ section.code }} — {{ section.name }}
+            </p>
+        {% endif %}
+
+        <label for="folderNameInput" class="form-label">Название папки</label>
+        <input type="text"
+               class="form-control"
+               id="folderNameInput"
+               name="name"
+               maxlength="255"
+               required
+               autofocus
+               placeholder="Например, Рабочая документация">
+    </div>
+    <div class="modal-footer">
+        <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-dismiss="modal">Отмена</button>
+        <button type="submit" class="btn btn-primary btn-sm">
+            <i class="bi bi-folder-plus me-1" aria-hidden="true"></i>Создать папку
+        </button>
+    </div>
+</form>

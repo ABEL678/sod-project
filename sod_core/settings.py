@@ -80,7 +80,7 @@ SCOTTY_CONFIG = {
     'BUTTON_VARIANT': 'primary',
 }
 
-DJANGO_TABLES2_TEMPLATE = 'storage/documents_table.html'
+DJANGO_TABLES2_TEMPLATE = 'django_tables2/bootstrap5.html'
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
