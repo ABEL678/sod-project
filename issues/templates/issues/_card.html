@@ -98,7 +98,33 @@
         </div>
 
         <div class="tab-pane fade" id="card-files-{{ issue.pk }}" role="tabpanel">
-            <p class="text-muted small mb-0">Список файлов маркапов будет доступен позже.</p>
+            {% if issue.crop_image %}
+                <div class="d-flex align-items-center justify-content-between p-2 border rounded mb-2">
+                    <div class="d-flex align-items-center text-truncate">
+                        <i class="bi bi-file-earmark-image text-primary fs-4 me-2"></i>
+                        <div class="text-truncate">
+                            <a href="{{ issue.crop_image.url }}" target="_blank" class="text-decoration-none fw-bold">
+                                thumbnail_{{ issue.id }}.jpeg
+                            </a>
+                            <div class="small text-muted">Маркап замечания</div>
+                        </div>
+                    </div>
+                    <div class="dropdown">
+                        <button class="btn btn-sm btn-link text-muted p-0" type="button" data-bs-toggle="dropdown">
+                            <i class="bi bi-three-dots-vertical"></i>
+                        </button>
+                        <ul class="dropdown-menu dropdown-menu-end">
+                            <li><a class="dropdown-item" href="{{ issue.crop_image.url }}" target="_blank">Открыть</a></li>
+                            <li><a class="dropdown-item" href="{{ issue.crop_image.url }}" download>Скачать</a></li>
+                        </ul>
+                    </div>
+                </div>
+                <div class="text-center mt-2">
+                    <img src="{{ issue.crop_image.url }}" class="img-fluid border rounded" alt="Маркап" style="max-height: 200px;">
+                </div>
+            {% else %}
+                <p class="text-muted small text-center mt-3">Нет прикреплённых маркапов</p>
+            {% endif %}
         </div>
     </div>
 </div>
