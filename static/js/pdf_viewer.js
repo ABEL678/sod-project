@@ -467,7 +467,13 @@
         }
         const layer = document.createElement('div');
         layer.className = 'textLayer';
-        wrapper.appendChild(layer);
+        layer.style.setProperty('--scale-factor', viewport.scale);
+        const pinLayer = wrapper.querySelector('.pdf-pin-layer');
+        if (pinLayer) {
+            wrapper.insertBefore(layer, pinLayer);
+        } else {
+            wrapper.appendChild(layer);
+        }
         page.getTextContent().then(function (textContent) {
             const task = window.pdfjsLib.renderTextLayer({
                 textContentSource: textContent,
@@ -518,9 +524,9 @@
                     const layer = document.createElement('div');
                     layer.className = 'pdf-pin-layer';
                     wrapper.appendChild(canvas);
-                    buildTextLayer(page, viewport, wrapper);
                     wrapper.appendChild(layer);
                     viewer.appendChild(wrapper);
+                    buildTextLayer(page, viewport, wrapper);
                     pages.set(number, {wrapper: wrapper, canvas: canvas, layer: layer});
                     bindPageInteraction(wrapper, canvas);
                     return page.render({
@@ -582,28 +588,47 @@
             }
         });
 
-        let panStart = null;
+    }
+
+    function initPan() {
+        let isPanning = false;
+        let startX = 0;
+        let startY = 0;
+        let scrollLeft = 0;
+        let scrollTop = 0;
+
         viewer.addEventListener('mousedown', function (event) {
             if (!panMode || event.button !== 0) {
                 return;
             }
-            panStart = {
-                x: event.clientX,
-                y: event.clientY,
-                left: viewer.scrollLeft,
-                top: viewer.scrollTop,
-            };
+            isPanning = true;
+            startX = event.clientX;
+            startY = event.clientY;
+            scrollLeft = viewer.scrollLeft;
+            scrollTop = viewer.scrollTop;
+            viewer.classList.add('is-panning');
+            viewer.style.cursor = 'grabbing';
             event.preventDefault();
         });
+
         window.addEventListener('mousemove', function (event) {
-            if (!panStart) {
+            if (!isPanning) {
                 return;
             }
-            viewer.scrollLeft = panStart.left - (event.clientX - panStart.x);
-            viewer.scrollTop = panStart.top - (event.clientY - panStart.y);
+            event.preventDefault();
+            const walkX = (event.clientX - startX) * 1.5;
+            const walkY = (event.clientY - startY) * 1.5;
+            viewer.scrollLeft = scrollLeft - walkX;
+            viewer.scrollTop = scrollTop - walkY;
         });
+
         window.addEventListener('mouseup', function () {
-            panStart = null;
+            if (!isPanning) {
+                return;
+            }
+            isPanning = false;
+            viewer.classList.remove('is-panning');
+            viewer.style.cursor = panMode ? 'grab' : 'default';
         });
     }
 
@@ -862,14 +887,16 @@
         panMode = !panMode;
         textMode = false;
         viewer.classList.toggle('is-pan', panMode);
-        viewer.classList.remove('text-mode');
+        viewer.classList.remove('is-panning', 'text-mode');
+        viewer.style.cursor = panMode ? 'grab' : 'default';
     };
 
     window.toggleSelect = function () {
         textMode = !textMode;
         panMode = false;
         viewer.classList.toggle('text-mode', textMode);
-        viewer.classList.remove('is-pan');
+        viewer.classList.remove('is-pan', 'is-panning');
+        viewer.style.cursor = 'default';
     };
 
     window.copyText = function () {
@@ -881,6 +908,7 @@
     window.renderPage = renderPages;
 
     initToolbar();
+    initPan();
     initContextMenu();
     initDetails();
     if (issues.length) {
