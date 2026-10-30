@@ -13,7 +13,7 @@
 <body class="bg-light d-flex flex-column" style="height: 100vh; overflow: hidden;">
 {% include 'storage/_topbar.html' with topbar_project=document.project %}
 <main class="d-flex flex-column flex-grow-1" style="min-height: 0;">
-    <div class="d-flex justify-content-between align-items-center py-1 px-2 border-bottom bg-white small flex-shrink-0" style="font-size: 0.85rem;">
+    <div class="d-flex align-items-center gap-2 py-1 px-2 border-bottom bg-white small flex-shrink-0" style="font-size: 0.85rem;">
         <nav aria-label="breadcrumb" class="mb-0">
             <ol class="breadcrumb mb-0">
                 <li class="breadcrumb-item"><a href="{% url 'storage:project_list' %}">Проекты</a></li>
@@ -22,11 +22,10 @@
             </ol>
         </nav>
 
-        <div class="d-flex align-items-center gap-2">
-            <span class="fw-bold">{{ document.name }}</span>
-            <span class="badge bg-secondary">{{ document.get_status_display }}</span>
-            <span class="text-muted">v{{ document.current_version.version_number }}</span>
-        </div>
+        <span class="text-muted">/</span>
+        <span class="fw-bold">{{ document.name }}</span>
+        <span class="badge bg-secondary">{{ document.get_status_display }}</span>
+        <span class="text-muted">v{{ document.current_version.version_number }}</span>
     </div>
 
     {% if public_view %}
@@ -51,7 +50,13 @@
                     <button class="btn btn-sm btn-outline-secondary d-flex align-items-center py-0 px-2 dropdown-toggle" style="height: 28px;" type="button" data-bs-toggle="dropdown" aria-expanded="false">100%</button>
                     <ul class="dropdown-menu">
                         <li><a class="dropdown-item" href="#" onclick="setZoom(0.5); return false;">50%</a></li>
+                        <li><a class="dropdown-item" href="#" onclick="setZoom(0.75); return false;">75%</a></li>
                         <li><a class="dropdown-item" href="#" onclick="setZoom(1.0); return false;">100%</a></li>
+                        <li><a class="dropdown-item" href="#" onclick="setZoom(1.25); return false;">125%</a></li>
+                        <li><a class="dropdown-item" href="#" onclick="setZoom(1.5); return false;">150%</a></li>
+                        <li><a class="dropdown-item" href="#" onclick="setZoom(2.0); return false;">200%</a></li>
+                        <li><a class="dropdown-item" href="#" onclick="setZoom(3.0); return false;">300%</a></li>
+                        <li><a class="dropdown-item" href="#" onclick="setZoom(4.0); return false;">400%</a></li>
                     </ul>
                 </div>
                 <div class="dropdown d-inline-block">
