@@ -1697,7 +1697,6 @@ def create_issue(
     project_organization: str = '',
     answer_text: str = '',
     due_date=None,
-    actual_fix_date=None,
     revision: str = '',
 ) -> Issue:
     """Создаёт замечание к документу с проверкой прав и валидацией координат."""
@@ -1766,7 +1765,6 @@ def create_issue(
         project_organization=project_organization,
         answer_text=answer_text,
         due_date=due_date,
-        actual_fix_date=actual_fix_date,
         revision=revision,
     )
 

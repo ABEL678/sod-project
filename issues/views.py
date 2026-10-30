@@ -109,9 +109,6 @@ class IssueCreateView(CreateView):
         y2_ratio = _to_float(y2_ratio)
 
         due_date = parse_date(self.request.POST.get('due_date') or '')
-        actual_fix_date = parse_date(
-            self.request.POST.get('actual_fix_date') or ''
-        )
 
         assignee = None
         assignee_id = (self.request.POST.get('assignee') or '').strip()
@@ -141,7 +138,6 @@ class IssueCreateView(CreateView):
                 ),
                 answer_text=self.request.POST.get('answer_text', ''),
                 due_date=due_date,
-                actual_fix_date=actual_fix_date,
                 revision=self.request.POST.get('revision', ''),
             )
         except PermissionDenied as exc:
@@ -302,6 +298,9 @@ def issue_detail_htmx(request, issue_id):
 @login_required
 def issue_delete_crop(request, issue_id):
     issue = get_object_or_404(Issue, pk=issue_id)
+    if issue.document not in get_accessible_documents(request.user):
+        return HttpResponseForbidden('Нет доступа')
+
     profile = getattr(request.user, 'userprofile', None)
     is_admin = profile is not None and profile.role == 'admin'
     if request.user == issue.author or is_admin or request.user.is_superuser:
@@ -315,6 +314,16 @@ def issue_delete_crop(request, issue_id):
 @login_required
 def add_comment(request, issue_id):
     issue = get_object_or_404(Issue, pk=issue_id)
+    if issue.document not in get_accessible_documents(request.user):
+        return HttpResponseForbidden('Нет доступа к этому замечанию')
+
+    if not request.user.is_superuser:
+        profile = getattr(request.user, 'userprofile', None)
+        if profile is None or profile.role == 'viewer':
+            return HttpResponseForbidden(
+                'Наблюдатели не могут комментировать'
+            )
+
     if request.method == 'POST':
         text = request.POST.get('text', '').strip()
         if text:

@@ -651,11 +651,11 @@ class IssueStatusMatrixTests(TestCase):
         delete_issue(self.gip, issue)
         self.assertFalse(Issue.objects.filter(pk=issue.pk).exists())
 
-    def test_done_sets_actual_fix_date(self):
+    def test_done_does_not_set_actual_fix_date(self):
         issue = self._issue()
         update_issue_status(self.developer, issue, 'DONE')
         issue.refresh_from_db()
-        self.assertIsNotNone(issue.actual_fix_date)
+        self.assertIsNone(issue.actual_fix_date)
 
     def test_document_detail_has_pdf_toolbar_and_element_tab(self):
         self._issue()
