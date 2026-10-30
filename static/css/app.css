@@ -2428,14 +2428,12 @@ body.modal-open {
 /* ---------- Compact issue table ---------- */
 
 .issue-table-text {
-    display: -webkit-box;
-    -webkit-line-clamp: 2;
-    -webkit-box-orient: vertical;
-    overflow: hidden;
-    white-space: normal;
-    word-wrap: break-word;
+    white-space: normal !important;
+    word-wrap: break-word !important;
     max-width: 200px;
     font-size: 0.8rem;
+    line-height: 1.2;
+    padding: 0.25rem 0.5rem;
 }
 
 .table-sm td,
