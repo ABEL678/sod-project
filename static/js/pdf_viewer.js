@@ -7,6 +7,7 @@
     window.togglePan = window.togglePan || function () {};
     window.toggleSelect = window.toggleSelect || function () {};
     window.copyText = window.copyText || function () {};
+    window.toggleOverlay = window.toggleOverlay || function () {};
 
     const viewer = document.getElementById('pdfViewer');
     if (!viewer) {
@@ -971,6 +972,10 @@
         if (navigator.clipboard) {
             navigator.clipboard.writeText(window.getSelection().toString());
         }
+    };
+
+    window.toggleOverlay = function () {
+        alert('Режим наложения версий будет доступен в следующем обновлении.');
     };
 
     window.renderPage = renderPages;

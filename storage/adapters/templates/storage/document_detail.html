@@ -36,7 +36,7 @@
     {% endif %}
 
     <div id="main-splitter" class="d-flex w-100" style="height: calc(100vh - 110px); margin-bottom: 0 !important;">
-        <div id="pdf-panel" class="h-100 bg-secondary d-flex flex-column" style="width: 75%;">
+        <div id="pdf-panel" class="h-100 d-flex flex-column" style="width: 75%;">
             <div class="bg-light border-bottom p-1 d-flex flex-wrap gap-1 align-items-center">
                 <button class="btn btn-sm btn-outline-secondary py-0 px-2" onclick="zoomIn()">+</button>
                 <button class="btn btn-sm btn-outline-secondary py-0 px-2" onclick="zoomOut()">−</button>
@@ -47,6 +47,22 @@
                         <li><a class="dropdown-item" href="#" onclick="setZoom(1.0); return false;">100%</a></li>
                     </ul>
                 </div>
+                <div class="dropdown d-inline-block">
+                    <button class="btn btn-sm btn-outline-secondary py-0 px-2 dropdown-toggle" type="button" data-bs-toggle="dropdown">
+                        Версии
+                    </button>
+                    <ul class="dropdown-menu">
+                        {% for version in document.versions.all %}
+                            <li>
+                                <a class="dropdown-item d-flex justify-content-between" href="?version={{ version.pk }}">
+                                    <span>v{{ version.version_number }}</span>
+                                    <span class="text-muted small">{{ version.uploaded_at|date:"d.m.Y" }}</span>
+                                </a>
+                            </li>
+                        {% endfor %}
+                    </ul>
+                </div>
+                <button class="btn btn-sm btn-outline-secondary py-0 px-2" onclick="toggleOverlay()">Наложение</button>
                 <button class="btn btn-sm btn-outline-secondary py-0 px-2" onclick="rotatePage()">⟲</button>
                 <button class="btn btn-sm btn-outline-secondary py-0 px-2" onclick="togglePan()">✋</button>
                 <button class="btn btn-sm btn-outline-secondary py-0 px-2" onclick="toggleSelect()">⍝</button>
@@ -56,7 +72,7 @@
                 <a href="{% url 'storage:document_pdf_with_issues' document.pk %}" class="btn btn-sm btn-primary py-0 px-2">Скачать</a>
             </div>
 
-            <div class="pdf-viewer flex-grow-1 overflow-auto" id="pdfViewer"
+            <div class="pdf-viewer flex-grow-1 overflow-auto h-100" id="pdfViewer"
                  data-pdf-url="{% url 'storage:document_download' document.current_version.pk %}"
                  data-worker-url="{% static 'js/pdfjs/pdf.worker.min.js' %}"
                  {% if can_create_issue %}data-issue-create-url="{% url 'issues:issue_create' document.pk %}"{% endif %}
