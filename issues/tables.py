@@ -26,7 +26,13 @@ class IssueTable(tables.Table):
     description = tables.Column(
         verbose_name='Текст',
         orderable=False,
-        attrs={'td': {'class': 'issue-table-text'}},
+        attrs={
+            'td': {
+                'style': (
+                    'white-space: normal; word-wrap: break-word; width: 100%;'
+                )
+            }
+        },
     )
     status = tables.Column(verbose_name='Статус', orderable=False)
     created_at = tables.DateColumn(
@@ -63,6 +69,7 @@ class IssueTable(tables.Table):
         empty_text = 'Замечаний пока нет'
         attrs = {
             'class': 'table table-sm small table-hover align-middle mb-0',
+            'style': 'table-layout: auto; width: 100%;',
         }
         row_attrs = {
             'id': lambda record: f'issue-row-{record.pk}',
