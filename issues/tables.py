@@ -30,7 +30,7 @@ class IssueTable(tables.Table):
             'td': {
                 'style': (
                     'white-space: normal; word-wrap: break-word; '
-                    'min-width: 150px;'
+                    'min-width: 150px; max-width: 200px;'
                 )
             }
         },
@@ -69,7 +69,7 @@ class IssueTable(tables.Table):
         )
         empty_text = 'Замечаний пока нет'
         attrs = {
-            'class': 'table table-sm table-hover align-middle mb-0',
+            'class': 'table table-sm table-hover align-middle mb-0 small',
         }
         row_attrs = {
             'id': lambda record: f'issue-row-{record.pk}',

@@ -10,14 +10,14 @@
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
     <link rel="stylesheet" href="{% static 'css/app.css' %}">
 </head>
-<body class="bg-light">
+<body class="bg-light" style="height: 100vh; overflow: hidden;">
 {% include 'storage/_topbar.html' with topbar_project=document.project %}
-<main class="container-fluid py-3 pb-5">
-    <div class="small py-1">
+<main class="container-fluid py-2 pb-0 d-flex flex-column" style="height: calc(100vh - 48px); overflow: hidden;">
+    <div class="small py-1 flex-shrink-0">
         {% include 'storage/_breadcrumbs.html' %}
     </div>
 
-    <div class="d-flex align-items-center justify-content-between py-1 border-bottom bg-white" style="font-size: 0.85rem;">
+    <div class="d-flex align-items-center justify-content-between py-1 border-bottom bg-white flex-shrink-0" style="font-size: 0.85rem;">
         <div class="d-flex align-items-center gap-2 text-truncate">
             <span class="text-muted">{{ document.project.code }}</span>
             <span class="text-muted">/</span>
@@ -33,7 +33,7 @@
         </div>
     </div>
 
-    <div id="docMetaDetails" class="collapse">
+    <div id="docMetaDetails" class="collapse flex-shrink-0">
         <div class="card-body py-2 small">
             <div class="row g-2">
                 <div class="col-md-3">
@@ -79,7 +79,7 @@
         {% endfor %}
     {% endif %}
 
-    <div class="d-flex align-items-center justify-content-between py-1 bg-light border-bottom">
+    <div class="sticky-top d-flex align-items-center justify-content-between py-1 bg-light border-bottom flex-shrink-0" style="z-index: 1020; top: 48px;">
         <div class="d-flex align-items-center gap-1 flex-nowrap" style="overflow-x: auto;">
             <button type="button" class="btn btn-sm btn-outline-secondary" onclick="zoomIn()">+</button>
             <button type="button" class="btn btn-sm btn-outline-secondary" onclick="zoomOut()">−</button>
@@ -96,7 +96,7 @@
         </span>
     </div>
 
-    <div id="main-splitter" class="d-flex" style="height: calc(100vh - 200px);">
+    <div id="main-splitter" class="d-flex flex-grow-1" style="min-height: 0; overflow: hidden;">
         <div id="pdf-panel" style="width: 60%; overflow: hidden; border-right: 1px solid #dee2e6;">
             <div class="card shadow-sm h-100">
                 <div class="card-body p-0">
@@ -144,7 +144,7 @@
         </div>
     </div>
 
-    <div class="card shadow-sm mb-0" id="versions">
+    <div class="card shadow-sm mb-0 flex-shrink-0" id="versions" style="max-height: 25vh; overflow-y: auto;">
         <div class="card-header bg-white py-2 d-flex justify-content-between align-items-center flex-wrap gap-2">
             <span class="fw-semibold small">История версий ({{ versions|length }})</span>
             {% if versions and not public_view %}

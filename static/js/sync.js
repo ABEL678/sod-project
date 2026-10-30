@@ -20,7 +20,7 @@ window.selectIssue = function (event, issueId) {
     );
     if (markup) {
         markup.classList.add('border-danger');
-        markup.scrollIntoView({behavior: 'smooth', block: 'center'});
+        markup.scrollIntoView({behavior: 'smooth', block: 'nearest'});
     }
 };
 
@@ -39,7 +39,7 @@ window.selectIssueFromPdf = function (issueId) {
     const row = document.getElementById('issue-row-' + issueId);
     if (row) {
         row.classList.add('table-active');
-        row.scrollIntoView({behavior: 'smooth', block: 'center'});
+        row.scrollIntoView({behavior: 'smooth', block: 'nearest'});
     }
 
     const markup = document.querySelector(
