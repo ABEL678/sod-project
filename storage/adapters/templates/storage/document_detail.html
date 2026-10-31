@@ -38,7 +38,11 @@
 
 <div class="toolbar">
   <div class="group">
-    <span class="page-label">Стр. <b>1</b></span>
+    <button class="tbtn" onclick="prevPage()" title="Предыдущая страница" type="button">‹</button>
+    <input class="page-input num" type="number" id="pageInput" min="1" value="1"
+           onchange="goToPage(Number(this.value))">
+    <span class="page-label num">из <span id="totalPages">1</span></span>
+    <button class="tbtn" onclick="nextPage()" title="Следующая страница" type="button">›</button>
   </div>
   <span class="divider"></span>
   <div class="group">

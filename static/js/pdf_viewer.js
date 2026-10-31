@@ -55,6 +55,7 @@
     let pdfDocument = null;
     let currentScale = 1.0;
     let currentRotation = 0;
+    let currentPage = 1;
     let panMode = false;
     let textMode = false;
     let selectedIssueId = null;
@@ -532,10 +533,36 @@
         }).catch(function () {});
     }
 
-    function renderPages() {
+    function updatePageControls() {
+        const total = pdfDocument ? pdfDocument.numPages : 1;
+        currentPage = Math.min(Math.max(1, Number(currentPage) || 1), total);
+        const input = document.getElementById('pageInput');
+        if (input) {
+            input.max = String(total);
+            input.value = String(currentPage);
+        }
+        const totalLabel = document.getElementById('totalPages');
+        if (totalLabel) {
+            totalLabel.textContent = String(total);
+        }
+        document.querySelectorAll('#minimap .thumb').forEach(function (thumb) {
+            thumb.classList.toggle(
+                'active',
+                Number(thumb.dataset.page) === currentPage
+            );
+        });
+    }
+
+    function renderPage(pageNumber) {
         if (!pdfDocument) {
             return;
         }
+        const total = pdfDocument.numPages;
+        currentPage = Math.min(
+            Math.max(1, Number(pageNumber) || 1),
+            total
+        );
+
         pageCleanups.splice(0).forEach(function (cleanup) {
             cleanup();
         });
@@ -543,48 +570,50 @@
             node.remove();
         });
         pages.clear();
-        const sequence = [];
-        for (let number = 1; number <= pdfDocument.numPages; number += 1) {
-            sequence.push(number);
-        }
-        return sequence.reduce(function (chain, number) {
-            return chain.then(function () {
-                return pdfDocument.getPage(number).then(function (page) {
-                    const viewport = page.getViewport({
-                        scale: currentScale,
-                        rotation: currentRotation,
-                    });
-                    const outputScale = window.devicePixelRatio || 1;
-                    const wrapper = document.createElement('div');
-                    wrapper.className = 'pdf-page';
-                    wrapper.dataset.page = String(number);
-                    wrapper.style.width = Math.floor(viewport.width) + 'px';
-                    const canvas = document.createElement('canvas');
-                    canvas.width = Math.floor(viewport.width * outputScale);
-                    canvas.height = Math.floor(viewport.height * outputScale);
-                    canvas.style.width = Math.floor(viewport.width) + 'px';
-                    canvas.style.height = Math.floor(viewport.height) + 'px';
-                    const context = canvas.getContext('2d');
-                    context.setTransform(
-                        outputScale, 0, 0, outputScale, 0, 0
-                    );
-                    const layer = document.createElement('div');
-                    layer.className = 'pdf-pin-layer';
-                    wrapper.appendChild(canvas);
-                    wrapper.appendChild(layer);
-                    viewer.appendChild(wrapper);
-                    buildTextLayer(page, viewport, wrapper);
-                    pages.set(number, {wrapper: wrapper, canvas: canvas, layer: layer});
-                    bindPageInteraction(wrapper, canvas);
-                    return page.render({
-                        canvasContext: context,
-                        viewport: viewport,
-                    }).promise.then(function () {
-                        drawMarks(number);
-                    });
-                });
+
+        return pdfDocument.getPage(currentPage).then(function (page) {
+            const viewport = page.getViewport({
+                scale: currentScale,
+                rotation: currentRotation,
             });
-        }, Promise.resolve());
+            const outputScale = window.devicePixelRatio || 1;
+            const wrapper = document.createElement('div');
+            wrapper.className = 'pdf-page';
+            wrapper.dataset.page = String(currentPage);
+            wrapper.style.width = Math.floor(viewport.width) + 'px';
+            const canvas = document.createElement('canvas');
+            canvas.width = Math.floor(viewport.width * outputScale);
+            canvas.height = Math.floor(viewport.height * outputScale);
+            canvas.style.width = Math.floor(viewport.width) + 'px';
+            canvas.style.height = Math.floor(viewport.height) + 'px';
+            const context = canvas.getContext('2d');
+            context.setTransform(
+                outputScale, 0, 0, outputScale, 0, 0
+            );
+            const layer = document.createElement('div');
+            layer.className = 'pdf-pin-layer';
+            wrapper.appendChild(canvas);
+            wrapper.appendChild(layer);
+            viewer.appendChild(wrapper);
+            buildTextLayer(page, viewport, wrapper);
+            pages.set(currentPage, {
+                wrapper: wrapper,
+                canvas: canvas,
+                layer: layer,
+            });
+            bindPageInteraction(wrapper, canvas);
+            updatePageControls();
+            return page.render({
+                canvasContext: context,
+                viewport: viewport,
+            }).promise.then(function () {
+                drawMarks(currentPage);
+            });
+        });
+    }
+
+    function renderPages() {
+        return renderPage(currentPage);
     }
 
     function toggleToolbarButton(action, active) {
@@ -854,19 +883,18 @@
     }
 
     window.goToPage = function (pageNumber) {
-        const page = pages.get(Number(pageNumber));
-        if (page) {
-            page.wrapper.scrollIntoView({behavior: 'smooth', block: 'start'});
+        return renderPage(pageNumber);
+    };
+
+    window.prevPage = function () {
+        if (pdfDocument && currentPage > 1) {
+            renderPage(currentPage - 1);
         }
-        document.querySelectorAll('#minimap .thumb').forEach(function (thumb) {
-            thumb.classList.toggle(
-                'active',
-                Number(thumb.dataset.page) === Number(pageNumber)
-            );
-        });
-        const label = document.querySelector('.page-label');
-        if (label) {
-            label.innerHTML = 'Стр. <b>' + Number(pageNumber) + '</b>';
+    };
+
+    window.nextPage = function () {
+        if (pdfDocument && currentPage < pdfDocument.numPages) {
+            renderPage(currentPage + 1);
         }
     };
 
@@ -1052,7 +1080,7 @@
         alert('Режим наложения версий будет доступен в следующем обновлении.');
     };
 
-    window.renderPage = renderPages;
+    window.renderPage = renderPage;
 
     initToolbar();
     initPan();
