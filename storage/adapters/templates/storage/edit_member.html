@@ -1,0 +1,76 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Редактирование участника — Stream-CAD</title>
+    <link rel="stylesheet" href="{% static 'css/bootstrap.min.css' %}">
+    <link rel="stylesheet" href="{% static 'design-tokens/tokens.css' %}">
+    <link rel="stylesheet" href="{% static 'css/redesign.css' %}">
+    <link rel="stylesheet" href="{% static 'css/app.css' %}">
+</head>
+<body class="bg-light">
+{% include 'storage/_topbar.html' with topbar_company=object.company topbar_title="Редактирование участника" %}
+<main class="container py-3 pb-5">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <div>
+            <h1 class="h4 mb-0">Редактирование участника</h1>
+            <div class="small text-muted">{{ object.user.username }}</div>
+        </div>
+        <a href="{% url 'storage:dashboard' %}" class="btn btn-sm btn-outline-secondary">← К панели</a>
+    </div>
+
+    <div class="card shadow-sm" style="max-width: 640px;">
+        <div class="card-body">
+            <form method="post">
+                {% csrf_token %}
+                {% if form.non_field_errors %}
+                    <div class="alert alert-danger">{{ form.non_field_errors }}</div>
+                {% endif %}
+
+                <div class="mb-3">
+                    <label class="form-label small" for="editUsername">Логин</label>
+                    <input class="form-control form-control-sm" id="editUsername"
+                           value="{{ object.user.username }}" disabled>
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label small" for="{{ form.first_name.id_for_label }}">{{ form.first_name.label }}</label>
+                    {{ form.first_name }}
+                    {% for error in form.first_name.errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label small" for="{{ form.last_name.id_for_label }}">{{ form.last_name.label }}</label>
+                    {{ form.last_name }}
+                    {% for error in form.last_name.errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label small" for="{{ form.email.id_for_label }}">{{ form.email.label }}</label>
+                    {{ form.email }}
+                    {% for error in form.email.errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label small" for="{{ form.role.id_for_label }}">{{ form.role.label }}</label>
+                    {{ form.role }}
+                    {% for error in form.role.errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label small" for="{{ form.company.id_for_label }}">{{ form.company.label }}</label>
+                    {{ form.company }}
+                    {% for error in form.company.errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}
+                </div>
+
+                <button type="submit" class="btn btn-primary btn-sm">Сохранить</button>
+                <a href="{% url 'storage:dashboard' %}" class="btn btn-outline-secondary btn-sm">Отмена</a>
+            </form>
+        </div>
+    </div>
+</main>
+<script src="{% static 'js/vendor/bootstrap.bundle.min.js' %}"></script>
+</body>
+</html>

@@ -20,6 +20,11 @@
         </div>
     </div>
 
+    <p class="text-muted small">
+        Проекты видны только участникам компании. Заказчик (customer) видит только те проекты,
+        куда его пригласили. Смежник (contractor) — только разделы из allowed_sections.
+    </p>
+
     {% if messages %}
         {% for message in messages %}
             <div class="alert {% if message.tags == 'error' %}alert-danger{% else %}alert-{{ message.tags }}{% endif %}">
@@ -94,6 +99,7 @@
                                     <th>ФИО</th>
                                     <th>Роль</th>
                                     <th>Email</th>
+                                    <th>Права</th>
                                     <th class="text-end">Действия</th>
                                 </tr>
                             </thead>
@@ -110,7 +116,21 @@
                                         <span class="badge bg-secondary">{{ member.get_role_display }}</span>
                                     </td>
                                     <td class="small">{{ member.user.email|default:"—" }}</td>
+                                    <td class="small">
+                                        <input type="checkbox" disabled checked> Чтение
+                                        <input type="checkbox" disabled
+                                               {% if member.role == 'admin' or member.role == 'gip' or member.role == 'developer' or member.role == 'contractor' %}checked{% endif %}>
+                                        Запись
+                                        <input type="checkbox" disabled
+                                               {% if member.role == 'admin' or member.role == 'gip' or member.role == 'checker' or member.role == 'normocontrol' or member.role == 'customer' %}checked{% endif %}>
+                                        Замечания
+                                        <input type="checkbox" disabled
+                                               {% if member.role == 'admin' %}checked{% endif %}>
+                                        Управление
+                                    </td>
                                     <td class="text-end">
+                                        <a href="{% url 'storage:edit_member' member.pk %}"
+                                           class="btn btn-sm btn-outline-secondary">Редактировать</a>
                                         <form method="post" action="{% url 'storage:dashboard' %}" class="d-inline"
                                               onsubmit="return confirm('Вы уверены, что хотите удалить этого участника?');">
                                             {% csrf_token %}
@@ -124,7 +144,7 @@
                                 </tr>
                             {% empty %}
                                 <tr>
-                                    <td colspan="4" class="text-center text-muted py-5">
+                                    <td colspan="5" class="text-center text-muted py-5">
                                         Участников пока нет
                                     </td>
                                 </tr>
@@ -147,20 +167,40 @@
                             <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрыть"></button>
                         </div>
                         <div class="modal-body">
-                            <div class="mb-3">
-                                <label class="form-label small" for="memberUser">Пользователь</label>
-                                <select class="form-select form-select-sm" id="memberUser" name="user_id" required>
-                                    <option value="">Выберите пользователя</option>
-                                    {% for candidate in available_users %}
-                                        <option value="{{ candidate.pk }}">
-                                            {{ candidate.get_full_name|default:candidate.username }}
-                                            {% if candidate.email %}({{ candidate.email }}){% endif %}
-                                        </option>
+                            {% if user.is_superuser %}
+                                <div class="mb-2">
+                                    <label class="form-label small" for="memberCompany">Компания</label>
+                                    <select class="form-select form-select-sm" id="memberCompany" name="company_id">
+                                        {% for c in all_companies %}
+                                            <option value="{{ c.pk }}">{{ c.name }}</option>
+                                        {% endfor %}
+                                    </select>
+                                </div>
+                            {% endif %}
+                            <div class="mb-2">
+                                <label class="form-label small" for="memberUsername">Логин</label>
+                                <input type="text" id="memberUsername" name="username" class="form-control form-control-sm" required>
+                            </div>
+                            <div class="mb-2">
+                                <label class="form-label small" for="memberFullName">ФИО</label>
+                                <input type="text" id="memberFullName" name="full_name" class="form-control form-control-sm" placeholder="Иванов Иван Иванович">
+                            </div>
+                            <div class="mb-2">
+                                <label class="form-label small" for="memberEmail">Email</label>
+                                <input type="email" id="memberEmail" name="email" class="form-control form-control-sm">
+                            </div>
+                            <div class="mb-2">
+                                <label class="form-label small" for="memberPassword">Пароль</label>
+                                <input type="password" id="memberPassword" name="password" class="form-control form-control-sm" placeholder="Оставьте пустым, если пользователь уже есть">
+                            </div>
+                            <div class="mb-2">
+                                <label class="form-label small" for="memberProject">Проект (опционально)</label>
+                                <select class="form-select form-select-sm" id="memberProject" name="project_id">
+                                    <option value="">Не привязывать</option>
+                                    {% for p in projects %}
+                                        <option value="{{ p.pk }}">{{ p.code }} — {{ p.name }}</option>
                                     {% endfor %}
                                 </select>
-                                {% if not available_users %}
-                                    <div class="form-text text-danger">Нет пользователей без компании.</div>
-                                {% endif %}
                             </div>
                             <div class="mb-3">
                                 <label class="form-label small" for="memberRole">Роль</label>

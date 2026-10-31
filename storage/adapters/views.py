@@ -19,13 +19,14 @@ from django.http import (
     HttpResponseNotFound,
     JsonResponse,
 )
+from django import forms
 from django.shortcuts import get_object_or_404, redirect
-from django.urls import reverse
+from django.urls import reverse, reverse_lazy
 from django.utils import timezone
 from django.utils.safestring import mark_safe
 from django.utils.text import get_valid_filename
 from django.views import View
-from django.views.generic import DetailView, ListView, TemplateView
+from django.views.generic import DetailView, ListView, TemplateView, UpdateView
 from django_scotty.views import CottonTableView
 from openpyxl import Workbook
 from openpyxl.styles import Font
@@ -1694,6 +1695,96 @@ class SimulateMailImportView(LoginRequiredMixin, View):
         return redirect('storage:project_detail', pk=project.pk)
 
 
+class EditMemberForm(forms.ModelForm):
+    first_name = forms.CharField(label='Имя', required=False)
+    last_name = forms.CharField(label='Фамилия', required=False)
+    email = forms.EmailField(label='Email', required=False)
+
+    class Meta:
+        model = UserProfile
+        fields = ('role', 'company')
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        for name in ('first_name', 'last_name', 'email'):
+            self.fields[name].widget.attrs['class'] = 'form-control form-control-sm'
+        self.fields['role'].widget.attrs['class'] = 'form-select form-select-sm'
+        self.fields['company'].widget.attrs['class'] = 'form-select form-select-sm'
+        if self.instance and self.instance.user_id:
+            self.fields['first_name'].initial = self.instance.user.first_name
+            self.fields['last_name'].initial = self.instance.user.last_name
+            self.fields['email'].initial = self.instance.user.email
+
+    def save(self, commit=True):
+        profile = super().save(commit=False)
+        user = profile.user
+        user.first_name = self.cleaned_data.get('first_name', '')
+        user.last_name = self.cleaned_data.get('last_name', '')
+        user.email = self.cleaned_data.get('email', '')
+        user.save()
+        if commit:
+            profile.save()
+        return profile
+
+
+class EditMemberView(LoginRequiredMixin, UserPassesTestMixin, UpdateView):
+    model = UserProfile
+    form_class = EditMemberForm
+    template_name = 'storage/edit_member.html'
+    success_url = reverse_lazy('storage:dashboard')
+
+    def test_func(self):
+        user = self.request.user
+        if user.is_superuser:
+            return True
+        profile = getattr(user, 'userprofile', None)
+        return profile is not None and profile.role in ('admin', 'gip')
+
+    def get_queryset(self):
+        queryset = UserProfile.objects.select_related('user', 'company')
+        actor = self.request.user
+        if actor.is_superuser:
+            return queryset
+        actor_profile = getattr(actor, 'userprofile', None)
+        if actor_profile is None:
+            return queryset.none()
+        queryset = queryset.filter(company=actor_profile.company)
+        if actor_profile.role != 'admin':
+            queryset = queryset.exclude(role='admin')
+        return queryset
+
+    def get_form(self, form_class=None):
+        form = super().get_form(form_class)
+        actor = self.request.user
+        actor_profile = getattr(actor, 'userprofile', None)
+        if not actor.is_superuser:
+            form.fields['company'].queryset = Company.objects.filter(
+                pk=actor_profile.company_id
+            )
+            form.fields['company'].disabled = True
+            if actor_profile.role != 'admin':
+                form.fields['role'].choices = [
+                    choice
+                    for choice in form.fields['role'].choices
+                    if choice[0] != 'admin'
+                ]
+        return form
+
+    def form_valid(self, form):
+        actor = self.request.user
+        if not actor.is_superuser:
+            actor_profile = getattr(actor, 'userprofile', None)
+            if (
+                self.object.role == 'admin'
+                or form.cleaned_data.get('role') == 'admin'
+            ) and actor_profile.role != 'admin':
+                raise PermissionDenied(
+                    'Только администратор может изменять администраторов'
+                )
+            form.instance.company = actor_profile.company
+        return super().form_valid(form)
+
+
 class DashboardView(LoginRequiredMixin, UserPassesTestMixin, TemplateView):
     template_name = 'storage/dashboard.html'
 
@@ -1737,6 +1828,16 @@ class DashboardView(LoginRequiredMixin, UserPassesTestMixin, TemplateView):
             if company is not None
             else Section.objects.none()
         )
+        context['all_companies'] = (
+            Company.objects.order_by('name')
+            if self.request.user.is_superuser
+            else Company.objects.none()
+        )
+        context['projects'] = (
+            Project.objects.filter(company=company).order_by('code')
+            if company is not None
+            else Project.objects.none()
+        )
         return context
 
     def post(self, request):
@@ -1756,23 +1857,83 @@ class DashboardView(LoginRequiredMixin, UserPassesTestMixin, TemplateView):
                 )
                 messages.success(request, 'Информация о компании обновлена.')
             elif action == 'add_member':
-                user = get_user_model().objects.filter(
-                    pk=request.POST.get('user_id')
-                ).first()
-                if user is not None:
-                    allowed_sections = [
-                        int(pk)
-                        for pk in request.POST.getlist('allowed_sections')
-                        if str(pk).isdigit()
-                    ]
-                    add_company_member(
-                        request.user,
-                        company,
-                        user,
-                        request.POST.get('role', ''),
-                        allowed_sections,
+                username = request.POST.get('username', '').strip()
+                user = None
+                if username:
+                    user = get_user_model().objects.filter(
+                        username=username
+                    ).first()
+                    if user is None:
+                        password = request.POST.get('password', '')
+                        if not password:
+                            raise ValueError(
+                                'Для нового пользователя укажите пароль'
+                            )
+                        user = get_user_model().objects.create_user(
+                            username=username,
+                            password=password,
+                        )
+                else:
+                    user = get_user_model().objects.filter(
+                        pk=request.POST.get('user_id')
+                    ).first()
+
+                if user is None:
+                    raise ValueError('Пользователь не найден')
+
+                selected_company = company
+                company_id = request.POST.get('company_id')
+                if request.user.is_superuser and company_id:
+                    selected_company = (
+                        Company.objects.filter(pk=company_id).first()
+                        or company
                     )
-                    messages.success(request, 'Участник добавлен.')
+
+                allowed_sections = [
+                    int(pk)
+                    for pk in request.POST.getlist('allowed_sections')
+                    if str(pk).isdigit()
+                ]
+                role = request.POST.get('role', '')
+                add_company_member(
+                    request.user,
+                    selected_company,
+                    user,
+                    role,
+                    allowed_sections,
+                )
+
+                full_name = request.POST.get('full_name', '').strip()
+                if full_name:
+                    parts = full_name.split()
+                    user.first_name = parts[0]
+                    user.last_name = ' '.join(parts[1:])
+                email = request.POST.get('email', '').strip()
+                if email:
+                    user.email = email
+                user.save()
+
+                project_id = request.POST.get('project_id')
+                if project_id:
+                    project = Project.objects.filter(
+                        pk=project_id,
+                        company=selected_company,
+                    ).first()
+                    if project is not None:
+                        project_role = (
+                            role
+                            if role in dict(
+                                ProjectMembership.ROLE_IN_PROJECT_CHOICES
+                            )
+                            else 'gip'
+                        )
+                        ProjectMembership.objects.update_or_create(
+                            project=project,
+                            user=user,
+                            defaults={'role_in_project': project_role},
+                        )
+
+                messages.success(request, 'Участник добавлен.')
             elif action == 'remove_member':
                 user = get_user_model().objects.filter(
                     pk=request.POST.get('user_id')

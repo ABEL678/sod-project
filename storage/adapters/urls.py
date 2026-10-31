@@ -7,6 +7,11 @@ app_name = 'storage'
 urlpatterns = [
     path('', views.ProjectListView.as_view(), name='project_list'),
     path('dashboard/', views.DashboardView.as_view(), name='dashboard'),
+    path(
+        'dashboard/member/<int:pk>/edit/',
+        views.EditMemberView.as_view(),
+        name='edit_member',
+    ),
     path('projects/create/', views.ProjectCreateView.as_view(), name='project_create'),
     path('projects/<int:pk>/', views.ProjectDetailView.as_view(), name='project_detail'),
     path('projects/<int:project_id>/sections/create/', views.SectionCreateView.as_view(), name='section_create'),
