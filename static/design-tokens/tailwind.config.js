@@ -45,11 +45,13 @@ module.exports = {
 
         /* Статусы: один смысл — один цвет (панель = бейдж = маркер на листе) */
         status: {
-          attention: { DEFAULT: 'var(--s-attention-solid)', subtle: 'var(--s-attention-subtle)', on: 'var(--s-attention-on)' }, // Не принято, Просрочено
-          wait:      { DEFAULT: 'var(--s-wait-solid)',      subtle: 'var(--s-wait-subtle)',      on: 'var(--s-wait-on)' },      // Открыто, На проверке
-          progress:  { DEFAULT: 'var(--s-progress-solid)',  subtle: 'var(--s-progress-subtle)',  on: 'var(--s-progress-on)' },  // В работе, Обсуждение
-          done:      { DEFAULT: 'var(--s-done-solid)',      subtle: 'var(--s-done-subtle)',      on: 'var(--s-done-on)' },      // Выполнено, Принято, Закрыто
-          canceled:  { DEFAULT: 'var(--s-canceled-solid)',  subtle: 'var(--s-canceled-subtle)',  on: 'var(--s-canceled-on)' },  // Отменено, Архив
+          attention: { DEFAULT: 'var(--s-attention-solid)', subtle: 'var(--s-attention-subtle)', on: 'var(--s-attention-on)' }, // Не принято (REJECTED)
+          wait:      { DEFAULT: 'var(--s-wait-solid)',      subtle: 'var(--s-wait-subtle)',      on: 'var(--s-wait-on)' },      // Открыто (NEW)
+          progress:  { DEFAULT: 'var(--s-progress-solid)',  subtle: 'var(--s-progress-subtle)',  on: 'var(--s-progress-on)' },  // В работе (IN_PROGRESS)
+          review:    { DEFAULT: 'var(--s-review-solid)',    subtle: 'var(--s-review-subtle)',    on: 'var(--s-review-on)' },    // К обсуждению (DISCUSSION)
+          done:      { DEFAULT: 'var(--s-done-solid)',      subtle: 'var(--s-done-subtle)',      on: 'var(--s-done-on)' },      // Выполнено (DONE)
+          closed:    { DEFAULT: 'var(--s-closed-solid)',    subtle: 'var(--s-closed-subtle)',    on: 'var(--s-closed-on)' },    // Закрыто (CLOSED)
+          canceled:  { DEFAULT: 'var(--s-canceled-solid)',  subtle: 'var(--s-canceled-subtle)',  on: 'var(--s-canceled-on)' },  // Аннулировано (CANCELLED)
         },
       },
 
@@ -104,11 +106,13 @@ module.exports = {
  *   --color-ink-muted: #9C9C94;
  *   --color-accent: #2F5BEA;
  *   --color-accent-subtle: #ECF0FE;
- *   --color-status-attention: #DC2626;  --color-status-attention-subtle: #FDECEC;
- *   --color-status-wait: #D97706;       --color-status-wait-subtle: #FCF3E6;
- *   --color-status-progress: #2563EB;   --color-status-progress-subtle: #E8EFFD;
- *   --color-status-done: #16A34A;       --color-status-done-subtle: #E9F7EE;
- *   --color-status-canceled: #6B7280;   --color-status-canceled-subtle: #F1F2F4;
+ *   --color-status-attention: #dc3545;  --color-status-attention-subtle: #FDEBED;
+ *   --color-status-wait: #0d6efd;       --color-status-wait-subtle: #E7F0FF;
+ *   --color-status-progress: #0dcaf0;   --color-status-progress-subtle: #E0F8FC;
+ *   --color-status-review: #ffc107;     --color-status-review-subtle: #FFF8E1;
+ *   --color-status-done: #198754;       --color-status-done-subtle: #E6F4EE;
+ *   --color-status-closed: #6c757d;     --color-status-closed-subtle: #F0F1F2;
+ *   --color-status-canceled: #212529;   --color-status-canceled-subtle: #E9EAEA;
  *   --font-sans: "Golos Text", "Inter", -apple-system, sans-serif;
  *   --font-mono: "JetBrains Mono", Consolas, monospace;
  * }

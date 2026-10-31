@@ -246,13 +246,14 @@
                 });
                 page.layer.appendChild(frame);
 
-                const badge = document.createElement('div');
+                const badge = document.createElement('span');
                 const badgeColor = statusColor(issue.status);
-                badge.className = 'pdf-pin pdf-issue-badge';
+                badge.className = 'pdf-issue-badge';
                 badge.dataset.issueId = issue.id;
-                badge.style.left = (x1 * 100) + '%';
-                badge.style.top = (y1 * 100) + '%';
-                badge.style.transform = 'translate(-50%, -50%)';
+                badge.style.position = 'absolute';
+                badge.style.top = '-12px';
+                badge.style.left = '-12px';
+                badge.style.transform = 'none';
                 badge.style.backgroundColor = badgeColor;
                 badge.style.color = ['IN_PROGRESS', 'DISCUSSION'].includes(issue.status)
                     ? '#212529'
@@ -270,22 +271,11 @@
                 badge.style.justifyContent = 'center';
                 badge.style.textAlign = 'center';
                 badge.style.boxShadow = '0 2px 4px rgba(0,0,0,0.2)';
-                badge.style.cursor = 'pointer';
+                badge.style.pointerEvents = 'none';
                 badge.style.zIndex = '2';
                 badge.textContent = issue.id;
                 badge.title = issue.description;
-                badge.addEventListener('click', function (event) {
-                    event.stopPropagation();
-                    if (window.selectIssueFromPdf) {
-                        window.selectIssueFromPdf(issue.id);
-                    }
-                });
-                badge.addEventListener('contextmenu', function (event) {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    openContextMenu(event.clientX, event.clientY, issue.id);
-                });
-                page.layer.appendChild(badge);
+                frame.appendChild(badge);
             });
         if (selectedIssueId != null) {
             document.querySelectorAll(

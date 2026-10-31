@@ -19,13 +19,13 @@
 
 | Код модели | Текущая надпись | Токен | Цвет | Фон 10–12% |
 |---|---|---|---|---|
-| `NEW` | Новое | `--status-wait` | `#D97706` | `#FDF3E7` |
-| `IN_PROGRESS` | Принято в работу | `--status-progress` | `#2563EB` | `#EAF0FE` |
-| `DISCUSSION` | К обсуждению | `--status-progress` + тег «диалог» | `#2563EB` | `#EAF0FE` |
-| `DONE` | Выполнено | `--status-review` | `#8B5CF6` | `#F3EFFE` |
-| `CLOSED` | Закрыто | `--status-done` | `#16A34A` | `#EAF7EF` |
-| `REJECTED` | Не принято | `--status-attention` | `#DC2626` | `#FDEDED` |
-| `CANCELLED` | Аннулировано | `--status-canceled` | `#6B7280` | `#F2F3F4` |
+| `NEW` | Новое | `--s-wait-solid` | `#0d6efd` | `#E7F0FF` |
+| `IN_PROGRESS` | Принято в работу | `--s-progress-solid` | `#0dcaf0` | `#E0F8FC` |
+| `DISCUSSION` | К обсуждению | `--s-review-solid` | `#ffc107` | `#FFF8E1` |
+| `DONE` | Выполнено | `--s-done-solid` | `#198754` | `#E6F4EE` |
+| `CLOSED` | Закрыто | `--s-closed-solid` | `#6c757d` | `#F0F1F2` |
+| `REJECTED` | Не принято | `--s-attention-solid` | `#dc3545` | `#FDEBED` |
+| `CANCELLED` | Аннулировано | `--s-canceled-solid` | `#212529` | `#E9EAEA` |
 
 Правила:
 1. **Один статус = один цвет** в панели списка, бейдже карточки, маркапе на листе
@@ -45,8 +45,8 @@
    CSS-переменных (или сгенерировать `status_map.js` из `tokens.json`):
    ```js
    const STATUS_TOKENS = {
-     NEW: 'wait', IN_PROGRESS: 'progress', DISCUSSION: 'progress',
-     DONE: 'review', CLOSED: 'done', REJECTED: 'attention', CANCELLED: 'canceled',
+     NEW: 'wait', IN_PROGRESS: 'progress', DISCUSSION: 'review',
+     DONE: 'done', CLOSED: 'closed', REJECTED: 'attention', CANCELLED: 'canceled',
    };
    function statusColor(status) {
      return getComputedStyle(document.documentElement)
