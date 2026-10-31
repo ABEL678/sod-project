@@ -134,6 +134,15 @@
 .cde-badge--done      { background: var(--s-done-subtle);      color: var(--s-done-on); }
 .cde-badge--closed    { background: var(--s-closed-subtle);    color: var(--s-closed-on); }
 .cde-badge--canceled  { background: var(--s-canceled-subtle);  color: var(--s-canceled-on); }
+.cde-badge--new,
+.cde-badge--draft     { background: var(--s-wait-subtle);      color: var(--s-wait-on); }
+.cde-badge--in_progress { background: var(--s-progress-subtle); color: var(--s-progress-on); }
+.cde-badge--discussion,
+.cde-badge--in_review { background: var(--s-review-subtle);    color: var(--s-review-on); }
+.cde-badge--rejected  { background: var(--s-attention-subtle); color: var(--s-attention-on); }
+.cde-badge--approved  { background: var(--s-done-subtle);      color: var(--s-done-on); }
+.cde-badge--archived  { background: var(--s-closed-subtle);    color: var(--s-closed-on); }
+.cde-badge--cancelled { background: var(--s-canceled-subtle);  color: var(--s-canceled-on); }
 .cde-badge--accent    { background: var(--c-accent-subtle);    color: var(--c-accent-on-subtle); }
 
 /* Дедлайн: живой индикатор срока ответа */

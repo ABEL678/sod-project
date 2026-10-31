@@ -7,6 +7,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{{ document.code }} — Stream-CAD</title>
     <link rel="stylesheet" href="{% static 'css/bootstrap.min.css' %}">
+    <link rel="stylesheet" href="{% static 'design-tokens/tokens.css' %}">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
     <link rel="stylesheet" href="{% static 'css/app.css' %}">
 </head>
@@ -31,7 +32,7 @@
 
         <span class="text-muted">/</span>
         <span class="fw-bold">{{ document.name }}</span>
-        <span class="badge bg-secondary">{{ document.get_status_display }}</span>
+        <span class="cde-badge cde-badge--{{ document.status|lower }}">{{ document.get_status_display }}</span>
         <span class="text-muted">v{{ document.current_version.version_number }}</span>
     </div>
 
@@ -120,7 +121,7 @@
                             <div class="d-flex justify-content-between align-items-center mb-1">
                                 <div>
                                     <span class="fw-bold text-muted me-2">#{{ issue.pk }}</span>
-                                    <span class="badge {% if issue.status == 'NEW' %}bg-primary{% elif issue.status == 'DONE' %}bg-success{% elif issue.status == 'REJECTED' %}bg-danger{% else %}bg-secondary{% endif %}">{{ issue.get_status_display }}</span>
+                                    <span class="cde-badge cde-badge--{{ issue.status|lower }}">{{ issue.get_status_display }}</span>
                                 </div>
                                 <span class="small text-muted">{{ issue.created_at|date:"d.m.Y" }}</span>
                             </div>
