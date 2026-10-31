@@ -1,251 +1,296 @@
 {% load static %}
-{% load django_tables2 %}
 <!DOCTYPE html>
 <html lang="ru">
 <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>{{ document.code }} — Stream-CAD</title>
-    <link rel="stylesheet" href="{% static 'css/bootstrap.min.css' %}">
-    <link rel="stylesheet" href="{% static 'design-tokens/tokens.css' %}">
-    <link rel="stylesheet" href="{% static 'css/redesign.css' %}">
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
-    <link rel="stylesheet" href="{% static 'css/app.css' %}">
+<meta charset="UTF-8">
+<title>{{ document.code }} — {{ document.name }}</title>
+<link href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{% static 'css/bootstrap.min.css' %}">
+<link rel="stylesheet" href="{% static 'design-tokens/tokens.css' %}?v=20261031-viewer">
+<link rel="stylesheet" href="{% static 'css/redesign.css' %}">
+<link rel="stylesheet" href="{% static 'css/viewer.css' %}?v=20261031-viewer">
+<link rel="stylesheet" href="{% static 'css/app.css' %}?v=20261031-viewer">
 </head>
-<body class="bg-light d-flex flex-column" style="height: 100vh; overflow: hidden;">
-{% include 'storage/_topbar.html' with topbar_project=document.project topbar_title=document.code %}
-<main class="d-flex flex-column flex-grow-1" style="min-height: 0;">
-    <div class="d-flex align-items-center gap-2 py-1 px-2 border-bottom bg-white small flex-shrink-0" style="font-size: 0.85rem;">
-        <nav aria-label="Хлебные крошки" class="mb-0">
-            <ol class="breadcrumb mb-0">
-                <li class="breadcrumb-item"><a href="{% url 'storage:project_list' %}">Проекты</a></li>
-                {% for crumb in breadcrumbs %}
-                    <li class="breadcrumb-item{% if crumb.active %} active{% endif %}"{% if crumb.active %} aria-current="page"{% endif %}>
-                        {% if crumb.url %}
-                            <a href="{{ crumb.url }}">{{ crumb.label }}</a>
-                        {% else %}
-                            {{ crumb.label }}
-                        {% endif %}
-                    </li>
-                {% endfor %}
-            </ol>
-        </nav>
+<body>
 
-        <span class="text-muted">/</span>
-        <span class="fw-bold">{{ document.name }}</span>
-        <span class="cde-badge cde-badge--{{ document.status|lower }}">{{ document.get_status_display }}</span>
-        <span class="text-muted">v{{ document.current_version.version_number }}</span>
-    </div>
-
-    {% if public_view %}
-        <div class="alert alert-info py-2 small mb-0">
-            <i class="bi bi-link-45deg me-1" aria-hidden="true"></i>
-            Публичный просмотр документа. Доступ только на чтение.
-        </div>
+<header class="topbar">
+  <a class="brand" href="{% url 'storage:project_list' %}" style="text-decoration: none; color: inherit;">
+    <span class="brand-mark">СОД</span><span>Stream-CAD</span>
+  </a>
+  <nav class="crumb">
+    <span>{{ document.project.code }}</span><span class="sep">/</span>
+    <span>{{ document.section.code }}</span><span class="sep">/</span>
+    <span class="doc">{{ document.code }}</span>
+  </nav>
+  <span class="chip">
+    <span class="mono">v{{ document.current_version.version_number }} · R{{ document.current_version.revision|default:"0" }}</span>
+    · {{ document.get_status_display }}
+  </span>
+  <div class="spacer"></div>
+  {% if user.is_authenticated %}
+    {% if user.userprofile.role == 'admin' or user.userprofile.role == 'gip' or user.is_superuser %}
+      <a href="{% url 'storage:dashboard' %}" class="btn">Управление</a>
     {% endif %}
+  {% endif %}
+  <a href="{% url 'storage:document_pdf_with_issues' document.pk %}" class="btn primary">Экспорт PDF с маркапами</a>
+  <div class="avatar">{{ user.username|slice:":2"|upper }}</div>
+</header>
 
-    {% if messages %}
-        {% for message in messages %}
-            <div class="alert {% if message.tags == 'error' %}alert-danger{% else %}alert-{{ message.tags }}{% endif %}">{{ message }}</div>
-        {% endfor %}
-    {% endif %}
+<div class="toolbar">
+  <div class="group">
+    <span class="page-label">Стр. <b>1</b></span>
+  </div>
+  <span class="divider"></span>
+  <div class="group">
+    <button class="tbtn" onclick="zoomOut()" title="Уменьшить" type="button">
+      <svg viewBox="0 0 24 24"><path d="M5 12h14"/></svg>
+    </button>
+    <span class="zoom-label num" id="zoomLabel">100%</span>
+    <button class="tbtn" onclick="zoomIn()" title="Увеличить" type="button">
+      <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+    </button>
+  </div>
+  <span class="divider"></span>
+  <div class="group">
+    <button class="tbtn" onclick="rotatePage()" title="Повернуть" type="button">⟲</button>
+    <button class="tbtn" onclick="togglePan()" title="Рука" type="button">✋</button>
+    <button class="tbtn" onclick="toggleSelect()" title="Выделение" type="button">⍝</button>
+  </div>
+</div>
 
-    <div id="main-splitter" class="d-flex w-100 flex-grow-1" style="min-height: 0; margin-bottom: 0 !important;">
-        <div id="pdf-panel" class="h-100 d-flex flex-column overflow-hidden" style="width: 75%;">
-            <div class="d-flex align-items-center gap-1 py-1 px-2 bg-light border-bottom flex-shrink-0 flex-nowrap">
-                <button class="btn btn-sm btn-outline-secondary d-flex align-items-center py-0 px-2" style="height: 28px;" onclick="zoomIn()">+</button>
-                <button class="btn btn-sm btn-outline-secondary d-flex align-items-center py-0 px-2" style="height: 28px;" onclick="zoomOut()">−</button>
-                <div class="dropdown">
-                    <button class="btn btn-sm btn-outline-secondary d-flex align-items-center py-0 px-2 dropdown-toggle" style="height: 28px;" type="button" data-bs-toggle="dropdown" aria-expanded="false">100%</button>
-                    <ul class="dropdown-menu">
-                        <li><a class="dropdown-item" href="#" onclick="setZoom(0.5); return false;">50%</a></li>
-                        <li><a class="dropdown-item" href="#" onclick="setZoom(0.75); return false;">75%</a></li>
-                        <li><a class="dropdown-item" href="#" onclick="setZoom(1.0); return false;">100%</a></li>
-                        <li><a class="dropdown-item" href="#" onclick="setZoom(1.25); return false;">125%</a></li>
-                        <li><a class="dropdown-item" href="#" onclick="setZoom(1.5); return false;">150%</a></li>
-                        <li><a class="dropdown-item" href="#" onclick="setZoom(2.0); return false;">200%</a></li>
-                        <li><a class="dropdown-item" href="#" onclick="setZoom(3.0); return false;">300%</a></li>
-                        <li><a class="dropdown-item" href="#" onclick="setZoom(4.0); return false;">400%</a></li>
-                    </ul>
-                </div>
-                <div class="dropdown d-inline-block">
-                    <button class="btn btn-sm btn-outline-secondary d-flex align-items-center py-0 px-2 dropdown-toggle" style="height: 28px;" type="button" data-bs-toggle="dropdown" aria-expanded="false">
-                        Версии
-                    </button>
-                    <ul class="dropdown-menu">
-                        {% for version in document.versions.all %}
-                            <li>
-                                <a class="dropdown-item d-flex justify-content-between" href="?version={{ version.pk }}">
-                                    <span>v{{ version.version_number }}</span>
-                                    <span class="text-muted small">{{ version.uploaded_at|date:"d.m.Y" }}</span>
-                                </a>
-                            </li>
-                        {% endfor %}
-                    </ul>
-                </div>
-                <button class="btn btn-sm btn-outline-secondary d-flex align-items-center py-0 px-2" style="height: 28px;" onclick="toggleOverlay()">Наложение</button>
-                <button class="btn btn-sm btn-outline-secondary d-flex align-items-center py-0 px-2" style="height: 28px;" onclick="rotatePage()">⟲</button>
-                <button class="btn btn-sm btn-outline-secondary d-flex align-items-center py-0 px-2" style="height: 28px;" onclick="togglePan()">✋</button>
-                <button class="btn btn-sm btn-outline-secondary d-flex align-items-center py-0 px-2" style="height: 28px;" onclick="toggleSelect()">⍝</button>
-                <span class="vr mx-1"></span>
-                <a href="{{ document.current_version.file.url }}" target="_blank" class="btn btn-sm btn-outline-secondary d-flex align-items-center py-0 px-2" style="height: 28px;">Печать</a>
-                <button class="btn btn-sm btn-outline-secondary d-flex align-items-center py-0 px-2" style="height: 28px;" onclick="copyText()">Копировать</button>
-                <a href="{% url 'storage:document_pdf_with_issues' document.pk %}" class="btn btn-sm btn-primary d-flex align-items-center py-0 px-2" style="height: 28px;">Скачать</a>
-            </div>
+<div class="workspace" id="main-splitter">
+  <aside class="minimap" id="minimap">
+    <button class="thumb active" title="Лист 1" type="button"><svg viewBox="0 0 92 64"><rect x="6" y="5" width="80" height="54" fill="#fff" stroke="#E4E4E0"/><text x="46" y="46" font-size="7" fill="#9C9C94" text-anchor="middle">01</text></svg></button>
+    <button class="thumb" title="Лист 2" type="button"><svg viewBox="0 0 92 64"><rect x="6" y="5" width="80" height="54" fill="#fff" stroke="#E4E4E0"/><text x="46" y="46" font-size="7" fill="#9C9C94" text-anchor="middle">02</text></svg></button>
+  </aside>
 
-            <div class="pdf-viewer flex-grow-1 overflow-auto h-100 d-flex flex-column align-items-center" id="pdfViewer"
-                 style="max-height: none; min-height: 0;"
-                 data-pdf-url="{% url 'storage:document_download' document.current_version.pk %}"
-                 data-worker-url="{% static 'js/pdfjs/pdf.worker.min.js' %}"
-                 {% if can_create_issue %}data-issue-create-url="{% url 'issues:issue_create' document.pk %}"{% endif %}
-                 data-can-create="{% if can_create_issue %}1{% else %}0{% endif %}">
-                <div class="pdf-loading text-muted small p-3">Загрузка PDF…</div>
-            </div>
-        </div>
+  <section class="stage" id="pdf-panel">
+    <div class="pdf-viewer" id="pdfViewer"
+         {% if document.current_version %}data-pdf-url="{% url 'storage:document_download' document.current_version.pk %}"{% endif %}
+         data-worker-url="{% static 'js/pdfjs/pdf.worker.min.js' %}"
+         {% if can_create_issue %}data-issue-create-url="{% url 'issues:issue_create' document.pk %}"{% endif %}
+         data-can-create="{% if can_create_issue %}1{% else %}0{% endif %}">
+      {% if document.current_version %}
+        <div class="pdf-loading text-muted small p-3">Загрузка PDF…</div>
+      {% else %}
+        <div class="p-3 text-muted">Нет текущей версии для просмотра.</div>
+      {% endif %}
+    </div>
+  </section>
 
-        <div id="drag-divider" style="width: 5px; cursor: col-resize; background-color: #dee2e6; flex-shrink: 0;"></div>
+  <div class="splitter" id="drag-divider"></div>
 
-        <div id="issues-panel" class="h-100 d-flex flex-column bg-white" style="width: 25%; min-width: 280px; overflow: auto;">
-            <div class="d-flex justify-content-between align-items-center p-2 border-bottom bg-light">
-                <h6 class="mb-0">Замечания ({{ issues|length }})</h6>
-                {% if not public_view and can_create_issue %}
-                    <button class="btn btn-sm btn-primary py-0 px-2" id="newIssueBtn">Создать</button>
-                {% endif %}
-            </div>
-
-            <div class="flex-grow-1 overflow-auto p-2" id="issues-list-view">
-                {% for issue in issues %}
-                    <div id="issue-row-{{ issue.pk }}" class="card mb-2 shadow-sm issue-row"
-                         data-issue-id="{{ issue.pk }}" style="cursor: pointer;"
-                         onclick="selectIssue(event, this.dataset.issueId)">
-                        <div class="card-body p-2">
-                            <div class="d-flex justify-content-between align-items-center mb-1">
-                                <div>
-                                    <span class="fw-bold text-muted me-2">#{{ issue.pk }}</span>
-                                    <span class="cde-badge cde-badge--{{ issue.status|lower }}">{{ issue.get_status_display }}</span>
-                                </div>
-                                <span class="small text-muted">{{ issue.created_at|date:"d.m.Y" }}</span>
-                            </div>
-                            <div class="mb-2" style="font-size: 0.8rem; white-space: normal; word-wrap: break-word;">
-                                {{ issue.description }}
-                            </div>
-                            <div class="d-flex justify-content-between align-items-center">
-                                <span class="small text-muted">{{ issue.author.get_full_name|default:issue.author.username }}</span>
-                                {% if not public_view %}
-                                    <button class="btn btn-sm btn-outline-primary py-0 px-2"
-                                            hx-get="{% url 'issues:issue_detail_htmx' issue.pk %}"
-                                            hx-target="#issue-card-content"
-                                            hx-swap="innerHTML"
-                                            onclick="showIssueCard()">Детали</button>
-                                {% endif %}
-                            </div>
-                        </div>
-                    </div>
-                {% endfor %}
-            </div>
-
-            <div id="issue-card-view" style="display: none; height: 100%;" class="overflow-auto p-3">
-                <button class="btn btn-sm btn-link text-decoration-none mb-2 px-0" onclick="showIssueList()">← Назад к списку</button>
-                <div id="issue-card-content"></div>
-            </div>
-        </div>
+  <aside class="panel" id="issues-panel">
+    <div class="panel-head">
+      <h2>Замечания</h2><span class="count num">{{ issues|length }}</span>
+      {% if not public_view and can_create_issue %}
+        <button class="btn btn-primary btn-sm" id="newIssueBtn" type="button">+ Замечание</button>
+      {% endif %}
     </div>
 
-    <div class="modal fade" id="issueModal" tabindex="-1" aria-labelledby="issueModalLabel" aria-hidden="true">
-        <div class="modal-dialog">
-            <div class="modal-content">
-                <form id="issueForm">
-                    {% csrf_token %}
-                    <input type="hidden" name="page_number" id="issuePageNumber">
-                    <input type="hidden" name="x_ratio" id="issueXRatio">
-                    <input type="hidden" name="y_ratio" id="issueYRatio">
-                    <input type="hidden" name="x1_ratio" id="issueX1Ratio">
-                    <input type="hidden" name="y1_ratio" id="issueY1Ratio">
-                    <input type="hidden" name="x2_ratio" id="issueX2Ratio">
-                    <input type="hidden" name="y2_ratio" id="issueY2Ratio">
-                    <input type="hidden" name="crop_image_base64" id="issueCropImage">
-                    {% if document.current_version %}
-                        <input type="hidden" name="version_id" value="{{ document.current_version.pk }}">
-                    {% endif %}
-                    <div class="modal-header">
-                        <h5 class="modal-title" id="issueModalLabel">Новое замечание</h5>
-                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрыть"></button>
-                    </div>
-                    <div class="modal-body">
-                        <div class="alert alert-danger d-none" id="issueFormError"></div>
-                        <div class="mb-3">
-                            <label for="issueDescription" class="form-label">Текст замечания</label>
-                            <textarea id="issueDescription" name="description" class="form-control" rows="4" required></textarea>
-                        </div>
-                        <div class="mb-0">
-                            <label for="issueAssignee" class="form-label">Ответственный</label>
-                            <select id="issueAssignee" name="assignee" class="form-select">
-                                <option value="">— не назначен —</option>
-                                {% for assignee in issue_assignees %}
-                                    <option value="{{ assignee.pk }}">{{ assignee.get_full_name|default:assignee.username }}</option>
-                                {% endfor %}
-                            </select>
-                        </div>
-                        <div class="row g-2 mt-1">
-                            <div class="col-6">
-                                <label for="issueDepartment" class="form-label small">От подразделения</label>
-                                <input type="text" id="issueDepartment" name="department" class="form-control form-control-sm">
-                            </div>
-                            <div class="col-6">
-                                <label for="issueOrganization" class="form-label small">Проектная организация</label>
-                                <input type="text" id="issueOrganization" name="project_organization" class="form-control form-control-sm">
-                            </div>
-                            <div class="col-6">
-                                <label for="issueDueDate" class="form-label small">Срок ответа</label>
-                                <input type="date" id="issueDueDate" name="due_date" class="form-control form-control-sm">
-                            </div>
-                            <div class="col-6">
-                                <label for="issueRevision" class="form-label small">Ревизия</label>
-                                <input type="text" id="issueRevision" name="revision" class="form-control form-control-sm">
-                            </div>
-                        </div>
-                        <div class="mt-2">
-                            <label for="issueAnswerText" class="form-label small">Ответ</label>
-                            <textarea id="issueAnswerText" name="answer_text" class="form-control form-control-sm" rows="2"></textarea>
-                        </div>
-                        <div class="form-text mt-2" id="issueCoordinates"></div>
-                    </div>
-                    <div class="modal-footer">
-                        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Отмена</button>
-                        <button type="submit" class="btn btn-primary">Сохранить</button>
-                    </div>
-                </form>
+    <div class="list" id="list"
+         data-detail-url-template="{% url 'issues:issue_detail_htmx' 0 %}">
+      {% for issue in issues %}
+        <div class="card issue-row"
+             id="issue-row-{{ issue.pk }}"
+             data-id="{{ issue.pk }}"
+             data-issue-id="{{ issue.pk }}"
+             data-status="{{ issue.status }}"
+             data-status-label="{{ issue.get_status_display }}"
+             onclick="openIssueCard({{ issue.pk }})">
+          <span class="mark-badge"
+                style="--mk: var(--status-{{ issue.status|lower }}); --mkb: var(--status-{{ issue.status|lower }}-bg); --mk-text: var(--status-{{ issue.status|lower }});">
+            {{ issue.pk|stringformat:"02d" }}
+          </span>
+          <div class="card-body">
+            <div class="card-title">{{ issue.description|truncatechars:60 }}</div>
+            <div class="card-meta">
+              <span>{{ issue.author.username }}</span>
+              <span>·</span>
+              <span>{{ issue.created_at|date:"d.m.Y" }}</span>
+              <span class="badge"
+                    style="margin-left:auto; --sfg: var(--status-{{ issue.status|lower }}); --sbg: var(--status-{{ issue.status|lower }}-bg);">
+                {{ issue.get_status_display }}
+              </span>
             </div>
+          </div>
         </div>
+      {% empty %}
+        <p class="text-muted text-center mt-3">Нет замечаний</p>
+      {% endfor %}
     </div>
-    <div id="issueContextMenu" class="issue-context-menu d-none">
-        <button type="button" class="context-item" data-action="answer">Ответить</button>
-        <div class="context-label">Изменить статус</div>
-        <div id="contextStatuses"></div>
-        <button type="button" class="context-item" data-action="copy-link">Скопировать ссылку</button>
-        <button type="button" class="context-item" data-action="delete">Удалить</button>
-        <button type="button" class="context-item" data-action="show-mark">Показать маркап</button>
-        <button type="button" class="context-item" data-action="download">Скачать вложение</button>
+
+    <div class="detail" id="detail">
+      <div class="detail-head">
+        <button class="back" onclick="closeIssueCard()" type="button">←</button>
+        <span class="no" id="dNo">№ —</span>
+        <span class="badge" id="dBadge">Статус</span>
+        <div class="nav">
+          <button class="navbtn" onclick="prevIssue()" type="button">‹</button>
+          <button class="navbtn" onclick="nextIssue()" type="button">›</button>
+        </div>
+      </div>
+      <div class="detail-scroll" id="detailContent"></div>
     </div>
-    {{ issues_json|json_script:"issues-data" }}
-</main>
+  </aside>
+</div>
+
+{{ issues_json|json_script:"issues-data" }}
+
+<div class="modal fade" id="issueModal" tabindex="-1" aria-labelledby="issueModalLabel" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <form id="issueForm">
+        {% csrf_token %}
+        <input type="hidden" name="page_number" id="issuePageNumber">
+        <input type="hidden" name="x_ratio" id="issueXRatio">
+        <input type="hidden" name="y_ratio" id="issueYRatio">
+        <input type="hidden" name="x1_ratio" id="issueX1Ratio">
+        <input type="hidden" name="y1_ratio" id="issueY1Ratio">
+        <input type="hidden" name="x2_ratio" id="issueX2Ratio">
+        <input type="hidden" name="y2_ratio" id="issueY2Ratio">
+        <input type="hidden" name="crop_image_base64" id="issueCropImage">
+        {% if document.current_version %}
+          <input type="hidden" name="version_id" value="{{ document.current_version.pk }}">
+        {% endif %}
+        <div class="modal-header">
+          <h5 class="modal-title" id="issueModalLabel">Новое замечание</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрыть"></button>
+        </div>
+        <div class="modal-body">
+          <div class="alert alert-danger d-none" id="issueFormError"></div>
+          <div class="mb-3">
+            <label for="issueDescription" class="form-label">Текст замечания</label>
+            <textarea id="issueDescription" name="description" class="form-control" rows="4" required></textarea>
+          </div>
+          <div class="mb-0">
+            <label for="issueAssignee" class="form-label">Ответственный</label>
+            <select id="issueAssignee" name="assignee" class="form-select">
+              <option value="">— не назначен —</option>
+              {% for assignee in issue_assignees %}
+                <option value="{{ assignee.pk }}">{{ assignee.get_full_name|default:assignee.username }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="row g-2 mt-1">
+            <div class="col-6">
+              <label for="issueDepartment" class="form-label small">От подразделения</label>
+              <input type="text" id="issueDepartment" name="department" class="form-control form-control-sm">
+            </div>
+            <div class="col-6">
+              <label for="issueOrganization" class="form-label small">Проектная организация</label>
+              <input type="text" id="issueOrganization" name="project_organization" class="form-control form-control-sm">
+            </div>
+            <div class="col-6">
+              <label for="issueDueDate" class="form-label small">Срок ответа</label>
+              <input type="date" id="issueDueDate" name="due_date" class="form-control form-control-sm">
+            </div>
+            <div class="col-6">
+              <label for="issueRevision" class="form-label small">Ревизия</label>
+              <input type="text" id="issueRevision" name="revision" class="form-control form-control-sm">
+            </div>
+          </div>
+          <div class="mt-2">
+            <label for="issueAnswerText" class="form-label small">Ответ</label>
+            <textarea id="issueAnswerText" name="answer_text" class="form-control form-control-sm" rows="2"></textarea>
+          </div>
+          <div class="form-text mt-2" id="issueCoordinates"></div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Отмена</button>
+          <button type="submit" class="btn btn-primary">Сохранить</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<div id="issueContextMenu" class="issue-context-menu d-none">
+  <button type="button" class="context-item" data-action="answer">Ответить</button>
+  <div class="context-label">Изменить статус</div>
+  <div id="contextStatuses"></div>
+  <button type="button" class="context-item" data-action="copy-link">Скопировать ссылку</button>
+  <button type="button" class="context-item" data-action="delete">Удалить</button>
+  <button type="button" class="context-item" data-action="show-mark">Показать маркап</button>
+  <button type="button" class="context-item" data-action="download">Скачать вложение</button>
+</div>
+
 <script src="{% static 'js/vendor/bootstrap.bundle.min.js' %}"></script>
-<script src="{% static 'js/vendor/htmx.min.js' %}"></script>
-<script>
-    function showIssueCard() {
-        document.getElementById('issues-list-view').style.display = 'none';
-        document.getElementById('issue-card-view').style.display = 'block';
-    }
-
-    function showIssueList() {
-        document.getElementById('issues-list-view').style.display = 'block';
-        document.getElementById('issue-card-view').style.display = 'none';
-    }
-
-</script>
 <script src="{% static 'js/pdfjs/pdf.min.js' %}"></script>
-<script src="{% static 'js/sync.js' %}?v=20261030-sync"></script>
-<script src="{% static 'js/pdf_viewer.js' %}?v=20261030-sync"></script>
-<script src="{% static 'js/splitter.js' %}?v=20261030-toolbar"></script>
+<script src="{% static 'js/sync.js' %}?v=20261031-viewer"></script>
+<script src="{% static 'js/pdf_viewer.js' %}?v=20261031-viewer"></script>
+<script src="{% static 'js/splitter.js' %}?v=20261031-viewer"></script>
+<script>
+  let currentIssueId = null;
+
+  function issueCards() {
+    return Array.from(document.querySelectorAll('#list .card[data-id]'));
+  }
+
+  function openIssueCard(id) {
+    const card = document.querySelector('#list .card[data-id="' + id + '"]');
+    if (!card) return;
+    currentIssueId = Number(id);
+
+    document.querySelectorAll('#list .card').forEach(function (item) {
+      item.classList.remove('is-active');
+    });
+    card.classList.add('is-active');
+
+    const template = document.getElementById('list').dataset.detailUrlTemplate;
+    const url = template.replace('/0/', '/' + id + '/');
+    const detailContent = document.getElementById('detailContent');
+    detailContent.innerHTML = '<div class="text-muted small p-3">Загрузка…</div>';
+
+    document.getElementById('list').style.display = 'none';
+    document.getElementById('detail').style.display = 'flex';
+
+    const number = document.getElementById('dNo');
+    const badge = document.getElementById('dBadge');
+    number.textContent = '№ ' + String(id).padStart(2, '0');
+    badge.textContent = card.dataset.statusLabel || '';
+    badge.style.setProperty('--sfg', 'var(--status-' + card.dataset.status.toLowerCase() + ')');
+    badge.style.setProperty('--sbg', 'var(--status-' + card.dataset.status.toLowerCase() + '-bg)');
+
+    fetch(url, {credentials: 'same-origin'})
+      .then(function (response) {
+        if (!response.ok) throw new Error('Не удалось загрузить карточку');
+        return response.text();
+      })
+      .then(function (html) {
+        detailContent.innerHTML = html;
+      })
+      .catch(function (error) {
+        detailContent.innerHTML = '<div class="alert alert-danger m-3">' + error.message + '</div>';
+      });
+  }
+
+  function closeIssueCard() {
+    document.getElementById('list').style.display = 'block';
+    document.getElementById('detail').style.display = 'none';
+  }
+
+  window.showIssueList = closeIssueCard;
+
+  function moveIssue(delta) {
+    const cards = issueCards();
+    if (!cards.length) return;
+    let index = cards.findIndex(function (card) {
+      return Number(card.dataset.id) === currentIssueId;
+    });
+    if (index < 0) index = 0;
+    index = (index + delta + cards.length) % cards.length;
+    openIssueCard(cards[index].dataset.id);
+  }
+
+  function prevIssue() { moveIssue(-1); }
+  function nextIssue() { moveIssue(1); }
+
+  document.addEventListener('keydown', function (event) {
+    if (event.target.closest('input, textarea, select')) return;
+    if (event.key === 'n' || event.key === 'N') nextIssue();
+    if (event.key === 'p' || event.key === 'P') prevIssue();
+  });
+</script>
 </body>
 </html>

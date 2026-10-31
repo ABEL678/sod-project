@@ -936,6 +936,10 @@
         if (button) {
             button.innerText = Math.round(scale * 100) + '%';
         }
+        const label = document.getElementById('zoomLabel');
+        if (label) {
+            label.textContent = Math.round(scale * 100) + '%';
+        }
         renderPages();
     };
 
