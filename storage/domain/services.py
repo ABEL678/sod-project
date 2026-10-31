@@ -22,6 +22,7 @@ from storage.domain.models import (
     ProjectMembership,
     Section,
     User,
+    UserProfile,
 )
 from issues.models import Issue, IssueComment
 from storage.domain.project_templates import PROJECT_TEMPLATES
@@ -1987,3 +1988,60 @@ def create_project_from_template(
         )
 
     return project
+
+
+def get_company_members(company: Company):
+    """Все профили пользователей компании."""
+    return UserProfile.objects.filter(company=company).select_related('user')
+
+
+def add_company_member(
+    company: Company,
+    user: User,
+    role: str,
+    allowed_sections=None,
+) -> UserProfile:
+    """Добавляет пользователя в компанию или меняет его роль."""
+    valid_roles = {code for code, _ in UserProfile.ROLE_CHOICES}
+    if role not in valid_roles:
+        raise ValueError('Неверная роль пользователя')
+
+    profile, _ = UserProfile.objects.get_or_create(
+        user=user,
+        defaults={'company': company, 'role': role},
+    )
+    profile.company = company
+    profile.role = role
+    profile.save()
+
+    if allowed_sections is not None:
+        if role in ('developer', 'contractor'):
+            profile.allowed_sections.set(allowed_sections)
+        else:
+            profile.allowed_sections.clear()
+
+    return profile
+
+
+def remove_company_member(company: Company, user: User) -> None:
+    """Убирает пользователя из компании, сохраняя его профиль."""
+    UserProfile.objects.filter(company=company, user=user).update(
+        company=None
+    )
+
+
+def update_company_info(
+    company: Company,
+    name: str | None = None,
+    logo=None,
+    is_private: bool | None = None,
+) -> Company:
+    """Обновляет название, логотип и приватность компании."""
+    if name is not None:
+        company.name = name.strip()
+    if logo is not None:
+        company.logo = logo
+    if is_private is not None:
+        company.is_private = is_private
+    company.save()
+    return company

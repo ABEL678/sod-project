@@ -6,7 +6,7 @@ from io import BytesIO
 from django.contrib import messages
 from django.contrib.auth import get_user_model
 from django.contrib.auth.decorators import login_required
-from django.contrib.auth.mixins import LoginRequiredMixin
+from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
 from django.core.exceptions import PermissionDenied
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db.models import Q
@@ -42,10 +42,12 @@ from storage.domain.models import (
     Project,
     ProjectMembership,
     Section,
+    UserProfile,
 )
 from storage.domain.services import (
     DOCUMENT_VIEW_COLUMNS,
     CANONICAL_ZONE_NAMES,
+    add_company_member,
     allowed_issue_statuses,
     can_create_project,
     can_manage_project_participants,
@@ -77,10 +79,12 @@ from storage.domain.services import (
     get_project_membership,
     get_sections_with_counts,
     get_trash,
+    get_company_members,
     get_user_company,
     list_document_views,
     list_project_participants,
     move_document,
+    remove_company_member,
     move_document_to_section,
     move_documents,
     move_folder,
@@ -90,6 +94,7 @@ from storage.domain.services import (
     restore_folder,
     save_document_view,
     search_documents,
+    update_company_info,
     update_project_member_role,
     upload_document,
 )
@@ -1687,3 +1692,91 @@ class SimulateMailImportView(LoginRequiredMixin, View):
 
         messages.success(request, 'Письмо обработано, файл добавлен.')
         return redirect('storage:project_detail', pk=project.pk)
+
+
+class DashboardView(LoginRequiredMixin, UserPassesTestMixin, TemplateView):
+    template_name = 'storage/dashboard.html'
+
+    def test_func(self):
+        user = self.request.user
+        if user.is_superuser:
+            return True
+        profile = getattr(user, 'userprofile', None)
+        return profile is not None and profile.role in ('admin', 'gip')
+
+    def get_company(self):
+        company = get_user_company(self.request.user)
+        if company is None and self.request.user.is_superuser:
+            company = Company.objects.first()
+        return company
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        company = self.get_company()
+        context['company'] = company
+        context['members'] = (
+            get_company_members(company)
+            if company is not None
+            else UserProfile.objects.none()
+        )
+        context['role_choices'] = UserProfile.ROLE_CHOICES
+        context['available_users'] = (
+            get_user_model()
+            .objects.exclude(userprofile__company=company)
+            .order_by('last_name', 'username')
+            if company is not None
+            else get_user_model().objects.none()
+        )
+        context['available_sections'] = (
+            Section.objects.filter(project__company=company)
+            .select_related('project')
+            .order_by('project__code', 'order')
+            if company is not None
+            else Section.objects.none()
+        )
+        return context
+
+    def post(self, request):
+        company = self.get_company()
+        if company is None:
+            messages.error(request, 'Компания не найдена.')
+            return redirect('storage:dashboard')
+
+        action = request.POST.get('action')
+        try:
+            if action == 'update_company':
+                update_company_info(
+                    company,
+                    name=request.POST.get('name', '').strip(),
+                    logo=request.FILES.get('logo'),
+                    is_private=request.POST.get('is_private') == 'on',
+                )
+                messages.success(request, 'Информация о компании обновлена.')
+            elif action == 'add_member':
+                user = get_user_model().objects.filter(
+                    pk=request.POST.get('user_id')
+                ).first()
+                if user is not None:
+                    allowed_sections = [
+                        int(pk)
+                        for pk in request.POST.getlist('allowed_sections')
+                        if str(pk).isdigit()
+                    ]
+                    add_company_member(
+                        company,
+                        user,
+                        request.POST.get('role', ''),
+                        allowed_sections,
+                    )
+                    messages.success(request, 'Участник добавлен.')
+            elif action == 'remove_member':
+                user = get_user_model().objects.filter(
+                    pk=request.POST.get('user_id')
+                ).first()
+                if user is not None:
+                    remove_company_member(company, user)
+                    messages.success(request, 'Участник удалён из компании.')
+        except (PermissionDenied, ValueError) as exc:
+            messages.error(request, str(exc))
+
+        return redirect('storage:dashboard')

@@ -10,6 +10,10 @@ class Company(models.Model):
         blank=True,
         verbose_name='Логотип',
     )
+    is_private = models.BooleanField(
+        default=False,
+        verbose_name='Приватная компания',
+    )
     created_at = models.DateTimeField(auto_now_add=True, verbose_name="Дата создания")
 
     class Meta:
