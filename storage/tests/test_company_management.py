@@ -107,6 +107,36 @@ class CompanyManagementServiceTests(TestCase):
         self.admin.userprofile.refresh_from_db()
         self.assertEqual(self.admin.userprofile.company, self.company)
 
+    def test_gip_cannot_demote_admin(self):
+        with self.assertRaises(PermissionDenied):
+            add_company_member(
+                self.gip, self.company, self.admin, 'developer'
+            )
+        self.admin.userprofile.refresh_from_db()
+        self.assertEqual(self.admin.userprofile.role, 'admin')
+        self.assertEqual(self.admin.userprofile.company, self.company)
+
+    def test_gip_cannot_demote_then_remove_admin(self):
+        with self.assertRaises(PermissionDenied):
+            add_company_member(
+                self.gip, self.company, self.admin, 'developer'
+            )
+        with self.assertRaises(PermissionDenied):
+            remove_company_member(self.gip, self.company, self.admin)
+        self.admin.userprofile.refresh_from_db()
+        self.assertEqual(self.admin.userprofile.role, 'admin')
+        self.assertEqual(self.admin.userprofile.company, self.company)
+
+    def test_admin_can_change_admin_role(self):
+        target = User.objects.create_user('second_admin', password='pass')
+        UserProfile.objects.create(
+            user=target, company=self.company, role='admin'
+        )
+        profile = add_company_member(
+            self.admin, self.company, target, 'developer'
+        )
+        self.assertEqual(profile.role, 'developer')
+
     def test_admin_can_assign_admin(self):
         user = User.objects.create_user('admin_target', password='pass')
         profile = add_company_member(

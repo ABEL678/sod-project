@@ -2029,6 +2029,15 @@ def add_company_member(
             'Пользователь уже принадлежит другой компании'
         )
 
+    if (
+        profile is not None
+        and profile.role == 'admin'
+        and not _is_company_admin(actor)
+    ):
+        raise PermissionDenied(
+            'Только администратор или суперюзер может изменять администраторов'
+        )
+
     if allowed_sections is not None:
         section_ids = [
             getattr(section, 'pk', section)
