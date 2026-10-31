@@ -1766,6 +1766,7 @@ class DashboardView(LoginRequiredMixin, UserPassesTestMixin, TemplateView):
                         if str(pk).isdigit()
                     ]
                     add_company_member(
+                        request.user,
                         company,
                         user,
                         request.POST.get('role', ''),
@@ -1777,7 +1778,7 @@ class DashboardView(LoginRequiredMixin, UserPassesTestMixin, TemplateView):
                     pk=request.POST.get('user_id')
                 ).first()
                 if user is not None:
-                    remove_company_member(company, user)
+                    remove_company_member(request.user, company, user)
                     messages.success(request, 'Участник удалён из компании.')
         except (PermissionDenied, ValueError) as exc:
             messages.error(request, str(exc))

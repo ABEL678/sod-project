@@ -1995,7 +1995,15 @@ def get_company_members(company: Company):
     return UserProfile.objects.filter(company=company).select_related('user')
 
 
+def _is_company_admin(actor: User) -> bool:
+    if actor.is_superuser:
+        return True
+    profile = getattr(actor, 'userprofile', None)
+    return profile is not None and profile.role == 'admin'
+
+
 def add_company_member(
+    actor: User,
     company: Company,
     user: User,
     role: str,
@@ -2005,6 +2013,11 @@ def add_company_member(
     valid_roles = {code for code, _ in UserProfile.ROLE_CHOICES}
     if role not in valid_roles:
         raise ValueError('Неверная роль пользователя')
+
+    if role == 'admin' and not _is_company_admin(actor):
+        raise PermissionDenied(
+            'Только администратор или суперюзер может назначать администраторов'
+        )
 
     profile = UserProfile.objects.filter(user=user).first()
     if (
@@ -2048,11 +2061,21 @@ def add_company_member(
     return profile
 
 
-def remove_company_member(company: Company, user: User) -> None:
+def remove_company_member(actor: User, company: Company, user: User) -> None:
     """Убирает пользователя из компании, сохраняя его профиль."""
-    UserProfile.objects.filter(company=company, user=user).update(
-        company=None
-    )
+    target_profile = UserProfile.objects.filter(
+        company=company, user=user
+    ).first()
+    if target_profile is None:
+        return
+
+    if target_profile.role == 'admin' and not _is_company_admin(actor):
+        raise PermissionDenied(
+            'Только администратор или суперюзер может удалять администраторов'
+        )
+
+    target_profile.company = None
+    target_profile.save(update_fields=['company'])
 
 
 def update_company_info(

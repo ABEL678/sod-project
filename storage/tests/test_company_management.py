@@ -26,19 +26,23 @@ class CompanyManagementServiceTests(TestCase):
         UserProfile.objects.create(
             user=self.developer, company=self.company, role='developer'
         )
+        self.gip = User.objects.create_user('gip_a', password='pass')
+        UserProfile.objects.create(
+            user=self.gip, company=self.company, role='gip'
+        )
 
     def test_get_company_members(self):
         members = get_company_members(self.company)
-        self.assertEqual(members.count(), 2)
+        self.assertEqual(members.count(), 3)
         self.assertEqual(
             set(members.values_list('user__username', flat=True)),
-            {'admin_a', 'dev_a'},
+            {'admin_a', 'dev_a', 'gip_a'},
         )
 
     def test_add_company_member(self):
         user = User.objects.create_user('new_dev', password='pass')
         profile = add_company_member(
-            self.company, user, 'developer', allowed_sections=[]
+            self.admin, self.company, user, 'developer', allowed_sections=[]
         )
         self.assertEqual(profile.company, self.company)
         self.assertEqual(profile.role, 'developer')
@@ -55,7 +59,9 @@ class CompanyManagementServiceTests(TestCase):
             user=other_user, company=other_company, role='admin'
         )
         with self.assertRaises(PermissionDenied):
-            add_company_member(self.company, other_user, 'developer')
+            add_company_member(
+                self.admin, self.company, other_user, 'developer'
+            )
 
     def test_admin_cannot_assign_section_from_other_company(self):
         other_company = Company.objects.create(name='Компания В')
@@ -75,6 +81,7 @@ class CompanyManagementServiceTests(TestCase):
         new_user = User.objects.create_user('section_dev', password='pass')
         with self.assertRaises(ValueError):
             add_company_member(
+                self.admin,
                 self.company,
                 new_user,
                 'developer',
@@ -84,13 +91,39 @@ class CompanyManagementServiceTests(TestCase):
     def test_add_user_without_company_works(self):
         user = User.objects.create_user('free_user', password='pass')
         profile = add_company_member(
-            self.company, user, 'developer', allowed_sections=[]
+            self.admin, self.company, user, 'developer', allowed_sections=[]
         )
         self.assertEqual(profile.company, self.company)
         self.assertEqual(profile.role, 'developer')
 
+    def test_gip_cannot_assign_admin(self):
+        user = User.objects.create_user('gip_target', password='pass')
+        with self.assertRaises(PermissionDenied):
+            add_company_member(self.gip, self.company, user, 'admin')
+
+    def test_gip_cannot_remove_admin(self):
+        with self.assertRaises(PermissionDenied):
+            remove_company_member(self.gip, self.company, self.admin)
+        self.admin.userprofile.refresh_from_db()
+        self.assertEqual(self.admin.userprofile.company, self.company)
+
+    def test_admin_can_assign_admin(self):
+        user = User.objects.create_user('admin_target', password='pass')
+        profile = add_company_member(
+            self.admin, self.company, user, 'admin'
+        )
+        self.assertEqual(profile.role, 'admin')
+        self.assertEqual(profile.company, self.company)
+
+    def test_superuser_can_assign_admin(self):
+        root = User.objects.create_superuser('root_admin', password='pass')
+        user = User.objects.create_user('super_target', password='pass')
+        profile = add_company_member(root, self.company, user, 'admin')
+        self.assertEqual(profile.role, 'admin')
+        self.assertEqual(profile.company, self.company)
+
     def test_remove_company_member(self):
-        remove_company_member(self.company, self.developer)
+        remove_company_member(self.admin, self.company, self.developer)
         self.developer.userprofile.refresh_from_db()
         self.assertIsNone(self.developer.userprofile.company)
 
