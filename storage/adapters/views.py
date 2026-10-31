@@ -55,6 +55,7 @@ from storage.domain.services import (
     copy_document,
     create_folder,
     create_project,
+    create_project_from_template,
     create_section,
     delete_document,
     delete_documents,
@@ -94,6 +95,7 @@ from storage.domain.services import (
 )
 
 from issues.models import Issue
+from storage.domain.project_templates import PROJECT_TEMPLATES
 
 
 RECENT_DOCUMENTS_SESSION_KEY = 'recent_documents'
@@ -331,6 +333,7 @@ class ProjectListView(LoginRequiredMixin, ListView):
         context = super().get_context_data(**kwargs)
         user = self.request.user
         context['can_create_project'] = can_create_project(user)
+        context['project_templates'] = PROJECT_TEMPLATES
         if context['can_create_project']:
             context['gip_candidates'] = (
                 get_user_model()
@@ -707,13 +710,15 @@ class ProjectCreateView(LoginRequiredMixin, View):
             gip = get_user_model().objects.filter(pk=gip_id).first()
 
         try:
-            project = create_project(
+            project = create_project_from_template(
                 company=company,
                 code=request.POST.get('code', '').strip(),
                 name=request.POST.get('name', '').strip(),
                 customer=request.POST.get('customer', '').strip(),
                 gip=gip,
                 created_by=request.user,
+                template_key=request.POST.get('template_key') or None,
+                base_code=request.POST.get('base_code', '').strip(),
             )
         except (PermissionDenied, ValueError) as exc:
             messages.error(request, str(exc))

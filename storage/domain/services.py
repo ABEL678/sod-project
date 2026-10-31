@@ -24,6 +24,7 @@ from storage.domain.models import (
     User,
 )
 from issues.models import Issue, IssueComment
+from storage.domain.project_templates import PROJECT_TEMPLATES
 
 
 DOCUMENT_VIEW_COLUMNS = ('code', 'name', 'doc_type', 'status', 'zone', 'version', 'date', 'author')
@@ -1934,3 +1935,55 @@ def delete_issue_crop(user: User, issue: Issue) -> Issue:
         issue.crop_image = None
         issue.save(update_fields=['crop_image'])
     return issue
+
+
+@transaction.atomic
+def create_project_from_template(
+    company: Company,
+    code: str,
+    name: str,
+    customer: str,
+    gip: User | None,
+    created_by: User | None,
+    template_key: str | None = None,
+    base_code: str = '',
+) -> Project:
+    """Создаёт проект и, при необходимости, разделы/папки из шаблона."""
+    project = create_project(
+        company=company,
+        code=code,
+        name=name,
+        customer=customer,
+        gip=gip,
+        created_by=created_by,
+        base_code=base_code,
+    )
+    template = PROJECT_TEMPLATES.get(template_key)
+    if template is None:
+        return project
+
+    actor = created_by or gip
+    sections = {}
+    for index, section_data in enumerate(template.get('sections', []), start=1):
+        section = create_section(
+            project,
+            section_data['code'],
+            section_data['name'],
+            index,
+            user=actor,
+        )
+        sections[section.code] = section
+
+    for folder_data in template.get('folders', []):
+        section = sections.get(folder_data.get('section_code'))
+        if section is None:
+            continue
+        create_folder(
+            actor,
+            project,
+            folder_data['name'],
+            section=section,
+            code=folder_data.get('code', ''),
+        )
+
+    return project

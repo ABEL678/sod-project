@@ -87,6 +87,19 @@
                                 <label class="form-label small" for="projectName">Название</label>
                                 <input class="form-control form-control-sm" id="projectName" name="name" required maxlength="255" placeholder="ЖК Тестовый">
                             </div>
+                            <div class="col-5">
+                                <label class="form-label small" for="projectBaseCode">Базовый шифр</label>
+                                <input class="form-control form-control-sm" id="projectBaseCode" name="base_code" maxlength="50" placeholder="2345-12">
+                            </div>
+                            <div class="col-7">
+                                <label class="form-label small" for="projectTemplate">Шаблон структуры</label>
+                                <select class="form-select form-select-sm" id="projectTemplate" name="template_key">
+                                    <option value="">Без шаблона</option>
+                                    {% for key, template in project_templates.items %}
+                                        <option value="{{ key }}">{{ template.name }}</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
                             <div class="col-12">
                                 <label class="form-label small" for="projectCustomer">Заказчик</label>
                                 <input class="form-control form-control-sm" id="projectCustomer" name="customer" maxlength="255">
