@@ -123,7 +123,7 @@
              data-issue-id="{{ issue.pk }}"
              data-status="{{ issue.status }}"
              data-status-label="{{ issue.get_status_display }}"
-             onclick="openIssueCard({{ issue.pk }})">
+             onclick="selectIssue(null, {{ issue.pk }})">
           <span class="mark-badge"
                 style="--mk: var(--status-{{ issue.status|lower }}); --mkb: var(--status-{{ issue.status|lower }}-bg); --mk-text: var(--status-{{ issue.status|lower }});">
             {{ issue.pk|stringformat:"02d" }}

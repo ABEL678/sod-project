@@ -672,6 +672,9 @@
         let startY = 0;
         let scrollLeft = 0;
         let scrollTop = 0;
+        const panContainer = viewer.closest('.stage') || viewer;
+
+        viewer.style.overflow = 'visible';
 
         viewer.addEventListener('mousedown', function (event) {
             if (!panMode || event.button !== 0) {
@@ -680,10 +683,12 @@
             isPanning = true;
             startX = event.clientX;
             startY = event.clientY;
-            scrollLeft = viewer.scrollLeft;
-            scrollTop = viewer.scrollTop;
+            scrollLeft = panContainer.scrollLeft;
+            scrollTop = panContainer.scrollTop;
             viewer.classList.add('is-panning');
+            panContainer.classList.add('is-panning');
             viewer.style.cursor = 'grabbing';
+            panContainer.style.cursor = 'grabbing';
             event.preventDefault();
         });
 
@@ -694,8 +699,8 @@
             event.preventDefault();
             const walkX = (event.clientX - startX) * 1.5;
             const walkY = (event.clientY - startY) * 1.5;
-            viewer.scrollLeft = scrollLeft - walkX;
-            viewer.scrollTop = scrollTop - walkY;
+            panContainer.scrollLeft = scrollLeft - walkX;
+            panContainer.scrollTop = scrollTop - walkY;
         });
 
         window.addEventListener('mouseup', function () {
@@ -704,7 +709,9 @@
             }
             isPanning = false;
             viewer.classList.remove('is-panning');
+            panContainer.classList.remove('is-panning');
             viewer.style.cursor = panMode ? 'grab' : 'default';
+            panContainer.style.cursor = panMode ? 'grab' : 'default';
         });
     }
 
@@ -1060,6 +1067,8 @@
         viewer.classList.toggle('is-pan', panMode);
         viewer.classList.remove('is-panning', 'text-mode');
         viewer.style.cursor = panMode ? 'grab' : 'default';
+        const panContainer = viewer.closest('.stage') || viewer;
+        panContainer.style.cursor = panMode ? 'grab' : 'default';
     };
 
     window.toggleSelect = function () {
@@ -1068,6 +1077,8 @@
         viewer.classList.toggle('text-mode', textMode);
         viewer.classList.remove('is-pan', 'is-panning');
         viewer.style.cursor = 'default';
+        const panContainer = viewer.closest('.stage') || viewer;
+        panContainer.style.cursor = 'default';
     };
 
     window.copyText = function () {
