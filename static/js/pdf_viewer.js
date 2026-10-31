@@ -940,6 +940,10 @@
         if (label) {
             label.textContent = Math.round(scale * 100) + '%';
         }
+        const select = document.getElementById('zoomSelect');
+        if (select) {
+            select.value = String(Math.round(scale * 100));
+        }
         renderPages();
     };
 

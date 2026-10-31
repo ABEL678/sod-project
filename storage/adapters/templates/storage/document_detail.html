@@ -42,13 +42,13 @@
   </div>
   <span class="divider"></span>
   <div class="group">
-    <button class="tbtn" onclick="zoomOut()" title="Уменьшить" type="button">
-      <svg viewBox="0 0 24 24"><path d="M5 12h14"/></svg>
-    </button>
-    <span class="zoom-label num" id="zoomLabel">100%</span>
-    <button class="tbtn" onclick="zoomIn()" title="Увеличить" type="button">
-      <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
-    </button>
+    <select class="zoom-select" id="zoomSelect" onchange="setZoom(parseFloat(this.value) / 100)">
+      <option value="50">50%</option>
+      <option value="75">75%</option>
+      <option value="100" selected>100%</option>
+      <option value="125">125%</option>
+      <option value="150">150%</option>
+    </select>
   </div>
   <span class="divider"></span>
   <div class="group">
@@ -112,6 +112,12 @@
                     style="margin-left:auto; --sfg: var(--status-{{ issue.status|lower }}); --sbg: var(--status-{{ issue.status|lower }}-bg);">
                 {{ issue.get_status_display }}
               </span>
+            </div>
+            <div class="card-actions">
+              <button class="btn btn-sm btn-outline-primary" type="button"
+                      onclick="event.stopPropagation(); openIssueCard({{ issue.pk }})">
+                Детали
+              </button>
             </div>
           </div>
         </div>
@@ -231,6 +237,10 @@
     const card = document.querySelector('#list .card[data-id="' + id + '"]');
     if (!card) return;
     currentIssueId = Number(id);
+
+    if (window.selectIssue) {
+      window.selectIssue(null, Number(id));
+    }
 
     document.querySelectorAll('#list .card').forEach(function (item) {
       item.classList.remove('is-active');
