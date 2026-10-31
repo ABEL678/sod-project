@@ -1,73 +1,33 @@
-<header class="app-topbar" data-role="topbar">
-    <div class="topbar-identity">
-        <a class="topbar-brand" href="{% url 'storage:project_list' %}">
-            {% if user.is_authenticated and user.userprofile.company.logo %}
-                <img src="{{ user.userprofile.company.logo.url }}"
-                     alt="{{ user.userprofile.company.name }}"
-                     style="height:24px; width:auto;" class="me-2">
-            {% else %}
-                <i class="bi bi-layers-half" aria-hidden="true"></i>
-            {% endif %}
-            <span class="topbar-company">{% firstof user.userprofile.company.name topbar_project.company.name topbar_company.name "Stream-CAD" %}</span>
-        </a>
+<header class="topbar">
+    <a class="brand" href="{% url 'storage:project_list' %}" style="text-decoration: none; color: inherit;">
+        <span class="brand-mark">СОД</span>
+        <span>Stream-CAD</span>
+    </a>
+    <nav class="crumb">
+        <span>{% firstof user.userprofile.company.name topbar_company.name topbar_project.company.name "Компания" %}</span>
+        <span>/</span>
+        <span class="doc">{% firstof topbar_title topbar_project.name "Проекты" %}</span>
+    </nav>
+    <div class="spacer"></div>
 
-        {% if topbar_project %}
-            <div class="topbar-project">
-                <span class="topbar-project-name" title="{{ topbar_project.name }}">{{ topbar_project.name }}</span>
-                <span class="topbar-code">{{ topbar_project.code }}</span>
-            </div>
-        {% elif topbar_title %}
-            <div class="topbar-project">
-                <span class="topbar-project-name">{{ topbar_title }}</span>
-            </div>
-        {% endif %}
-    </div>
-
-    {% if topbar_project %}
-        <form class="topbar-search" method="get" action="{% url 'storage:search' topbar_project.pk %}" role="search">
-            <i class="bi bi-search" aria-hidden="true"></i>
-            <input type="search" name="q" placeholder="Поиск по шифру, названию, комментарию" aria-label="Поиск по проекту">
-        </form>
-    {% endif %}
-
-    <div class="topbar-actions">
-        {% if recent_documents %}
-            <div class="dropdown" id="recent-documents">
-                <button class="topbar-icon-btn" type="button" data-bs-toggle="dropdown" aria-expanded="false" title="Последние документы">
-                    <i class="bi bi-clock-history" aria-hidden="true"></i>
-                </button>
-                <div class="dropdown-menu dropdown-menu-end" id="recentMenu">
-                    <h6 class="dropdown-header">Последние документы</h6>
-                    {% for doc in recent_documents %}
-                        <a class="dropdown-item d-flex justify-content-between align-items-center gap-3" href="{% url 'storage:document_detail' doc.pk %}">
-                            <span class="text-truncate">
-                                <span class="fw-semibold">{{ doc.code }}</span>
-                                <span class="text-muted">— {{ doc.name }}</span>
-                            </span>
-                            <span class="small text-muted text-nowrap">
-                                {% if doc.current_version %}v{{ doc.current_version.version_number }}{% else %}—{% endif %}
-                            </span>
-                        </a>
-                    {% endfor %}
-                </div>
-            </div>
+    {% if user.is_authenticated %}
+        {% if user.userprofile.role == 'admin' or user.userprofile.role == 'gip' or user.is_superuser %}
+            <a href="{% url 'storage:dashboard' %}" class="btn">
+                <i class="bi bi-gear"></i> Управление
+            </a>
         {% endif %}
 
-        <div class="topbar-user">
-            {% if user.is_authenticated %}
-                <span class="topbar-avatar" aria-hidden="true">{{ user.username|first|upper }}</span>
-                <span class="topbar-username" title="{{ user.get_full_name|default:user.username }}">{{ user.get_full_name|default:user.username }}</span>
-                <form method="post" action="{% url 'logout' %}" class="mb-0">
-                    {% csrf_token %}
-                    <button type="submit" class="topbar-icon-btn" title="Выйти" aria-label="Выйти">
-                        <i class="bi bi-box-arrow-right" aria-hidden="true"></i>
-                    </button>
-                </form>
-            {% else %}
-                <a class="topbar-icon-btn" href="{% url 'login' %}" title="Войти" aria-label="Войти">
-                    <i class="bi bi-box-arrow-in-right" aria-hidden="true"></i>
-                </a>
-            {% endif %}
+        <div class="avatar" title="{{ user.get_full_name|default:user.username }}">
+            {{ user.username|slice:":2"|upper }}
         </div>
-    </div>
+
+        <form method="post" action="{% url 'logout' %}" class="m-0">
+            {% csrf_token %}
+            <button type="submit" class="btn" title="Выйти" aria-label="Выйти">
+                <i class="bi bi-box-arrow-right"></i>
+            </button>
+        </form>
+    {% else %}
+        <a href="{% url 'login' %}" class="btn">Войти</a>
+    {% endif %}
 </header>

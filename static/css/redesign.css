@@ -1,0 +1,11 @@
+.topbar { height: 52px; background: #fff; border-bottom: 1px solid #E4E4E0; display: flex; align-items: center; padding: 0 16px; gap: 12px; }
+.topbar .brand { font-weight: 600; font-size: 15px; display: flex; align-items: center; gap: 8px; }
+.topbar .brand-mark { width: 24px; height: 24px; border-radius: 7px; background: #2F5BEA; color: #fff; display: grid; place-items: center; font-size: 11px; }
+.topbar .crumb { color: #6E6E68; font-size: 13.5px; display: flex; gap: 6px; }
+.topbar .crumb .doc { color: #191917; font-weight: 500; }
+.topbar .spacer { flex: 1; }
+.topbar .btn { height: 32px; padding: 0 12px; border-radius: 8px; border: 1px solid #E4E4E0; background: #fff; font-size: 13px; font-weight: 500; display: inline-flex; align-items: center; gap: 6px; text-decoration: none; color: #191917; }
+.topbar .btn.primary { background: #2F5BEA; border-color: #2F5BEA; color: #fff; }
+.topbar .avatar { width: 28px; height: 28px; border-radius: 50%; background: #191917; color: #fff; display: grid; place-items: center; font-size: 11px; font-weight: 500; }
+body { background: #F6F6F4; font-family: 'Golos Text', 'Inter', system-ui, sans-serif; }
+.container { max-width: 1060px; margin: 0 auto; padding: 24px; }
