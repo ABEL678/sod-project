@@ -829,10 +829,64 @@
         }
     }
 
+    function buildMinimap(pageCount) {
+        const minimap = document.getElementById('minimap');
+        if (!minimap) {
+            return;
+        }
+        minimap.innerHTML = '';
+        for (let number = 1; number <= pageCount; number += 1) {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'thumb' + (number === 1 ? ' active' : '');
+            button.dataset.page = String(number);
+            button.title = 'Лист ' + number;
+            button.innerHTML =
+                '<svg viewBox="0 0 92 64"><rect x="6" y="5" width="80" height="54" '
+                + 'fill="#fff" stroke="#E4E4E0"/><text x="46" y="46" font-size="7" '
+                + 'fill="#9C9C94" text-anchor="middle">'
+                + String(number).padStart(2, '0') + '</text></svg>';
+            button.addEventListener('click', function () {
+                window.goToPage(number);
+            });
+            minimap.appendChild(button);
+        }
+    }
+
+    window.goToPage = function (pageNumber) {
+        const page = pages.get(Number(pageNumber));
+        if (page) {
+            page.wrapper.scrollIntoView({behavior: 'smooth', block: 'start'});
+        }
+        document.querySelectorAll('#minimap .thumb').forEach(function (thumb) {
+            thumb.classList.toggle(
+                'active',
+                Number(thumb.dataset.page) === Number(pageNumber)
+            );
+        });
+        const label = document.querySelector('.page-label');
+        if (label) {
+            label.innerHTML = 'Стр. <b>' + Number(pageNumber) + '</b>';
+        }
+    };
+
+    viewer.addEventListener('wheel', function (event) {
+        if (!event.ctrlKey) {
+            return;
+        }
+        event.preventDefault();
+        if (event.deltaY < 0) {
+            window.zoomIn();
+        } else {
+            window.zoomOut();
+        }
+    }, {passive: false});
+
     if (window.pdfjsLib && pdfUrl) {
         window.pdfjsLib.GlobalWorkerOptions.workerSrc = viewer.dataset.workerUrl;
         window.pdfjsLib.getDocument(pdfUrl).promise.then(function (pdf) {
             pdfDocument = pdf;
+            buildMinimap(pdf.numPages);
             return renderPages();
         }).catch(function () {
             viewer.innerHTML = '<div class="alert alert-warning m-3 mb-0">Не удалось загрузить PDF.</div>';
@@ -915,12 +969,23 @@
         });
     }
 
+    const ZOOM_OPTIONS = [0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4];
+
     window.zoomIn = function () {
-        window.setZoom(currentScale * 1.2);
+        const next = ZOOM_OPTIONS.find(function (value) {
+            return value > currentScale + 0.001;
+        });
+        window.setZoom(next || ZOOM_OPTIONS[ZOOM_OPTIONS.length - 1]);
     };
 
     window.zoomOut = function () {
-        window.setZoom(currentScale / 1.2);
+        const previous = ZOOM_OPTIONS
+            .slice()
+            .reverse()
+            .find(function (value) {
+                return value < currentScale - 0.001;
+            });
+        window.setZoom(previous || ZOOM_OPTIONS[0]);
     };
 
     window.rotatePage = function () {

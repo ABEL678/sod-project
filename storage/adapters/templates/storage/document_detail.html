@@ -42,13 +42,18 @@
   </div>
   <span class="divider"></span>
   <div class="group">
+    <button class="tbtn" onclick="zoomOut()" title="Уменьшить" type="button">−</button>
     <select class="zoom-select" id="zoomSelect" onchange="setZoom(parseFloat(this.value) / 100)">
       <option value="50">50%</option>
       <option value="75">75%</option>
       <option value="100" selected>100%</option>
       <option value="125">125%</option>
       <option value="150">150%</option>
+      <option value="200">200%</option>
+      <option value="300">300%</option>
+      <option value="400">400%</option>
     </select>
+    <button class="tbtn" onclick="zoomIn()" title="Увеличить" type="button">+</button>
   </div>
   <span class="divider"></span>
   <div class="group">
@@ -60,8 +65,8 @@
 
 <div class="workspace" id="main-splitter">
   <aside class="minimap" id="minimap">
-    <button class="thumb active" title="Лист 1" type="button"><svg viewBox="0 0 92 64"><rect x="6" y="5" width="80" height="54" fill="#fff" stroke="#E4E4E0"/><text x="46" y="46" font-size="7" fill="#9C9C94" text-anchor="middle">01</text></svg></button>
-    <button class="thumb" title="Лист 2" type="button"><svg viewBox="0 0 92 64"><rect x="6" y="5" width="80" height="54" fill="#fff" stroke="#E4E4E0"/><text x="46" y="46" font-size="7" fill="#9C9C94" text-anchor="middle">02</text></svg></button>
+    <button class="thumb active" data-page="1" title="Лист 1" type="button" onclick="setMinimapActive(this); if(window.goToPage) window.goToPage(1);"><svg viewBox="0 0 92 64"><rect x="6" y="5" width="80" height="54" fill="#fff" stroke="#E4E4E0"/><text x="46" y="46" font-size="7" fill="#9C9C94" text-anchor="middle">01</text></svg></button>
+    <button class="thumb" data-page="2" title="Лист 2" type="button" onclick="setMinimapActive(this); if(window.goToPage) window.goToPage(2);"><svg viewBox="0 0 92 64"><rect x="6" y="5" width="80" height="54" fill="#fff" stroke="#E4E4E0"/><text x="46" y="46" font-size="7" fill="#9C9C94" text-anchor="middle">02</text></svg></button>
   </aside>
 
   <section class="stage" id="pdf-panel">
@@ -86,6 +91,23 @@
       {% if not public_view and can_create_issue %}
         <button class="btn btn-primary btn-sm" id="newIssueBtn" type="button">+ Замечание</button>
       {% endif %}
+    </div>
+    <div class="status-tabs" id="statusTabs">
+      <button class="status-tab active" data-filter="all" onclick="filterIssues('all', this)" type="button">
+        Все <span class="num" data-count="all">0</span>
+      </button>
+      <button class="status-tab" data-filter="open" onclick="filterIssues('open', this)" type="button">
+        Открытые <span class="num" data-count="open">0</span>
+      </button>
+      <button class="status-tab" data-filter="progress" onclick="filterIssues('progress', this)" type="button">
+        В работе <span class="num" data-count="progress">0</span>
+      </button>
+      <button class="status-tab" data-filter="review" onclick="filterIssues('review', this)" type="button">
+        На проверке <span class="num" data-count="review">0</span>
+      </button>
+      <button class="status-tab" data-filter="closed" onclick="filterIssues('closed', this)" type="button">
+        Закрытые <span class="num" data-count="closed">0</span>
+      </button>
     </div>
 
     <div class="list" id="list"
@@ -229,8 +251,53 @@
 <script>
   let currentIssueId = null;
 
-  function issueCards() {
+  function allIssueCards() {
     return Array.from(document.querySelectorAll('#list .card[data-id]'));
+  }
+
+  function issueCards() {
+    return allIssueCards().filter(function (card) {
+      return card.style.display !== 'none';
+    });
+  }
+
+  function statusGroup(status) {
+    if (status === 'IN_PROGRESS') return 'progress';
+    if (status === 'DONE') return 'review';
+    if (status === 'CLOSED' || status === 'CANCELLED') return 'closed';
+    return 'open';
+  }
+
+  function updateIssueCounters() {
+    const counts = {all: 0, open: 0, progress: 0, review: 0, closed: 0};
+    allIssueCards().forEach(function (card) {
+      counts.all += 1;
+      counts[statusGroup(card.dataset.status)] += 1;
+    });
+    document.querySelectorAll('#statusTabs [data-count]').forEach(function (el) {
+      el.textContent = counts[el.dataset.count] || 0;
+    });
+  }
+
+  function filterIssues(filter, button) {
+    allIssueCards().forEach(function (card) {
+      card.style.display =
+        filter === 'all' || statusGroup(card.dataset.status) === filter
+          ? ''
+          : 'none';
+    });
+    document.querySelectorAll('#statusTabs .status-tab').forEach(function (tab) {
+      tab.classList.toggle('active', tab === button);
+    });
+    document.getElementById('list').style.display = 'block';
+    document.getElementById('detail').style.display = 'none';
+    updateIssueCounters();
+  }
+
+  function setMinimapActive(button) {
+    document.querySelectorAll('#minimap .thumb').forEach(function (thumb) {
+      thumb.classList.toggle('active', thumb === button);
+    });
   }
 
   function openIssueCard(id) {
@@ -301,6 +368,8 @@
     if (event.key === 'n' || event.key === 'N') nextIssue();
     if (event.key === 'p' || event.key === 'P') prevIssue();
   });
+
+  updateIssueCounters();
 </script>
 </body>
 </html>

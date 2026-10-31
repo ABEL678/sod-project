@@ -341,3 +341,46 @@ body {
     padding: 0 8px;
     font-size: 11px;
 }
+
+.panel-head {
+    padding: 8px 12px 6px;
+}
+
+.panel-head h2 {
+    font-size: 14px;
+}
+
+.status-tabs {
+    display: flex;
+    gap: 4px;
+    padding: 0 10px 8px;
+    overflow-x: auto;
+    border-bottom: 1px solid #E4E4E0;
+}
+
+.status-tab {
+    flex-shrink: 0;
+    border: 0;
+    border-radius: 999px;
+    padding: 4px 8px;
+    background: transparent;
+    color: #6E6E68;
+    font-size: 12px;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.status-tab:hover {
+    background: #F6F6F4;
+}
+
+.status-tab.active {
+    background: #E8EFFD;
+    color: #1D4ED8;
+    font-weight: 500;
+}
+
+.status-tab .num {
+    margin-left: 2px;
+    font-size: 11px;
+}
