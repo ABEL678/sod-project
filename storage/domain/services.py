@@ -2006,17 +2006,42 @@ def add_company_member(
     if role not in valid_roles:
         raise ValueError('Неверная роль пользователя')
 
-    profile, _ = UserProfile.objects.get_or_create(
-        user=user,
-        defaults={'company': company, 'role': role},
-    )
+    profile = UserProfile.objects.filter(user=user).first()
+    if (
+        profile is not None
+        and profile.company_id is not None
+        and profile.company_id != company.pk
+    ):
+        raise PermissionDenied(
+            'Пользователь уже принадлежит другой компании'
+        )
+
+    if allowed_sections is not None:
+        section_ids = [
+            getattr(section, 'pk', section)
+            for section in allowed_sections
+        ]
+        unique_ids = set(section_ids)
+        sections = Section.objects.filter(pk__in=unique_ids)
+        if sections.count() != len(unique_ids):
+            raise ValueError('Один или несколько разделов не найдены')
+        if sections.exclude(project__company=company).exists():
+            raise ValueError(
+                'Разделы должны принадлежать компании пользователя'
+            )
+    else:
+        section_ids = None
+
+    if profile is None:
+        profile = UserProfile(user=user)
+
     profile.company = company
     profile.role = role
     profile.save()
 
-    if allowed_sections is not None:
+    if section_ids is not None:
         if role in ('developer', 'contractor'):
-            profile.allowed_sections.set(allowed_sections)
+            profile.allowed_sections.set(section_ids)
         else:
             profile.allowed_sections.clear()
 

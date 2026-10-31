@@ -1,8 +1,9 @@
 from django.contrib.auth import get_user_model
+from django.core.exceptions import PermissionDenied
 from django.test import TestCase
 from django.urls import reverse
 
-from storage.domain.models import Company, UserProfile
+from storage.domain.models import Company, Project, Section, UserProfile
 from storage.domain.services import (
     add_company_member,
     get_company_members,
@@ -46,6 +47,47 @@ class CompanyManagementServiceTests(TestCase):
                 user=user, company=self.company, role='developer'
             ).exists()
         )
+
+    def test_admin_cannot_add_user_from_other_company(self):
+        other_company = Company.objects.create(name='Компания Б')
+        other_user = User.objects.create_user('other_admin', password='pass')
+        UserProfile.objects.create(
+            user=other_user, company=other_company, role='admin'
+        )
+        with self.assertRaises(PermissionDenied):
+            add_company_member(self.company, other_user, 'developer')
+
+    def test_admin_cannot_assign_section_from_other_company(self):
+        other_company = Company.objects.create(name='Компания В')
+        other_project = Project.objects.create(
+            company=other_company,
+            code='OTHER-1',
+            name='Чужой проект',
+            status='active',
+            created_by=self.admin,
+        )
+        other_section = Section.objects.create(
+            project=other_project,
+            code='АР',
+            name='Чужие архитектурные решения',
+            order=1,
+        )
+        new_user = User.objects.create_user('section_dev', password='pass')
+        with self.assertRaises(ValueError):
+            add_company_member(
+                self.company,
+                new_user,
+                'developer',
+                allowed_sections=[other_section],
+            )
+
+    def test_add_user_without_company_works(self):
+        user = User.objects.create_user('free_user', password='pass')
+        profile = add_company_member(
+            self.company, user, 'developer', allowed_sections=[]
+        )
+        self.assertEqual(profile.company, self.company)
+        self.assertEqual(profile.role, 'developer')
 
     def test_remove_company_member(self):
         remove_company_member(self.company, self.developer)

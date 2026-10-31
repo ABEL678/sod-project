@@ -1722,7 +1722,10 @@ class DashboardView(LoginRequiredMixin, UserPassesTestMixin, TemplateView):
         context['role_choices'] = UserProfile.ROLE_CHOICES
         context['available_users'] = (
             get_user_model()
-            .objects.exclude(userprofile__company=company)
+            .objects.filter(
+                Q(userprofile__isnull=True)
+                | Q(userprofile__company__isnull=True)
+            )
             .order_by('last_name', 'username')
             if company is not None
             else get_user_model().objects.none()
