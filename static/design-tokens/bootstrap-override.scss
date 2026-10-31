@@ -1,0 +1,73 @@
+/* ============================================================
+   СОД Stream-CAD · bootstrap-override.scss v1.0
+   Мост дизайн-токенов на переменные Bootstrap 5.
+   Текущий фронтенд СОД живёт на BS5 + vanilla JS — файл подключается
+   ПЕРЕД bootstrap (если собираете SCSS) или поверх (если vars-only).
+   Цель: убрать насыщенные bg-* бейджи и привести каркас к токенам,
+   не переписывая разметку.
+   ============================================================ */
+
+/* 1. Префикс BS-переменных из токенов (вариант сборки SCSS) */
+$font-family-sans-serif: 'Golos Text', 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+$font-family-monospace:  'JetBrains Mono', 'SFMono-Regular', Consolas, monospace;
+
+$primary:   #2F5BEA;   // --accent
+$body-bg:   #F6F6F4;   // --bg-app
+$body-color:#191917;   // --text-primary
+$border-color:        #E4E4E0;  // --border-hairline
+$border-radius:       8px;      // --radius-control
+$border-radius-lg:    12px;     // --radius-card
+$border-radius-sm:    6px;
+
+$box-shadow-sm: 0 1px 2px rgba(25,25,23,.06), 0 1px 6px rgba(25,25,23,.05);
+$box-shadow:    0 4px 14px rgba(25,25,23,.10), 0 2px 4px rgba(25,25,23,.06);
+
+$font-size-base: 0.875rem;  // 14px
+$small-font-size: 0.8125rem; // 13px
+
+/* 2. Runtime-переопределения поверх скомпилированного Bootstrap */
+:root {
+  --bs-primary: #2F5BEA;
+  --bs-primary-rgb: 47, 91, 234;
+  --bs-body-bg: #F6F6F4;
+  --bs-body-color: #191917;
+  --bs-border-color: #E4E4E0;
+  --bs-border-radius: 8px;
+  --bs-border-radius-lg: 12px;
+  --bs-link-color: #2F5BEA;
+  --bs-link-hover-color: #2447C4;
+  --bs-font-sans-serif: 'Golos Text', 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --bs-font-monospace: 'JetBrains Mono', 'SFMono-Regular', Consolas, monospace;
+}
+
+/* 3. Бейджи: вместо насыщенных bg-* — мягкая семантика статусов.
+   Заменяет в шаблонах: bg-danger  -> badge-status-attention, и т.д.
+   Соответствие кодов Issue см. в README.md. */
+.badge { font-weight: 500; border-radius: 999px; }
+
+.badge-status-wait      { color: #D97706; background: #FDF3E7; }  /* NEW         */
+.badge-status-progress  { color: #2563EB; background: #EAF0FE; }  /* IN_PROGRESS, DISCUSSION */
+.badge-status-review    { color: #8B5CF6; background: #F3EFFE; }  /* DONE        */
+.badge-status-done      { color: #16A34A; background: #EAF7EF; }  /* CLOSED      */
+.badge-status-attention { color: #DC2626; background: #FDEDED; }  /* REJECTED    */
+.badge-status-canceled  { color: #6B7280; background: #F2F3F4; }  /* CANCELLED   */
+
+/* 4. Маркапы pdf_viewer.js: читаются из CSS-переменных вместо STATUS_COLORS.
+   Замена STATUS_COLORS в static/js/pdf_viewer.js:
+     const el = document.createElement(...);
+     el.style.color  = getComputedStyle(document.documentElement)
+                         .getPropertyValue('--status-' + token);
+   где token приходит из status_map.js (сгенерирован из tokens.json). */
+.pdf-markup, .pdf-pin { --mk: var(--status-progress); }
+
+/* 5. Табличные цифры для колонок шифров/версий/дат */
+.table td.tabular, .table td.mono {
+  font-family: var(--bs-font-monospace);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 6. Фокус-стили (WCAG 2.2 AA) */
+:focus-visible {
+  outline: 2px solid #2F5BEA;
+  outline-offset: 2px;
+}

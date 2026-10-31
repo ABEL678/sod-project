@@ -1,0 +1,178 @@
+/* ============================================================================
+   CDE «Среда общих данных» — дизайн-токены (CSS Custom Properties)
+   Источник истины: tokens.json · Версия 1.0 · 31.10.2026
+   ----------------------------------------------------------------------------
+   Подключение:  <link rel="stylesheet" href="tokens.css">
+   Шрифты (опционально, есть системные фолбэки):
+     <link href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+   ГЛАВНЫЕ ПРАВИЛА СИСТЕМЫ
+   1. Один смысл — один цвет. Статусные цвета одинаковы в панели замечаний,
+      в бейджах таблиц и в маркерах на листе документа.
+   2. Акцентный цвет (#2F5BEA) — единственный. Не красить им статусы.
+   3. Статус никогда не кодируется только цветом: всегда иконка + текст.
+   4. Цвет + контекст применения:
+        solid   — маркеры, иконки, точки
+        subtle  — фон бейджа/строки   (текст на нём — onSubtle, контраст AA)
+   5. Формат дат и версий: 30.10.2026, 13:41 · v1 · R6 · tabular-nums.
+   ========================================================================== */
+
+:root {
+  /* --- Поверхности --- */
+  --c-bg-app:           #F6F6F4;
+  --c-bg-surface:       #FFFFFF;
+  --c-bg-surface-hover: #FAFAF8;
+  --c-bg-surface-sunken:#EFEFEC;
+  --c-bg-canvas:        #26272B;   /* тёмный canvas вьювера */
+
+  /* --- Границы --- */
+  --c-border-hairline: #E4E4E0;
+  --c-border-default:  #D4D4CE;
+
+  /* --- Текст --- */
+  --c-text-primary:     #191917;
+  --c-text-secondary:   #6E6E68;
+  --c-text-muted:       #9C9C94;
+  --c-text-on-dark:     #F2F2EF;
+  --c-text-on-dark-muted:#A6A7AC;
+  --c-text-inverse:     #FFFFFF;
+
+  /* --- Акцент (единственный) --- */
+  --c-accent:           #2F5BEA;
+  --c-accent-hover:     #2447C4;
+  --c-accent-pressed:   #1D3BA8;
+  --c-accent-subtle:    #ECF0FE;
+  --c-accent-on-subtle: #1E41B8;
+
+  /* --- Статусы: solid / subtle / onSubtle --- */
+  --s-attention-solid: #DC2626;  --s-attention-subtle: #FDECEC;  --s-attention-on: #B91C1C; /* Не принято, Просрочено */
+  --s-wait-solid:      #D97706;  --s-wait-subtle:      #FCF3E6;  --s-wait-on:      #B45309; /* Открыто, На проверке */
+  --s-progress-solid:  #2563EB;  --s-progress-subtle:  #E8EFFD;  --s-progress-on:  #1D4ED8; /* В работе, Обсуждение */
+  --s-done-solid:      #16A34A;  --s-done-subtle:      #E9F7EE;  --s-done-on:      #15803D; /* Выполнено, Принято, Закрыто */
+  --s-canceled-solid:  #6B7280;  --s-canceled-subtle:  #F1F2F4;  --s-canceled-on:  #4B5563; /* Отменено, Архив */
+
+  /* --- Типографика --- */
+  --font-sans: "Golos Text", "Inter", -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "JetBrains Mono", "SF Mono", Consolas, "Liberation Mono", monospace;
+
+  --text-display: 22px;  --lh-display: 28px;  /* заголовок экрана      600 */
+  --text-heading: 18px;  --lh-heading: 24px;  /* заголовок панели      600 */
+  --text-subhead: 16px;  --lh-subhead: 22px;  /* подзаголовок          600 */
+  --text-body-lg: 15px;  --lh-body-lg: 22px;  /* тексты замечаний      400 */
+  --text-body:    14px;  --lh-body:    20px;  /* таблицы, реестры      400 */
+  --text-second:  13px;  --lh-second:  18px;  /* лейблы, без CAPS      400 */
+  --text-caption: 12px;  --lh-caption: 16px;  /* метаданные, бейджи    500 */
+
+  /* --- Сетка 8pt --- */
+  --sp-1: 4px;  --sp-2: 8px;  --sp-3: 12px; --sp-4: 16px; --sp-5: 20px;
+  --sp-6: 24px; --sp-8: 32px; --sp-10: 40px; --sp-12: 48px; --sp-16: 64px;
+
+  /* --- Контролы и плотность --- */
+  --ctl-sm: 28px; --ctl-md: 32px; --ctl-lg: 40px;
+  --row-comfortable: 48px; --row-compact: 36px;
+  --panel-remarks: 380px;
+
+  /* --- Радиусы --- */
+  --r-sm: 6px; --r-md: 8px; --r-lg: 12px; --r-pill: 999px;
+
+  /* --- Тени --- */
+  --shadow-1:   0 1px 2px rgba(25, 25, 23, 0.05);
+  --shadow-2:   0 2px 8px rgba(25, 25, 23, 0.08);
+  --shadow-3:   0 8px 24px rgba(25, 25, 23, 0.14);
+  --shadow-doc: 0 8px 28px rgba(0, 0, 0, 0.30);
+
+  /* --- Моушн --- */
+  --dur-fast: 120ms; --dur-base: 180ms; --dur-slow: 240ms;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+
+  /* --- Фокус (не отключать!) --- */
+  --focus-ring: 0 0 0 2px #FFFFFF, 0 0 0 4px #2F5BEA;
+}
+
+/* ---------------------------------------------------------------------------
+   Тёмная тема: применяется атрибутом  <html data-theme="dark">
+   Рекомендуется для вьювера при работе с документом > 1 часа.
+   ------------------------------------------------------------------------- */
+[data-theme="dark"] {
+  --c-bg-app:            #1B1C1F;
+  --c-bg-surface:        #232429;
+  --c-bg-surface-hover:  #2A2B31;
+  --c-bg-surface-sunken: #1F2024;
+  --c-border-hairline:   #32333A;
+  --c-border-default:    #3E3F47;
+  --c-text-primary:      #F2F2EF;
+  --c-text-secondary:    #A6A7AC;
+  --c-text-muted:        #6E6F76;
+  --c-accent:            #6B8BFF;
+  --c-accent-hover:      #8AA2FF;
+  --c-accent-subtle:     #26304F;
+  --c-accent-on-subtle:  #B9C8FF;
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.40);
+  --shadow-2: 0 2px 8px rgba(0, 0, 0, 0.45);
+  --shadow-3: 0 8px 24px rgba(0, 0, 0, 0.55);
+}
+
+/* ---------------------------------------------------------------------------
+   Готовые семантические классы
+   ------------------------------------------------------------------------- */
+
+/* Статусный бейдж: <span class="cde-badge cde-badge--attention">Не принято</span>
+   Иконку добавлять обязательным префиксом (SVG/шрифтовой), не только цветом */
+.cde-badge {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 2px 10px;
+  border-radius: var(--r-pill);
+  font: 500 var(--text-caption)/var(--lh-caption) var(--font-sans);
+  white-space: nowrap;
+}
+.cde-badge--attention { background: var(--s-attention-subtle); color: var(--s-attention-on); }
+.cde-badge--wait      { background: var(--s-wait-subtle);      color: var(--s-wait-on); }
+.cde-badge--progress  { background: var(--s-progress-subtle);  color: var(--s-progress-on); }
+.cde-badge--done      { background: var(--s-done-subtle);      color: var(--s-done-on); }
+.cde-badge--canceled  { background: var(--s-canceled-subtle);  color: var(--s-canceled-on); }
+.cde-badge--accent    { background: var(--c-accent-subtle);    color: var(--c-accent-on-subtle); }
+
+/* Дедлайн: живой индикатор срока ответа */
+.cde-deadline { background: var(--s-wait-subtle); color: var(--s-wait-on); }
+.cde-deadline--soon     { background: var(--s-attention-subtle); color: var(--s-attention-on); } /* <= 3 дней */
+.cde-deadline--overdue  { background: var(--s-attention-solid);  color: var(--c-text-inverse); } /* просрочено */
+
+/* Чипы версий: <span class="cde-chip">v1</span> */
+.cde-chip {
+  display: inline-flex; align-items: center;
+  padding: 1px 8px;
+  border: 1px solid var(--c-border-hairline);
+  border-radius: var(--r-sm);
+  font: 500 var(--text-caption)/var(--lh-caption) var(--font-mono);
+  color: var(--c-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Маркер замечания на листе: цвет = СТАТУС, не номер */
+.cde-marker {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 24px; height: 24px;
+  border-radius: var(--r-pill);
+  color: var(--c-text-inverse);
+  font: 600 12px/1 var(--font-mono);
+  box-shadow: var(--shadow-2);
+  cursor: pointer;
+  font-variant-numeric: tabular-nums;
+}
+.cde-marker[data-status="attention"] { background: var(--s-attention-solid); }
+.cde-marker[data-status="wait"]      { background: var(--s-wait-solid); }
+.cde-marker[data-status="progress"]  { background: var(--s-progress-solid); }
+.cde-marker[data-status="done"]      { background: var(--s-done-solid); opacity: 0.55; }
+.cde-marker[data-status="canceled"]  { background: var(--s-canceled-solid); opacity: 0.45; }
+.cde-marker.is-active { outline: 3px solid var(--c-text-inverse); outline-offset: 1px; }
+
+/* Табличные данные: даты/версии не «пляшут» */
+.cde-tnum { font-variant-numeric: tabular-nums; }
+
+/* Клавиатурный фокус */
+:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+
+/* Уважение к prefers-reduced-motion */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; }
+}
