@@ -9,3 +9,19 @@
 .topbar .avatar { width: 28px; height: 28px; border-radius: 50%; background: #191917; color: #fff; display: grid; place-items: center; font-size: 11px; font-weight: 500; }
 body { background: #F6F6F4; font-family: 'Golos Text', 'Inter', system-ui, sans-serif; }
 .container { max-width: 1060px; margin: 0 auto; padding: 24px; }
+
+.permission-checkbox:checked {
+    background-color: #198754;
+    border-color: #198754;
+}
+
+.permission-checkbox {
+    opacity: 0.7;
+    width: 14px;
+    height: 14px;
+    margin-right: 4px;
+}
+
+.permission-checkbox:disabled {
+    opacity: 0.7;
+}

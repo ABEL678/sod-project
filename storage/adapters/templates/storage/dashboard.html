@@ -99,6 +99,8 @@
                                     <th>ФИО</th>
                                     <th>Роль</th>
                                     <th>Email</th>
+                                    <th>Проекты</th>
+                                    <th>Разделы</th>
                                     <th>Права</th>
                                     <th class="text-end">Действия</th>
                                 </tr>
@@ -117,14 +119,28 @@
                                     </td>
                                     <td class="small">{{ member.user.email|default:"—" }}</td>
                                     <td class="small">
-                                        <input type="checkbox" disabled checked> Чтение
-                                        <input type="checkbox" disabled
+                                        {% for pm in member.user.projectmembership_set.all %}
+                                            {{ pm.project.code }}<br>
+                                        {% empty %}
+                                            —
+                                        {% endfor %}
+                                    </td>
+                                    <td class="small">
+                                        {% for section in member.allowed_sections.all %}
+                                            {{ section.code }}<br>
+                                        {% empty %}
+                                            —
+                                        {% endfor %}
+                                    </td>
+                                    <td class="small">
+                                        <input type="checkbox" class="form-check-input permission-checkbox" disabled checked> Чтение
+                                        <input type="checkbox" class="form-check-input permission-checkbox" disabled
                                                {% if member.role == 'admin' or member.role == 'gip' or member.role == 'developer' or member.role == 'contractor' %}checked{% endif %}>
                                         Запись
-                                        <input type="checkbox" disabled
+                                        <input type="checkbox" class="form-check-input permission-checkbox" disabled
                                                {% if member.role == 'admin' or member.role == 'gip' or member.role == 'checker' or member.role == 'normocontrol' or member.role == 'customer' %}checked{% endif %}>
                                         Замечания
-                                        <input type="checkbox" disabled
+                                        <input type="checkbox" class="form-check-input permission-checkbox" disabled
                                                {% if member.role == 'admin' %}checked{% endif %}>
                                         Управление
                                     </td>
@@ -144,7 +160,7 @@
                                 </tr>
                             {% empty %}
                                 <tr>
-                                    <td colspan="5" class="text-center text-muted py-5">
+                                    <td colspan="7" class="text-center text-muted py-5">
                                         Участников пока нет
                                     </td>
                                 </tr>

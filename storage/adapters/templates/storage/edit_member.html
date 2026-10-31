@@ -54,6 +54,19 @@
                 </div>
 
                 <div class="mb-3">
+                    <label class="form-label small" for="{{ form.projects.id_for_label }}">{{ form.projects.label }}</label>
+                    {{ form.projects }}
+                    <div class="form-text">Удерживайте Ctrl/Command для выбора нескольких проектов.</div>
+                    {% for error in form.projects.errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label small" for="{{ form.allowed_sections.id_for_label }}">{{ form.allowed_sections.label }}</label>
+                    {{ form.allowed_sections }}
+                    {% for error in form.allowed_sections.errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}
+                </div>
+
+                <div class="mb-3">
                     <label class="form-label small" for="{{ form.role.id_for_label }}">{{ form.role.label }}</label>
                     {{ form.role }}
                     {% for error in form.role.errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}

@@ -1699,6 +1699,16 @@ class EditMemberForm(forms.ModelForm):
     first_name = forms.CharField(label='Имя', required=False)
     last_name = forms.CharField(label='Фамилия', required=False)
     email = forms.EmailField(label='Email', required=False)
+    projects = forms.ModelMultipleChoiceField(
+        queryset=Project.objects.none(),
+        required=False,
+        label='Проекты',
+    )
+    allowed_sections = forms.ModelMultipleChoiceField(
+        queryset=Section.objects.none(),
+        required=False,
+        label='Разделы',
+    )
 
     class Meta:
         model = UserProfile
@@ -1710,6 +1720,41 @@ class EditMemberForm(forms.ModelForm):
             self.fields[name].widget.attrs['class'] = 'form-control form-control-sm'
         self.fields['role'].widget.attrs['class'] = 'form-select form-select-sm'
         self.fields['company'].widget.attrs['class'] = 'form-select form-select-sm'
+        self.fields['projects'].widget.attrs.update({
+            'class': 'form-select form-select-sm',
+            'size': '5',
+        })
+        self.fields['allowed_sections'].widget.attrs.update({
+            'class': 'form-select form-select-sm',
+            'size': '5',
+        })
+
+        company = self.instance.company if self.instance else None
+        if self.is_bound:
+            selected_company = self.data.get('company')
+            if selected_company:
+                company = (
+                    Company.objects.filter(pk=selected_company).first()
+                    or company
+                )
+        if company is not None:
+            self.fields['projects'].queryset = Project.objects.filter(
+                company=company
+            ).order_by('code')
+            self.fields['allowed_sections'].queryset = Section.objects.filter(
+                project__company=company
+            ).select_related('project').order_by('project__code', 'order')
+            if self.instance.user_id:
+                self.fields['projects'].initial = list(
+                    ProjectMembership.objects.filter(
+                        user=self.instance.user,
+                        project__company=company,
+                    ).values_list('project_id', flat=True)
+                )
+                self.fields['allowed_sections'].initial = list(
+                    self.instance.allowed_sections.values_list('pk', flat=True)
+                )
+
         if self.instance and self.instance.user_id:
             self.fields['first_name'].initial = self.instance.user.first_name
             self.fields['last_name'].initial = self.instance.user.last_name
@@ -1724,6 +1769,28 @@ class EditMemberForm(forms.ModelForm):
         user.save()
         if commit:
             profile.save()
+            profile.allowed_sections.set(
+                self.cleaned_data.get('allowed_sections') or []
+            )
+            if profile.company_id:
+                selected_projects = self.cleaned_data.get('projects') or []
+                ProjectMembership.objects.filter(
+                    user=user,
+                    project__company=profile.company,
+                ).exclude(project__in=selected_projects).delete()
+                project_role = (
+                    profile.role
+                    if profile.role in dict(
+                        ProjectMembership.ROLE_IN_PROJECT_CHOICES
+                    )
+                    else 'gip'
+                )
+                for project in selected_projects:
+                    ProjectMembership.objects.update_or_create(
+                        user=user,
+                        project=project,
+                        defaults={'role_in_project': project_role},
+                    )
         return profile
 
 
