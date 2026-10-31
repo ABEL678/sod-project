@@ -15,9 +15,20 @@
 
 <header class="topbar">
   <a class="brand" href="{% url 'storage:project_list' %}" style="text-decoration: none; color: inherit;">
-    <span class="brand-mark">СОД</span><span>Stream-CAD</span>
+    {% if user.userprofile.company.logo %}
+      <img src="{{ user.userprofile.company.logo.url }}"
+           alt="{{ user.userprofile.company.name }}"
+           style="height: 24px; width: auto; margin-right: 8px;">
+    {% else %}
+      <span class="brand-mark">СОД</span>
+    {% endif %}
+    <span>Stream-CAD</span>
   </a>
   <nav class="crumb">
+    <a href="{% url 'storage:project_list' %}" class="text-decoration-none text-dark fw-bold">
+      {{ document.project.company.name|default:"Моя компания" }}
+    </a>
+    <span class="sep">/</span>
     <span>{{ document.project.code }}</span><span class="sep">/</span>
     <span>{{ document.section.code }}</span><span class="sep">/</span>
     <span class="doc">{{ document.code }}</span>
@@ -29,11 +40,20 @@
   <div class="spacer"></div>
   {% if user.is_authenticated %}
     {% if user.userprofile.role == 'admin' or user.userprofile.role == 'gip' or user.is_superuser %}
-      <a href="{% url 'storage:dashboard' %}" class="btn">Управление</a>
+      {% if request.resolver_match.url_name == 'project_list' %}
+        <a href="{% url 'storage:dashboard' %}" class="btn btn-sm btn-outline-secondary"
+           title="Только для администратора и ГИП">Управление</a>
+      {% endif %}
     {% endif %}
   {% endif %}
   <a href="{% url 'storage:document_pdf_with_issues' document.pk %}" class="btn primary">Экспорт PDF с маркапами</a>
   <div class="avatar">{{ user.username|slice:":2"|upper }}</div>
+  <form method="post" action="{% url 'logout' %}" class="d-inline">
+    {% csrf_token %}
+    <button type="submit" class="btn btn-sm btn-outline-secondary" title="Выйти">
+      <i class="bi bi-box-arrow-right"></i> Выйти
+    </button>
+  </form>
 </header>
 
 <div class="toolbar">
