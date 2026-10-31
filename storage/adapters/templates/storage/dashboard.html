@@ -35,7 +35,7 @@
 
     {% if company %}
         <div class="row g-3">
-            <div class="col-md-4">
+            <div class="col-md-3">
                 <div class="card shadow-sm h-100">
                     <div class="card-header bg-white fw-semibold">
                         <i class="bi bi-building me-1"></i>Компания
@@ -80,7 +80,7 @@
                 </div>
             </div>
 
-            <div class="col-md-8">
+            <div class="col-md-9">
                 <div class="card shadow-sm h-100">
                     <div class="card-header bg-white d-flex justify-content-between align-items-center">
                         <span class="fw-semibold">
@@ -99,6 +99,7 @@
                                     <th>ФИО</th>
                                     <th>Роль</th>
                                     <th>Email</th>
+                                    <th>Телефон</th>
                                     <th>Проекты</th>
                                     <th>Разделы</th>
                                     <th>Права</th>
@@ -118,6 +119,7 @@
                                         <span class="badge bg-secondary">{{ member.get_role_display }}</span>
                                     </td>
                                     <td class="small">{{ member.user.email|default:"—" }}</td>
+                                    <td class="small">{{ member.phone|default:"—" }}</td>
                                     <td class="small">
                                         {% for pm in member.user.projectmembership_set.all %}
                                             {{ pm.project.code }}<br>
@@ -160,7 +162,7 @@
                                 </tr>
                             {% empty %}
                                 <tr>
-                                    <td colspan="7" class="text-center text-muted py-5">
+                                    <td colspan="8" class="text-center text-muted py-5">
                                         Участников пока нет
                                     </td>
                                 </tr>
@@ -204,6 +206,10 @@
                             <div class="mb-2">
                                 <label class="form-label small" for="memberEmail">Email</label>
                                 <input type="email" id="memberEmail" name="email" class="form-control form-control-sm">
+                            </div>
+                            <div class="mb-2">
+                                <label class="form-label small" for="memberPhone">Телефон</label>
+                                <input type="text" id="memberPhone" name="phone" class="form-control form-control-sm" placeholder="+7 (999) 123-45-67">
                             </div>
                             <div class="mb-2">
                                 <label class="form-label small" for="memberPassword">Пароль</label>

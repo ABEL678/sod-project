@@ -7,8 +7,11 @@
         {% else %}
             <span class="brand-mark">СОД</span>
         {% endif %}
-        <span>Stream-CAD</span>
     </a>
+    <div class="brand-watermark">
+        <span class="brand-text">Stream-CAD</span>
+        <span class="brand-slogan">Управляйте потоком чертежей</span>
+    </div>
     <nav class="crumb">
         <a href="{% url 'storage:project_list' %}" class="text-decoration-none text-dark fw-bold">
             {% firstof user.userprofile.company.name topbar_company.name topbar_project.company.name "Моя компания" %}

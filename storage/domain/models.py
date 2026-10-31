@@ -252,6 +252,12 @@ class UserProfile(models.Model):
         ('viewer', 'Наблюдатель'),
     ]
     role = models.CharField(max_length=20, choices=ROLE_CHOICES, verbose_name="Роль")
+    phone = models.CharField(
+        max_length=30,
+        blank=True,
+        default='',
+        verbose_name="Телефон",
+    )
     allowed_sections = models.ManyToManyField(Section, blank=True, verbose_name="Доступные разделы")
 
     class Meta:

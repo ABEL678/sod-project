@@ -25,3 +25,31 @@ body { background: #F6F6F4; font-family: 'Golos Text', 'Inter', system-ui, sans-
 .permission-checkbox:disabled {
     opacity: 0.7;
 }
+
+/* T83: watermark brand */
+.topbar {
+    position: relative;
+}
+
+.brand-watermark {
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    text-align: center;
+    opacity: 0.25;
+    pointer-events: none;
+}
+
+.brand-text {
+    font-size: 18px;
+    font-weight: 600;
+    letter-spacing: 1px;
+    color: #191917;
+}
+
+.brand-slogan {
+    display: block;
+    font-size: 10px;
+    color: #6E6E68;
+    margin-top: 1px;
+}

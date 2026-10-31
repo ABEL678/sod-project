@@ -1696,8 +1696,6 @@ class SimulateMailImportView(LoginRequiredMixin, View):
 
 
 class EditMemberForm(forms.ModelForm):
-    first_name = forms.CharField(label='Имя', required=False)
-    last_name = forms.CharField(label='Фамилия', required=False)
     email = forms.EmailField(label='Email', required=False)
     projects = forms.ModelMultipleChoiceField(
         queryset=Project.objects.none(),
@@ -1712,11 +1710,11 @@ class EditMemberForm(forms.ModelForm):
 
     class Meta:
         model = UserProfile
-        fields = ('role', 'company')
+        fields = ('role', 'company', 'phone')
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        for name in ('first_name', 'last_name', 'email'):
+        for name in ('email', 'phone'):
             self.fields[name].widget.attrs['class'] = 'form-control form-control-sm'
         self.fields['role'].widget.attrs['class'] = 'form-select form-select-sm'
         self.fields['company'].widget.attrs['class'] = 'form-select form-select-sm'
@@ -1756,15 +1754,11 @@ class EditMemberForm(forms.ModelForm):
                 )
 
         if self.instance and self.instance.user_id:
-            self.fields['first_name'].initial = self.instance.user.first_name
-            self.fields['last_name'].initial = self.instance.user.last_name
             self.fields['email'].initial = self.instance.user.email
 
     def save(self, commit=True):
         profile = super().save(commit=False)
         user = profile.user
-        user.first_name = self.cleaned_data.get('first_name', '')
-        user.last_name = self.cleaned_data.get('last_name', '')
         user.email = self.cleaned_data.get('email', '')
         user.save()
         if commit:
@@ -1962,13 +1956,16 @@ class DashboardView(LoginRequiredMixin, UserPassesTestMixin, TemplateView):
                     if str(pk).isdigit()
                 ]
                 role = request.POST.get('role', '')
-                add_company_member(
+                profile = add_company_member(
                     request.user,
                     selected_company,
                     user,
                     role,
                     allowed_sections,
                 )
+
+                profile.phone = request.POST.get('phone', '').strip()
+                profile.save(update_fields=['phone'])
 
                 full_name = request.POST.get('full_name', '').strip()
                 if full_name:
