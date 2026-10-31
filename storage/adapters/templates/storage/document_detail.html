@@ -68,11 +68,6 @@
 </div>
 
 <div class="workspace" id="main-splitter">
-  <aside class="minimap" id="minimap">
-    <button class="thumb active" data-page="1" title="Лист 1" type="button" onclick="setMinimapActive(this); if(window.goToPage) window.goToPage(1);"><svg viewBox="0 0 92 64"><rect x="6" y="5" width="80" height="54" fill="#fff" stroke="#E4E4E0"/><text x="46" y="46" font-size="7" fill="#9C9C94" text-anchor="middle">01</text></svg></button>
-    <button class="thumb" data-page="2" title="Лист 2" type="button" onclick="setMinimapActive(this); if(window.goToPage) window.goToPage(2);"><svg viewBox="0 0 92 64"><rect x="6" y="5" width="80" height="54" fill="#fff" stroke="#E4E4E0"/><text x="46" y="46" font-size="7" fill="#9C9C94" text-anchor="middle">02</text></svg></button>
-  </aside>
-
   <section class="stage" id="pdf-panel">
     <div class="pdf-viewer" id="pdfViewer"
          {% if document.current_version %}data-pdf-url="{% url 'storage:document_download' document.current_version.pk %}"{% endif %}
@@ -132,7 +127,7 @@
           <div class="card-body">
             <div class="card-title">{{ issue.description|truncatechars:60 }}</div>
             <div class="card-meta">
-              <span>{{ issue.author.username }}</span>
+              <span>{{ issue.author.get_full_name|default:issue.author.username }}</span>
               <span>·</span>
               <span>{{ issue.created_at|date:"d.m.Y" }}</span>
               <span class="badge"
