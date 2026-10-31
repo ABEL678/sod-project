@@ -23,6 +23,12 @@ class Company(models.Model):
 class Project(models.Model):
     company = models.ForeignKey(Company, on_delete=models.CASCADE, related_name='projects', verbose_name="Компания")
     code = models.CharField(max_length=50, unique=True, verbose_name="Шифр")
+    base_code = models.CharField(
+        max_length=50,
+        blank=True,
+        default='',
+        verbose_name="Базовое обозначение",
+    )
     name = models.CharField(max_length=255, verbose_name="Название")
     customer = models.CharField(max_length=255, blank=True, verbose_name="Заказчик")
     gip = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='gip_projects', verbose_name="ГИП")
@@ -45,6 +51,12 @@ class Project(models.Model):
 class Section(models.Model):
     project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='sections', verbose_name="Проект")
     code = models.CharField(max_length=20, verbose_name="Код раздела")
+    full_code = models.CharField(
+        max_length=100,
+        blank=True,
+        default='',
+        verbose_name="Полный шифр",
+    )
     name = models.CharField(max_length=255, verbose_name="Название")
     order = models.IntegerField(verbose_name="Порядок сортировки")
     folder_template = models.CharField(max_length=100, blank=True, verbose_name="Шаблон папки")
@@ -148,6 +160,18 @@ class Folder(models.Model):
         verbose_name="Родительская папка",
     )
     name = models.CharField(max_length=255, verbose_name="Название")
+    code = models.CharField(
+        max_length=50,
+        blank=True,
+        default='',
+        verbose_name="Код папки",
+    )
+    full_code = models.CharField(
+        max_length=100,
+        blank=True,
+        default='',
+        verbose_name="Полный шифр",
+    )
     order = models.IntegerField(default=0, verbose_name="Порядок сортировки")
     zone = models.CharField(
         max_length=20,

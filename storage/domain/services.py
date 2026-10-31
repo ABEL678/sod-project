@@ -574,6 +574,20 @@ def _ensure_project_zones(project: Project, user: User | None = None) -> bool:
     return True
 
 
+def generate_gost_code(
+    base_code: str,
+    section_code: str,
+    folder_code: str | None = None,
+) -> str:
+    """Собирает ГОСТ-шифр из непустых частей через дефис."""
+    parts = [
+        (value or '').strip()
+        for value in (base_code, section_code, folder_code)
+        if (value or '').strip()
+    ]
+    return '-'.join(parts)
+
+
 def create_project(
     company: Company,
     code: str,
@@ -581,6 +595,7 @@ def create_project(
     customer: str,
     gip: User | None = None,
     created_by: User | None = None,
+    base_code: str = '',
 ) -> Project:
     """Создает проект в указанной компании.
 
@@ -609,6 +624,7 @@ def create_project(
     project = Project.objects.create(
         company=company,
         code=code,
+        base_code=(base_code or '').strip(),
         name=name,
         customer=customer,
         gip=gip,
@@ -629,7 +645,14 @@ def can_create_project(user: User) -> bool:
     return profile is not None and profile.role in ('admin', 'gip')
 
 
-def create_section(project: Project, code: str, name: str, order: int, user: User | None = None) -> Section:
+def create_section(
+    project: Project,
+    code: str,
+    name: str,
+    order: int,
+    user: User | None = None,
+    full_code: str = '',
+) -> Section:
     """Создаёт раздел проекта."""
     if user is not None:
         _ensure_content_manager(user, project)
@@ -639,9 +662,14 @@ def create_section(project: Project, code: str, name: str, order: int, user: Use
         raise ValueError("Код и название раздела обязательны")
     if Section.objects.filter(project=project, code=code).exists():
         raise ValueError("Раздел с таким кодом уже существует")
+    section_full_code = (full_code or '').strip() or generate_gost_code(
+        project.base_code,
+        code,
+    )
     return Section.objects.create(
         project=project,
         code=code,
+        full_code=section_full_code,
         name=name,
         order=int(order or 0),
     )
@@ -671,6 +699,8 @@ def create_folder(
     name: str,
     section: Section | None = None,
     parent: Folder | None = None,
+    code: str = '',
+    full_code: str = '',
 ) -> Folder:
     """Создаёт папку проекта или вложенную папку."""
     _ensure_content_manager(user, project)
@@ -694,11 +724,19 @@ def create_folder(
     max_order = Folder.objects.filter(project=project, parent=parent).aggregate(
         Max('order')
     )['order__max']
+    code = (code or '').strip()
+    folder_full_code = (full_code or '').strip() or generate_gost_code(
+        project.base_code,
+        section.code if section is not None else '',
+        code,
+    )
     return Folder.objects.create(
         project=project,
         section=section,
         parent=parent,
         name=name,
+        code=code,
+        full_code=folder_full_code,
         order=(max_order or 0) + 1,
         created_by=user,
     )
