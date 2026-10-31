@@ -403,3 +403,46 @@ body {
     -webkit-appearance: none;
     margin: 0;
 }
+
+/* T66: compact issue panel */
+.panel {
+    width: 360px;
+    min-width: 300px;
+}
+
+.panel-head {
+    padding: 6px 10px;
+}
+
+.panel-head h2 {
+    font-size: 15px;
+    margin: 0 0 4px;
+}
+
+.status-tabs {
+    padding: 0 8px 6px;
+}
+
+.status-tab {
+    height: 30px;
+    padding: 0 8px;
+    font-size: 12px;
+}
+
+.list {
+    padding: 8px;
+}
+
+.panel .card {
+    padding: 8px;
+    margin-bottom: 6px;
+}
+
+.card-title {
+    font-size: 13px;
+}
+
+.card-meta {
+    margin-top: 4px;
+    font-size: 11px;
+}

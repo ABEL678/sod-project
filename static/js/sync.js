@@ -1,3 +1,29 @@
+window.centerMarkup = function (issueId) {
+    const container = document.querySelector('.stage')
+        || document.getElementById('pdfViewer');
+    const markup = document.querySelector(
+        '.pdf-markup[data-issue-id="' + issueId + '"]'
+    );
+    if (!container || !markup) {
+        return;
+    }
+
+    markup.classList.add('border-danger');
+    const rect = markup.getBoundingClientRect();
+    const contRect = container.getBoundingClientRect();
+    container.scrollTo({
+        left: container.scrollLeft
+            + (rect.left - contRect.left)
+            - (contRect.width / 2)
+            + (rect.width / 2),
+        top: container.scrollTop
+            + (rect.top - contRect.top)
+            - (contRect.height / 2)
+            + (rect.height / 2),
+        behavior: 'smooth',
+    });
+};
+
 window.selectIssue = function (event, issueId) {
     if (event && event.target.closest('button')) {
         return;
@@ -15,12 +41,30 @@ window.selectIssue = function (event, issueId) {
         row.classList.add('table-active');
     }
 
-    const markup = document.querySelector(
-        '.pdf-markup[data-issue-id="' + issueId + '"]'
+    const card = document.querySelector(
+        '.issue-row[data-issue-id="' + issueId + '"]'
     );
-    if (markup) {
-        markup.classList.add('border-danger');
-        markup.scrollIntoView({behavior: 'smooth', block: 'nearest'});
+    const pageNumber = card ? Number(card.dataset.page) : 0;
+    const finish = function () {
+        window.centerMarkup(issueId);
+    };
+
+    if (
+        pageNumber
+        && typeof window.goToPage === 'function'
+        && (
+            typeof window.getCurrentPage !== 'function'
+            || Number(window.getCurrentPage()) !== pageNumber
+        )
+    ) {
+        const result = window.goToPage(pageNumber);
+        if (result && typeof result.then === 'function') {
+            result.then(finish);
+        } else {
+            finish();
+        }
+    } else {
+        finish();
     }
 };
 
@@ -42,12 +86,7 @@ window.selectIssueFromPdf = function (issueId) {
         row.scrollIntoView({behavior: 'smooth', block: 'nearest'});
     }
 
-    const markup = document.querySelector(
-        '.pdf-markup[data-issue-id="' + issueId + '"]'
-    );
-    if (markup) {
-        markup.classList.add('border-danger');
-    }
+    window.centerMarkup(issueId);
 };
 
 window.changeStatus = function (issueId, newStatus) {

@@ -1092,6 +1092,9 @@
     };
 
     window.renderPage = renderPage;
+    window.getCurrentPage = function () {
+        return currentPage;
+    };
 
     initToolbar();
     initPan();

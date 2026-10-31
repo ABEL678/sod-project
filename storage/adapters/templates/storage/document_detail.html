@@ -122,6 +122,7 @@
              data-id="{{ issue.pk }}"
              data-issue-id="{{ issue.pk }}"
              data-status="{{ issue.status }}"
+             data-page="{{ issue.page_number|default:'' }}"
              data-status-label="{{ issue.get_status_display }}"
              onclick="selectIssue(null, {{ issue.pk }})">
           <span class="mark-badge"
