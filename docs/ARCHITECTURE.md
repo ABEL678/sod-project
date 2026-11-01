@@ -276,6 +276,17 @@ sod_project/
 
 `IssueAttachment` не создавался: маркап хранится в `Issue.crop_image`.
 
+#### Notification (Волна 3)
+| Поле | Тип | Описание |
+|---|---|---|
+| id | PK | |
+| recipient | FK → User, related_name='notifications' | Получатель уведомления |
+| actor | FK → User, null=True | Инициатор действия |
+| message | CharField(255) | Текст уведомления |
+| url | CharField(255) | Ссылка для перехода |
+| is_read | BooleanField | Флаг прочтения |
+| created_at | DateTimeField | |
+
 ### 3.3. Связи
 
 User 1─1 UserProfile
