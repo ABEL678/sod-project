@@ -6,6 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Проекты — Stream-CAD</title>
     <link rel="stylesheet" href="{% static 'css/bootstrap.min.css' %}">
+    <link rel="stylesheet" href="{% static 'design-tokens/tokens.css' %}?v=20261101">
     <link rel="stylesheet" href="{% static 'css/redesign.css' %}">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
     <link rel="stylesheet" href="{% static 'css/app.css' %}">
@@ -39,27 +40,23 @@
                         <th>Название</th>
                         <th>Заказчик</th>
                         <th>Статус</th>
-                        <th></th>
                     </tr>
                 </thead>
                 <tbody>
                 {% for project in projects %}
-                    <tr>
-                        <td class="fw-semibold">{{ project.code }}</td>
+                    <tr data-href="{% url 'storage:project_detail' project.pk %}" class="project-row" title="Открыть проект {{ project.name }}">
+                        <td class="fw-semibold"><span class="cde-chip">{{ project.code }}</span></td>
                         <td><a href="{% url 'storage:project_detail' project.pk %}">{{ project.name }}</a></td>
                         <td>{{ project.customer|default:"—" }}</td>
                         <td>
-                            <span class="badge {% if project.status == 'active' %}bg-success{% else %}bg-secondary{% endif %}">
+                            <span class="cde-badge {% if project.status == 'active' %}cde-badge--done{% else %}cde-badge--closed{% endif %}">
                                 {{ project.get_status_display }}
                             </span>
-                        </td>
-                        <td class="text-end">
-                            <a class="btn btn-sm btn-outline-primary" href="{% url 'storage:project_detail' project.pk %}">Открыть</a>
                         </td>
                     </tr>
                 {% empty %}
                     <tr>
-                        <td colspan="5" class="text-center text-muted py-4">Проектов пока нет</td>
+                        <td colspan="4" class="text-center text-muted py-4">Проектов пока нет</td>
                     </tr>
                 {% endfor %}
                 </tbody>
@@ -126,5 +123,15 @@
     </div>
     <script src="{% static 'js/vendor/bootstrap.bundle.min.js' %}"></script>
 {% endif %}
+<script>
+    document.querySelectorAll('tr[data-href]').forEach(function (row) {
+        row.addEventListener('click', function (event) {
+            if (event.target.closest('a, button, form, input, select')) {
+                return;
+            }
+            window.location.href = row.dataset.href;
+        });
+    });
+</script>
 </body>
 </html>

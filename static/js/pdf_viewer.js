@@ -1381,11 +1381,11 @@
         renderPages();
     };
 
-    window.fitToPage = function () {
+    window.fitWidth = function () {
         if (!pdfDocument) {
             return;
         }
-        pdfDocument.getPage(1).then(function (page) {
+        pdfDocument.getPage(currentPage).then(function (page) {
             const base = page.getViewport({
                 scale: 1,
                 rotation: currentRotation,
@@ -1394,6 +1394,24 @@
             window.setZoom(available / base.width);
         });
     };
+
+    window.fitPage = function () {
+        if (!pdfDocument) {
+            return;
+        }
+        pdfDocument.getPage(currentPage).then(function (page) {
+            const base = page.getViewport({
+                scale: 1,
+                rotation: currentRotation,
+            });
+            const availableW = Math.max(200, viewer.clientWidth - 24);
+            const availableH = Math.max(200, viewer.clientHeight - 24);
+            window.setZoom(Math.min(availableW / base.width, availableH / base.height));
+        });
+    };
+
+    // Обратная совместимость: старое имя работало как «по ширине».
+    window.fitToPage = window.fitWidth;
 
     window.togglePan = function () {
         panMode = !panMode;
@@ -1442,6 +1460,17 @@
         });
     }
     updateComparisonButton();
+
+    // Смена статуса без перезагрузки: обновляем внутренний список и маркеры на листе.
+    document.addEventListener('issue:status-changed', function (event) {
+        const target = issues.find(function (item) {
+            return item.id === Number(event.detail.id);
+        });
+        if (target) {
+            target.status = event.detail.status;
+        }
+        drawMarks(currentPage);
+    });
 
     initToolbar();
     initPan();

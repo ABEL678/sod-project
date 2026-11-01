@@ -48,7 +48,7 @@
   --s-attention-solid: #dc3545;  --s-attention-subtle: #FDEBED;  --s-attention-on: #B02A37; /* Не принято (REJECTED) */
   --s-wait-solid:      #0d6efd;  --s-wait-subtle:      #E7F0FF;  --s-wait-on:      #0B5ED7; /* Открыто (NEW) */
   --s-progress-solid:  #0dcaf0;  --s-progress-subtle:  #E0F8FC;  --s-progress-on:  #087990; /* В работе (IN_PROGRESS) */
-  --s-review-solid:    #ffc107;  --s-review-subtle:    #FFF8E1;  --s-review-on:    #997404; /* К обсуждению (DISCUSSION) */
+  --s-review-solid:    #ffc107;  --s-review-subtle:    #FFF8E1;  --s-review-on:    #7A5C03; /* К обсуждению (DISCUSSION) */
   --s-done-solid:      #198754;  --s-done-subtle:      #E6F4EE;  --s-done-on:      #146C43; /* Выполнено (DONE) */
   --s-closed-solid:    #6c757d;  --s-closed-subtle:    #F0F1F2;  --s-closed-on:    #565E64; /* Закрыто (CLOSED) */
   --s-canceled-solid:  #212529;  --s-canceled-subtle:  #E9EAEA;  --s-canceled-on:  #000000; /* Аннулировано (CANCELLED) */

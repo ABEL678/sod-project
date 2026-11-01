@@ -1,18 +1,25 @@
 :root {
     --status-new: var(--s-wait-solid);
     --status-new-bg: var(--s-wait-subtle);
+    --status-new-on: var(--s-wait-on);
     --status-in_progress: var(--s-progress-solid);
     --status-in_progress-bg: var(--s-progress-subtle);
+    --status-in_progress-on: var(--s-progress-on);
     --status-discussion: var(--s-review-solid);
     --status-discussion-bg: var(--s-review-subtle);
+    --status-discussion-on: var(--s-review-on);
     --status-rejected: var(--s-attention-solid);
     --status-rejected-bg: var(--s-attention-subtle);
+    --status-rejected-on: var(--s-attention-on);
     --status-done: var(--s-done-solid);
     --status-done-bg: var(--s-done-subtle);
+    --status-done-on: var(--s-done-on);
     --status-closed: var(--s-closed-solid);
     --status-closed-bg: var(--s-closed-subtle);
+    --status-closed-on: var(--s-closed-on);
     --status-cancelled: var(--s-canceled-solid);
     --status-cancelled-bg: var(--s-canceled-subtle);
+    --status-cancelled-on: var(--s-canceled-on);
 }
 
 body {

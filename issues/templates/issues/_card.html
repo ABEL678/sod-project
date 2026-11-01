@@ -1,3 +1,4 @@
+{% load issue_extras %}
 <div class="issue-card-detail" data-issue-id="{{ issue.pk }}">
     <div class="d-flex justify-content-between align-items-center mb-2">
         <div class="fw-semibold small">ИД: {{ issue.pk }}</div>
@@ -54,7 +55,12 @@
                     </span>
                 </dt>
                 <dd class="col-sm-7">
-                    {% if issue.due_date %}{{ issue.due_date|date:"d.m.Y" }}{% else %}—{% endif %}
+                    {% if issue.due_date %}
+                        <span class="cde-tnum">{{ issue.due_date|date:"d.m.Y" }}</span>
+                        {% if issue|deadline_label %}
+                            <span class="cde-badge {{ issue|deadline_class }}">{{ issue|deadline_label }}</span>
+                        {% endif %}
+                    {% else %}—{% endif %}
                 </dd>
 
                 <dt class="col-sm-5">Ответ</dt>
@@ -112,7 +118,7 @@
             <div class="d-flex align-items-center mb-2">
                 <strong class="me-2">Статус:</strong>
                 {% if allowed_status_options %}
-                    <select class="form-select form-select-sm" style="width: auto;" onchange="changeStatus({{ issue.pk }}, this.value)">
+                    <select class="form-select form-select-sm" style="width: auto;" onchange="changeStatus({{ issue.pk }}, this.value, this.selectedOptions[0] ? this.selectedOptions[0].textContent.trim() : '')">
                         {% if issue.status not in allowed_statuses %}
                             <option value="{{ issue.status }}" selected disabled>{{ issue.get_status_display }}</option>
                         {% endif %}

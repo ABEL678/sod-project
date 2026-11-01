@@ -114,3 +114,9 @@ body { background: #F6F6F4; font-family: 'Golos Text', 'Inter', system-ui, sans-
 .clickable-row:hover {
     background: #F0FDF4;
 }
+
+/* Sprint 1 (аудит 2.0): кликабельные строки списка проектов */
+tr[data-href],
+.project-row {
+    cursor: pointer;
+}
