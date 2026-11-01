@@ -69,6 +69,8 @@ from storage.domain.services import (
     get_accessible_documents,
     get_accessible_projects,
     get_accessible_sections,
+    get_document_version_for_view,
+    get_document_versions,
     get_document_view,
     get_flat_folders,
     get_folder_documents,
@@ -1401,6 +1403,7 @@ class DocumentDetailView(LoginRequiredMixin, DetailView):
             if document is None:
                 raise Http404
             self.object = document
+            self.public_view = True
             _remember_document(request, document.pk)
             context = self.get_context_data(object=document)
             context['public_view'] = True
@@ -1423,11 +1426,70 @@ class DocumentDetailView(LoginRequiredMixin, DetailView):
         context = self.get_context_data(object=self.object)
         return self.render_to_response(context)
 
+    def _resolve_selected_version(self):
+        """Версия для просмотра с учётом ?version=<id>."""
+        document = self.object
+        if getattr(self, 'public_view', False):
+            return document.current_version, True
+
+        if 'version' not in self.request.GET:
+            return document.current_version, True
+
+        raw_version = self.request.GET.get('version', '')
+        try:
+            version_id = int(raw_version)
+        except (TypeError, ValueError):
+            raise Http404
+
+        try:
+            version = get_document_version_for_view(
+                self.request.user, document, version_id
+            )
+        except (DocumentVersion.DoesNotExist, PermissionDenied, ValueError):
+            raise Http404
+        return version, version.pk == document.current_version_id
+
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
+        selected_version, is_current_version = self._resolve_selected_version()
+
+        if getattr(self, 'public_view', False):
+            versions = self.object.versions.select_related('uploaded_by').order_by(
+                '-version_number'
+            )
+        else:
+            versions = get_document_versions(self.request.user, self.object)
+
+        if selected_version is not None:
+            pdf_url = reverse(
+                'storage:document_download', args=[selected_version.pk]
+            )
+        else:
+            pdf_url = ''
+
+        if is_current_version or self.object.current_version_id is None:
+            pdf_url_current = ''
+        else:
+            pdf_url_current = reverse(
+                'storage:document_download',
+                args=[self.object.current_version_id],
+            )
+
+        params = self.request.GET.copy()
+        params.pop('version', None)
+        current_version_url = self.request.path
+        if params:
+            current_version_url += '?' + params.urlencode()
+
         context['breadcrumbs'] = _document_breadcrumbs(self.object)
-        context['versions'] = self.object.versions.select_related('uploaded_by').order_by('-version_number')
+        context['versions'] = versions
+        context['selected_version'] = selected_version
+        context['is_current_version'] = is_current_version
+        context['pdf_url'] = pdf_url
+        context['pdf_url_current'] = pdf_url_current
+        context['current_version_url'] = current_version_url
         issues = list(get_issues_for_version(self.object))
+
         status_labels = dict(Issue.STATUS_CHOICES)
         for issue in issues:
             issue.allowed_status_options = [

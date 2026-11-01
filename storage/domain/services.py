@@ -1503,11 +1503,52 @@ def generate_vedomost(project: Project, section=None, *, company: Company, user:
     return [_document_row(doc) for doc in qs]
 
 
-def get_document_versions(user: User, document_id: int):
-    document = Document.objects.get(pk=document_id)
+def get_document_versions(user: User, document: Document | int) -> QuerySet[DocumentVersion]:
+    """Список версий документа, доступных на чтение.
+
+    Проверка доступа — через check_read_permission(). current_version
+    не изменяется. Для обратной совместимости принимает и pk документа.
+    """
+    if not isinstance(document, Document):
+        document = Document.objects.get(pk=document)
     if not check_read_permission(user, document):
         raise PermissionDenied("Нет прав на чтение документа")
-    return document.versions.all().order_by('-version_number')
+    return (
+        document.versions.select_related('uploaded_by')
+        .order_by('-version_number')
+    )
+
+
+def get_document_version_for_view(
+    user: User,
+    document: Document,
+    version_id: int | None,
+) -> DocumentVersion:
+    """Возвращает версию документа для просмотра с проверкой доступа.
+
+    version_id is None → document.current_version.
+    version_id задан → версия обязана принадлежать ЭТОМУ документу
+    (защита от IDOR), иначе DocumentVersion.DoesNotExist.
+    ValueError возникает только при version_id is None и отсутствии
+    current_version; при переданном version_id отсутствующая/чужая
+    версия даёт DocumentVersion.DoesNotExist.
+    current_version не изменяется.
+    """
+    if not check_read_permission(user, document):
+        raise PermissionDenied("Нет прав на чтение документа")
+
+    if version_id is None:
+        version = document.current_version
+        if version is None:
+            raise ValueError("У документа нет текущей версии")
+        return version
+
+    try:
+        return document.versions.select_related('uploaded_by').get(pk=version_id)
+    except DocumentVersion.DoesNotExist:
+        raise DocumentVersion.DoesNotExist(
+            "Версия не принадлежит указанному документу"
+        ) from None
 
 
 def search_documents(
