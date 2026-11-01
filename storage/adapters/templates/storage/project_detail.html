@@ -42,8 +42,16 @@
                                 title="Добавить раздел"
                                 aria-label="Добавить раздел">
                             <i class="bi bi-plus-lg" aria-hidden="true"></i> Раздел
-                        </button>
-                    {% endif %}
+                                </button>
+                            {% else %}
+                                <button type="button"
+                                        class="btn btn-sm btn-link section-menu-btn"
+                                        disabled
+                                        title="Нет прав"
+                                        aria-label="Нет прав на изменение структуры">
+                                    <i class="bi bi-three-dots-vertical" aria-hidden="true"></i>
+                                </button>
+                            {% endif %}
                     <button type="button"
                             class="btn btn-sm btn-light border-0 px-1 py-0"
                             id="sidebarCollapse"
@@ -57,7 +65,9 @@
             <div class="sidebar-scroll" id="sectionList" data-role="section-list">
                 {% if project_folders %}
                     <div class="sidebar-label">Папки проекта</div>
-                    <div class="list-group list-group-flush folder-tree-list">
+                    <div class="list-group list-group-flush folder-tree-list"
+                         data-folder-sortable
+                         data-folder-reorder-url="{% url 'storage:folder_reorder' project.pk %}">
                         {% for folder in project_folders %}
                             {% include 'storage/_folder_tree.html' with folder=folder %}
                         {% endfor %}
@@ -80,6 +90,44 @@
                                 <span class="section-name" title="{{ section.name }}">{{ section.name }}</span>
                                 <span class="section-count" data-section-id="{{ section.pk }}" data-role="section-count">{{ section.document_count }}</span>
                             </a>
+                            {% if can_manage_structure %}
+                                <div class="dropdown">
+                                    <button type="button"
+                                            class="btn btn-sm btn-link section-menu-btn"
+                                            data-bs-toggle="dropdown"
+                                            aria-expanded="false"
+                                            title="Действия с разделом"
+                                            aria-label="Действия с разделом">
+                                        <i class="bi bi-three-dots-vertical" aria-hidden="true"></i>
+                                    </button>
+                                    <ul class="dropdown-menu dropdown-menu-end">
+                                        <li>
+                                            <button type="button" class="dropdown-item"
+                                                    data-section-rename
+                                                    data-section-id="{{ section.pk }}"
+                                                    data-section-name="{{ section.name }}"
+                                                    data-section-code="{{ section.code }}"
+                                                    data-section-url="{% url 'storage:section_rename' section.pk %}">
+                                                <i class="bi bi-pencil me-2" aria-hidden="true"></i>Переименовать
+                                            </button>
+                                        </li>
+                                        <li>
+                                            <button type="button" class="dropdown-item text-danger"
+                                                    disabled title="Удаление раздела пока недоступно">
+                                                <i class="bi bi-trash me-2" aria-hidden="true"></i>Удалить
+                                            </button>
+                                        </li>
+                                    </ul>
+                                </div>
+                            {% else %}
+                                <button type="button"
+                                        class="btn btn-sm btn-link section-menu-btn"
+                                        disabled
+                                        title="Нет прав"
+                                        aria-label="Нет прав на изменение структуры">
+                                    <i class="bi bi-three-dots-vertical" aria-hidden="true"></i>
+                                </button>
+                            {% endif %}
 <div id="dndToast" class="dnd-toast d-none" role="status" aria-live="polite"></div>
 
 <div id="docRowMenu" class="dropdown-menu doc-row-menu" role="menu" aria-hidden="true">
@@ -147,7 +195,9 @@
                         </div>
 
                         {% if section.folder_nodes %}
-                            <div class="folder-tree-list ms-2">
+                            <div class="folder-tree-list ms-2"
+                                 data-folder-sortable
+                                 data-folder-reorder-url="{% url 'storage:folder_reorder' project.pk %}">
                                 {% for folder in section.folder_nodes %}
                                     {% include 'storage/_folder_tree.html' with folder=folder %}
                                 {% endfor %}
@@ -405,6 +455,36 @@
                     <div class="modal-footer">
                         <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-dismiss="modal">Отмена</button>
                         <button type="submit" class="btn btn-primary btn-sm">Создать раздел</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal fade" id="sectionRenameModal" tabindex="-1" aria-labelledby="sectionRenameTitle" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <form id="sectionRenameForm" method="post">
+                    {% csrf_token %}
+                    <div class="modal-header">
+                        <h5 class="modal-title" id="sectionRenameTitle">Переименовать раздел</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрыть"></button>
+                    </div>
+                    <div class="modal-body">
+                        <div class="row g-2">
+                            <div class="col-4">
+                                <label class="form-label small" for="sectionRenameCode">Код</label>
+                                <input class="form-control form-control-sm" id="sectionRenameCode" name="code" maxlength="20" required>
+                            </div>
+                            <div class="col-8">
+                                <label class="form-label small" for="sectionRenameName">Название</label>
+                                <input class="form-control form-control-sm" id="sectionRenameName" name="name" maxlength="255" required>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-dismiss="modal">Отмена</button>
+                        <button type="submit" class="btn btn-primary btn-sm">Сохранить</button>
                     </div>
                 </form>
             </div>

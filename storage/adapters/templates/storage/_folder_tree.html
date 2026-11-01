@@ -110,12 +110,22 @@
                     </li>
                 </ul>
             </div>
+        {% else %}
+            <button type="button"
+                    class="btn btn-sm btn-link p-0"
+                    disabled
+                    title="Нет прав"
+                    aria-label="Нет прав на изменение структуры">
+                <i class="bi bi-three-dots" aria-hidden="true"></i>
+            </button>
         {% endif %}
     </div>
 
     {% if folder.children_tree %}
         <div class="collapse show folder-children" id="folder-children-{{ folder.pk }}">
-            <div class="list-group list-group-flush folder-children-list ms-3 border-start">
+            <div class="list-group list-group-flush folder-children-list ms-3 border-start"
+                 data-folder-sortable
+                 data-folder-reorder-url="{% url 'storage:folder_reorder' project.pk %}">
                 {% for child in folder.children_tree %}
                     {% include 'storage/_folder_tree.html' with folder=child %}
                 {% endfor %}

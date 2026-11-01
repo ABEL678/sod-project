@@ -1314,6 +1314,143 @@
         });
     }
 
+    function renderWorkflowActions(cell, documentId, actions) {
+        if (!cell) {
+            return;
+        }
+        if (!actions || !actions.length) {
+            cell.innerHTML = '<span class="text-muted">—</span>';
+            return;
+        }
+        var buttons = actions.map(function (item) {
+            return '<button type="button" class="wf-btn" ' +
+                'data-workflow-action="' + item.code + '" ' +
+                'data-workflow-url="' + urlForWorkflow(documentId) + '" ' +
+                'title="' + escapeHtml(item.label) + '" ' +
+                'aria-label="' + escapeHtml(item.label) + '">' +
+                '<i class="bi ' + item.icon + '" aria-hidden="true"></i></button>';
+        });
+        cell.innerHTML = '<span class="wf-actions" data-role="workflow-actions">' +
+            buttons.join('') + '</span>';
+    }
+
+    function initInternalStatus() {
+        document.addEventListener('change', function (event) {
+            var select = event.target.closest('[data-internal-status-url]');
+            if (!select) {
+                return;
+            }
+            var row = select.closest('tr');
+            var previous = select.getAttribute('data-current-status') || '';
+            var body = new FormData();
+            body.append('status', select.value);
+            fetch(select.getAttribute('data-internal-status-url'), {
+                method: 'POST',
+                headers: {'X-CSRFToken': csrfToken()},
+                body: body,
+                credentials: 'same-origin'
+            }).then(function (response) {
+                return response.json().then(function (data) {
+                    return {ok: response.ok, data: data};
+                });
+            }).then(function (result) {
+                if (!result.ok || result.data.status !== 'ok') {
+                    select.value = previous;
+                    showDndToast(
+                        (result.data && result.data.error) ||
+                        'Не удалось изменить внутренний статус',
+                        true
+                    );
+                    return;
+                }
+                select.setAttribute('data-current-status', result.data.internal_status);
+                if (row) {
+                    renderWorkflowActions(
+                        row.querySelector('[data-column="actions"]'),
+                        result.data.document_id,
+                        result.data.actions
+                    );
+                }
+                showToast('Внутренний статус обновлён');
+            }).catch(function () {
+                select.value = previous;
+                showDndToast('Не удалось изменить внутренний статус', true);
+            });
+        });
+    }
+
+    function initSectionRename() {
+        var modalElement = document.getElementById('sectionRenameModal');
+        var form = document.getElementById('sectionRenameForm');
+        var nameInput = document.getElementById('sectionRenameName');
+        var codeInput = document.getElementById('sectionRenameCode');
+        if (!modalElement || !form || !nameInput || !codeInput) {
+            return;
+        }
+        document.addEventListener('click', function (event) {
+            var trigger = event.target.closest('[data-section-rename]');
+            if (!trigger) {
+                return;
+            }
+            event.preventDefault();
+            form.action = trigger.getAttribute('data-section-url') || '';
+            nameInput.value = trigger.getAttribute('data-section-name') || '';
+            codeInput.value = trigger.getAttribute('data-section-code') || '';
+            if (window.bootstrap) {
+                window.bootstrap.Modal.getOrCreateInstance(modalElement).show();
+            }
+        });
+    }
+
+    function initFolderReorder() {
+        if (!window.Sortable) {
+            return;
+        }
+        document.querySelectorAll('[data-folder-sortable]').forEach(function (list) {
+            if (list.dataset.sortableReady === '1') {
+                return;
+            }
+            list.dataset.sortableReady = '1';
+            window.Sortable.create(list, {
+                animation: 150,
+                draggable: '.folder-node',
+                filter: 'button, a, input, select, .dropdown-menu',
+                preventOnFilter: false,
+                onEnd: function () {
+                    var ids = Array.from(list.children)
+                        .filter(function (node) {
+                            return node.classList.contains('folder-node');
+                        })
+                        .map(function (node) {
+                            return node.getAttribute('data-folder-id');
+                        })
+                        .filter(Boolean);
+                    var url = list.getAttribute('data-folder-reorder-url');
+                    if (!url || !ids.length) {
+                        return;
+                    }
+                    var body = new FormData();
+                    ids.forEach(function (id) {
+                        body.append('ids', id);
+                    });
+                    fetch(url, {
+                        method: 'POST',
+                        headers: {'X-CSRFToken': csrfToken()},
+                        body: body,
+                        credentials: 'same-origin'
+                    }).then(function (response) {
+                        if (!response.ok) {
+                            throw new Error('reorder');
+                        }
+                        window.location.reload();
+                    }).catch(function () {
+                        showDndToast('Не удалось сохранить порядок папок', true);
+                    });
+                }
+            });
+        });
+    }
+
     function init() {
         initSidebar();
         initBulkSelection();
@@ -1323,6 +1460,9 @@
         initDocumentsPanel();
         initZoneWorkflow();
         initFolderMove();
+        initSectionRename();
+        initFolderReorder();
+        initInternalStatus();
         initHtmx();
     }
 

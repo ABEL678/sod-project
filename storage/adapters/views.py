@@ -71,6 +71,8 @@ from storage.domain.services import (
     get_accessible_projects,
     get_accessible_sections,
     get_readable_documents,
+    rename_section,
+    reorder_folders,
     get_document_version_for_view,
     get_document_versions,
     get_document_view,
@@ -90,6 +92,7 @@ from storage.domain.services import (
     document_workflow_actions,
     _effective_zone,
     transition_document_zone,
+    update_internal_status,
     ZONE_WORKFLOW_ACTIONS,
     list_document_views,
     list_project_participants,
@@ -821,6 +824,27 @@ class SectionCreateView(LoginRequiredMixin, View):
         return redirect('storage:project_detail', pk=project.pk)
 
 
+class SectionRenameView(LoginRequiredMixin, View):
+    def post(self, request, section_id):
+        section = get_object_or_404(
+            Section.objects.select_related('project'),
+            pk=section_id,
+            project__in=get_accessible_projects(request.user),
+        )
+        try:
+            rename_section(
+                request.user,
+                section,
+                request.POST.get('name', ''),
+                request.POST.get('code'),
+            )
+        except (PermissionDenied, ValueError) as exc:
+            messages.error(request, str(exc))
+        else:
+            messages.success(request, 'Раздел переименован.')
+        return redirect('storage:project_detail', pk=section.project_id)
+
+
 class FolderCreateView(LoginRequiredMixin, View):
     def post(self, request, project_id):
         project = get_object_or_404(
@@ -927,7 +951,7 @@ class FolderRenameView(LoginRequiredMixin, View):
                 request.user,
                 folder,
                 request.POST.get('name', ''),
-                request.POST.get('code', ''),
+                request.POST.get('code'),
             )
         except (PermissionDenied, ValueError) as exc:
             messages.error(request, str(exc))
@@ -1073,6 +1097,41 @@ class DocumentWorkflowView(LoginRequiredMixin, View):
             'internal_status': document.internal_status,
             'internal_display': document.get_internal_status_display(),
             'message': '{} — {}'.format(document.code, zone_name),
+            'actions': document_workflow_actions(request.user, document),
+        })
+
+
+class DocumentInternalStatusView(LoginRequiredMixin, View):
+    """Смена внутреннего статуса WIP-документа без перезагрузки."""
+
+    def post(self, request, document_id):
+        document = get_object_or_404(
+            get_accessible_documents(request.user),
+            pk=document_id,
+            is_deleted=False,
+        )
+        try:
+            update_internal_status(
+                request.user,
+                document,
+                request.POST.get('status', ''),
+            )
+        except PermissionDenied as exc:
+            return JsonResponse(
+                {'status': 'error', 'error': str(exc)},
+                status=403,
+            )
+        except ValueError as exc:
+            return JsonResponse(
+                {'status': 'error', 'error': str(exc)},
+                status=400,
+            )
+
+        return JsonResponse({
+            'status': 'ok',
+            'document_id': document.pk,
+            'internal_status': document.internal_status,
+            'internal_display': document.get_internal_status_display(),
             'actions': document_workflow_actions(request.user, document),
         })
 
@@ -1288,7 +1347,13 @@ class FolderMoveView(LoginRequiredMixin, View):
                 if section is None:
                     raise ValueError('Целевой раздел не найден.')
 
-            move_folder(request.user, folder, parent=parent, section=section)
+            move_folder(
+                request.user,
+                folder,
+                parent=parent,
+                section=section,
+                to_project_root=not parent_id and not section_id,
+            )
         except PermissionDenied as exc:
             return JsonResponse(
                 {'status': 'error', 'error': str(exc)},
@@ -1306,6 +1371,28 @@ class FolderMoveView(LoginRequiredMixin, View):
             'parent_id': folder.parent_id,
             'section_id': folder.section_id,
         })
+
+
+class FolderReorderView(LoginRequiredMixin, View):
+    """AJAX-переупорядочивание папок в дереве."""
+
+    def post(self, request, project_id):
+        project = get_object_or_404(
+            get_accessible_projects(request.user),
+            pk=project_id,
+        )
+        try:
+            updated = reorder_folders(
+                request.user,
+                project,
+                request.POST.getlist('ids'),
+            )
+        except PermissionDenied as exc:
+            return JsonResponse(
+                {'status': 'error', 'error': str(exc)},
+                status=403,
+            )
+        return JsonResponse({'status': 'ok', 'updated': updated})
 
 
 class DocumentBulkActionView(LoginRequiredMixin, View):

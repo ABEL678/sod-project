@@ -234,6 +234,11 @@ class Folder(models.Model):
                 condition=~models.Q(parent=models.F('id')),
                 name='folder_parent_not_self',
             ),
+            models.UniqueConstraint(
+                fields=['project', 'section', 'code'],
+                condition=models.Q(code__gt=''),
+                name='uniq_folder_code_per_section',
+            ),
         ]
 
     def __str__(self):

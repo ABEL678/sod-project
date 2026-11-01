@@ -709,6 +709,40 @@ def _folder_subtree_ids(folder: Folder) -> set[int]:
     return ids
 
 
+def _folder_code_exists(
+    project: Project,
+    section: Section | None,
+    code: str,
+    exclude: Folder | None = None,
+) -> bool:
+    if not code:
+        return False
+    qs = Folder.objects.filter(
+        project=project,
+        section=section,
+        code=code,
+        is_deleted=False,
+    )
+    if exclude is not None:
+        qs = qs.exclude(pk=exclude.pk)
+    return qs.exists()
+
+
+def _next_folder_code(project: Project, section: Section | None) -> str:
+    codes = set(
+        Folder.objects.filter(
+            project=project,
+            section=section,
+            code__gt='',
+            is_deleted=False,
+        ).values_list('code', flat=True)
+    )
+    index = 1
+    while str(index).zfill(2) in codes:
+        index += 1
+    return str(index).zfill(2)
+
+
 def create_folder(
     user: User,
     project: Project,
@@ -744,6 +778,10 @@ def create_folder(
     if parent is not None:
         folder_zone = parent.zone or 'WIP'
     code = (code or '').strip()
+    if not code:
+        code = _next_folder_code(project, section)
+    elif _folder_code_exists(project, section, code):
+        raise ValueError('Папка с таким кодом уже существует в этом разделе')
     folder_full_code = (full_code or '').strip() or generate_gost_code(
         project.base_code,
         section.code if section is not None else '',
@@ -776,7 +814,14 @@ def rename_folder(
     update_fields = ['name']
     folder.name = name
     if code is not None:
-        folder.code = (code or '').strip()
+        code = (code or '').strip()
+        if not code:
+            raise ValueError('Код папки обязателен')
+        if _folder_code_exists(
+            folder.project, folder.section, code, exclude=folder
+        ):
+            raise ValueError('Папка с таким кодом уже существует в этом разделе')
+        folder.code = code
         folder.full_code = generate_gost_code(
             folder.project.base_code,
             folder.section.code if folder.section is not None else '',
@@ -785,6 +830,33 @@ def rename_folder(
         update_fields.extend(['code', 'full_code'])
     folder.save(update_fields=update_fields)
     return folder
+
+
+def rename_section(
+    user: User,
+    section: Section,
+    name: str,
+    code: str | None = None,
+) -> Section:
+    """Переименовывает раздел и пересчитывает шифры его папок."""
+    _ensure_content_manager(user, section.project)
+    name = (name or '').strip()
+    if not name:
+        raise ValueError("Название раздела обязательно")
+    section.name = name
+    update_fields = ['name']
+    if code is not None:
+        code = (code or '').strip()
+        if not code:
+            raise ValueError("Код раздела обязателен")
+        section.code = code
+        update_fields.append('code')
+    section.save(update_fields=update_fields)
+    for folder in Folder.objects.filter(
+        section=section, parent__isnull=True, is_deleted=False
+    ):
+        _refresh_folder_subtree(folder, section)
+    return section
 
 
 def get_folder_tree(user: User, project: Project) -> list[Folder]:
@@ -997,13 +1069,26 @@ def copy_document(
     return copied
 
 
+def _refresh_folder_subtree(folder: Folder, section: Section | None) -> None:
+    folder.section = section
+    folder.full_code = generate_gost_code(
+        folder.project.base_code,
+        section.code if section is not None else '',
+        folder.code,
+    )
+    folder.save(update_fields=['section', 'full_code'])
+    for child in Folder.objects.filter(parent=folder, is_deleted=False):
+        _refresh_folder_subtree(child, section)
+
+
 def move_folder(
     user: User,
     folder: Folder,
     parent: Folder | None = None,
     section: Section | None = None,
+    to_project_root: bool = False,
 ) -> Folder:
-    """Перемещает папку в другую папку или в корень раздела."""
+    """Перемещает папку в другую папку, раздел или в корень проекта."""
     _ensure_content_manager(user, folder.project)
     if folder.is_deleted:
         raise ValueError("Нельзя перемещать папку из корзины")
@@ -1017,26 +1102,50 @@ def move_folder(
             raise ValueError("Нельзя переместить папку в саму себя")
         if parent.pk in _folder_subtree_ids(folder):
             raise ValueError("Нельзя переместить папку в собственный потомок")
-        if (
-            folder.section_id is not None
-            and parent.section_id is not None
-            and folder.section_id != parent.section_id
-        ):
-            raise ValueError("Нельзя перемещать папку между разделами")
-        new_section = parent.section if parent.section_id else folder.section
+        new_section = parent.section
     elif section is not None:
         if section.project_id != folder.project_id:
             raise ValueError("Раздел относится к другому проекту")
-        if folder.section_id is not None and folder.section_id != section.pk:
-            raise ValueError("Нельзя перемещать папку между разделами")
         new_section = section
+    elif to_project_root:
+        new_section = None
     else:
         new_section = folder.section
 
+    if _folder_code_exists(
+        folder.project, new_section, folder.code, exclude=folder
+    ):
+        raise ValueError('Папка с таким кодом уже существует в этом разделе')
+
     folder.parent = parent
-    folder.section = new_section
-    folder.save(update_fields=['parent', 'section'])
+    folder.save(update_fields=['parent'])
+    _refresh_folder_subtree(folder, new_section)
     return folder
+
+
+def reorder_folders(user: User, project: Project, folder_ids: list[int]) -> int:
+    """Сохраняет порядок папок (порядок id в списке)."""
+    _ensure_content_manager(user, project)
+    valid_ids = []
+    for raw in folder_ids:
+        try:
+            valid_ids.append(int(raw))
+        except (TypeError, ValueError):
+            continue
+    existing = set(
+        Folder.objects.filter(
+            project=project,
+            pk__in=valid_ids,
+            is_deleted=False,
+        ).values_list('pk', flat=True)
+    )
+    updated = 0
+    for index, folder_id in enumerate(valid_ids):
+        if folder_id not in existing:
+            continue
+        Folder.objects.filter(pk=folder_id).update(order=index)
+        updated += 1
+    return updated
 
 
 def delete_document(user: User, document: Document) -> Document:
@@ -1515,6 +1624,52 @@ def _has_open_issues(document: Document) -> bool:
         document=document,
         status__in=('NEW', 'IN_PROGRESS'),
     ).exists()
+
+
+def update_internal_status(
+    user: User,
+    document: Document,
+    new_status: str,
+) -> Document:
+    """Меняет внутренний статус WIP-документа с проверкой прав и переходов."""
+    if document.is_deleted:
+        raise ValueError("Документ находится в корзине")
+    if _effective_zone(document) != 'WIP':
+        raise ValueError("Внутренний статус доступен только в зоне WIP")
+
+    profile = getattr(user, 'userprofile', None)
+    is_admin = user.is_superuser or (profile is not None and profile.role == 'admin')
+    is_author = document.created_by_id == user.id
+    is_gip = (
+        profile is not None
+        and profile.role == 'gip'
+        and _is_project_gip(user, document.project)
+    )
+    if not (is_admin or is_author or is_gip):
+        raise PermissionDenied("Нет прав на изменение внутреннего статуса")
+
+    new_status = (new_status or '').strip()
+    if new_status not in dict(Document.INTERNAL_STATUS_CHOICES):
+        raise ValueError("Неизвестный внутренний статус")
+    if new_status == document.internal_status:
+        return document
+
+    allowed = {
+        'draft': {'internal_review'},
+        'internal_review': {'ready_to_share', 'rework'},
+        'rework': {'internal_review'},
+        'ready_to_share': {'internal_review', 'rework'},
+    }
+    if new_status not in allowed.get(document.internal_status, set()):
+        raise ValueError("Недопустимый переход внутреннего статуса")
+    if new_status == 'ready_to_share' and _has_open_issues(document):
+        raise ValueError(
+            "Нельзя перевести в «Готов к передаче» при открытых замечаниях"
+        )
+
+    document.internal_status = new_status
+    document.save(update_fields=['internal_status', 'updated_at'])
+    return document
 
 
 def document_workflow_actions(user: User, document: Document) -> list[dict]:

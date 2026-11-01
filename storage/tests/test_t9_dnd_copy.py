@@ -107,21 +107,24 @@ class T9DndCopyFolderTests(T8UltimateTestBase):
         root.refresh_from_db()
         self.assertIsNone(root.parent_id)
 
-    def test_folder_cannot_move_to_another_section(self):
+    def test_folder_can_move_to_another_section(self):
         folder = create_folder(self.user_gip, self.project, 'РД', section=self.section)
         other = create_folder(
-            self.user_gip, self.project, 'Другой', section=self.other_section
+            self.user_gip, self.project, 'Другой',
+            section=self.other_section, code='02',
         )
         self.client.force_login(self.user_gip)
 
         response = self.client.post(
             reverse('storage:folder_move', args=[folder.pk]),
-            {'parent_id': other.pk},
+            {'section_id': self.other_section.pk},
         )
 
-        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.status_code, 200)
         folder.refresh_from_db()
         self.assertIsNone(folder.parent_id)
+        self.assertEqual(folder.section_id, self.other_section.pk)
+        self.assertIn(self.other_section.code, folder.full_code)
 
     def test_viewer_cannot_move_folders(self):
         folder = create_folder(self.user_gip, self.project, 'РД', section=self.section)

@@ -30,11 +30,15 @@ from storage.domain.services import (
     get_folder_tree,
     get_trash,
     move_document,
+    move_folder,
+    rename_folder,
     restore_document,
     restore_folder,
+    update_internal_status,
     update_project_member_role,
     upload_document,
 )
+from issues.models import Issue
 
 
 User = get_user_model()
@@ -472,3 +476,104 @@ class T8CoreViewTests(T8CoreTestBase):
         names = archive.namelist()
         self.assertEqual(len(names), 1)
         self.assertTrue(names[0].startswith('subfolder/'))
+
+
+class T67AuditTest(T8CoreTestBase):
+    """T67: уникальные шифры, move и internal_status."""
+
+    def test_duplicate_folder_code_rejected(self):
+        create_folder(
+            self.user_gip, self.project, 'First', section=self.section, code='01'
+        )
+        with self.assertRaises(ValueError):
+            create_folder(
+                self.user_gip, self.project, 'Second',
+                section=self.section, code='01',
+            )
+
+    def test_rename_folder_to_existing_code_rejected(self):
+        first = create_folder(
+            self.user_gip, self.project, 'First', section=self.section, code='01'
+        )
+        second = create_folder(
+            self.user_gip, self.project, 'Second', section=self.section, code='02'
+        )
+        with self.assertRaises(ValueError):
+            rename_folder(self.user_gip, second, 'Second', '01')
+        self.assertEqual(Folder.objects.get(pk=first.pk).code, '01')
+
+    def test_move_folder_recalculates_full_code(self):
+        root = create_folder(
+            self.user_gip, self.project, 'Plans', section=self.section, code='10'
+        )
+        child = create_folder(
+            self.user_gip, self.project, 'Nested', parent=root, code='11'
+        )
+        move_folder(
+            self.user_gip, root, section=self.other_section
+        )
+        root.refresh_from_db()
+        child.refresh_from_db()
+        self.assertEqual(root.section_id, self.other_section.pk)
+        self.assertEqual(child.section_id, self.other_section.pk)
+        self.assertIn(self.other_section.code, root.full_code)
+        self.assertIn(self.other_section.code, child.full_code)
+
+    def test_update_internal_status_and_open_issue_block(self):
+        document = self.make_document(code='T67-INTERNAL')
+        update_internal_status(self.user_gip, document, 'internal_review')
+        document.refresh_from_db()
+        self.assertEqual(document.internal_status, 'internal_review')
+
+        update_internal_status(self.user_gip, document, 'ready_to_share')
+        document.refresh_from_db()
+        self.assertEqual(document.internal_status, 'ready_to_share')
+
+        blocked = self.make_document(code='T67-BLOCKED')
+        update_internal_status(self.user_gip, blocked, 'internal_review')
+        issue = Issue.objects.create(
+            document=blocked,
+            author=self.user_gip,
+            description='Open issue',
+            status='NEW',
+        )
+        with self.assertRaises(ValueError):
+            update_internal_status(self.user_gip, blocked, 'ready_to_share')
+        issue.status = 'CLOSED'
+        issue.save(update_fields=['status'])
+        update_internal_status(self.user_gip, blocked, 'ready_to_share')
+        blocked.refresh_from_db()
+        self.assertEqual(blocked.internal_status, 'ready_to_share')
+
+    def test_internal_status_only_in_wip_and_permissions(self):
+        document = self.make_document(code='T67-ZONE')
+        document.status = 'in_review'
+        document.save(update_fields=['status'])
+        with self.assertRaises(ValueError):
+            update_internal_status(self.user_gip, document, 'internal_review')
+
+        wip = self.make_document(code='T67-PERM')
+        with self.assertRaises(PermissionDenied):
+            update_internal_status(self.user_viewer, wip, 'internal_review')
+
+    def test_folder_idor_foreign_company(self):
+        folder = create_folder(
+            self.user_gip, self.project, 'Private', section=self.section
+        )
+        other_company = Company.objects.create(name='Other Company')
+        outsider = User.objects.create_user('outsider', password='pass')
+        UserProfile.objects.create(
+            user=outsider, role='admin', company=other_company
+        )
+        self.client.force_login(outsider)
+
+        move_response = self.client.post(
+            reverse('storage:folder_move', args=[folder.pk]),
+            {'section_id': self.other_section.pk},
+        )
+        rename_response = self.client.post(
+            reverse('storage:folder_rename', args=[folder.pk]),
+            {'name': 'Hacked', 'code': '01'},
+        )
+        self.assertEqual(move_response.status_code, 404)
+        self.assertEqual(rename_response.status_code, 404)

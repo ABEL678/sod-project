@@ -1,5 +1,5 @@
 from django.urls import reverse
-from django.utils.html import format_html
+from django.utils.html import format_html, format_html_join
 from django.utils.safestring import mark_safe
 import django_tables2 as tables
 from django_tables2.utils import AttributeDict
@@ -185,10 +185,24 @@ class DocumentTable(tables.Table):
     def render_internal_status(self, record):
         if _effective_zone(record) != 'WIP':
             return '—'
+        options = format_html_join(
+            '',
+            '<option value="{}"{}>{}</option>',
+            (
+                (
+                    code,
+                    mark_safe(' selected') if code == record.internal_status else '',
+                    label,
+                )
+                for code, label in Document.INTERNAL_STATUS_CHOICES
+            ),
+        )
         return format_html(
-            '<span class="doc-internal-status" title="{}">{}</span>',
-            record.get_internal_status_display(),
-            record.get_internal_status_display(),
+            '<select class="form-select form-select-sm doc-internal-select" '
+            'data-internal-status-url="{}" data-current-status="{}">{}</select>',
+            reverse('storage:document_internal_status_update', args=[record.pk]),
+            record.internal_status,
+            options,
         )
 
     def render_zone(self, record):
