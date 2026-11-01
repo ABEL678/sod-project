@@ -1,6 +1,15 @@
 <form method="post" action="{% url 'storage:folder_rename' folder.pk %}">
     {% csrf_token %}
     <div class="modal-body">
+        <label for="folderCodeInput" class="form-label">Код папки</label>
+        <input type="text"
+               class="form-control mb-3"
+               id="folderCodeInput"
+               name="code"
+               maxlength="50"
+               value="{{ folder.code }}"
+               placeholder="Например, 01">
+
         <label for="folderRenameInput" class="form-label">Название папки</label>
         <input type="text"
                class="form-control"

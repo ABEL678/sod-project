@@ -438,8 +438,43 @@
             </div>
         </div>
     </div>
+    <div class="modal fade" id="folderMoveModal" tabindex="-1" aria-labelledby="folderMoveTitle" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <form id="folderMoveForm">
+                    {% csrf_token %}
+                    <input type="hidden" id="folderMoveId" name="folder_id">
+                    <div class="modal-header">
+                        <h5 class="modal-title" id="folderMoveTitle">Переместить папку</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрыть"></button>
+                    </div>
+                    <div class="modal-body">
+                        <label for="folderMoveTarget" class="form-label">Новое расположение</label>
+                        <select class="form-select" id="folderMoveTarget" name="target" required>
+                            <option value="">Выберите раздел или папку…</option>
+                            {% for section in sections %}
+                                <optgroup label="{{ section.code }} — {{ section.name }}">
+                                    <option value="section:{{ section.pk }}">Корень раздела {{ section.code }}</option>
+                                    {% for folder in all_folders %}
+                                        {% if folder.section_id == section.pk %}
+                                            <option value="folder:{{ folder.pk }}">{% if folder.code %}{{ folder.code }}. {% endif %}{{ folder.name }}</option>
+                                        {% endif %}
+                                    {% endfor %}
+                                </optgroup>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-dismiss="modal">Отмена</button>
+                        <button type="submit" class="btn btn-primary btn-sm">
+                            <i class="bi bi-folder-symlink me-1" aria-hidden="true"></i>Переместить
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
 {% endif %}
-
 {% if active_tab != 'participants' %}
     <div class="modal fade" id="viewSettingsModal" tabindex="-1" aria-labelledby="viewSettingsTitle" aria-hidden="true" data-role="settings-modal">
         <div class="modal-dialog modal-dialog-centered">

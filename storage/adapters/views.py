@@ -849,6 +849,7 @@ class FolderCreateView(LoginRequiredMixin, View):
                 name=request.POST.get('name', ''),
                 section=section,
                 parent=parent,
+                code=request.POST.get('code', ''),
             )
         except (PermissionDenied, ValueError) as exc:
             messages.error(request, str(exc))
@@ -922,7 +923,12 @@ class FolderRenameView(LoginRequiredMixin, View):
             project__in=get_accessible_projects(request.user),
         )
         try:
-            rename_folder(request.user, folder, request.POST.get('name', ''))
+            rename_folder(
+                request.user,
+                folder,
+                request.POST.get('name', ''),
+                request.POST.get('code', ''),
+            )
         except (PermissionDenied, ValueError) as exc:
             messages.error(request, str(exc))
         else:
@@ -1062,6 +1068,10 @@ class DocumentWorkflowView(LoginRequiredMixin, View):
             'zone_name': zone_name,
             'status_code': document.status,
             'status_display': document.get_status_display(),
+            'suitability_code': document.suitability_code,
+            'suitability_display': document.get_suitability_code_display(),
+            'internal_status': document.internal_status,
+            'internal_display': document.get_internal_status_display(),
             'message': '{} — {}'.format(document.code, zone_name),
             'actions': document_workflow_actions(request.user, document),
         })

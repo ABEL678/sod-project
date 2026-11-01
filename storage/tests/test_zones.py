@@ -22,6 +22,7 @@ from storage.domain.services import (
     _effective_zone,
     _ensure_project_zones,
 )
+from issues.models import Issue
 
 User = get_user_model()
 
@@ -1003,13 +1004,58 @@ class VirtualZoneTest(TestCase):
     def test_transition_preserves_folder_and_uses_virtual_zone(self):
         document = self._upload(self.admin, 'VZ-TRANSITION', folder=self.folder)
         original_folder_id = document.folder_id
+        document.internal_status = 'ready_to_share'
+        document.save(update_fields=['internal_status'])
 
         transition_document_zone(self.admin, document, 'submit_review')
         document.refresh_from_db()
 
         self.assertEqual(document.folder_id, original_folder_id)
         self.assertEqual(document.status, 'in_review')
+        self.assertEqual(document.suitability_code, 'S3')
         self.assertEqual(_effective_zone(document), 'SHARED')
+
+    def test_submit_review_requires_ready_to_share(self):
+        document = self._upload(self.admin, 'VZ-NOT-READY')
+        with self.assertRaises(ValueError):
+            transition_document_zone(self.admin, document, 'submit_review')
+
+    def test_submit_review_blocked_by_open_issues(self):
+        document = self._upload(self.admin, 'VZ-OPEN-ISSUE')
+        document.internal_status = 'ready_to_share'
+        document.save(update_fields=['internal_status'])
+        Issue.objects.create(
+            document=document,
+            author=self.admin,
+            description='Открытое замечание',
+            status='NEW',
+        )
+        with self.assertRaises(ValueError):
+            transition_document_zone(self.admin, document, 'submit_review')
+
+    def test_publish_and_return_wip_sync_codes(self):
+        document = self._upload(self.admin, 'VZ-CODES')
+        document.internal_status = 'ready_to_share'
+        document.save(update_fields=['internal_status'])
+
+        transition_document_zone(self.admin, document, 'submit_review')
+        document.refresh_from_db()
+        self.assertEqual(document.suitability_code, 'S3')
+
+        transition_document_zone(self.admin, document, 'return_wip')
+        document.refresh_from_db()
+        self.assertEqual(document.status, 'draft')
+        self.assertEqual(document.suitability_code, 'S0')
+        self.assertEqual(document.internal_status, 'rework')
+
+        published = self._upload(self.admin, 'VZ-PUBLISH')
+        published.internal_status = 'ready_to_share'
+        published.save(update_fields=['internal_status'])
+        transition_document_zone(self.admin, published, 'submit_review')
+        transition_document_zone(self.admin, published, 'publish')
+        published.refresh_from_db()
+        self.assertEqual(published.status, 'approved')
+        self.assertEqual(published.suitability_code, 'A')
 
     def test_effective_zone_without_folder_uses_status(self):
         document = self._upload(self.admin, 'VZ-STATUS')

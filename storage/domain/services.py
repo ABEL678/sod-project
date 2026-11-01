@@ -762,14 +762,28 @@ def create_folder(
     )
 
 
-def rename_folder(user: User, folder: Folder, name: str) -> Folder:
-    """Переименовывает папку."""
+def rename_folder(
+    user: User,
+    folder: Folder,
+    name: str,
+    code: str | None = None,
+) -> Folder:
+    """Переименовывает папку и, при необходимости, меняет ГОСТ-код."""
     _ensure_content_manager(user, folder.project)
     name = (name or '').strip()
     if not name:
         raise ValueError("Название папки обязательно")
+    update_fields = ['name']
     folder.name = name
-    folder.save(update_fields=['name'])
+    if code is not None:
+        folder.code = (code or '').strip()
+        folder.full_code = generate_gost_code(
+            folder.project.base_code,
+            folder.section.code if folder.section is not None else '',
+            folder.code,
+        )
+        update_fields.extend(['code', 'full_code'])
+    folder.save(update_fields=update_fields)
     return folder
 
 
@@ -1495,6 +1509,14 @@ def _workflow_role_allowed(user: User, document: Document, action_code: str) -> 
     return True
 
 
+def _has_open_issues(document: Document) -> bool:
+    """Открытые замечания (NEW/IN_PROGRESS) блокируют передачу в Shared."""
+    return Issue.objects.filter(
+        document=document,
+        status__in=('NEW', 'IN_PROGRESS'),
+    ).exists()
+
+
 def document_workflow_actions(user: User, document: Document) -> list[dict]:
     """Доступные документу workflow-действия для отрисовки кнопок."""
     if user is None or not user.is_authenticated or document.is_deleted:
@@ -1503,6 +1525,11 @@ def document_workflow_actions(user: User, document: Document) -> list[dict]:
     actions = []
     for code, spec in ZONE_WORKFLOW_ACTIONS.items():
         if spec['from'] != current_zone:
+            continue
+        if code == 'submit_review' and (
+            document.internal_status != 'ready_to_share'
+            or _has_open_issues(document)
+        ):
             continue
         if _workflow_role_allowed(user, document, code):
             actions.append({
@@ -1568,6 +1595,17 @@ def transition_document_zone(
             )
         )
 
+    if action_code == 'submit_review':
+        if document.internal_status != 'ready_to_share':
+            raise ValueError(
+                "Подать на согласование можно только после статуса "
+                "«Готов к передаче»"
+            )
+        if _has_open_issues(document):
+            raise ValueError(
+                "Нельзя подать на согласование документ с открытыми замечаниями"
+            )
+
     target_folder = document.folder
     if target_folder is None or _is_canonical_zone_folder(target_folder):
         target_folder = _get_or_create_zone_folder(
@@ -1577,7 +1615,18 @@ def transition_document_zone(
     target_status = ZONE_STATUS_MAP.get(action['to'])
     if target_status is not None and target_status != document.status:
         document.status = target_status
-    document.save(update_fields=['folder', 'status', 'updated_at'])
+
+    if action_code == 'submit_review':
+        document.suitability_code = 'S3'
+    elif action_code == 'publish':
+        document.suitability_code = 'A'
+    elif action_code == 'return_wip':
+        document.suitability_code = 'S0'
+        document.internal_status = 'rework'
+
+    document.save(update_fields=[
+        'folder', 'status', 'suitability_code', 'internal_status', 'updated_at',
+    ])
 
     _notify_zone_transition(user, document, action_code)
     return document

@@ -14,6 +14,14 @@
             </p>
         {% endif %}
 
+        <label for="folderCodeInput" class="form-label">Код папки</label>
+        <input type="text"
+               class="form-control mb-3"
+               id="folderCodeInput"
+               name="code"
+               maxlength="50"
+               placeholder="Например, 01">
+
         <label for="folderNameInput" class="form-label">Название папки</label>
         <input type="text"
                class="form-control"
@@ -23,6 +31,9 @@
                required
                autofocus
                placeholder="Например, Рабочая документация">
+        <div class="form-text text-muted mt-3">
+            Создавать и менять структуру могут только ГИП и Администратор.
+        </div>
     </div>
     <div class="modal-footer">
         <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-dismiss="modal">Отмена</button>

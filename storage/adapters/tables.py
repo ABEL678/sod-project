@@ -55,6 +55,16 @@ class DocumentTable(tables.Table):
     name = tables.Column(verbose_name='Название', attrs=_column_attrs('name'))
     doc_type = tables.Column(verbose_name='Тип', attrs=_column_attrs('doc_type'))
     status = tables.Column(verbose_name='Статус', attrs=_column_attrs('status'))
+    suitability_code = tables.Column(
+        verbose_name='Код',
+        attrs=_column_attrs('suitability'),
+        order_by=('suitability_code',),
+    )
+    internal_status = tables.Column(
+        verbose_name='Внутренний статус',
+        attrs=_column_attrs('internal-status'),
+        order_by=('internal_status',),
+    )
     zone = tables.Column(
         verbose_name='Зона',
         attrs=_column_attrs('zone'),
@@ -97,6 +107,8 @@ class DocumentTable(tables.Table):
             'name',
             'doc_type',
             'status',
+            'suitability_code',
+            'internal_status',
             'zone',
             'current_version',
             'updated_at',
@@ -161,6 +173,22 @@ class DocumentTable(tables.Table):
             '<span class="doc-badge {}">{}</span>',
             STATUS_BADGE_CLASSES.get(record.status, 'doc-badge-draft'),
             record.get_status_display(),
+        )
+
+    def render_suitability_code(self, record):
+        return format_html(
+            '<span class="doc-suitability" title="{}">{}</span>',
+            record.get_suitability_code_display(),
+            record.suitability_code,
+        )
+
+    def render_internal_status(self, record):
+        if _effective_zone(record) != 'WIP':
+            return '—'
+        return format_html(
+            '<span class="doc-internal-status" title="{}">{}</span>',
+            record.get_internal_status_display(),
+            record.get_internal_status_display(),
         )
 
     def render_zone(self, record):

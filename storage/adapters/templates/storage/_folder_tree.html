@@ -36,7 +36,7 @@
         {% endif %}
         <a class="folder-name flex-grow-1 text-truncate"
            href="{% url 'storage:project_detail' project.pk %}?folder={{ folder.pk }}{% if selected_view %}&amp;view={{ selected_view.pk }}{% endif %}"
-           title="{{ folder.name }}">{{ folder.name }}</a>
+           title="{{ folder.full_code|default:folder.name }}">{% if folder.code %}{{ folder.code }}. {% endif %}{{ folder.name }}</a>
         <span class="badge text-bg-light border folder-count" title="Документов в папке и вложенных папках">{{ folder.subtree_document_count|default:folder.document_count }}</span>
 
         {% if can_manage_structure %}
@@ -71,6 +71,14 @@
                                 data-bs-toggle="modal"
                                 data-bs-target="#folderCreateModal">
                             <i class="bi bi-folder-plus me-2" aria-hidden="true"></i>Создать подпапку
+                        </button>
+                    </li>
+                    <li>
+                        <button type="button" class="dropdown-item"
+                                data-folder-move
+                                data-folder-id="{{ folder.pk }}"
+                                data-folder-move-url="{% url 'storage:folder_move' folder.pk %}">
+                            <i class="bi bi-folder-symlink me-2" aria-hidden="true"></i>Переместить в…
                         </button>
                     </li>
                     <li>

@@ -52,6 +52,12 @@
       <span class="mono">v{{ document.current_version.version_number }} · R{{ document.current_version.revision|default:"0" }}</span>
       · {{ document.get_status_display }}
     </span>
+    <span class="chip" title="{{ document.get_suitability_code_display }}">
+      {{ document.suitability_code }}
+    </span>
+    <span class="chip" title="{{ document.get_internal_status_display }}">
+      {{ document.get_internal_status_display }}
+    </span>
   </div>
   <form action="{% url 'storage:search' document.project.pk %}" method="get" class="d-flex">
     <input type="search" name="q" class="form-control form-control-sm"

@@ -1160,6 +1160,22 @@
                 escapeHtml(data.status_display || '') + '</span>';
         }
 
+        var suitabilityCell = row.querySelector('[data-column="suitability"]');
+        if (suitabilityCell) {
+            suitabilityCell.innerHTML = '<span class="doc-suitability" title="' +
+                escapeHtml(data.suitability_display || '') + '">' +
+                escapeHtml(data.suitability_code || '') + '</span>';
+        }
+
+        var internalCell = row.querySelector('[data-column="internal-status"]');
+        if (internalCell) {
+            internalCell.innerHTML = data.zone_code === 'WIP'
+                ? '<span class="doc-internal-status" title="' +
+                  escapeHtml(data.internal_display || '') + '">' +
+                  escapeHtml(data.internal_display || '') + '</span>'
+                : '—';
+        }
+
         var actionsCell = row.querySelector('[data-column="actions"]');
         if (actionsCell && data.actions) {
             if (!data.actions.length) {
@@ -1238,6 +1254,66 @@
         }, 3500);
     }
 
+    function initFolderMove() {
+        var modalElement = document.getElementById('folderMoveModal');
+        var form = document.getElementById('folderMoveForm');
+        var target = document.getElementById('folderMoveTarget');
+        var folderIdInput = document.getElementById('folderMoveId');
+        if (!modalElement || !form || !target || !folderIdInput) {
+            return;
+        }
+        var moveUrl = '';
+
+        document.addEventListener('click', function (event) {
+            var trigger = event.target.closest('[data-folder-move]');
+            if (!trigger) {
+                return;
+            }
+            event.preventDefault();
+            moveUrl = trigger.getAttribute('data-folder-move-url') || '';
+            folderIdInput.value = trigger.getAttribute('data-folder-id') || '';
+            target.value = '';
+            if (window.bootstrap) {
+                window.bootstrap.Modal.getOrCreateInstance(modalElement).show();
+            }
+        });
+
+        form.addEventListener('submit', function (event) {
+            event.preventDefault();
+            if (!moveUrl || !folderIdInput.value || !target.value) {
+                return;
+            }
+            var body = new FormData();
+            if (target.value.indexOf('section:') === 0) {
+                body.append('section_id', target.value.slice('section:'.length));
+            } else {
+                body.append('parent_id', target.value.slice('folder:'.length));
+            }
+            fetch(moveUrl, {
+                method: 'POST',
+                headers: {'X-CSRFToken': csrfToken()},
+                body: body,
+                credentials: 'same-origin'
+            }).then(function (response) {
+                return response.json().then(function (data) {
+                    return {ok: response.ok, data: data};
+                });
+            }).then(function (result) {
+                if (!result.ok || result.data.status !== 'ok') {
+                    showDndToast(
+                        (result.data && result.data.error) ||
+                        'Не удалось переместить папку',
+                        true
+                    );
+                    return;
+                }
+                window.location.reload();
+            }).catch(function () {
+                showDndToast('Не удалось переместить папку', true);
+            });
+        });
+    }
+
     function init() {
         initSidebar();
         initBulkSelection();
@@ -1246,6 +1322,7 @@
         initContextMenus();
         initDocumentsPanel();
         initZoneWorkflow();
+        initFolderMove();
         initHtmx();
     }
 
