@@ -27,16 +27,25 @@
     <span class="brand-text">Stream-CAD</span>
     <span class="brand-slogan">Управляйте потоком чертежей</span>
   </div>
-  <nav class="crumb">
+  <nav aria-label="Хлебные крошки" class="crumb">
     <a href="{% url 'storage:project_list' %}" class="company-link">
       {{ document.project.company.name|default:"Моя компания" }}
     </a>
     <span class="sep">/</span>
     <a href="{% url 'storage:project_detail' document.project.pk %}">{{ document.project.code }}</a>
     <span class="sep">/</span>
-    <span>{{ document.section.code }}</span><span class="sep">/</span>
+    <a href="{% url 'storage:project_detail' document.project.pk %}?section={{ document.section.pk }}">{{ document.section.code }}</a>
+    <span class="sep">/</span>
+    {% if document.folder %}
+      <a href="{% url 'storage:project_detail' document.project.pk %}?folder={{ document.folder.pk }}">{{ document.folder.name }}</a>
+      <span class="sep">/</span>
+    {% endif %}
     <span class="doc">{{ document.code }}</span>
   </nav>
+  <form action="{% url 'storage:search' document.project.pk %}" method="get" class="d-flex">
+    <input type="search" name="q" class="form-control form-control-sm"
+           placeholder="Поиск по шифру, названию" value="{{ request.GET.q }}">
+  </form>
   <span class="chip">
     <span class="mono">v{{ document.current_version.version_number }} · R{{ document.current_version.revision|default:"0" }}</span>
     · {{ document.get_status_display }}
@@ -60,6 +69,10 @@
   </form>
 </header>
 
+{% if public_view %}
+<div class="alert alert-info m-2 py-1 small">Публичный просмотр (только чтение)</div>
+{% endif %}
+
 <div class="toolbar">
   <div class="group">
     <button class="tbtn" onclick="prevPage()" title="Предыдущая страница" type="button">‹</button>
@@ -67,6 +80,17 @@
            onchange="goToPage(Number(this.value))">
     <span class="page-label num">из <span id="totalPages">1</span></span>
     <button class="tbtn" onclick="nextPage()" title="Следующая страница" type="button">›</button>
+  </div>
+  <span class="divider"></span>
+  <div class="group">
+    <select class="form-select form-select-sm" style="width: auto;"
+            onchange="window.location.href='?version=' + this.value">
+      {% for v in document.versions.all %}
+        <option value="{{ v.pk }}" {% if v == document.current_version %}selected{% endif %}>
+          v{{ v.version_number }}
+        </option>
+      {% endfor %}
+    </select>
   </div>
   <span class="divider"></span>
   <div class="group">
