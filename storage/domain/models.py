@@ -110,14 +110,14 @@ class Document(models.Model):
     ]
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, verbose_name="Статус")
     SUITABILITY_CHOICES = [
-        ('S0', 'S0 — Исходный (WIP)'),
-        ('S1', 'S1 — Для координации (Shared)'),
-        ('S2', 'S2 — Для ознакомления (Shared)'),
-        ('S3', 'S3 — На проверку (Shared)'),
-        ('S4', 'S4 — На утверждение (Shared)'),
-        ('A', 'A — Утверждено (Published)'),
-        ('B', 'B — Утверждено с замечаниями (Published)'),
-        ('CR', 'CR — Исполнительная (Published)'),
+        ('S0', 'В работе'),
+        ('S1', 'Для координации'),
+        ('S2', 'Для ознакомления'),
+        ('S3', 'На согласовании'),
+        ('S4', 'На утверждении'),
+        ('A', 'Утверждено'),
+        ('B', 'Утверждено с замечаниями'),
+        ('CR', 'Исполнительная'),
     ]
     suitability_code = models.CharField(
         max_length=2,
@@ -126,7 +126,7 @@ class Document(models.Model):
         verbose_name="Код пригодности",
     )
     INTERNAL_STATUS_CHOICES = [
-        ('draft', 'В разработке'),
+        ('draft', 'В работе'),
         ('internal_review', 'На внутренней проверке'),
         ('rework', 'На доработке'),
         ('ready_to_share', 'Готов к передаче'),

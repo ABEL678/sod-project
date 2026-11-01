@@ -1,11 +1,14 @@
 from django.urls import reverse
-from django.utils.html import format_html, format_html_join
+from django.utils.html import format_html
 from django.utils.safestring import mark_safe
 import django_tables2 as tables
 from django_tables2.utils import AttributeDict
 
 from storage.domain.models import Document, Folder
-from storage.domain.services import _effective_zone, document_workflow_actions
+from storage.domain.services import (
+    _effective_zone,
+    document_actions,
+)
 
 
 STATUS_BADGE_CLASSES = {
@@ -56,7 +59,7 @@ class DocumentTable(tables.Table):
     doc_type = tables.Column(verbose_name='Тип', attrs=_column_attrs('doc_type'))
     status = tables.Column(verbose_name='Статус', attrs=_column_attrs('status'))
     suitability_code = tables.Column(
-        verbose_name='Код',
+        verbose_name='Внешний статус',
         attrs=_column_attrs('suitability'),
         order_by=('suitability_code',),
     )
@@ -179,30 +182,16 @@ class DocumentTable(tables.Table):
         return format_html(
             '<span class="doc-suitability" title="{}">{}</span>',
             record.get_suitability_code_display(),
-            record.suitability_code,
+            record.get_suitability_code_display(),
         )
 
     def render_internal_status(self, record):
         if _effective_zone(record) != 'WIP':
             return '—'
-        options = format_html_join(
-            '',
-            '<option value="{}"{}>{}</option>',
-            (
-                (
-                    code,
-                    mark_safe(' selected') if code == record.internal_status else '',
-                    label,
-                )
-                for code, label in Document.INTERNAL_STATUS_CHOICES
-            ),
-        )
         return format_html(
-            '<select class="form-select form-select-sm doc-internal-select" '
-            'data-internal-status-url="{}" data-current-status="{}">{}</select>',
-            reverse('storage:document_internal_status_update', args=[record.pk]),
-            record.internal_status,
-            options,
+            '<span class="doc-internal-status" title="{}">{}</span>',
+            record.get_internal_status_display(),
+            record.get_internal_status_display(),
         )
 
     def render_zone(self, record):
@@ -240,25 +229,31 @@ class DocumentTable(tables.Table):
         return record.created_by.get_full_name() or record.created_by.username
 
     def render_actions(self, record):
-        """Workflow-кнопки зон ISO 19650 (Волна 3), только доступные роли."""
+        """Кнопки внутреннего workflow и зон ISO 19650."""
         user = getattr(self.request, 'user', None)
-        actions = document_workflow_actions(user, record)
+        actions = document_actions(user, record)
         if not actions:
             return mark_safe('<span class="text-muted">—</span>')
-        buttons = [
-            format_html(
+        buttons = []
+        for action in actions:
+            if action.get('kind') == 'internal':
+                url = reverse(
+                    'storage:document_internal_status_update',
+                    args=[record.pk],
+                )
+            else:
+                url = reverse('storage:document_workflow', args=[record.pk])
+            buttons.append(format_html(
                 '<button type="button" class="wf-btn" data-workflow-action="{code}" '
                 'data-workflow-url="{url}" title="{title}" '
                 'aria-label="{title}">'
                 '<i class="bi {icon}" aria-hidden="true"></i>'
                 '</button>',
                 code=action['code'],
-                url=reverse('storage:document_workflow', args=[record.pk]),
+                url=url,
                 title=action['label'],
                 icon=action['icon'],
-            )
-            for action in actions
-        ]
+            ))
         return mark_safe(
             '<span class="wf-actions" data-role="workflow-actions">{}</span>'.format(
                 ''.join(str(button) for button in buttons)

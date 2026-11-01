@@ -89,6 +89,7 @@ from storage.domain.services import (
     get_company_members,
     get_user_company,
     get_zone_counts,
+    document_actions,
     document_workflow_actions,
     _effective_zone,
     transition_document_zone,
@@ -124,7 +125,7 @@ DOCUMENT_VIEW_COLUMN_LABELS = {
     'name': 'Название',
     'doc_type': 'Тип',
     'status': 'Статус',
-    'suitability': 'Код',
+    'suitability': 'Внешний статус',
     'internal_status': 'Внутренний статус',
     'zone': 'Зона',
     'version': 'Версия',
@@ -1063,6 +1064,22 @@ class DocumentMoveView(LoginRequiredMixin, View):
         })
 
 
+def _workflow_actions_payload(user, document):
+    actions = document_actions(user, document)
+    for action in actions:
+        if action.get('kind') == 'internal':
+            action['url'] = reverse(
+                'storage:document_internal_status_update',
+                args=[document.pk],
+            )
+        else:
+            action['url'] = reverse(
+                'storage:document_workflow',
+                args=[document.pk],
+            )
+    return actions
+
+
 class DocumentWorkflowView(LoginRequiredMixin, View):
     """Workflow зон ISO 19650 (Волна 3): «Подать на согласование» и т.д.
 
@@ -1105,12 +1122,12 @@ class DocumentWorkflowView(LoginRequiredMixin, View):
             'internal_status': document.internal_status,
             'internal_display': document.get_internal_status_display(),
             'message': '{} — {}'.format(document.code, zone_name),
-            'actions': document_workflow_actions(request.user, document),
+            'actions': _workflow_actions_payload(request.user, document),
         })
 
 
 class DocumentInternalStatusView(LoginRequiredMixin, View):
-    """Смена внутреннего статуса WIP-документа без перезагрузки."""
+    """Выполнение внутреннего workflow-действия WIP-документа."""
 
     def post(self, request, document_id):
         document = get_object_or_404(
@@ -1118,12 +1135,13 @@ class DocumentInternalStatusView(LoginRequiredMixin, View):
             pk=document_id,
             is_deleted=False,
         )
+        action = (
+            request.POST.get('action')
+            or request.POST.get('status')
+            or ''
+        )
         try:
-            update_internal_status(
-                request.user,
-                document,
-                request.POST.get('status', ''),
-            )
+            update_internal_status(request.user, document, action)
         except PermissionDenied as exc:
             return JsonResponse(
                 {'status': 'error', 'error': str(exc)},
@@ -1135,12 +1153,21 @@ class DocumentInternalStatusView(LoginRequiredMixin, View):
                 status=400,
             )
 
+        effective_zone = _effective_zone(document)
+        zone_name = dict(Folder.ZONE_CHOICES).get(effective_zone, effective_zone)
         return JsonResponse({
             'status': 'ok',
             'document_id': document.pk,
+            'zone_code': effective_zone,
+            'zone_name': zone_name,
+            'status_code': document.status,
+            'status_display': document.get_status_display(),
+            'suitability_code': document.suitability_code,
+            'suitability_display': document.get_suitability_code_display(),
             'internal_status': document.internal_status,
             'internal_display': document.get_internal_status_display(),
-            'actions': document_workflow_actions(request.user, document),
+            'message': '{} — {}'.format(document.code, zone_name),
+            'actions': _workflow_actions_payload(request.user, document),
         })
 
 

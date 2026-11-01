@@ -1629,42 +1629,75 @@ def _has_open_issues(document: Document) -> bool:
     ).exists()
 
 
-def update_internal_status(
-    user: User,
-    document: Document,
-    new_status: str,
-) -> Document:
-    """Меняет внутренний статус WIP-документа с проверкой прав и переходов."""
-    if document.is_deleted:
-        raise ValueError("Документ находится в корзине")
-    if _effective_zone(document) != 'WIP':
-        raise ValueError("Внутренний статус доступен только в зоне WIP")
+INTERNAL_ACTION_SPECS = {
+    'send_to_review': ('internal_review', ('draft', 'rework'), 'send'),
+    'return_to_rework': ('rework', ('internal_review',), 'review'),
+    'approve_internal': ('ready_to_share', ('internal_review',), 'review'),
+}
 
+
+def _internal_permissions(user: User, document: Document):
     profile = getattr(user, 'userprofile', None)
-    is_admin = user.is_superuser or (profile is not None and profile.role == 'admin')
+    is_admin = user.is_superuser or (
+        profile is not None and profile.role == 'admin'
+    )
     is_author = document.created_by_id == user.id
     is_gip = (
         profile is not None
         and profile.role == 'gip'
         and _is_project_gip(user, document.project)
     )
-    if not (is_admin or is_author or is_gip):
-        raise PermissionDenied("Нет прав на изменение внутреннего статуса")
+    return is_admin, is_author, is_gip
 
-    new_status = (new_status or '').strip()
-    if new_status not in dict(Document.INTERNAL_STATUS_CHOICES):
-        raise ValueError("Неизвестный внутренний статус")
-    if new_status == document.internal_status:
-        return document
 
-    allowed = {
-        'draft': {'internal_review', 'ready_to_share'},
-        'internal_review': {'ready_to_share', 'rework'},
-        'rework': {'internal_review'},
-        'ready_to_share': {'internal_review', 'rework'},
-    }
-    if new_status not in allowed.get(document.internal_status, set()):
-        raise ValueError("Недопустимый переход внутреннего статуса")
+def update_internal_status(
+    user: User,
+    document: Document,
+    action: str,
+) -> Document:
+    """Выполняет внутреннее действие WIP-документа.
+
+    Принимает action-коды send_to_review / return_to_rework /
+    approve_internal / submit_review. Для обратной совместимости
+    принимает и целевой internal_status.
+    """
+    if document.is_deleted:
+        raise ValueError("Документ находится в корзине")
+    if _effective_zone(document) != 'WIP':
+        raise ValueError("Внутренний статус доступен только в зоне WIP")
+
+    action = (action or '').strip()
+    if action == 'submit_review':
+        return transition_document_zone(user, document, 'submit_review')
+
+    is_admin, is_author, is_gip = _internal_permissions(user, document)
+    spec = INTERNAL_ACTION_SPECS.get(action)
+    if spec is not None:
+        new_status, from_statuses, mode = spec
+        if document.internal_status not in from_statuses:
+            raise ValueError("Действие недоступно для текущего внутреннего статуса")
+        if mode == 'send':
+            if not (is_admin or is_author or is_gip):
+                raise PermissionDenied("Нет прав на отправку на проверку")
+        elif not (is_admin or is_gip):
+            raise PermissionDenied("Нет прав на проверку документа")
+    else:
+        new_status = action
+        if new_status not in dict(Document.INTERNAL_STATUS_CHOICES):
+            raise ValueError("Неизвестный внутренний статус")
+        if not (is_admin or is_author or is_gip):
+            raise PermissionDenied("Нет прав на изменение внутреннего статуса")
+        if new_status == document.internal_status:
+            return document
+        allowed = {
+            'draft': {'internal_review', 'ready_to_share'},
+            'internal_review': {'ready_to_share', 'rework'},
+            'rework': {'internal_review'},
+            'ready_to_share': {'internal_review', 'rework'},
+        }
+        if new_status not in allowed.get(document.internal_status, set()):
+            raise ValueError("Недопустимый переход внутреннего статуса")
+
     if new_status == 'ready_to_share' and _has_open_issues(document):
         raise ValueError(
             "Нельзя перевести в «Готов к передаче» при открытых замечаниях"
@@ -1673,6 +1706,52 @@ def update_internal_status(
     document.internal_status = new_status
     document.save(update_fields=['internal_status', 'updated_at'])
     return document
+
+
+def document_internal_actions(user: User, document: Document) -> list[dict]:
+    """Кнопки внутреннего workflow для WIP-документа."""
+    if (
+        user is None
+        or not user.is_authenticated
+        or document.is_deleted
+        or _effective_zone(document) != 'WIP'
+    ):
+        return []
+    is_admin, is_author, is_gip = _internal_permissions(user, document)
+    actions = []
+    if (
+        document.internal_status in ('draft', 'rework')
+        and (is_admin or is_author or is_gip)
+    ):
+        actions.append({
+            'code': 'send_to_review',
+            'label': 'Отправить на проверку',
+            'icon': 'bi-send',
+            'kind': 'internal',
+        })
+    if document.internal_status == 'internal_review' and (is_admin or is_gip):
+        actions.append({
+            'code': 'return_to_rework',
+            'label': 'Вернуть на доработку',
+            'icon': 'bi-arrow-counterclockwise',
+            'kind': 'internal',
+        })
+        if not _has_open_issues(document):
+            actions.append({
+                'code': 'approve_internal',
+                'label': 'Согласовать',
+                'icon': 'bi-check2',
+                'kind': 'internal',
+            })
+    return actions
+
+
+def document_actions(user: User, document: Document) -> list[dict]:
+    """Все доступные действия: внутренние + зоны."""
+    return (
+        document_internal_actions(user, document)
+        + document_workflow_actions(user, document)
+    )
 
 
 def document_workflow_actions(user: User, document: Document) -> list[dict]:
@@ -1694,6 +1773,7 @@ def document_workflow_actions(user: User, document: Document) -> list[dict]:
                 'code': code,
                 'label': spec['label'],
                 'icon': spec['icon'],
+                'kind': 'zone',
             })
     return actions
 

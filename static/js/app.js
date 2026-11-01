@@ -1164,7 +1164,7 @@
         if (suitabilityCell) {
             suitabilityCell.innerHTML = '<span class="doc-suitability" title="' +
                 escapeHtml(data.suitability_display || '') + '">' +
-                escapeHtml(data.suitability_code || '') + '</span>';
+                escapeHtml(data.suitability_display || '') + '</span>';
         }
 
         var internalCell = row.querySelector('[data-column="internal-status"]');
@@ -1184,7 +1184,7 @@
                 var buttons = data.actions.map(function (item) {
                     return '<button type="button" class="wf-btn" ' +
                         'data-workflow-action="' + item.code + '" ' +
-                        'data-workflow-url="' + urlForWorkflow(data.document_id) + '" ' +
+                        'data-workflow-url="' + (item.url || urlForWorkflow(data.document_id)) + '" ' +
                         'title="' + escapeHtml(item.label) + '" ' +
                         'aria-label="' + escapeHtml(item.label) + '">' +
                         '<i class="bi ' + item.icon + '" aria-hidden="true"></i></button>';
@@ -1314,71 +1314,6 @@
         });
     }
 
-    function renderWorkflowActions(cell, documentId, actions) {
-        if (!cell) {
-            return;
-        }
-        if (!actions || !actions.length) {
-            cell.innerHTML = '<span class="text-muted">—</span>';
-            return;
-        }
-        var buttons = actions.map(function (item) {
-            return '<button type="button" class="wf-btn" ' +
-                'data-workflow-action="' + item.code + '" ' +
-                'data-workflow-url="' + urlForWorkflow(documentId) + '" ' +
-                'title="' + escapeHtml(item.label) + '" ' +
-                'aria-label="' + escapeHtml(item.label) + '">' +
-                '<i class="bi ' + item.icon + '" aria-hidden="true"></i></button>';
-        });
-        cell.innerHTML = '<span class="wf-actions" data-role="workflow-actions">' +
-            buttons.join('') + '</span>';
-    }
-
-    function initInternalStatus() {
-        document.addEventListener('change', function (event) {
-            var select = event.target.closest('[data-internal-status-url]');
-            if (!select) {
-                return;
-            }
-            var row = select.closest('tr');
-            var previous = select.getAttribute('data-current-status') || '';
-            var body = new FormData();
-            body.append('status', select.value);
-            fetch(select.getAttribute('data-internal-status-url'), {
-                method: 'POST',
-                headers: {'X-CSRFToken': csrfToken()},
-                body: body,
-                credentials: 'same-origin'
-            }).then(function (response) {
-                return response.json().then(function (data) {
-                    return {ok: response.ok, data: data};
-                });
-            }).then(function (result) {
-                if (!result.ok || result.data.status !== 'ok') {
-                    select.value = previous;
-                    showDndToast(
-                        (result.data && result.data.error) ||
-                        'Не удалось изменить внутренний статус',
-                        true
-                    );
-                    return;
-                }
-                select.setAttribute('data-current-status', result.data.internal_status);
-                if (row) {
-                    renderWorkflowActions(
-                        row.querySelector('[data-column="actions"]'),
-                        result.data.document_id,
-                        result.data.actions
-                    );
-                }
-                showToast('Внутренний статус обновлён');
-            }).catch(function () {
-                select.value = previous;
-                showDndToast('Не удалось изменить внутренний статус', true);
-            });
-        });
-    }
-
     function initSectionRename() {
         var modalElement = document.getElementById('sectionRenameModal');
         var form = document.getElementById('sectionRenameForm');
@@ -1462,7 +1397,6 @@
         initFolderMove();
         initSectionRename();
         initFolderReorder();
-        initInternalStatus();
         initHtmx();
     }
 
