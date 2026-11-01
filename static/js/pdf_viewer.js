@@ -15,8 +15,10 @@
     }
 
     const pdfUrl = viewer.dataset.pdfUrl;
+    const pdfUrlCurrent = viewer.dataset.pdfUrlCurrent || '';
+    const isCurrentView = viewer.dataset.isCurrent !== 'false';
     const createUrl = viewer.dataset.issueCreateUrl;
-    const canCreate = viewer.dataset.canCreate === '1';
+    const canCreate = viewer.dataset.canCreate === '1' && isCurrentView;
     const issuesData = document.getElementById('issues-data');
     const issues = issuesData ? JSON.parse(issuesData.textContent) : [];
     const issuesList = document.getElementById('issuesList');
@@ -185,7 +187,14 @@
     }
 
     function drawMarks(pageNumber) {
-        const page = pages.get(Number(pageNumber));
+        if (!isCurrentView) {
+            return;
+        }
+        drawMarksInto(pages, pageNumber);
+    }
+
+    function drawMarksInto(pageMap, pageNumber) {
+        const page = pageMap.get(Number(pageNumber));
         if (!page) {
             return;
         }
@@ -638,15 +647,12 @@
                 return;
             }
             const action = button.dataset.pdfAction;
-            if (action === 'zoom-in' && currentScale < 3) {
-                currentScale *= 1.2;
-                renderPages();
+            if (action === 'zoom-in' && currentScale < 4) {
+                window.zoomIn();
             } else if (action === 'zoom-out' && currentScale > 0.5) {
-                currentScale /= 1.2;
-                renderPages();
+                window.zoomOut();
             } else if (action === 'rotate') {
-                currentRotation = (currentRotation - 90 + 360) % 360;
-                renderPages();
+                window.rotatePage();
             } else if (action === 'pan') {
                 panMode = !panMode;
                 textMode = false;
@@ -826,6 +832,309 @@
         }
     }
 
+    const comparison = {
+        active: false,
+        selected: null,
+        current: null,
+        page: 1,
+        scale: 1,
+        rotation: 0,
+    };
+    let comparisonScrollLock = false;
+
+    function comparisonPane(viewerElement, url, drawIssueMarks) {
+        return {
+            viewer: viewerElement,
+            url: url,
+            drawIssueMarks: drawIssueMarks,
+            pdfDocument: null,
+            pageMap: new Map(),
+            pageNumber: 1,
+            renderTask: null,
+            renderToken: 0,
+        };
+    }
+
+    function comparisonTotalPages() {
+        if (comparison.current && comparison.current.pdfDocument) {
+            return comparison.current.pdfDocument.numPages;
+        }
+        if (comparison.selected && comparison.selected.pdfDocument) {
+            return comparison.selected.pdfDocument.numPages;
+        }
+        return 1;
+    }
+
+    function updateComparisonPageControls() {
+        const total = comparisonTotalPages();
+        const input = document.getElementById('pageInput');
+        if (input) {
+            input.max = String(total);
+            input.value = String(comparison.page);
+        }
+        const totalLabel = document.getElementById('totalPages');
+        if (totalLabel) {
+            totalLabel.textContent = String(total);
+        }
+    }
+
+    function updateComparisonButton() {
+        const button = document.getElementById('compareToggleBtn');
+        if (!button) {
+            return;
+        }
+        button.textContent = comparison.active
+            ? 'Закрыть сравнение'
+            : 'Сравнить с текущей';
+        button.disabled = !comparison.active && (isCurrentView || !pdfUrlCurrent);
+    }
+
+    function loadComparisonPane(pane) {
+        pane.viewer.innerHTML =
+            '<div class="pdf-loading text-muted small p-3">Загрузка PDF…</div>';
+        return window.pdfjsLib.getDocument(pane.url).promise.then(function (pdf) {
+            pane.pdfDocument = pdf;
+            return pdf;
+        }).catch(function () {
+            pane.viewer.innerHTML =
+                '<div class="alert alert-warning m-3 mb-0">'
+                + 'Не удалось загрузить PDF.</div>';
+        });
+    }
+
+    function renderComparisonPane(pane, pageNumber) {
+        if (!pane || !pane.pdfDocument) {
+            return Promise.resolve();
+        }
+        const total = pane.pdfDocument.numPages;
+        const target = Math.min(Math.max(1, Number(pageNumber) || 1), total);
+        pane.pageNumber = target;
+        const token = pane.renderToken + 1;
+        pane.renderToken = token;
+        if (pane.renderTask) {
+            try {
+                pane.renderTask.cancel();
+            } catch (error) {
+                pane.renderTask = null;
+            }
+        }
+        pane.renderTask = null;        pane.viewer.querySelectorAll('.pdf-page, .pdf-loading').forEach(function (node) {
+            node.remove();
+        });
+        pane.pageMap.clear();
+
+        return pane.pdfDocument.getPage(target).then(function (page) {
+            if (token !== pane.renderToken) {
+                return;
+            }
+            const viewport = page.getViewport({
+                scale: comparison.scale,
+                rotation: comparison.rotation,
+            });
+            const outputScale = window.devicePixelRatio || 1;
+            const wrapper = document.createElement('div');
+            wrapper.className = 'pdf-page';
+            wrapper.dataset.page = String(target);
+            wrapper.style.width = Math.floor(viewport.width) + 'px';
+            const canvas = document.createElement('canvas');
+            canvas.width = Math.floor(viewport.width * outputScale);
+            canvas.height = Math.floor(viewport.height * outputScale);
+            canvas.style.width = Math.floor(viewport.width) + 'px';
+            canvas.style.height = Math.floor(viewport.height) + 'px';
+            const context = canvas.getContext('2d');
+            context.setTransform(outputScale, 0, 0, outputScale, 0, 0);
+            const layer = document.createElement('div');
+            layer.className = 'pdf-pin-layer';
+            wrapper.appendChild(canvas);
+            wrapper.appendChild(layer);
+            pane.viewer.appendChild(wrapper);
+            pane.pageMap.set(target, {
+                wrapper: wrapper,
+                canvas: canvas,
+                layer: layer,
+            });
+            const task = page.render({
+                canvasContext: context,
+                viewport: viewport,
+            });
+            pane.renderTask = task;
+            return task.promise.then(function () {
+                if (token !== pane.renderToken) {
+                    return;
+                }
+                if (pane.drawIssueMarks) {
+                    drawMarksInto(pane.pageMap, target);
+                }
+            }).catch(function () {});
+        });
+    }
+
+    function syncComparisonScroll(source) {
+        if (!comparison.active || comparisonScrollLock) {
+            return;
+        }
+        const other = source === comparison.selected
+            ? comparison.current
+            : comparison.selected;
+        if (!other) {
+            return;
+        }
+        comparisonScrollLock = true;
+        const sourceMaxY = Math.max(
+            1, source.viewer.scrollHeight - source.viewer.clientHeight
+        );
+        const sourceMaxX = Math.max(
+            1, source.viewer.scrollWidth - source.viewer.clientWidth
+        );
+        const ratioY = source.viewer.scrollTop / sourceMaxY;
+        const ratioX = source.viewer.scrollLeft / sourceMaxX;
+        other.viewer.scrollTop = ratioY * Math.max(
+            0, other.viewer.scrollHeight - other.viewer.clientHeight
+        );
+        other.viewer.scrollLeft = ratioX * Math.max(
+            0, other.viewer.scrollWidth - other.viewer.clientWidth
+        );
+        window.requestAnimationFrame(function () {
+            comparisonScrollLock = false;
+        });
+    }
+
+    function comparisonPaneForViewer(element) {
+        if (comparison.selected && comparison.selected.viewer === element) {
+            return comparison.selected;
+        }
+        if (comparison.current && comparison.current.viewer === element) {
+            return comparison.current;
+        }
+        return null;
+    }
+
+    function bindComparisonPane(pane) {
+        if (pane.viewer.dataset.compareBound === '1') {
+            return;
+        }
+        pane.viewer.dataset.compareBound = '1';
+        const element = pane.viewer;
+        element.addEventListener('scroll', function () {
+            const source = comparisonPaneForViewer(element);
+            if (source) {
+                syncComparisonScroll(source);
+            }
+        });
+        element.addEventListener('wheel', function (event) {
+            if (!event.ctrlKey) {
+                return;
+            }
+            event.preventDefault();
+            if (event.deltaY < 0) {
+                window.zoomIn();
+            } else {
+                window.zoomOut();
+            }
+        }, {passive: false});
+    }
+
+    function renderComparisonPage(pageNumber) {
+        if (!comparison.active) {
+            return Promise.resolve();
+        }
+        const total = comparisonTotalPages();
+        comparison.page = Math.min(
+            Math.max(1, Number(pageNumber) || 1),
+            total
+        );
+        updateComparisonPageControls();
+        return Promise.all([
+            renderComparisonPane(comparison.selected, comparison.page),
+            renderComparisonPane(comparison.current, comparison.page),
+        ]);
+    }
+
+    function openComparison() {
+        if (comparison.active || isCurrentView || !pdfUrl || !pdfUrlCurrent) {
+            return;
+        }
+        const compareStage = document.getElementById('compareStage');
+        const selectedViewer = document.getElementById('compareViewerSelected');
+        const currentViewer = document.getElementById('compareViewerCurrent');
+        const stage = document.getElementById('pdf-panel');
+        if (!compareStage || !selectedViewer || !currentViewer) {
+            return;
+        }
+
+        comparison.active = true;
+        comparison.page = currentPage;
+        comparison.scale = currentScale;
+        comparison.rotation = currentRotation;
+        comparison.selected = comparisonPane(selectedViewer, pdfUrl, false);
+        comparison.current = comparisonPane(
+            currentViewer, pdfUrlCurrent, true
+        );
+        bindComparisonPane(comparison.selected);
+        bindComparisonPane(comparison.current);
+
+        compareStage.classList.remove('d-none');
+        viewer.classList.add('d-none');
+        if (stage) {
+            stage.classList.add('is-comparing');
+        }
+        updateComparisonButton();
+        updateComparisonPageControls();
+
+        Promise.all([
+            loadComparisonPane(comparison.selected),
+            loadComparisonPane(comparison.current),
+        ]).then(function () {
+            if (!comparison.active) {
+                return null;
+            }
+            return renderComparisonPage(comparison.page);
+        });
+    }
+
+    function closeComparison() {
+        if (!comparison.active) {
+            return;
+        }
+        const page = comparison.page;
+        comparison.active = false;
+        [comparison.selected, comparison.current].forEach(function (pane) {
+            if (!pane) {
+                return;
+            }
+            if (pane.renderTask) {
+                try {
+                    pane.renderTask.cancel();
+                } catch (error) {
+                    pane.renderTask = null;
+                }
+            }
+            pane.viewer.innerHTML = '';
+            pane.pageMap.clear();
+            pane.pdfDocument = null;
+        });
+        comparison.selected = null;
+        comparison.current = null;
+
+        const compareStage = document.getElementById('compareStage');
+        const stage = document.getElementById('pdf-panel');
+        if (compareStage) {
+            compareStage.classList.add('d-none');
+        }
+        if (stage) {
+            stage.classList.remove('is-comparing');
+        }
+        viewer.classList.remove('d-none');
+        updateComparisonButton();
+
+        if (pdfDocument) {
+            currentPage = page;
+            renderPages();
+        } else {
+            updatePageControls();
+        }
+    }
+
     function initDetails() {
         const saveButton = document.getElementById('detailAnswerSave');
         const answerField = document.getElementById('detailAnswer');
@@ -890,16 +1199,31 @@
     }
 
     window.goToPage = function (pageNumber) {
+        if (comparison.active) {
+            return renderComparisonPage(pageNumber);
+        }
         return renderPage(pageNumber);
     };
 
     window.prevPage = function () {
+        if (comparison.active) {
+            if (comparison.page > 1) {
+                renderComparisonPage(comparison.page - 1);
+            }
+            return;
+        }
         if (pdfDocument && currentPage > 1) {
             renderPage(currentPage - 1);
         }
     };
 
     window.nextPage = function () {
+        if (comparison.active) {
+            if (comparison.page < comparisonTotalPages()) {
+                renderComparisonPage(comparison.page + 1);
+            }
+            return;
+        }
         if (pdfDocument && currentPage < pdfDocument.numPages) {
             renderPage(currentPage + 1);
         }
@@ -1025,6 +1349,11 @@
 
     window.rotatePage = function () {
         currentRotation = (currentRotation - 90 + 360) % 360;
+        if (comparison.active) {
+            comparison.rotation = currentRotation;
+            renderComparisonPage(comparison.page);
+            return;
+        }
         renderPages();
     };
 
@@ -1043,6 +1372,11 @@
         const select = document.getElementById('zoomSelect');
         if (select) {
             select.value = String(Math.round(scale * 100));
+        }
+        if (comparison.active) {
+            comparison.scale = scale;
+            renderComparisonPage(comparison.page);
+            return;
         }
         renderPages();
     };
@@ -1093,8 +1427,21 @@
 
     window.renderPage = renderPage;
     window.getCurrentPage = function () {
-        return currentPage;
+        return comparison.active ? comparison.page : currentPage;
     };
+    window.closePdfComparison = closeComparison;
+
+    const compareToggleBtn = document.getElementById('compareToggleBtn');
+    if (compareToggleBtn) {
+        compareToggleBtn.addEventListener('click', function () {
+            if (comparison.active) {
+                closeComparison();
+            } else {
+                openComparison();
+            }
+        });
+    }
+    updateComparisonButton();
 
     initToolbar();
     initPan();

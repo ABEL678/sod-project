@@ -8,7 +8,7 @@
 <link rel="stylesheet" href="{% static 'css/bootstrap.min.css' %}">
 <link rel="stylesheet" href="{% static 'design-tokens/tokens.css' %}?v=20261031-viewer">
 <link rel="stylesheet" href="{% static 'css/redesign.css' %}">
-<link rel="stylesheet" href="{% static 'css/viewer.css' %}?v=20261031-viewer">
+<link rel="stylesheet" href="{% static 'css/viewer.css' %}?v=20261101-t64">
 <link rel="stylesheet" href="{% static 'css/app.css' %}?v=20261031-viewer">
 </head>
 <body>
@@ -82,17 +82,29 @@
     <button class="tbtn" onclick="nextPage()" title="Следующая страница" type="button">›</button>
   </div>
   <span class="divider"></span>
+  {% if not public_view %}
   <div class="group">
-    <select class="form-select form-select-sm" style="width: auto;"
-            onchange="window.location.href='?version=' + this.value">
-      {% for v in document.versions.all %}
-        <option value="{{ v.pk }}" {% if v == document.current_version %}selected{% endif %}>
-          v{{ v.version_number }}
+    <select class="form-select form-select-sm" id="versionSelect" style="width: auto;"
+            onchange="changeVersion(this.value)">
+      {% for v in versions %}
+        <option value="{{ v.pk }}" {% if selected_version and v.pk == selected_version.pk %}selected{% endif %}>
+          v{{ v.version_number }}{% if v.pk == document.current_version_id %} (текущая){% endif %}
         </option>
+      {% empty %}
+        <option value="">Нет версий</option>
       {% endfor %}
     </select>
+    {% if not is_current_version %}
+      <span class="version-badge">Просмотр версии v{{ selected_version.version_number }} (не текущая)</span>
+      <a class="version-back" href="{{ current_version_url }}">Вернуться к текущей</a>
+    {% endif %}
+    <button class="tbtn compare-toggle" id="compareToggleBtn" type="button"
+            {% if is_current_version or not document.current_version %}disabled{% endif %}>
+      Сравнить с текущей
+    </button>
   </div>
   <span class="divider"></span>
+  {% endif %}
   <div class="group">
     <button class="tbtn" onclick="zoomOut()" title="Уменьшить" type="button">−</button>
     <select class="zoom-select" id="zoomSelect" onchange="setZoom(parseFloat(this.value) / 100)">
@@ -118,15 +130,37 @@
 <div class="workspace" id="main-splitter">
   <section class="stage" id="pdf-panel">
     <div class="pdf-viewer" id="pdfViewer"
-         {% if document.current_version %}data-pdf-url="{% url 'storage:document_download' document.current_version.pk %}"{% endif %}
+         data-pdf-url="{{ pdf_url }}"
+         data-pdf-url-current="{{ pdf_url_current }}"
+         data-current-version-id="{{ document.current_version_id|default:'' }}"
+         data-selected-version-id="{{ selected_version.pk|default:'' }}"
+         data-selected-version-number="{{ selected_version.version_number|default:'' }}"
+         data-is-current="{{ is_current_version|yesno:'true,false' }}"
          data-worker-url="{% static 'js/pdfjs/pdf.worker.min.js' %}"
          {% if can_create_issue %}data-issue-create-url="{% url 'issues:issue_create' document.pk %}"{% endif %}
          data-can-create="{% if can_create_issue %}1{% else %}0{% endif %}">
-      {% if document.current_version %}
+      {% if selected_version %}
         <div class="pdf-loading text-muted small p-3">Загрузка PDF…</div>
       {% else %}
-        <div class="p-3 text-muted">Нет текущей версии для просмотра.</div>
+        <div class="p-3 text-muted">Нет версий для просмотра.</div>
       {% endif %}
+    </div>
+
+    <div class="compare-stage d-none" id="compareStage">
+      <section class="compare-pane">
+        <div class="compare-pane-head">
+          Выбранная версия
+          {% if selected_version %}v{{ selected_version.version_number }}{% endif %}
+        </div>
+        <div class="pdf-viewer compare-viewer" id="compareViewerSelected"></div>
+      </section>
+      <section class="compare-pane">
+        <div class="compare-pane-head">
+          Текущая версия
+          {% if document.current_version %}v{{ document.current_version.version_number }}{% endif %}
+        </div>
+        <div class="pdf-viewer compare-viewer" id="compareViewerCurrent"></div>
+      </section>
     </div>
   </section>
 
@@ -135,10 +169,16 @@
   <aside class="panel" id="issues-panel">
     <div class="panel-head">
       <h2>Замечания</h2><span class="count num">{{ issues|length }}</span>
-      {% if not public_view and can_create_issue %}
+      {% if not public_view and can_create_issue and is_current_version %}
         <button class="btn btn-primary btn-sm" id="newIssueBtn" type="button">+ Замечание</button>
       {% endif %}
     </div>
+    {% if not is_current_version %}
+      <div class="version-issues-note" id="versionIssuesNote">
+        Маркапы относятся к текущей версии
+        {% if document.current_version %}v{{ document.current_version.version_number }}{% endif %}.
+      </div>
+    {% endif %}
     <div class="status-tabs" id="statusTabs">
       <button class="status-tab active" data-filter="all" onclick="filterIssues('all', this)" type="button">
         Все <span class="num" data-count="all">0</span>
@@ -294,9 +334,23 @@
 <script src="{% static 'js/vendor/bootstrap.bundle.min.js' %}"></script>
 <script src="{% static 'js/pdfjs/pdf.min.js' %}"></script>
 <script src="{% static 'js/sync.js' %}?v=20261031-viewer"></script>
-<script src="{% static 'js/pdf_viewer.js' %}?v=20261031-viewer"></script>
+<script src="{% static 'js/pdf_viewer.js' %}?v=20261101-t64"></script>
 <script src="{% static 'js/splitter.js' %}?v=20261031-viewer"></script>
 <script>
+  function changeVersion(value) {
+    if (typeof window.closePdfComparison === 'function') {
+      window.closePdfComparison();
+    }
+    const params = new URLSearchParams(window.location.search);
+    if (value) {
+      params.set('version', value);
+    } else {
+      params.delete('version');
+    }
+    const query = params.toString();
+    window.location.href = window.location.pathname + (query ? '?' + query : '');
+  }
+
   let currentIssueId = null;
 
   function allIssueCards() {
