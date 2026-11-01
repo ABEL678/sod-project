@@ -1375,6 +1375,16 @@ def check_read_permission(user: User, document: Document) -> bool:
     return False
 
 
+def get_readable_documents(user: User, project: Project | None = None):
+    """Документы, прошедшие реальную проверку чтения (с учётом членства)."""
+    qs = get_accessible_documents(user)
+    if project is not None:
+        qs = qs.filter(project=project)
+    qs = qs.select_related('project', 'section')
+    pks = [doc.pk for doc in qs if check_read_permission(user, doc)]
+    return Document.objects.filter(pk__in=pks)
+
+
 # ============================================================================
 # Волна 3: workflow зон ISO 19650 — «Подать на согласование» / «Опубликовать»
 # ============================================================================
@@ -1450,6 +1460,9 @@ def _workflow_role_allowed(user: User, document: Document, action_code: str) -> 
     if profile.role in ('developer', 'contractor'):
         # подать может автор работы в своём разделе
         return check_write_permission(user, document.section)
+    if profile.role in ('checker', 'normocontrol'):
+        # проверяющий действует только в проектах, где состоит
+        return document.project.memberships.filter(user=user).exists()
     return True
 
 

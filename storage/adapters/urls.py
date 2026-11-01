@@ -53,5 +53,6 @@ urlpatterns = [
     path('projects/<int:project_id>/export/', views.ExportVedomostView.as_view(), name='export_vedomost'),
     path('projects/<int:project_id>/mail-import/', views.SimulateMailImportView.as_view(), name='simulate_mail_import'),
     path('palette/', views.PaletteSearchView.as_view(), name='palette_search'),
+    path('offline/', views.OfflineView.as_view(), name='offline'),
     path('sw.js', views.ServiceWorkerView.as_view(), name='service_worker'),
 ]

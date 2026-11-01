@@ -33,6 +33,7 @@ from storage.domain.services import (
     check_read_permission,
     get_accessible_documents,
     get_accessible_projects,
+    get_readable_documents,
     create_issue,
     delete_issue,
     delete_issue_crop,
@@ -372,10 +373,9 @@ def _safe_excel_value(value):
 
 
 def _readable_document_pks(user, project):
-    qs = get_accessible_documents(user).filter(project=project).select_related(
-        'project', 'section'
+    return list(
+        get_readable_documents(user, project).values_list('pk', flat=True)
     )
-    return [doc.pk for doc in qs if check_read_permission(user, doc)]
 
 
 def _registry_issues(user, project):
@@ -638,7 +638,7 @@ class IssueRegistryExportView(LoginRequiredMixin, View):
 
 def _my_issues_base(user):
     """Замечания, где пользователь автор или ответственный (по правам)."""
-    accessible = get_accessible_documents(user)
+    accessible = get_readable_documents(user)
     return (
         Issue.objects.filter(
             document__in=accessible,

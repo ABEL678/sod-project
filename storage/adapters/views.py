@@ -70,6 +70,7 @@ from storage.domain.services import (
     get_accessible_documents,
     get_accessible_projects,
     get_accessible_sections,
+    get_readable_documents,
     get_document_version_for_view,
     get_document_versions,
     get_document_view,
@@ -1075,14 +1076,14 @@ class PaletteSearchView(LoginRequiredMixin, View):
             .order_by('code')[:5]
         )
         documents = (
-            get_accessible_documents(request.user)
+            get_readable_documents(request.user)
             .filter(Q(code__icontains=query) | Q(name__icontains=query))
             .select_related('project')
             .order_by('code')[:6]
         )
         issues = (
             Issue.objects.filter(
-                document__in=get_accessible_documents(request.user),
+                document__in=get_readable_documents(request.user),
                 document__is_deleted=False,
             )
             .filter(
@@ -1141,6 +1142,12 @@ class ServiceWorkerView(View):
         )
         response['Service-Worker-Allowed'] = '/'
         return response
+
+
+class OfflineView(TemplateView):
+    """Офлайн-заглушка для PWA (кэшируется service worker)."""
+
+    template_name = 'storage/offline.html'
 
 
 class DocumentDeleteView(LoginRequiredMixin, View):

@@ -5,7 +5,7 @@
    Не кэшируем API/POST, палитру, уведомления и всё с query-параметрами. */
 'use strict';
 
-const CACHE_NAME = 'sod-shell-v3';
+const CACHE_NAME = 'sod-shell-v4';
 
 const PRECACHE_URLS = [
     '/static/css/bootstrap.min.css',
@@ -17,6 +17,7 @@ const PRECACHE_URLS = [
     '/static/js/app.js',
     '/static/icons/icon-192.png',
     '/static/icons/icon-512.png',
+    '/offline/',
 ];
 
 self.addEventListener('install', function (event) {
@@ -66,14 +67,18 @@ self.addEventListener('fetch', function (event) {
         || url.pathname.startsWith('/issues/')
         || url.pathname.startsWith('/projects/')
         || url.pathname.startsWith('/documents/')
+        || url.pathname.startsWith('/download/')
+        || url.pathname.startsWith('/media/')
+        || url.pathname.startsWith('/folders/')
+        || url.pathname.startsWith('/offline/')
         || url.search.length > 0
     );
 
     if (request.mode === 'navigate') {
         event.respondWith(
             fetch(request).catch(function () {
-                return caches.match(request).then(function (cached) {
-                    return cached || Response.error();
+                return caches.match('/offline/').then(function (offline) {
+                    return offline || caches.match(request) || Response.error();
                 });
             })
         );
