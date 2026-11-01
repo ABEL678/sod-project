@@ -1,17 +1,12 @@
-{% load static %}
-<!DOCTYPE html>
-<html lang="ru">
-<head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Редактирование участника — Stream-CAD</title>
-    <link rel="stylesheet" href="{% static 'css/bootstrap.min.css' %}">
-    <link rel="stylesheet" href="{% static 'design-tokens/tokens.css' %}">
-    <link rel="stylesheet" href="{% static 'css/redesign.css' %}?v=20261103">
-    <link rel="stylesheet" href="{% static 'css/app.css' %}">
-</head>
-<body class="bg-light">
-{% include 'storage/_topbar.html' with topbar_company=object.company topbar_title="Редактирование участника" %}
+{% extends 'storage/base.html' %}
+
+{% block title %}Редактирование участника — Stream-CAD{% endblock %}
+
+{% block topbar %}
+    {% include 'storage/_topbar.html' with topbar_company=object.company topbar_title="Редактирование участника" %}
+{% endblock %}
+
+{% block content %}
 <main class="container py-3 pb-5">
     <div class="d-flex justify-content-between align-items-center mb-3">
         <div>
@@ -107,6 +102,4 @@
         </div>
     </div>
 </main>
-<script src="{% static 'js/vendor/bootstrap.bundle.min.js' %}"></script>
-</body>
-</html>
+{% endblock %}

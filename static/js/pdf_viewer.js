@@ -42,15 +42,10 @@
         ? window.bootstrap.Modal.getOrCreateInstance(modalElement)
         : null;
 
-    const STATUS_COLORS = {
-        NEW: '#0d6efd',
-        IN_PROGRESS: '#0dcaf0',
-        DISCUSSION: '#ffc107',
-        REJECTED: '#dc3545',
-        DONE: '#198754',
-        CLOSED: '#6c757d',
-        CANCELLED: '#212529',
-    };
+    // Цвета статусов приходят из дизайн-токенов (static/js/design-tokens.js,
+    // генерируется из tokens.json). Фолбэк — только аварийный синий.
+    const STATUS_COLORS = (window.CDE_TOKENS && window.CDE_TOKENS.statusHex) || {};
+    const STATUS_FALLBACK_COLOR = '#0d6efd';
 
     const pages = new Map();
     const pageCleanups = [];
@@ -65,7 +60,7 @@
     let pendingCrop = '';
 
     function statusColor(status) {
-        return STATUS_COLORS[status] || '#0d6efd';
+        return STATUS_COLORS[status] || STATUS_FALLBACK_COLOR;
     }
 
     function withAlpha(hex, alpha) {
@@ -457,8 +452,8 @@
             };
             preview = document.createElement('div');
             preview.className = 'pdf-markup pdf-markup-preview';
-            preview.style.borderColor = STATUS_COLORS.NEW;
-            preview.style.backgroundColor = withAlpha(STATUS_COLORS.NEW, 0.1);
+            preview.style.borderColor = statusColor('NEW');
+            preview.style.backgroundColor = withAlpha(statusColor('NEW'), 0.1);
             wrapper.querySelector('.pdf-pin-layer').appendChild(preview);
             event.preventDefault();
         });
@@ -554,12 +549,7 @@
         if (totalLabel) {
             totalLabel.textContent = String(total);
         }
-        document.querySelectorAll('#minimap .thumb').forEach(function (thumb) {
-            thumb.classList.toggle(
-                'active',
-                Number(thumb.dataset.page) === currentPage
-            );
-        });
+        updateMinimapLabel();
     }
 
     function renderPage(pageNumber) {
@@ -617,6 +607,7 @@
                 viewport: viewport,
             }).promise.then(function () {
                 drawMarks(currentPage);
+                renderMinimap();
             });
         });
     }
@@ -1423,29 +1414,184 @@
         }
     }
 
-    function buildMinimap(pageCount) {
-        const minimap = document.getElementById('minimap');
-        if (!minimap) {
-            return;
-        }
-        minimap.innerHTML = '';
-        for (let number = 1; number <= pageCount; number += 1) {
-            const button = document.createElement('button');
-            button.type = 'button';
-            button.className = 'thumb' + (number === 1 ? ' active' : '');
-            button.dataset.page = String(number);
-            button.title = 'Лист ' + number;
-            button.innerHTML =
-                '<svg viewBox="0 0 92 64"><rect x="6" y="5" width="80" height="54" '
-                + 'fill="#fff" stroke="#E4E4E0"/><text x="46" y="46" font-size="7" '
-                + 'fill="#9C9C94" text-anchor="middle">'
-                + String(number).padStart(2, '0') + '</text></svg>';
-            button.addEventListener('click', function () {
-                window.goToPage(number);
-            });
-            minimap.appendChild(button);
+    /* ====================================================================
+       Мини-карта: живое превью текущего листа + рамка видимой области.
+       В отличие от старой (удаляли её в 4d3620b — статичные SVG-заглушки
+       «01/02»), здесь настоящий рендер страницы в маленьком масштабе:
+       видно, где находишься на листе A1; клик/протяжка по мини-карте
+       перемещает вьюпорт. Плавающая — не отнимает ширину у панели.
+       ==================================================================== */
+    const MINIMAP_WIDTH = 168;
+    let minimapBox = null;
+    let minimapView = null;
+    let minimapCanvas = null;
+    let minimapRect = null;
+    let minimapLabel = null;
+    let minimapVisible = true;
+
+    function minimapStage() {
+        return viewer.closest('.stage') || viewer;
+    }
+
+    function updateMinimapLabel() {
+        if (minimapLabel && pdfDocument) {
+            minimapLabel.textContent = 'Лист ' + currentPage + ' / ' + pdfDocument.numPages;
         }
     }
+
+    function initMinimap() {
+        const stage = minimapStage();
+        if (!stage) {
+            return;
+        }
+        minimapBox = document.createElement('div');
+        minimapBox.className = 'pdf-minimap';
+        minimapBox.id = 'pdfMinimap';
+        minimapLabel = document.createElement('div');
+        minimapLabel.className = 'pdf-minimap-label num';
+        minimapView = document.createElement('div');
+        minimapView.className = 'pdf-minimap-view';
+        minimapCanvas = document.createElement('canvas');
+        minimapRect = document.createElement('div');
+        minimapRect.className = 'pdf-minimap-rect';
+        minimapView.appendChild(minimapCanvas);
+        minimapView.appendChild(minimapRect);
+        minimapBox.appendChild(minimapLabel);
+        minimapBox.appendChild(minimapView);
+        stage.appendChild(minimapBox);
+
+        try {
+            minimapVisible = window.localStorage.getItem('cde-minimap') !== 'off';
+        } catch (error) {
+            minimapVisible = true;
+        }
+        minimapBox.classList.toggle('is-hidden', !minimapVisible);
+        const toggle = document.getElementById('minimapToggle');
+        if (toggle) {
+            toggle.classList.toggle('active', minimapVisible);
+        }
+
+        minimapBox.addEventListener('mousedown', function (event) {
+            if (event.button !== 0) {
+                return;
+            }
+            event.preventDefault();
+            minimapNavigate(event);
+            const onMove = function (moveEvent) {
+                minimapNavigate(moveEvent);
+            };
+            const onUp = function () {
+                window.removeEventListener('mousemove', onMove);
+                window.removeEventListener('mouseup', onUp);
+            };
+            window.addEventListener('mousemove', onMove);
+            window.addEventListener('mouseup', onUp);
+        });
+
+        stage.addEventListener('scroll', function () {
+            window.requestAnimationFrame(updateMinimapRect);
+        }, { passive: true });
+        window.addEventListener('resize', updateMinimapRect);
+    }
+
+    function minimapNavigate(event) {
+        const stage = minimapStage();
+        const page = pages.get(currentPage);
+        if (!stage || !page || !minimapView) {
+            return;
+        }
+        const viewRect = minimapView.getBoundingClientRect();
+        if (!viewRect.width || !viewRect.height) {
+            return;
+        }
+        const ratioX = Math.min(1, Math.max(0, (event.clientX - viewRect.left) / viewRect.width));
+        const ratioY = Math.min(1, Math.max(0, (event.clientY - viewRect.top) / viewRect.height));
+        const pageRect = page.wrapper.getBoundingClientRect();
+        const stageRect = stage.getBoundingClientRect();
+        // Хотим, чтобы точка ratio листа оказалась в той же доле вьюпорта.
+        const targetX = ratioX * pageRect.width;
+        const targetY = ratioY * pageRect.height;
+        const currentX = (stageRect.left - pageRect.left) + stageRect.width * ratioX;
+        const currentY = (stageRect.top - pageRect.top) + stageRect.height * ratioY;
+        stage.scrollLeft += targetX - currentX;
+        stage.scrollTop += targetY - currentY;
+        updateMinimapRect();
+    }
+
+    function renderMinimap() {
+        if (!minimapVisible || !pdfDocument || !minimapCanvas) {
+            return;
+        }
+        pdfDocument.getPage(currentPage).then(function (page) {
+            const base = page.getViewport({ scale: 1, rotation: currentRotation });
+            if (!base.width) {
+                return null;
+            }
+            const scale = MINIMAP_WIDTH / base.width;
+            const viewport = page.getViewport({ scale: scale, rotation: currentRotation });
+            const outputScale = window.devicePixelRatio || 1;
+            minimapCanvas.width = Math.floor(viewport.width * outputScale);
+            minimapCanvas.height = Math.floor(viewport.height * outputScale);
+            minimapCanvas.style.width = Math.floor(viewport.width) + 'px';
+            minimapCanvas.style.height = Math.floor(viewport.height) + 'px';
+            const context = minimapCanvas.getContext('2d');
+            context.setTransform(outputScale, 0, 0, outputScale, 0, 0);
+            updateMinimapLabel();
+            return page.render({
+                canvasContext: context,
+                viewport: viewport,
+            }).promise;
+        }).then(function () {
+            updateMinimapRect();
+        }).catch(function () {});
+    }
+
+    function updateMinimapRect() {
+        if (!minimapVisible || !minimapRect || !minimapCanvas) {
+            return;
+        }
+        const stage = minimapStage();
+        const page = pages.get(currentPage);
+        if (!stage || !page) {
+            return;
+        }
+        const pageRect = page.wrapper.getBoundingClientRect();
+        if (!pageRect.width || !pageRect.height) {
+            return;
+        }
+        const stageRect = stage.getBoundingClientRect();
+        // Видимая область в координатах листа (с обрезкой по границам).
+        const left = Math.max(0, stageRect.left - pageRect.left);
+        const top = Math.max(0, stageRect.top - pageRect.top);
+        const right = Math.min(pageRect.width, stageRect.left + stageRect.width - pageRect.left);
+        const bottom = Math.min(pageRect.height, stageRect.top + stageRect.height - pageRect.top);
+        const scaleX = minimapCanvas.clientWidth / pageRect.width;
+        const scaleY = minimapCanvas.clientHeight / pageRect.height;
+        minimapRect.style.left = (left * scaleX) + 'px';
+        minimapRect.style.top = (top * scaleY) + 'px';
+        minimapRect.style.width = Math.max(6, (right - left) * scaleX) + 'px';
+        minimapRect.style.height = Math.max(6, (bottom - top) * scaleY) + 'px';
+    }
+
+    window.toggleMinimap = function () {
+        if (!minimapBox) {
+            return;
+        }
+        minimapVisible = !minimapVisible;
+        minimapBox.classList.toggle('is-hidden', !minimapVisible);
+        try {
+            window.localStorage.setItem('cde-minimap', minimapVisible ? 'on' : 'off');
+        } catch (error) {
+            /* приватный режим — просто не запоминаем */
+        }
+        const toggle = document.getElementById('minimapToggle');
+        if (toggle) {
+            toggle.classList.toggle('active', minimapVisible);
+        }
+        if (minimapVisible) {
+            renderMinimap();
+        }
+    };
 
     window.goToPage = function (pageNumber) {
         if (comparison.active) {
@@ -1494,7 +1640,6 @@
         window.pdfjsLib.GlobalWorkerOptions.workerSrc = viewer.dataset.workerUrl;
         window.pdfjsLib.getDocument(pdfUrl).promise.then(function (pdf) {
             pdfDocument = pdf;
-            buildMinimap(pdf.numPages);
             return renderPages();
         }).catch(function () {
             viewer.innerHTML = '<div class="alert alert-warning m-3 mb-0">Не удалось загрузить PDF.</div>';
@@ -1766,6 +1911,7 @@
     initSlider();
     initContextMenu();
     initDetails();
+    initMinimap();
     if (issues.length) {
         selectIssue(issues[0].id);
     }

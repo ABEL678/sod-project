@@ -1,27 +1,5 @@
-:root {
-    --status-new: var(--s-wait-solid);
-    --status-new-bg: var(--s-wait-subtle);
-    --status-new-on: var(--s-wait-on);
-    --status-in_progress: var(--s-progress-solid);
-    --status-in_progress-bg: var(--s-progress-subtle);
-    --status-in_progress-on: var(--s-progress-on);
-    --status-discussion: var(--s-review-solid);
-    --status-discussion-bg: var(--s-review-subtle);
-    --status-discussion-on: var(--s-review-on);
-    --status-rejected: var(--s-attention-solid);
-    --status-rejected-bg: var(--s-attention-subtle);
-    --status-rejected-on: var(--s-attention-on);
-    --status-done: var(--s-done-solid);
-    --status-done-bg: var(--s-done-subtle);
-    --status-done-on: var(--s-done-on);
-    --status-closed: var(--s-closed-solid);
-    --status-closed-bg: var(--s-closed-subtle);
-    --status-closed-on: var(--s-closed-on);
-    --status-cancelled: var(--s-canceled-solid);
-    --status-cancelled-bg: var(--s-canceled-subtle);
-    --status-cancelled-on: var(--s-canceled-on);
-}
-
+/* Алиасы --status-* (коды моделей -> токены) генерируются в tokens.css
+   из tokens.json. Здесь — только вьювер-специфика. */
 body {
     margin: 0;
     height: 100vh;
@@ -657,4 +635,65 @@ body {
 
 .stage.is-sliding {
     padding: 10px;
+}
+
+/* ==========================================================================
+   Мини-карта (Спринт 2): живое превью листа + рамка видимой области.
+   Плавающая поверх тёмного канваса — не отнимает ширину у панели замечаний
+   (в отличие от старой sidebar-миникарты, которую снесли в 4d3620b).
+   ========================================================================== */
+.stage {
+    position: relative;
+}
+
+.pdf-minimap {
+    position: absolute;
+    right: 16px;
+    bottom: 16px;
+    z-index: 30;
+    padding: 6px;
+    background: var(--c-bg-surface, #fff);
+    border: 1px solid var(--c-border-default, #D4D4CE);
+    border-radius: var(--r-md, 8px);
+    box-shadow: var(--shadow-3, 0 8px 24px rgba(25, 25, 23, 0.14));
+    cursor: crosshair;
+    user-select: none;
+}
+
+.pdf-minimap.is-hidden {
+    display: none;
+}
+
+.pdf-minimap-label {
+    font: 500 11px/16px var(--font-mono, monospace);
+    color: var(--c-text-secondary, #6E6E68);
+    padding: 0 2px 4px;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+}
+
+.pdf-minimap-view {
+    position: relative;
+}
+
+.pdf-minimap canvas {
+    display: block;
+    border: 1px solid var(--c-border-hairline, #E4E4E0);
+    background: #fff;
+}
+
+.pdf-minimap-rect {
+    position: absolute;
+    border: 2px solid var(--c-accent, #2F5BEA);
+    background: rgba(47, 91, 234, 0.12);
+    border-radius: 2px;
+    pointer-events: none;
+    box-sizing: border-box;
+}
+
+/* На узких экранах мини-карта только мешает — прячем (как и старую) */
+@media (max-width: 1000px) {
+    .pdf-minimap {
+        display: none;
+    }
 }

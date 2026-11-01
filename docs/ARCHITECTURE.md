@@ -235,6 +235,15 @@ sod_project/
 | page_number | PositiveIntegerField, null=True | Страница PDF |
 | x_ratio / y_ratio | FloatField, null=True | Координаты пина (0.0–1.0) |
 | created_at / updated_at | DateTimeField | |
+| x1_ratio / y1_ratio | FloatField, null=True | Координаты левого верхнего угла рамки маркапа |
+| x2_ratio / y2_ratio | FloatField, null=True | Координаты правого нижнего угла рамки маркапа |
+| crop_image | ImageField, null=True | Вырезанное изображение маркапа |
+| department | CharField(255), blank | Подразделение автора |
+| project_organization | CharField(255), blank | Проектная организация |
+| due_date | DateField, null=True | Срок ответа на замечание |
+| actual_fix_date | DateField, null=True | Фактическая дата исправления |
+| revision | CharField(100), blank | Ревизия документа |
+| answer_text | TextField, blank | Ответ разработчика (если без комментария) |
 
 **Constraint:** `issue_pin_coords_consistency` — координаты задаются только вместе с `page_number`.
 

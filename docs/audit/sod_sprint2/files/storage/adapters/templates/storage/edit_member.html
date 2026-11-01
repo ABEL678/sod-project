@@ -1,0 +1,105 @@
+{% extends 'storage/base.html' %}
+
+{% block title %}Редактирование участника — Stream-CAD{% endblock %}
+
+{% block topbar %}
+    {% include 'storage/_topbar.html' with topbar_company=object.company topbar_title="Редактирование участника" %}
+{% endblock %}
+
+{% block content %}
+<main class="container py-3 pb-5">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <div>
+            <h1 class="h4 mb-0">Редактирование участника</h1>
+            <div class="small text-muted">{{ object.user.username }}</div>
+        </div>
+        <a href="{% url 'storage:dashboard' %}" class="btn btn-sm btn-outline-secondary">← К панели</a>
+    </div>
+
+    <div class="card shadow-sm" style="max-width: 640px;">
+        <div class="card-body">
+            <form method="post">
+                {% csrf_token %}
+                {% if form.non_field_errors %}
+                    <div class="alert alert-danger">{{ form.non_field_errors }}</div>
+                {% endif %}
+
+                <div class="mb-3">
+                    <label class="form-label small" for="editUsername">Логин</label>
+                    <input class="form-control form-control-sm" id="editUsername"
+                           value="{{ object.user.username }}" disabled>
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label small" for="editLastName">Фамилия</label>
+                    <input class="form-control form-control-sm" id="editLastName"
+                           value="{{ object.user.last_name }}" disabled>
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label small" for="editFirstName">Имя</label>
+                    <input class="form-control form-control-sm" id="editFirstName"
+                           value="{{ object.user.first_name }}" disabled>
+                </div>
+
+                <p class="text-muted small">
+                    Чтобы изменить ФИО или логин — создайте нового участника.
+                </p>
+
+                <div class="mb-3">
+                    <label class="form-label small" for="{{ form.email.id_for_label }}">{{ form.email.label }}</label>
+                    {{ form.email }}
+                    {% for error in form.email.errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label small" for="{{ form.phone.id_for_label }}">{{ form.phone.label }}</label>
+                    {{ form.phone }}
+                    {% for error in form.phone.errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label small" for="{{ form.projects.id_for_label }}">{{ form.projects.label }}</label>
+                    {{ form.projects }}
+                    <div class="form-text">Удерживайте Ctrl/Command для выбора нескольких проектов.</div>
+                    {% for error in form.projects.errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label small" for="{{ form.allowed_sections.id_for_label }}">{{ form.allowed_sections.label }}</label>
+                    {{ form.allowed_sections }}
+                    {% for error in form.allowed_sections.errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label small" for="{{ form.role.id_for_label }}">{{ form.role.label }}</label>
+                    {{ form.role }}
+                    {% for error in form.role.errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label small" for="{{ form.company.id_for_label }}">{{ form.company.label }}</label>
+                    {{ form.company }}
+                    {% for error in form.company.errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}
+                </div>
+
+                <button type="submit" class="btn btn-primary btn-sm">Сохранить</button>
+                <a href="{% url 'storage:dashboard' %}" class="btn btn-outline-secondary btn-sm">Отмена</a>
+            </form>
+
+            {% if user.is_superuser or user.userprofile.role == 'admin' %}
+                <form method="post" action="{% url 'storage:delete_member' object.pk %}"
+                      class="d-inline mt-3" onsubmit="return confirm('Удалить участника?');">
+                    {% csrf_token %}
+                    <button type="submit" class="btn btn-danger btn-sm">Удалить участника</button>
+                </form>
+            {% else %}
+                <button type="button" class="btn btn-secondary btn-sm mt-3" disabled
+                        title="Только администратор или суперюзер может удалять участников">
+                    Удалить участника (нет прав)
+                </button>
+            {% endif %}
+        </div>
+    </div>
+</main>
+{% endblock %}

@@ -1,0 +1,432 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ document.code }} — {{ document.name }}</title>
+<link href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+<link rel="stylesheet" href="{% static 'css/bootstrap.min.css' %}">
+<link rel="stylesheet" href="{% static 'design-tokens/tokens.css' %}?v=20261102">
+<link rel="stylesheet" href="{% static 'css/redesign.css' %}">
+<link rel="stylesheet" href="{% static 'css/viewer.css' %}?v=20261102">
+<link rel="stylesheet" href="{% static 'css/app.css' %}?v=20261102">
+</head>
+<body>
+
+<header class="topbar">
+  <a class="brand" href="{% url 'storage:project_list' %}" style="text-decoration: none; color: inherit;">
+    {% if user.userprofile.company.logo %}
+      <img src="{{ user.userprofile.company.logo.url }}"
+           alt="{{ user.userprofile.company.name }}"
+           style="height: 100%; max-height: 48px; width: auto; object-fit: contain; margin-right: 8px;">
+    {% else %}
+      <span class="brand-mark">СОД</span>
+    {% endif %}
+  </a>
+  <div class="brand-watermark">
+    <span class="brand-text">Stream-CAD</span>
+    <span class="brand-slogan">Управляйте потоком чертежей</span>
+  </div>
+  <nav aria-label="Хлебные крошки" class="crumb">
+    <a href="{% url 'storage:project_list' %}" class="company-link">
+      {{ document.project.company.name|default:"Моя компания" }}
+    </a>
+    <span class="sep">/</span>
+    <a href="{% url 'storage:project_detail' document.project.pk %}">{{ document.project.code }}</a>
+    <span class="sep">/</span>
+    <a href="{% url 'storage:project_detail' document.project.pk %}?section={{ document.section.pk }}">{{ document.section.code }}</a>
+    <span class="sep">/</span>
+    {% if document.folder %}
+      <a href="{% url 'storage:project_detail' document.project.pk %}?folder={{ document.folder.pk }}">{{ document.folder.name }}</a>
+      <span class="sep">/</span>
+    {% endif %}
+    <span class="doc">{{ document.code }}</span>
+  </nav>
+  <form action="{% url 'storage:search' document.project.pk %}" method="get" class="d-flex">
+    <input type="search" name="q" class="form-control form-control-sm"
+           placeholder="Поиск по шифру, названию" value="{{ request.GET.q }}">
+  </form>
+  <span class="chip">
+    <span class="mono">v{{ document.current_version.version_number }} · R{{ document.current_version.revision|default:"0" }}</span>
+    · {{ document.get_status_display }}
+  </span>
+  <div class="spacer"></div>
+  {% if user.is_authenticated %}
+    {% if user.userprofile.role == 'admin' or user.userprofile.role == 'gip' or user.is_superuser %}
+      {% if request.resolver_match.url_name == 'project_list' %}
+        <a href="{% url 'storage:dashboard' %}" class="btn btn-sm btn-outline-secondary"
+           title="Только для администратора и ГИП">Управление</a>
+      {% endif %}
+    {% endif %}
+  {% endif %}
+  <a href="{% url 'storage:document_pdf_with_issues' document.pk %}" class="btn primary">Экспорт PDF с маркапами</a>
+  <div class="avatar">{{ user.username|slice:":2"|upper }}</div>
+  <form method="post" action="{% url 'logout' %}" class="d-inline">
+    {% csrf_token %}
+    <button type="submit" class="btn btn-sm btn-outline-secondary" title="Выйти">
+      <i class="bi bi-box-arrow-right"></i> Выйти
+    </button>
+  </form>
+</header>
+
+{% if public_view %}
+<div class="alert alert-info m-2 py-1 small">Публичный просмотр (только чтение)</div>
+{% endif %}
+
+<div class="toolbar">
+  <div class="group">
+    <button class="tbtn" onclick="prevPage()" title="Предыдущая страница" type="button">‹</button>
+    <input class="page-input num" type="number" id="pageInput" min="1" value="1"
+           onchange="goToPage(Number(this.value))">
+    <span class="page-label num">из <span id="totalPages">1</span></span>
+    <button class="tbtn" onclick="nextPage()" title="Следующая страница" type="button">›</button>
+  </div>
+  <span class="divider"></span>
+  <div class="group">
+    <select class="form-select form-select-sm" style="width: auto;"
+            onchange="window.location.href='?version=' + this.value">
+      {% for v in document.versions.all %}
+        <option value="{{ v.pk }}" {% if v == document.current_version %}selected{% endif %}>
+          v{{ v.version_number }}
+        </option>
+      {% endfor %}
+    </select>
+  </div>
+  <span class="divider"></span>
+  <div class="group">
+    <button class="tbtn" onclick="zoomOut()" title="Уменьшить" type="button">−</button>
+    <select class="zoom-select" id="zoomSelect" onchange="setZoom(parseFloat(this.value) / 100)">
+      <option value="50">50%</option>
+      <option value="75">75%</option>
+      <option value="100" selected>100%</option>
+      <option value="125">125%</option>
+      <option value="150">150%</option>
+      <option value="200">200%</option>
+      <option value="300">300%</option>
+      <option value="400">400%</option>
+    </select>
+    <button class="tbtn" onclick="zoomIn()" title="Увеличить" type="button">+</button>
+  </div>
+  <span class="divider"></span>
+  <div class="group">
+    <button class="tbtn" onclick="fitWidth()" title="По ширине" type="button" aria-label="По ширине">
+      <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M1.5 8h13M4.5 5 1.5 8l3 3M11.5 5l3 3-3 3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
+    <button class="tbtn" onclick="fitPage()" title="Вся страница" type="button" aria-label="Вся страница">
+      <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M2 6V2.5h4.5M14 6V2.5H9.5M2 10v3.5h4.5M14 10v3.5H9.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
+  </div>
+  <div class="group">
+    <button class="tbtn" onclick="rotatePage()" title="Повернуть" type="button">⟲</button>
+    <button class="tbtn" onclick="togglePan()" title="Рука" type="button">✋</button>
+    <button class="tbtn" onclick="toggleSelect()" title="Выделение" type="button">⍝</button>
+    <button class="tbtn active" id="minimapToggle" onclick="toggleMinimap()" type="button"
+            title="Мини-карта: превью листа и видимой области" aria-label="Мини-карта">
+      <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.4"/><rect x="8" y="7" width="4.5" height="4" fill="currentColor" opacity="0.55"/></svg>
+    </button>
+  </div>
+</div>
+
+<div class="workspace" id="main-splitter">
+  <section class="stage" id="pdf-panel">
+    <div class="pdf-viewer" id="pdfViewer"
+         {% if document.current_version %}data-pdf-url="{% url 'storage:document_download' document.current_version.pk %}"{% endif %}
+         data-worker-url="{% static 'js/pdfjs/pdf.worker.min.js' %}"
+         {% if can_create_issue %}data-issue-create-url="{% url 'issues:issue_create' document.pk %}"{% endif %}
+         data-can-create="{% if can_create_issue %}1{% else %}0{% endif %}">
+      {% if document.current_version %}
+        <div class="pdf-loading text-muted small p-3">Загрузка PDF…</div>
+      {% else %}
+        <div class="p-3 text-muted">Нет текущей версии для просмотра.</div>
+      {% endif %}
+    </div>
+  </section>
+
+  <div class="splitter" id="drag-divider"></div>
+
+  <aside class="panel" id="issues-panel">
+    <div class="panel-head">
+      <h2>Замечания</h2><span class="count num">{{ issues|length }}</span>
+      {% if not public_view and can_create_issue %}
+        <button class="btn btn-primary btn-sm" id="newIssueBtn" type="button">+ Замечание</button>
+      {% endif %}
+    </div>
+    <div class="status-tabs" id="statusTabs">
+      <button class="status-tab active" data-filter="all" onclick="filterIssues('all', this)" type="button">
+        Все <span class="num" data-count="all">0</span>
+      </button>
+      <button class="status-tab" data-filter="open" onclick="filterIssues('open', this)" type="button">
+        Открытые <span class="num" data-count="open">0</span>
+      </button>
+      <button class="status-tab" data-filter="progress" onclick="filterIssues('progress', this)" type="button">
+        В работе <span class="num" data-count="progress">0</span>
+      </button>
+      <button class="status-tab" data-filter="review" onclick="filterIssues('review', this)" type="button">
+        На проверке <span class="num" data-count="review">0</span>
+      </button>
+      <button class="status-tab" data-filter="closed" onclick="filterIssues('closed', this)" type="button">
+        Закрытые <span class="num" data-count="closed">0</span>
+      </button>
+    </div>
+
+    <div class="list" id="list"
+         data-detail-url-template="{% url 'issues:issue_detail_htmx' 0 %}">
+      {% for issue in issues %}
+        <div class="card issue-row"
+             id="issue-row-{{ issue.pk }}"
+             data-id="{{ issue.pk }}"
+             data-issue-id="{{ issue.pk }}"
+             data-status="{{ issue.status }}"
+             data-page="{{ issue.page_number|default:'' }}"
+             data-status-label="{{ issue.get_status_display }}"
+             onclick="selectIssue(null, {{ issue.pk }})">
+          <span class="mark-badge"
+                style="--mk: var(--status-{{ issue.status|lower }}); --mkb: var(--status-{{ issue.status|lower }}-bg); --mk-text: var(--status-{{ issue.status|lower }}-on);">
+            {{ issue.pk|stringformat:"02d" }}
+          </span>
+          <div class="card-body">
+            <div class="card-title">{{ issue.description|truncatechars:60 }}</div>
+            <div class="card-meta">
+              <span>{{ issue.author.get_full_name|default:issue.author.username }}</span>
+              <span>·</span>
+              <span>{{ issue.created_at|date:"d.m.Y" }}</span>
+              <span class="badge"
+                    style="margin-left:auto; --sfg: var(--status-{{ issue.status|lower }}-on); --sbg: var(--status-{{ issue.status|lower }}-bg);">
+                {{ issue.get_status_display }}
+              </span>
+            </div>
+            <div class="card-actions">
+              <button class="btn btn-sm btn-outline-primary" type="button"
+                      onclick="event.stopPropagation(); openIssueCard({{ issue.pk }})">
+                Детали
+              </button>
+            </div>
+          </div>
+        </div>
+      {% empty %}
+        <p class="text-muted text-center mt-3">Нет замечаний</p>
+      {% endfor %}
+    </div>
+
+    <div class="detail" id="detail">
+      <div class="detail-head">
+        <button class="back" onclick="closeIssueCard()" type="button">←</button>
+        <span class="no" id="dNo">№ —</span>
+        <span class="badge" id="dBadge">Статус</span>
+        <div class="nav">
+          <button class="navbtn" onclick="prevIssue()" type="button">‹</button>
+          <button class="navbtn" onclick="nextIssue()" type="button">›</button>
+        </div>
+      </div>
+      <div class="detail-scroll" id="detailContent"></div>
+    </div>
+  </aside>
+</div>
+
+{{ issues_json|json_script:"issues-data" }}
+
+<div class="modal fade" id="issueModal" tabindex="-1" aria-labelledby="issueModalLabel" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <form id="issueForm">
+        {% csrf_token %}
+        <input type="hidden" name="page_number" id="issuePageNumber">
+        <input type="hidden" name="x_ratio" id="issueXRatio">
+        <input type="hidden" name="y_ratio" id="issueYRatio">
+        <input type="hidden" name="x1_ratio" id="issueX1Ratio">
+        <input type="hidden" name="y1_ratio" id="issueY1Ratio">
+        <input type="hidden" name="x2_ratio" id="issueX2Ratio">
+        <input type="hidden" name="y2_ratio" id="issueY2Ratio">
+        <input type="hidden" name="crop_image_base64" id="issueCropImage">
+        {% if document.current_version %}
+          <input type="hidden" name="version_id" value="{{ document.current_version.pk }}">
+        {% endif %}
+        <div class="modal-header">
+          <h5 class="modal-title" id="issueModalLabel">Новое замечание</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрыть"></button>
+        </div>
+        <div class="modal-body">
+          <div class="alert alert-danger d-none" id="issueFormError"></div>
+          <div class="mb-3">
+            <label for="issueDescription" class="form-label">Текст замечания</label>
+            <textarea id="issueDescription" name="description" class="form-control" rows="4" required></textarea>
+          </div>
+          <div class="mb-0">
+            <label for="issueAssignee" class="form-label">Ответственный</label>
+            <select id="issueAssignee" name="assignee" class="form-select">
+              <option value="">— не назначен —</option>
+              {% for assignee in issue_assignees %}
+                <option value="{{ assignee.pk }}">{{ assignee.get_full_name|default:assignee.username }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="row g-2 mt-1">
+            <div class="col-6">
+              <label for="issueDepartment" class="form-label small">От подразделения</label>
+              <input type="text" id="issueDepartment" name="department" class="form-control form-control-sm">
+            </div>
+            <div class="col-6">
+              <label for="issueOrganization" class="form-label small">Проектная организация</label>
+              <input type="text" id="issueOrganization" name="project_organization" class="form-control form-control-sm">
+            </div>
+            <div class="col-6">
+              <label for="issueDueDate" class="form-label small">Срок ответа</label>
+              <input type="date" id="issueDueDate" name="due_date" class="form-control form-control-sm">
+            </div>
+            <div class="col-6">
+              <label for="issueRevision" class="form-label small">Ревизия</label>
+              <input type="text" id="issueRevision" name="revision" class="form-control form-control-sm">
+            </div>
+          </div>
+          <div class="mt-2">
+            <label for="issueAnswerText" class="form-label small">Ответ</label>
+            <textarea id="issueAnswerText" name="answer_text" class="form-control form-control-sm" rows="2"></textarea>
+          </div>
+          <div class="form-text mt-2" id="issueCoordinates"></div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Отмена</button>
+          <button type="submit" class="btn btn-primary">Сохранить</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<div id="issueContextMenu" class="issue-context-menu d-none">
+  <button type="button" class="context-item" data-action="answer">Ответить</button>
+  <div class="context-label">Изменить статус</div>
+  <div id="contextStatuses"></div>
+  <button type="button" class="context-item" data-action="copy-link">Скопировать ссылку</button>
+  <button type="button" class="context-item" data-action="delete">Удалить</button>
+  <button type="button" class="context-item" data-action="show-mark">Показать маркап</button>
+  <button type="button" class="context-item" data-action="download">Скачать вложение</button>
+</div>
+
+<script src="{% static 'js/vendor/bootstrap.bundle.min.js' %}"></script>
+<script src="{% static 'js/pdfjs/pdf.min.js' %}"></script>
+<script src="{% static 'js/design-tokens.js' %}?v=20261102"></script>
+<script src="{% static 'js/sync.js' %}?v=20261102"></script>
+<script src="{% static 'js/pdf_viewer.js' %}?v=20261102"></script>
+<script src="{% static 'js/splitter.js' %}?v=20261102"></script>
+<script>
+  let currentIssueId = null;
+
+  function allIssueCards() {
+    return Array.from(document.querySelectorAll('#list .card[data-id]'));
+  }
+
+  function issueCards() {
+    return allIssueCards().filter(function (card) {
+      return card.style.display !== 'none';
+    });
+  }
+
+  function statusGroup(status) {
+    if (status === 'IN_PROGRESS') return 'progress';
+    if (status === 'DONE') return 'review';
+    if (status === 'CLOSED' || status === 'CANCELLED') return 'closed';
+    return 'open';
+  }
+
+  function updateIssueCounters() {
+    const counts = {all: 0, open: 0, progress: 0, review: 0, closed: 0};
+    allIssueCards().forEach(function (card) {
+      counts.all += 1;
+      counts[statusGroup(card.dataset.status)] += 1;
+    });
+    document.querySelectorAll('#statusTabs [data-count]').forEach(function (el) {
+      el.textContent = counts[el.dataset.count] || 0;
+    });
+  }
+
+  function filterIssues(filter, button) {
+    allIssueCards().forEach(function (card) {
+      card.style.display =
+        filter === 'all' || statusGroup(card.dataset.status) === filter
+          ? ''
+          : 'none';
+    });
+    document.querySelectorAll('#statusTabs .status-tab').forEach(function (tab) {
+      tab.classList.toggle('active', tab === button);
+    });
+    document.getElementById('list').style.display = 'block';
+    document.getElementById('detail').style.display = 'none';
+    updateIssueCounters();
+  }
+
+  function openIssueCard(id) {
+    const card = document.querySelector('#list .card[data-id="' + id + '"]');
+    if (!card) return;
+    currentIssueId = Number(id);
+
+    if (window.selectIssue) {
+      window.selectIssue(null, Number(id));
+    }
+
+    document.querySelectorAll('#list .card').forEach(function (item) {
+      item.classList.remove('is-active');
+    });
+    card.classList.add('is-active');
+
+    const template = document.getElementById('list').dataset.detailUrlTemplate;
+    const url = template.replace('/0/', '/' + id + '/');
+    const detailContent = document.getElementById('detailContent');
+    detailContent.innerHTML = '<div class="text-muted small p-3">Загрузка…</div>';
+
+    document.getElementById('list').style.display = 'none';
+    document.getElementById('detail').style.display = 'flex';
+
+    const number = document.getElementById('dNo');
+    const badge = document.getElementById('dBadge');
+    number.textContent = '№ ' + String(id).padStart(2, '0');
+    badge.textContent = card.dataset.statusLabel || '';
+    badge.style.setProperty('--sfg', 'var(--status-' + card.dataset.status.toLowerCase() + '-on)');
+    badge.style.setProperty('--sbg', 'var(--status-' + card.dataset.status.toLowerCase() + '-bg)');
+
+    fetch(url, {credentials: 'same-origin'})
+      .then(function (response) {
+        if (!response.ok) throw new Error('Не удалось загрузить карточку');
+        return response.text();
+      })
+      .then(function (html) {
+        detailContent.innerHTML = html;
+      })
+      .catch(function (error) {
+        detailContent.innerHTML = '<div class="alert alert-danger m-3">' + error.message + '</div>';
+      });
+  }
+
+  function closeIssueCard() {
+    document.getElementById('list').style.display = 'block';
+    document.getElementById('detail').style.display = 'none';
+  }
+
+  window.showIssueList = closeIssueCard;
+
+  function moveIssue(delta) {
+    const cards = issueCards();
+    if (!cards.length) return;
+    let index = cards.findIndex(function (card) {
+      return Number(card.dataset.id) === currentIssueId;
+    });
+    if (index < 0) index = 0;
+    index = (index + delta + cards.length) % cards.length;
+    openIssueCard(cards[index].dataset.id);
+  }
+
+  function prevIssue() { moveIssue(-1); }
+  function nextIssue() { moveIssue(1); }
+
+  document.addEventListener('keydown', function (event) {
+    if (event.target.closest('input, textarea, select')) return;
+    if (event.key === 'n' || event.key === 'N') nextIssue();
+    if (event.key === 'p' || event.key === 'P') prevIssue();
+  });
+
+  updateIssueCounters();
+</script>
+</body>
+</html>

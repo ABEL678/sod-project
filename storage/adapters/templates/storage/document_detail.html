@@ -8,10 +8,10 @@
 <link href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
 <link rel="stylesheet" href="{% static 'css/bootstrap.min.css' %}">
-<link rel="stylesheet" href="{% static 'design-tokens/tokens.css' %}?v=20261101">
-<link rel="stylesheet" href="{% static 'css/redesign.css' %}?v=20261103">
-<link rel="stylesheet" href="{% static 'css/viewer.css' %}?v=20261101-t65">
-<link rel="stylesheet" href="{% static 'css/app.css' %}?v=20261031-viewer">
+<link rel="stylesheet" href="{% static 'design-tokens/tokens.css' %}?v=20261102">
+<link rel="stylesheet" href="{% static 'css/redesign.css' %}?v=20261104-s2">
+<link rel="stylesheet" href="{% static 'css/viewer.css' %}?v=20261102-t65">
+<link rel="stylesheet" href="{% static 'css/app.css' %}?v=20261102">
 </head>
 <body>
 
@@ -143,6 +143,10 @@
     <button class="tbtn" onclick="rotatePage()" title="Повернуть" type="button">⟲</button>
     <button class="tbtn" onclick="togglePan()" title="Рука" type="button">✋</button>
     <button class="tbtn" onclick="toggleSelect()" title="Выделение" type="button">⍝</button>
+    <button class="tbtn active" id="minimapToggle" onclick="toggleMinimap()" type="button"
+            title="Мини-карта: превью листа и видимой области" aria-label="Мини-карта">
+      <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.4"/><rect x="8" y="7" width="4.5" height="4" fill="currentColor" opacity="0.55"/></svg>
+    </button>
   </div>
 </div>
 
@@ -362,9 +366,10 @@
 
 <script src="{% static 'js/vendor/bootstrap.bundle.min.js' %}"></script>
 <script src="{% static 'js/pdfjs/pdf.min.js' %}"></script>
-<script src="{% static 'js/sync.js' %}?v=20261031-viewer"></script>
-<script src="{% static 'js/pdf_viewer.js' %}?v=20261101-t65"></script>
-<script src="{% static 'js/splitter.js' %}?v=20261031-viewer"></script>
+<script src="{% static 'js/design-tokens.js' %}?v=20261102"></script>
+<script src="{% static 'js/sync.js' %}?v=20261102"></script>
+<script src="{% static 'js/pdf_viewer.js' %}?v=20261102-t65"></script>
+<script src="{% static 'js/splitter.js' %}?v=20261102"></script>
 <script>
   function changeVersion(value) {
     if (typeof window.closePdfComparison === 'function') {
@@ -423,12 +428,6 @@
     document.getElementById('list').style.display = 'block';
     document.getElementById('detail').style.display = 'none';
     updateIssueCounters();
-  }
-
-  function setMinimapActive(button) {
-    document.querySelectorAll('#minimap .thumb').forEach(function (thumb) {
-      thumb.classList.toggle('active', thumb === button);
-    });
   }
 
   function openIssueCard(id) {

@@ -1,0 +1,132 @@
+{% extends 'storage/base.html' %}
+
+{% block title %}Проекты — Stream-CAD{% endblock %}
+
+{% block topbar %}
+    {% include 'storage/_topbar.html' with topbar_company=projects.0.company topbar_title="Проекты" %}
+{% endblock %}
+
+{% block content %}
+<main class="container py-3 pb-5">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h1 class="h3 mb-0">Проекты</h1>
+        {% if can_create_project %}
+            <button type="button"
+                    class="btn btn-primary btn-sm"
+                    id="openCreateProject"
+                    data-bs-toggle="modal"
+                    data-bs-target="#createProjectModal">
+                <i class="bi bi-plus-lg me-1" aria-hidden="true"></i>Создать проект
+            </button>
+        {% endif %}
+    </div>
+    {% if messages %}
+        {% for message in messages %}
+            <div class="alert {% if message.tags == 'error' %}alert-danger{% else %}alert-{{ message.tags }}{% endif %}">{{ message }}</div>
+        {% endfor %}
+    {% endif %}
+    <div class="card shadow-sm">
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th>Шифр</th>
+                        <th>Название</th>
+                        <th>Заказчик</th>
+                        <th>Статус</th>
+                    </tr>
+                </thead>
+                <tbody>
+                {% for project in projects %}
+                    <tr data-href="{% url 'storage:project_detail' project.pk %}" class="project-row" title="Открыть проект {{ project.name }}">
+                        <td class="fw-semibold"><span class="cde-chip">{{ project.code }}</span></td>
+                        <td><a href="{% url 'storage:project_detail' project.pk %}">{{ project.name }}</a></td>
+                        <td>{{ project.customer|default:"—" }}</td>
+                        <td>
+                            <span class="cde-badge {% if project.status == 'active' %}cde-badge--active{% else %}cde-badge--archived{% endif %}">
+                                {{ project.get_status_display }}
+                            </span>
+                        </td>
+                    </tr>
+                {% empty %}
+                    <tr>
+                        <td colspan="4" class="text-center text-muted py-4">Проектов пока нет</td>
+                    </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</main>
+
+{% if can_create_project %}
+    <div class="modal fade settings-modal" id="createProjectModal" tabindex="-1" aria-hidden="true" data-role="project-create-modal">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <form method="post" action="{% url 'storage:project_create' %}">
+                    {% csrf_token %}
+                    <div class="modal-header">
+                        <h5 class="modal-title">Новый проект</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрыть"></button>
+                    </div>
+                    <div class="modal-body">
+                        <div class="row g-2">
+                            <div class="col-5">
+                                <label class="form-label small" for="projectCode">Шифр</label>
+                                <input class="form-control form-control-sm" id="projectCode" name="code" required maxlength="50" placeholder="28-10-26-ТЕСТ">
+                            </div>
+                            <div class="col-7">
+                                <label class="form-label small" for="projectName">Название</label>
+                                <input class="form-control form-control-sm" id="projectName" name="name" required maxlength="255" placeholder="ЖК Тестовый">
+                            </div>
+                            <div class="col-5">
+                                <label class="form-label small" for="projectBaseCode">Базовый шифр</label>
+                                <input class="form-control form-control-sm" id="projectBaseCode" name="base_code" maxlength="50" placeholder="2345-12">
+                            </div>
+                            <div class="col-7">
+                                <label class="form-label small" for="projectTemplate">Шаблон структуры</label>
+                                <select class="form-select form-select-sm" id="projectTemplate" name="template_key">
+                                    <option value="">Без шаблона</option>
+                                    {% for key, template in project_templates.items %}
+                                        <option value="{{ key }}">{{ template.name }}</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                            <div class="col-12">
+                                <label class="form-label small" for="projectCustomer">Заказчик</label>
+                                <input class="form-control form-control-sm" id="projectCustomer" name="customer" maxlength="255">
+                            </div>
+                            <div class="col-12">
+                                <label class="form-label small" for="projectGip">ГИП</label>
+                                <select class="form-select form-select-sm" id="projectGip" name="gip">
+                                    <option value="">Не назначен</option>
+                                    {% for candidate in gip_candidates %}
+                                        <option value="{{ candidate.pk }}">{{ candidate.get_full_name|default:candidate.username }}</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-dismiss="modal">Отмена</button>
+                        <button type="submit" class="btn btn-primary btn-sm">Создать проект</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+{% endif %}
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    document.querySelectorAll('tr[data-href]').forEach(function (row) {
+        row.addEventListener('click', function (event) {
+            if (event.target.closest('a, button, form, input, select')) {
+                return;
+            }
+            window.location.href = row.dataset.href;
+        });
+    });
+</script>
+{% endblock %}

@@ -1,4 +1,4 @@
-"""Живой дедлайн-бейдж для карточки замечания.
+"""Живой дедлайн-бейдж и статус-бейдж для карточки замечания.
 
 Возвращает человеческий ярлык («осталось 5 дней», «просрочено на 2 дня»)
 и CSS-класс из дизайн-токенов (cde-deadline / --soon / --overdue).
@@ -6,10 +6,13 @@
     {% load issue_extras %}
     {{ issue|deadline_label }}
     {{ issue|deadline_class }}
+    <span class="{{ issue|status_badge_class }}">{{ issue.get_status_display }}</span>
 """
 from datetime import date
 
 from django import template
+
+from storage.domain.design_colors import DEFAULT_STATUS, ISSUE_STATUS_CLASS
 
 register = template.Library()
 
@@ -58,3 +61,12 @@ def deadline_class(issue):
     if days <= 3:
         return "cde-deadline cde-deadline--soon"
     return "cde-deadline"
+
+
+@register.filter
+def status_badge_class(issue):
+    """CSS-класс статусного бейджа из дизайн-токенов (единый источник:
+    tokens.json -> design_colors.py), чтобы реестр, вьювер и экспорт
+    красили статусы одинаково."""
+    status = getattr(issue, "status", "")
+    return ISSUE_STATUS_CLASS.get(status) or ISSUE_STATUS_CLASS[DEFAULT_STATUS]

@@ -4,12 +4,20 @@ import re
 from django.contrib import messages
 from django.contrib.auth import get_user_model
 from django.contrib.auth.decorators import login_required
+from django.contrib.auth.mixins import LoginRequiredMixin
 from django.core.exceptions import PermissionDenied
-from django.http import HttpResponseForbidden, JsonResponse
+from django.db.models import Count, Q
+from django.http import FileResponse, HttpResponseForbidden, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
+from django.urls import reverse
+from django.utils import timezone
 from django.utils.dateparse import parse_date
+from django.utils.text import get_valid_filename
 from django.views import View
-from django.views.generic import CreateView
+from django.views.generic import CreateView, ListView
+from io import BytesIO
+from openpyxl import Workbook
+from openpyxl.styles import Alignment, Font, PatternFill
 
 from storage.adapters.views import _issue_payload
 from storage.domain.services import (
@@ -18,6 +26,7 @@ from storage.domain.services import (
     check_issue_permission,
     check_read_permission,
     get_accessible_documents,
+    get_accessible_projects,
     create_issue,
     delete_issue,
     delete_issue_crop,
@@ -328,3 +337,261 @@ def add_comment(request, issue_id):
     return redirect(
         request.META.get('HTTP_REFERER', 'storage:project_list')
     )
+
+
+# ============================================================================
+# Реестр замечаний проекта
+# ============================================================================
+
+# Группы статусов — те же, что в табах панели замечаний вьювера,
+# чтобы «Открытые» означало одно и то же на обоих экранах.
+ISSUE_STATUS_GROUPS = {
+    'open': ('NEW', 'REJECTED', 'DISCUSSION'),
+    'progress': ('IN_PROGRESS',),
+    'review': ('DONE',),
+    'closed': ('CLOSED', 'CANCELLED'),
+}
+ACTIVE_ISSUE_STATUSES = ISSUE_STATUS_GROUPS['open'] + ISSUE_STATUS_GROUPS['progress']
+
+
+def _registry_issues(user, project):
+    """Все замечания проекта, видимые пользователю (по правам на документы)."""
+    return Issue.objects.filter(
+        document__project=project,
+        document__in=get_accessible_documents(user),
+    ).select_related(
+        'document',
+        'document__project',
+        'document__section',
+        'author',
+        'assignee',
+    )
+
+
+def _apply_registry_filters(queryset, params):
+    """Точечные GET-фильтры реестра (те же параметры принимает Excel-экспорт)."""
+    status = (params.get('status') or '').strip()
+    if status in dict(Issue.STATUS_CHOICES):
+        queryset = queryset.filter(status=status)
+
+    flag = (params.get('flag') or '').strip()
+    if flag == 'open':
+        queryset = queryset.exclude(status__in=ISSUE_STATUS_GROUPS['closed'])
+    elif flag == 'closed':
+        queryset = queryset.filter(status__in=ISSUE_STATUS_GROUPS['closed'])
+    elif flag == 'overdue':
+        queryset = queryset.filter(
+            due_date__isnull=False,
+            due_date__lt=timezone.localdate(),
+            status__in=ACTIVE_ISSUE_STATUSES,
+        )
+
+    assignee = (params.get('assignee') or '').strip()
+    if assignee == 'none':
+        queryset = queryset.filter(assignee__isnull=True)
+    elif assignee.isdigit():
+        queryset = queryset.filter(assignee_id=int(assignee))
+
+    query = (params.get('q') or '').strip()
+    if query:
+        queryset = queryset.filter(
+            Q(description__icontains=query)
+            | Q(document__code__icontains=query)
+            | Q(document__name__icontains=query)
+        )
+    return queryset
+
+
+def _registry_context_counts(user, project):
+    """Счётчики по группам статусов + просрочка (по полному, нефильнутому набору)."""
+    counts = dict(
+        _registry_issues(user, project)
+        .values_list('status')
+        .annotate(total=Count('pk'))
+    )
+    today = timezone.localdate()
+    overdue = _registry_issues(user, project).filter(
+        due_date__isnull=False,
+        due_date__lt=today,
+        status__in=ACTIVE_ISSUE_STATUSES,
+    ).count()
+    groups = {
+        group: sum(counts.get(status, 0) for status in statuses)
+        for group, statuses in ISSUE_STATUS_GROUPS.items()
+    }
+    return {
+        'total': sum(counts.values()),
+        'groups': groups,
+        'overdue': overdue,
+    }
+
+
+class IssueRegistryView(LoginRequiredMixin, ListView):
+    """Реестр всех замечаний проекта: один экран — вся переписка по качеству.
+
+    Отвечает на вопрос ГИПа «что требует внимания прямо сейчас»:
+    счётчики по группам статусов, просрочка, фильтры, Excel-выгрузка.
+    """
+
+    template_name = 'issues/registry.html'
+    context_object_name = 'issues'
+    paginate_by = 50
+
+    def dispatch(self, request, *args, **kwargs):
+        self.project = get_object_or_404(
+            get_accessible_projects(request.user),
+            pk=kwargs['project_id'],
+        )
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_queryset(self):
+        return _apply_registry_filters(
+            _registry_issues(self.request.user, self.project),
+            self.request.GET,
+        ).order_by('-created_at')
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        user = self.request.user
+        project = self.project
+
+        assignee_choices = list(
+            get_user_model()
+            .objects.filter(
+                assigned_issues__document__project=project,
+                assigned_issues__document__in=get_accessible_documents(user),
+            )
+            .distinct()
+            .order_by('last_name', 'first_name')
+        )
+
+        context.update({
+            'project': project,
+            'status_choices': Issue.STATUS_CHOICES,
+            'assignee_choices': assignee_choices,
+            'counts': _registry_context_counts(user, project),
+            'filters': {
+                'status': (self.request.GET.get('status') or '').strip(),
+                'flag': (self.request.GET.get('flag') or '').strip(),
+                'assignee': (self.request.GET.get('assignee') or '').strip(),
+                'q': (self.request.GET.get('q') or '').strip(),
+            },
+            'export_url': self._export_url(),
+        })
+        return context
+
+    def _export_url(self):
+        """Ссылка на Excel-выгрузку с текущими фильтрами."""
+        query = self.request.GET.urlencode()
+        url = reverse('issues:issue_registry_export', args=[self.project.pk])
+        return url + ('?' + query if query else '')
+
+
+class IssueRegistryExportView(LoginRequiredMixin, View):
+    """Excel-выгрузка реестра (с учётом активных фильтров)."""
+
+    def get(self, request, project_id):
+        project = get_object_or_404(
+            get_accessible_projects(request.user),
+            pk=project_id,
+        )
+        issues = list(
+            _apply_registry_filters(
+                _registry_issues(request.user, project),
+                request.GET,
+            ).order_by('document__code', 'pk')
+        )
+
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.title = 'Замечания'
+
+        headers = [
+            '№', 'Документ', 'Раздел', 'Статус', 'Текст замечания',
+            'Автор', 'Ответственный', 'Срок ответа', 'Просрочено',
+            'Создано', 'Ответ', 'Закрыто',
+        ]
+        sheet.append(headers)
+        header_fill = PatternFill('solid', fgColor='EFEFEC')
+        for cell in sheet[1]:
+            cell.font = Font(bold=True)
+            cell.fill = header_fill
+            cell.alignment = Alignment(vertical='center')
+        sheet.freeze_panes = 'A2'
+        sheet.auto_filter.ref = sheet.dimensions
+
+        today = timezone.localdate()
+        for row, issue in enumerate(issues, start=2):
+            doc = issue.document
+            sheet.cell(row=row, column=1, value=issue.pk)
+
+            code_cell = sheet.cell(row=row, column=2, value=doc.code)
+            code_cell.hyperlink = request.build_absolute_uri(
+                reverse('storage:document_detail', args=[doc.pk])
+            )
+            code_cell.font = Font(color='0563C1', underline='single')
+
+            sheet.cell(row=row, column=3, value=doc.section.code if doc.section else '')
+            sheet.cell(row=row, column=4, value=issue.get_status_display())
+
+            text_cell = sheet.cell(row=row, column=5, value=issue.description)
+            text_cell.alignment = Alignment(wrap_text=True, vertical='top')
+
+            sheet.cell(
+                row=row, column=6,
+                value=issue.author.get_full_name() or issue.author.username,
+            )
+            sheet.cell(
+                row=row, column=7,
+                value=(
+                    issue.assignee.get_full_name() or issue.assignee.username
+                ) if issue.assignee else '',
+            )
+            sheet.cell(
+                row=row, column=8,
+                value=issue.due_date.strftime('%d.%m.%Y') if issue.due_date else '',
+            )
+            overdue = bool(
+                issue.due_date
+                and issue.due_date < today
+                and issue.status in ACTIVE_ISSUE_STATUSES
+            )
+            overdue_cell = sheet.cell(row=row, column=9, value='да' if overdue else '')
+            if overdue:
+                overdue_cell.font = Font(color='B02A37', bold=True)
+            sheet.cell(
+                row=row, column=10,
+                value=timezone.localtime(issue.created_at).strftime('%d.%m.%Y %H:%M'),
+            )
+            answer_cell = sheet.cell(row=row, column=11, value=issue.answer_text)
+            answer_cell.alignment = Alignment(wrap_text=True, vertical='top')
+            sheet.cell(
+                row=row, column=12,
+                value=(
+                    timezone.localtime(issue.closed_at).strftime('%d.%m.%Y')
+                    if issue.closed_at else ''
+                ),
+            )
+
+        for column, width in {
+            'A': 6, 'B': 18, 'C': 10, 'D': 16, 'E': 52, 'F': 24, 'G': 24,
+            'H': 13, 'I': 12, 'J': 17, 'K': 40, 'L': 12,
+        }.items():
+            sheet.column_dimensions[column].width = width
+
+        buffer = BytesIO()
+        workbook.save(buffer)
+        buffer.seek(0)
+
+        filename = 'reestr_zamechanij_{code}.xlsx'.format(
+            code=get_valid_filename(project.code or project.pk),
+        )
+        return FileResponse(
+            buffer,
+            as_attachment=True,
+            filename=filename,
+            content_type=(
+                'application/vnd.openxmlformats-officedocument'
+                '.spreadsheetml.sheet'
+            ),
+        )

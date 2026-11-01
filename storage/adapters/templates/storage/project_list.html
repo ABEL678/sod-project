@@ -1,18 +1,12 @@
-{% load static %}
-<!DOCTYPE html>
-<html lang="ru">
-<head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Проекты — Stream-CAD</title>
-    <link rel="stylesheet" href="{% static 'css/bootstrap.min.css' %}">
-    <link rel="stylesheet" href="{% static 'design-tokens/tokens.css' %}?v=20261101">
-    <link rel="stylesheet" href="{% static 'css/redesign.css' %}?v=20261103">
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
-    <link rel="stylesheet" href="{% static 'css/app.css' %}">
-</head>
-<body class="bg-light">
-{% include 'storage/_topbar.html' with topbar_company=projects.0.company topbar_title="Проекты" %}
+{% extends 'storage/base.html' %}
+
+{% block title %}Проекты — Stream-CAD{% endblock %}
+
+{% block topbar %}
+    {% include 'storage/_topbar.html' with topbar_company=projects.0.company topbar_title="Проекты" %}
+{% endblock %}
+
+{% block content %}
 <main class="container py-3 pb-5">
     <div class="d-flex justify-content-between align-items-center mb-3">
         <h1 class="h3 mb-0">Проекты</h1>
@@ -49,7 +43,7 @@
                         <td><a href="{% url 'storage:project_detail' project.pk %}">{{ project.name }}</a></td>
                         <td>{{ project.customer|default:"—" }}</td>
                         <td>
-                            <span class="cde-badge {% if project.status == 'active' %}cde-badge--done{% else %}cde-badge--closed{% endif %}">
+                            <span class="cde-badge {% if project.status == 'active' %}cde-badge--active{% else %}cde-badge--archived{% endif %}">
                                 {{ project.get_status_display }}
                             </span>
                         </td>
@@ -121,8 +115,10 @@
             </div>
         </div>
     </div>
-    <script src="{% static 'js/vendor/bootstrap.bundle.min.js' %}"></script>
 {% endif %}
+{% endblock %}
+
+{% block extra_js %}
 <script>
     document.querySelectorAll('tr[data-href]').forEach(function (row) {
         row.addEventListener('click', function (event) {
@@ -133,5 +129,4 @@
         });
     });
 </script>
-</body>
-</html>
+{% endblock %}

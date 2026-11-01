@@ -1,0 +1,509 @@
+{% extends 'storage/base.html' %}
+{% load static %}
+
+{% block title %}{{ project.name }} — Stream-CAD{% endblock %}
+
+{% block body_class %}app-body{% endblock %}
+
+{% comment %}
+Экран проекта — полноэкранный: топбар живёт ВНУТРИ .app-shell (flex на 100vh),
+поэтому базовый блок топбара отключаем и включаем его в content.
+{% endcomment %}
+{% block topbar %}{% endblock %}
+
+{% block content %}
+<div class="app-shell" id="appShell">
+    {% include 'storage/_topbar.html' with topbar_project=project %}
+
+    <div id="recent-documents" class="mt-3 px-3">
+        <h5>Последние документы</h5>
+        <ul class="list-unstyled">
+            {% for doc in recent_documents %}
+                <li>
+                    <a href="{% url 'storage:document_detail' doc.pk %}">
+                        {{ doc.code }} — {{ doc.name }}
+                    </a>
+                </li>
+            {% endfor %}
+        </ul>
+    </div>
+
+    <div class="app-layout" id="appLayout">
+        <aside class="app-sidebar" id="projectSidebar" data-role="sidebar">
+            <div class="sidebar-header">
+                <span>РАЗДЕЛЫ</span>
+                <div class="sidebar-header-actions">
+                    {% if can_manage_structure %}
+                        <button type="button"
+                                class="btn btn-sm btn-primary"
+                                id="openSectionModal"
+                                data-bs-toggle="modal"
+                                data-bs-target="#sectionCreateModal"
+                                title="Добавить раздел"
+                                aria-label="Добавить раздел">
+                            <i class="bi bi-plus-lg" aria-hidden="true"></i> Раздел
+                        </button>
+                    {% endif %}
+                    <button type="button"
+                            class="btn btn-sm btn-light border-0 px-1 py-0"
+                            id="sidebarCollapse"
+                            title="Скрыть панель"
+                            aria-label="Скрыть панель">
+                        <i class="bi bi-chevron-left" aria-hidden="true"></i>
+                    </button>
+                </div>
+            </div>
+
+            <div class="sidebar-scroll" id="sectionList" data-role="section-list">
+                {% if project_folders %}
+                    <div class="sidebar-label">Папки проекта</div>
+                    <div class="list-group list-group-flush folder-tree-list">
+                        {% for folder in project_folders %}
+                            {% include 'storage/_folder_tree.html' with folder=folder %}
+                        {% endfor %}
+                    </div>
+                {% endif %}
+
+                {% for section in sections %}
+                    <div class="section-node list-group-item" data-section-node="{{ section.pk }}">
+                        <div class="section-row">
+                            <a class="section-item list-group-item-action {% if selected_section.pk == section.pk and not selected_folder %}active{% endif %}"
+                               href="{% url 'storage:project_detail' project.pk %}?section={{ section.pk }}{% if selected_view %}&amp;view={{ selected_view.pk }}{% endif %}"
+                               data-role="section-item"
+                               data-id="{{ section.pk }}"
+                               data-code="{{ section.code }}"
+                               data-name="{{ section.name }}"
+                               data-drop-section="{{ section.pk }}"
+                               data-drop-name="{{ section.code }} — {{ section.name }}">
+                                <i class="bi bi-folder2" aria-hidden="true"></i>
+                                <span class="fw-semibold section-code">{{ section.code }}</span>
+                                <span class="section-name" title="{{ section.name }}">{{ section.name }}</span>
+                                <span class="section-count" data-section-id="{{ section.pk }}" data-role="section-count">{{ section.document_count }}</span>
+                            </a>
+<div id="dndToast" class="dnd-toast d-none" role="status" aria-live="polite"></div>
+
+<div id="docRowMenu" class="dropdown-menu doc-row-menu" role="menu" aria-hidden="true">
+    <button type="button" class="dropdown-item" role="menuitem" data-doc-action="open">
+        <i class="bi bi-box-arrow-up-right me-2" aria-hidden="true"></i>Открыть
+    </button>
+    <button type="button" class="dropdown-item" role="menuitem" data-doc-action="versions">
+        <i class="bi bi-clock-history me-2" aria-hidden="true"></i>История версий
+    </button>
+    <button type="button" class="dropdown-item" role="menuitem" data-doc-action="share">
+        <i class="bi bi-link-45deg me-2" aria-hidden="true"></i>Скопировать ссылку
+    </button>
+    <button type="button" class="dropdown-item" role="menuitem" data-doc-action="move">
+        <i class="bi bi-folder-symlink me-2" aria-hidden="true"></i>Переместить в…
+    </button>
+    <div class="dropdown-divider"></div>
+    <button type="button" class="dropdown-item text-danger" role="menuitem" data-doc-action="delete">
+        <i class="bi bi-trash3 me-2" aria-hidden="true"></i>Удалить в корзину
+    </button>
+</div>
+
+<div class="modal fade" id="documentMoveModal" tabindex="-1" aria-labelledby="documentMoveTitle" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <form id="documentMoveForm">
+                {% csrf_token %}
+                <input type="hidden" name="document_id" id="documentMoveId">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="documentMoveTitle">Переместить документ</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрыть"></button>
+                </div>
+                <div class="modal-body">
+                    <label for="documentMoveFolder" class="form-label">Целевая папка</label>
+                    <select class="form-select" id="documentMoveFolder" name="folder_id">
+                        <option value="">Корень текущего раздела</option>
+                        {% for folder in all_folders %}
+                            <option value="{{ folder.pk }}">{{ folder.section.code|default:"Проект" }} / {{ folder.name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-dismiss="modal">Отмена</button>
+                    <button type="submit" class="btn btn-primary btn-sm">
+                        <i class="bi bi-folder-symlink me-1" aria-hidden="true"></i>Переместить
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+{% if can_manage_structure %}
+                                <button type="button"
+                                        class="btn btn-sm btn-link section-add-folder"
+                                        title="Создать папку в разделе"
+                                        aria-label="Создать папку в разделе"
+                                        hx-get="{% url 'storage:folder_create_form' project.pk %}?section={{ section.pk }}"
+                                        hx-target="#folderCreateModalBody"
+                                        hx-swap="innerHTML"
+                                        data-bs-toggle="modal"
+                                        data-bs-target="#folderCreateModal">
+                                    <i class="bi bi-folder-plus" aria-hidden="true"></i>
+                                </button>
+                            {% endif %}
+                        </div>
+
+                        {% if section.folder_nodes %}
+                            <div class="folder-tree-list ms-2">
+                                {% for folder in section.folder_nodes %}
+                                    {% include 'storage/_folder_tree.html' with folder=folder %}
+                                {% endfor %}
+                            </div>
+                        {% endif %}
+                    </div>
+                {% empty %}
+                    <div class="sidebar-empty">Разделов пока нет</div>
+                {% endfor %}
+            </div>
+
+            <div class="sidebar-footer">
+                <div class="upload-target" id="uploadTarget">Загрузка в {{ upload_target_name }}</div>
+                <input type="file" id="fileInput" multiple hidden>
+                <label for="fileInput"
+                       class="btn btn-primary btn-sm w-100"
+                       id="uploadBtn"
+                       data-role="upload-button">
+                    <i class="bi bi-plus-lg" aria-hidden="true"></i>
+                    Загрузить
+                </label>
+                <div id="uploadStatus" class="upload-status d-none">Загрузка…</div>
+            </div>
+        </aside>
+
+        <div class="sidebar-resizer"
+             id="sidebarResizer"
+             role="separator"
+             aria-orientation="vertical"
+             aria-label="Изменить ширину панели разделов"
+             title="Изменить ширину панели"></div>
+
+        <button type="button"
+                class="sidebar-restore"
+                id="sidebarRestore"
+                title="Показать панель"
+                aria-label="Показать панель">
+            <i class="bi bi-chevron-right" aria-hidden="true"></i>
+        </button>
+
+        <main class="app-main" data-role="main">
+            {% if messages %}
+                <div class="flash-stack">
+                    {% for message in messages %}
+                        <div class="alert {% if message.tags == 'error' %}alert-danger{% else %}alert-{{ message.tags }}{% endif %} mb-0">{{ message }}</div>
+                    {% endfor %}
+                </div>
+            {% endif %}
+
+            {% if can_manage_participants %}
+                <nav class="app-tabs" aria-label="Разделы проекта">
+                    <a class="app-tab {% if active_tab == 'documents' %}active{% endif %}"
+                       href="{% url 'storage:project_detail' project.pk %}{% if selected_view %}?view={{ selected_view.pk }}{% endif %}">
+                        <i class="bi bi-table" aria-hidden="true"></i>
+                        Документы
+                        <span class="badge text-bg-light border">{{ documents|length }}</span>
+                    </a>
+                    <a class="app-tab {% if active_tab == 'participants' %}active{% endif %}"
+                       href="{% url 'storage:project_detail' project.pk %}?tab=participants">
+                        <i class="bi bi-people" aria-hidden="true"></i>
+                        Участники
+                    </a>
+                    <a class="app-tab {% if active_tab == 'trash' %}active{% endif %}"
+                       href="{% url 'storage:project_detail' project.pk %}?tab=trash">
+                        <i class="bi bi-trash3" aria-hidden="true"></i>
+                        Корзина
+                    </a>
+                </nav>
+            {% endif %}
+
+            {% if active_tab == 'participants' and can_manage_participants %}
+                <div class="toolbar" data-role="participants-toolbar">
+                    <span class="fw-semibold">Участники проекта</span>
+                    <span class="badge text-bg-light border">{{ participants|length }}</span>
+                    <span class="toolbar-spacer"></span>
+                    <span class="text-muted small">
+                        <i class="bi bi-shield-lock me-1" aria-hidden="true"></i>Роли меняет ГИП или администратор
+                    </span>
+                </div>
+
+                <div class="participants-wrap">
+                    <table class="table table-hover align-middle participant-table" data-role="participants-table">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Пользователь</th>
+                                <th style="width: 170px;">Роль в проекте</th>
+                                <th class="participant-actions text-end">Изменить роль</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                        {% for membership in participants %}
+                            <tr>
+                                <td>
+                                    <div class="participant-user">
+                                        <span class="participant-avatar" aria-hidden="true">{{ membership.user.username|first|upper }}</span>
+                                        <span class="text-truncate">
+                                            <span class="participant-name">{{ membership.user.get_full_name|default:membership.user.username }}</span>
+                                            <span class="participant-login">@{{ membership.user.username }}</span>
+                                        </span>
+                                    </div>
+                                </td>
+                                <td>
+                                    <span class="role-badge {% if membership.role_in_project == 'gip' %}role-gip{% elif membership.role_in_project == 'developer' %}role-developer{% elif membership.role_in_project == 'contractor' %}role-contractor{% else %}role-viewer{% endif %}">
+                                        {{ membership.get_role_in_project_display }}
+                                    </span>
+                                </td>
+                                <td>
+                                    <form method="post"
+                                          action="{% url 'storage:membership_role_update' project.pk membership.pk %}"
+                                          class="d-flex gap-1 justify-content-end">
+                                        {% csrf_token %}
+                                        <select name="role" class="form-select form-select-sm" aria-label="Роль участника {{ membership.user.username }}">
+                                            {% for value, label in membership_role_choices %}
+                                                <option value="{{ value }}" {% if membership.role_in_project == value %}selected{% endif %}>{{ label }}</option>
+                                            {% endfor %}
+                                        </select>
+                                        <button type="submit" class="btn btn-sm btn-primary" title="Сохранить роль" aria-label="Сохранить роль">
+                                            <i class="bi bi-check-lg" aria-hidden="true"></i>
+                                        </button>
+                                    </form>
+                                </td>
+                            </tr>
+                        {% empty %}
+                            <tr>
+                                <td colspan="3" class="text-center text-muted py-4">Участников пока нет</td>
+                            </tr>
+                        {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            {% elif active_tab == 'trash' and can_manage_participants %}
+                <div class="toolbar" data-role="trash-toolbar">
+                    <span class="fw-semibold"><i class="bi bi-trash3 me-2" aria-hidden="true"></i>Корзина</span>
+                    <span class="badge text-bg-light border">{{ trash.documents|length }} док. / {{ trash.folders|length }} папок</span>
+                    <span class="toolbar-spacer"></span>
+                    {% if can_purge_trash %}
+                        <form method="post"
+                              action="{% url 'storage:trash_clear' project.pk %}"
+                              class="mb-0"
+                              onsubmit="return confirm('Файлы будут удалены с диска безвозвратно. Очистить корзину?');">
+                            {% csrf_token %}
+                            <button type="submit" class="btn btn-sm btn-outline-danger" id="trashClearButton">
+                                <i class="bi bi-trash3-fill me-1" aria-hidden="true"></i>Очистить корзину
+                            </button>
+                        </form>
+                    {% endif %}
+                    <span class="text-muted small">Удалённые элементы можно восстановить</span>
+                </div>
+                <div class="trash-wrap">
+                    <h6 class="trash-title">Документы</h6>
+                    <div class="table-responsive">
+                        <table class="table table-hover table-bordered align-middle trash-table mb-3">
+                            <thead class="table-light">
+                                <tr>
+                                    <th>Шифр</th>
+                                    <th>Название</th>
+                                    <th>Раздел</th>
+                                    <th>Удалён</th>
+                                    <th class="text-end">Действие</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                            {% for document in trash.documents %}
+                                <tr>
+                                    <td class="fw-semibold">{{ document.code }}</td>
+                                    <td>{{ document.name }}</td>
+                                    <td>{{ document.section.code }}</td>
+                                    <td class="text-muted small">{{ document.deleted_at|date:"d.m.Y H:i" }}</td>
+                                    <td class="text-end">
+                                        <form method="post" action="{% url 'storage:trash_restore' project.pk %}" class="d-inline">
+                                            {% csrf_token %}
+                                            <input type="hidden" name="item_type" value="document">
+                                            <input type="hidden" name="item_id" value="{{ document.pk }}">
+                                            <button type="submit" class="btn btn-sm btn-outline-primary">
+                                                <i class="bi bi-arrow-counterclockwise me-1" aria-hidden="true"></i>Восстановить
+                                            </button>
+                                        </form>
+                                    </td>
+                                </tr>
+                            {% empty %}
+                                <tr><td colspan="5" class="text-center text-muted py-4">Документов в корзине нет</td></tr>
+                            {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <h6 class="trash-title mt-4">Папки</h6>
+                    <div class="table-responsive">
+                        <table class="table table-hover table-bordered align-middle trash-table mb-0">
+                            <thead class="table-light">
+                                <tr>
+                                    <th>Название</th>
+                                    <th>Раздел</th>
+                                    <th>Удалена</th>
+                                    <th class="text-end">Действие</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                            {% for folder in trash.folders %}
+                                <tr>
+                                    <td class="fw-semibold"><i class="bi bi-folder2 me-2" aria-hidden="true"></i>{{ folder.name }}</td>
+                                    <td>{{ folder.section.code|default:"Проект" }}</td>
+                                    <td class="text-muted small">{{ folder.deleted_at|date:"d.m.Y H:i" }}</td>
+                                    <td class="text-end">
+                                        <form method="post" action="{% url 'storage:trash_restore' project.pk %}" class="d-inline">
+                                            {% csrf_token %}
+                                            <input type="hidden" name="item_type" value="folder">
+                                            <input type="hidden" name="item_id" value="{{ folder.pk }}">
+                                            <button type="submit" class="btn btn-sm btn-outline-primary">
+                                                <i class="bi bi-arrow-counterclockwise me-1" aria-hidden="true"></i>Восстановить
+                                            </button>
+                                        </form>
+                                    </td>
+                                </tr>
+                            {% empty %}
+                                <tr><td colspan="4" class="text-center text-muted py-4">Папок в корзине нет</td></tr>
+                            {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            {% else %}
+                {% include 'storage/_documents_panel.html' %}
+            {% endif %}
+        </main>
+    </div>
+</div>
+
+{% if can_manage_structure %}
+    <div class="modal fade" id="sectionCreateModal" tabindex="-1" aria-labelledby="sectionCreateTitle" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <form method="post" action="{% url 'storage:section_create' project.pk %}">
+                    {% csrf_token %}
+                    <div class="modal-header">
+                        <h5 class="modal-title" id="sectionCreateTitle">Новый раздел</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрыть"></button>
+                    </div>
+                    <div class="modal-body">
+                        <div class="row g-2">
+                            <div class="col-4">
+                                <label class="form-label small" for="sectionCodeInput">Код</label>
+                                <input class="form-control form-control-sm" id="sectionCodeInput" name="code" maxlength="20" required placeholder="АР">
+                            </div>
+                            <div class="col-8">
+                                <label class="form-label small" for="sectionNameInput">Название</label>
+                                <input class="form-control form-control-sm" id="sectionNameInput" name="name" maxlength="255" required placeholder="Архитектурные решения">
+                            </div>
+                            <div class="col-4">
+                                <label class="form-label small" for="sectionOrderInput">Порядок</label>
+                                <input class="form-control form-control-sm" id="sectionOrderInput" name="order" type="number" value="0">
+                            </div>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-dismiss="modal">Отмена</button>
+                        <button type="submit" class="btn btn-primary btn-sm">Создать раздел</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal fade" id="folderCreateModal" tabindex="-1" aria-labelledby="folderCreateTitle" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="folderCreateTitle">Новая папка</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрыть"></button>
+                </div>
+                <div id="folderCreateModalBody">
+                    <div class="modal-body text-muted small">Загрузка формы…</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal fade" id="folderRenameModal" tabindex="-1" aria-labelledby="folderRenameTitle" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="folderRenameTitle">Переименовать папку</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрыть"></button>
+                </div>
+                <div id="folderRenameModalBody">
+                    <div class="modal-body text-muted small">Загрузка формы…</div>
+                </div>
+            </div>
+        </div>
+    </div>
+{% endif %}
+
+{% if active_tab != 'participants' %}
+    <div class="modal fade" id="viewSettingsModal" tabindex="-1" aria-labelledby="viewSettingsTitle" aria-hidden="true" data-role="settings-modal">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <form method="post" action="{% url 'storage:document_view_save' project.pk %}" id="viewSettingsForm">
+                    {% csrf_token %}
+                    <div class="modal-header">
+                        <h5 class="modal-title" id="viewSettingsTitle">
+                            <i class="bi bi-sliders me-1" aria-hidden="true"></i>Настройки вида
+                        </h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрыть"></button>
+                    </div>
+                    <div class="modal-body">
+                        <div class="settings-section-title">Столбцы таблицы</div>
+                        <div class="settings-columns">
+                            {% for column in column_defs %}
+                                <div class="form-check">
+                                    <input class="form-check-input column-toggle"
+                                           type="checkbox"
+                                           name="columns"
+                                           value="{{ column.key }}"
+                                           id="column-{{ column.key }}"
+                                           data-column="{{ column.key }}"
+                                           {% if column.visible %}checked{% endif %}>
+                                    <label class="form-check-label" for="column-{{ column.key }}">{{ column.label }}</label>
+                                </div>
+                            {% endfor %}
+                        </div>
+
+                        <div class="mt-3">
+                            <label class="settings-section-title d-block" for="viewName">Название вида</label>
+                            <input type="text" name="name" id="viewName" class="form-control" placeholder="Например: Только шифры и статусы" maxlength="100" required>
+                        </div>
+
+                        {% if can_manage_participants %}
+                            <div class="form-check mt-2">
+                                <input class="form-check-input" type="checkbox" name="is_shared" id="isShared">
+                                <label class="form-check-label" for="isShared">Общий вид для всех участников проекта</label>
+                            </div>
+                        {% endif %}
+
+                        <input type="hidden" name="section" value="{{ active_filters.section|default:'' }}">
+                        <input type="hidden" name="doc_type" value="{{ active_filters.doc_type|default:'' }}">
+                        <input type="hidden" name="status" value="{{ active_filters.status|default:'' }}">
+                        <input type="hidden" name="sort" value="{{ active_sort }}">
+                        <input type="hidden" name="widths" id="viewWidthsInput" value="{}">
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-dismiss="modal">Отмена</button>
+                        <button type="submit" class="btn btn-primary btn-sm">
+                            <i class="bi bi-check2 me-1" aria-hidden="true"></i>Сохранить вид
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+{% endif %}
+
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="{% static 'js/vendor/htmx.min.js' %}"></script>
+<script src="{% static 'js/vendor/Sortable.min.js' %}"></script>
+<script src="{% static 'js/app.js' %}"></script>
+{% endblock %}

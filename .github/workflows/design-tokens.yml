@@ -1,0 +1,34 @@
+name: design-tokens
+
+# Дизайн-токены: единственный источник правды — static/design-tokens/tokens.json.
+# tokens.css / design-tokens.js / design_colors.py генерируются скриптом.
+# CI не даёт им разъехаться: если кто-то правил сгенерированный файл руками
+# (или забыл перегенерировать после правки tokens.json) — сборка падает.
+on:
+  push:
+    paths:
+      - 'static/design-tokens/**'
+      - 'static/js/design-tokens.js'
+      - 'storage/domain/design_colors.py'
+      - 'scripts/build_design_tokens.py'
+      - '.github/workflows/design-tokens.yml'
+  pull_request:
+    paths:
+      - 'static/design-tokens/**'
+      - 'static/js/design-tokens.js'
+      - 'storage/domain/design_colors.py'
+      - 'scripts/build_design_tokens.py'
+      - '.github/workflows/design-tokens.yml'
+
+jobs:
+  drift-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Проверка дрейфа дизайн-токенов
+        run: python scripts/build_design_tokens.py --check

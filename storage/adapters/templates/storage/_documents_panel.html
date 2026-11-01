@@ -10,6 +10,11 @@
 
     {% include 'storage/_breadcrumbs.html' %}
 
+    {% comment %}
+    Спринт 2: фильтры применяются сразу — по change у селектов и с
+    задержкой 350 мс при наборе в поиске. Кнопка «Найти» больше не нужна
+    (скрытый submit оставлен для доступности/Enter).
+    {% endcomment %}
     <form id="filtersForm"
           class="filter-panel"
           method="get"
@@ -19,7 +24,8 @@
           hx-select="#documentsPanel"
           hx-swap="outerHTML"
           hx-push-url="true"
-          hx-trigger="change, submit, keyup changed delay:350ms from:#quickFilter">
+          hx-trigger="change, keyup changed delay:350ms from:find input[name='q'], submit"
+          hx-indicator="#documentsPanel">
         <input type="hidden" name="tab" value="documents">
         {% if selected_view %}
             <input type="hidden" name="view" value="{{ selected_view.pk }}">
@@ -85,12 +91,13 @@
                 {{ filter.form.q }}
             </div>
             <div class="filter-actions">
-                <button type="submit" class="btn btn-primary btn-sm">
-                    <i class="bi bi-search me-1" aria-hidden="true"></i>Найти
-                </button>
+                {% comment %}доступность: Enter в любом поле всё ещё отправляет форму{% endcomment %}
+                <button type="submit" class="visually-hidden" aria-hidden="true" tabindex="-1">Найти</button>
                 <a href="{% url 'storage:project_detail' project.pk %}"
                    class="btn btn-outline-secondary btn-sm"
-                   title="Сбросить фильтры">Сбросить</a>
+                   title="Сбросить фильтры">
+                    <i class="bi bi-x-lg me-1" aria-hidden="true"></i>Сбросить
+                </a>
             </div>
         </div>
     </form>
@@ -110,6 +117,17 @@
         </div>
         <div class="toolbar-spacer"></div>
         <div class="toolbar-actions">
+            <a class="btn btn-outline-secondary btn-sm" href="{% url 'issues:issue_registry' project.pk %}"
+               title="Реестр замечаний проекта">
+                <i class="bi bi-chat-left-text" aria-hidden="true"></i>
+                <span class="d-none d-xl-inline">Замечания</span>
+                {% if issue_counts %}
+                    <span class="cde-badge {% if issue_counts.overdue %}cde-deadline cde-deadline--overdue{% elif issue_counts.open %}cde-badge--attention{% else %}cde-badge--done{% endif %} cde-tnum ms-1"
+                          title="Открытых: {{ issue_counts.open }} · просрочено: {{ issue_counts.overdue }}">
+                        {{ issue_counts.open }}
+                    </span>
+                {% endif %}
+            </a>
             <form method="post" action="{% url 'storage:simulate_mail_import' project.pk %}" class="mb-0">
                 {% csrf_token %}
                 <button type="submit" class="btn btn-outline-secondary btn-sm" title="Импортировать из почты">

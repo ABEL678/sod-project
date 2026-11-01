@@ -1,16 +1,17 @@
+{% extends 'storage/base.html' %}
 {% load static %}
-<!DOCTYPE html>
-<html lang="ru">
-<head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>{{ project.name }} — Stream-CAD</title>
-    <link rel="stylesheet" href="{% static 'css/bootstrap.min.css' %}">
-    <link rel="stylesheet" href="{% static 'css/redesign.css' %}?v=20261103">
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
-    <link rel="stylesheet" href="{% static 'css/app.css' %}">
-</head>
-<body class="app-body">
+
+{% block title %}{{ project.name }} — Stream-CAD{% endblock %}
+
+{% block body_class %}app-body{% endblock %}
+
+{% comment %}
+Экран проекта — полноэкранный: топбар живёт ВНУТРИ .app-shell (flex на 100vh),
+поэтому базовый блок топбара отключаем и включаем его в content.
+{% endcomment %}
+{% block topbar %}{% endblock %}
+
+{% block content %}
 <div class="app-shell" id="appShell">
     {% include 'storage/_topbar.html' with topbar_project=project %}
 
@@ -498,9 +499,11 @@
     </div>
 {% endif %}
 
-<script src="{% static 'js/vendor/bootstrap.bundle.min.js' %}"></script>
+</div>
+{% endblock %}
+
+{% block extra_js %}
 <script src="{% static 'js/vendor/htmx.min.js' %}"></script>
 <script src="{% static 'js/vendor/Sortable.min.js' %}"></script>
 <script src="{% static 'js/app.js' %}"></script>
-</body>
-</html>
+{% endblock %}

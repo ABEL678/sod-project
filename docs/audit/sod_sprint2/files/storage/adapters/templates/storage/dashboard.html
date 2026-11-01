@@ -1,0 +1,259 @@
+{% extends 'storage/base.html' %}
+
+{% block title %}Панель управления — Stream-CAD{% endblock %}
+
+{% block topbar %}
+    {% include 'storage/_topbar.html' with topbar_company=company topbar_title="Панель управления" %}
+{% endblock %}
+
+{% block content %}
+<main class="container-fluid px-3 py-3 pb-5">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <div>
+            <h1 class="h4 mb-0">Панель управления</h1>
+            <div class="small text-muted">Компания и участники</div>
+        </div>
+    </div>
+
+    <p class="text-muted small">
+        Проекты видны только участникам компании. Заказчик (customer) видит только те проекты,
+        куда его пригласили. Смежник (contractor) — только разделы из allowed_sections.
+    </p>
+
+    {% if messages %}
+        {% for message in messages %}
+            <div class="alert {% if message.tags == 'error' %}alert-danger{% else %}alert-{{ message.tags }}{% endif %}">
+                {{ message }}
+            </div>
+        {% endfor %}
+    {% endif %}
+
+    {% if company %}
+        <div class="row g-3">
+            <div class="col-md-2">
+                <div class="card shadow-sm h-100">
+                    <div class="card-header bg-white fw-semibold">
+                        <i class="bi bi-building me-1"></i>Компания
+                    </div>
+                    <div class="card-body">
+                        <div class="text-center mb-3">
+                            {% if company.logo %}
+                                <img src="{{ company.logo.url }}" alt="{{ company.name }}"
+                                     class="img-fluid border rounded" style="max-height: 72px;">
+                            {% else %}
+                                <div class="bg-light border rounded d-inline-flex align-items-center justify-content-center"
+                                     style="width: 72px; height: 72px;">
+                                    <i class="bi bi-building text-muted fs-2"></i>
+                                </div>
+                            {% endif %}
+                        </div>
+                        <form method="post" action="{% url 'storage:dashboard' %}" enctype="multipart/form-data">
+                            {% csrf_token %}
+                            <input type="hidden" name="action" value="update_company">
+                            <div class="mb-2">
+                                <label class="form-label small" for="companyName">Название</label>
+                                <input class="form-control form-control-sm" id="companyName" name="name"
+                                       value="{{ company.name }}" required>
+                            </div>
+                            <div class="mb-2">
+                                <label class="form-label small" for="companyLogo">Логотип</label>
+                                <input class="form-control form-control-sm" id="companyLogo" name="logo"
+                                       type="file" accept="image/*">
+                            </div>
+                            <div class="form-check mb-3">
+                                <input class="form-check-input" type="checkbox" id="companyPrivate"
+                                       name="is_private" {% if company.is_private %}checked{% endif %}>
+                                <label class="form-check-label small" for="companyPrivate">
+                                    Приватная компания
+                                </label>
+                            </div>
+                            <button class="btn btn-primary btn-sm w-100" type="submit">
+                                Сохранить
+                            </button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-md-10">
+                <div class="card shadow-sm h-100">
+                    <div class="card-header bg-white d-flex justify-content-between align-items-center">
+                        <span class="fw-semibold">
+                            <i class="bi bi-people me-1"></i>
+                            Участники <span class="text-muted">({{ members|length }})</span>
+                        </span>
+                        <button type="button" class="btn btn-primary btn-sm"
+                                data-bs-toggle="modal" data-bs-target="#addMemberModal">
+                            <i class="bi bi-plus-lg me-1"></i>Добавить участника
+                        </button>
+                    </div>
+                    <div class="table-responsive">
+                        <table class="table table-hover align-middle mb-0">
+                            <thead class="table-light">
+                                <tr>
+                                    <th style="width: 15%;">ФИО</th>
+                                    <th>Логин</th>
+                                    <th>Компания</th>
+                                    <th>Роль</th>
+                                    <th>Email</th>
+                                    <th>Телефон</th>
+                                    <th style="width: 15%;">Проекты</th>
+                                    <th>Разделы</th>
+                                    <th style="width: 150px;">Права</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                            {% for member in members %}
+                                <tr class="clickable-row"
+                                    data-href="{% url 'storage:edit_member' member.pk %}">
+                                    <td class="fw-semibold">
+                                        {{ member.user.get_full_name|default:member.user.username }}
+                                    </td>
+                                    <td class="small">{{ member.user.username }}</td>
+                                    <td class="small">{{ member.company.name|default:"—" }}</td>
+                                    <td>
+                                        <span class="badge bg-secondary">{{ member.get_role_display }}</span>
+                                    </td>
+                                    <td class="small">{{ member.user.email|default:"—" }}</td>
+                                    <td class="small">{{ member.phone|default:"—" }}</td>
+                                    <td class="small">
+                                        {% for pm in member.user.projectmembership_set.all %}
+                                            {{ pm.project.code }} — {{ pm.project.name }}{% if not forloop.last %}, {% endif %}
+                                        {% empty %}
+                                            —
+                                        {% endfor %}
+                                    </td>
+                                    <td class="small">
+                                        {% for section in member.allowed_sections.all %}
+                                            {{ section.code }} — {{ section.name }}{% if not forloop.last %}, {% endif %}
+                                        {% empty %}
+                                            —
+                                        {% endfor %}
+                                    </td>
+                                    <td class="small permission-cell">
+                                        <input type="checkbox" class="form-check-input permission-checkbox" disabled checked> Чтение (файлы)<br>
+                                        <input type="checkbox" class="form-check-input permission-checkbox" disabled
+                                               {% if member.role == 'admin' or member.role == 'gip' or member.role == 'developer' or member.role == 'contractor' %}checked{% endif %}>
+                                        Запись (загрузка)<br>
+                                        <input type="checkbox" class="form-check-input permission-checkbox" disabled
+                                               {% if member.role == 'admin' or member.role == 'gip' or member.role == 'checker' or member.role == 'normocontrol' or member.role == 'customer' %}checked{% endif %}>
+                                        Замечания (создание)<br>
+                                        <input type="checkbox" class="form-check-input permission-checkbox" disabled
+                                               {% if member.role == 'admin' %}checked{% endif %}>
+                                        Управление (участники)
+                                    </td>
+                                </tr>
+                            {% empty %}
+                                <tr>
+                                    <td colspan="9" class="text-center text-muted py-5">
+                                        Участников пока нет
+                                    </td>
+                                </tr>
+                            {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="modal fade" id="addMemberModal" tabindex="-1" aria-labelledby="addMemberModalLabel" aria-hidden="true">
+            <div class="modal-dialog modal-dialog-centered">
+                <div class="modal-content">
+                    <form method="post" action="{% url 'storage:dashboard' %}">
+                        {% csrf_token %}
+                        <input type="hidden" name="action" value="add_member">
+                        <div class="modal-header">
+                            <h5 class="modal-title" id="addMemberModalLabel">Добавить участника</h5>
+                            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрыть"></button>
+                        </div>
+                        <div class="modal-body">
+                            {% if user.is_superuser %}
+                                <div class="mb-2">
+                                    <label class="form-label small" for="memberCompany">Компания</label>
+                                    <select class="form-select form-select-sm" id="memberCompany" name="company_id">
+                                        {% for c in all_companies %}
+                                            <option value="{{ c.pk }}">{{ c.name }}</option>
+                                        {% endfor %}
+                                    </select>
+                                </div>
+                            {% endif %}
+                            <div class="mb-2">
+                                <label class="form-label small" for="memberUsername">Логин</label>
+                                <input type="text" id="memberUsername" name="username" class="form-control form-control-sm" required>
+                            </div>
+                            <div class="mb-2">
+                                <label class="form-label small" for="memberFullName">ФИО</label>
+                                <input type="text" id="memberFullName" name="full_name" class="form-control form-control-sm" placeholder="Иванов Иван Иванович">
+                            </div>
+                            <div class="mb-2">
+                                <label class="form-label small" for="memberEmail">Email</label>
+                                <input type="email" id="memberEmail" name="email" class="form-control form-control-sm">
+                            </div>
+                            <div class="mb-2">
+                                <label class="form-label small" for="memberPhone">Телефон</label>
+                                <input type="text" id="memberPhone" name="phone" class="form-control form-control-sm" placeholder="+7 (999) 123-45-67">
+                            </div>
+                            <div class="mb-2">
+                                <label class="form-label small" for="memberPassword">Пароль</label>
+                                <input type="password" id="memberPassword" name="password" class="form-control form-control-sm" placeholder="Оставьте пустым, если пользователь уже есть">
+                            </div>
+                            <div class="mb-2">
+                                <label class="form-label small" for="memberProject">Проект (опционально)</label>
+                                <select class="form-select form-select-sm" id="memberProject" name="project_id">
+                                    <option value="">Не привязывать</option>
+                                    {% for p in projects %}
+                                        <option value="{{ p.pk }}">{{ p.code }} — {{ p.name }}</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label small" for="memberRole">Роль</label>
+                                <select class="form-select form-select-sm" id="memberRole" name="role" required>
+                                    {% for value, label in role_choices %}
+                                        {% if value != 'admin' %}
+                                            <option value="{{ value }}">{{ label }}</option>
+                                        {% endif %}
+                                    {% endfor %}
+                                </select>
+                            </div>
+                            <div class="mb-0">
+                                <label class="form-label small" for="memberSections">
+                                    Доступные разделы
+                                    <span class="text-muted">(для разработчика/смежника)</span>
+                                </label>
+                                <select class="form-select form-select-sm" id="memberSections"
+                                        name="allowed_sections" multiple size="5">
+                                    {% for section in available_sections %}
+                                        <option value="{{ section.pk }}">
+                                            {{ section.project.code }} — {{ section.code }} {{ section.name }}
+                                        </option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                        </div>
+                        <div class="modal-footer">
+                            <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-dismiss="modal">
+                                Отмена
+                            </button>
+                            <button type="submit" class="btn btn-primary btn-sm">Добавить</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    {% else %}
+        <div class="alert alert-warning">Компания не найдена.</div>
+    {% endif %}
+</main>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    document.querySelectorAll('.clickable-row').forEach(function (row) {
+        row.addEventListener('click', function () {
+            window.location.href = this.dataset.href;
+        });
+    });
+</script>
+{% endblock %}

@@ -9,7 +9,7 @@ from django.contrib.auth.decorators import login_required
 from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
 from django.core.exceptions import PermissionDenied
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.db.models import Q
+from django.db.models import Count, Q
 from django.http import (
     FileResponse,
     Http404,
@@ -646,6 +646,24 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
             'status_choices': Document.STATUS_CHOICES,
             'CANONICAL_ZONE_NAMES': CANONICAL_ZONE_NAMES,
         })
+
+        # Счётчики замечаний проекта — «нервная система» для ГИПа:
+        # видно из тулбара таблицы, сколько требует внимания прямо сейчас.
+        # (Тот же смысл, что и в реестре: issues:issue_registry.)
+        active_issue_statuses = ('NEW', 'IN_PROGRESS', 'DISCUSSION', 'REJECTED')
+        context['issue_counts'] = Issue.objects.filter(
+            document__project=project,
+            document__in=get_accessible_documents(user),
+        ).aggregate(
+            total=Count('pk'),
+            open=Count('pk', filter=~Q(status__in=('CLOSED', 'CANCELLED'))),
+            overdue=Count(
+                'pk',
+                filter=Q(due_date__isnull=False)
+                & Q(due_date__lt=timezone.localdate())
+                & Q(status__in=active_issue_statuses),
+            ),
+        )
 
         if can_manage_participants:
             context['participants'] = list_project_participants(user, project)

@@ -1,0 +1,2719 @@
+diff --git a/.github/workflows/design-tokens.yml b/.github/workflows/design-tokens.yml
+new file mode 100644
+index 0000000..ab012b1
+--- /dev/null
++++ b/.github/workflows/design-tokens.yml
+@@ -0,0 +1,34 @@
++name: design-tokens
++
++# Дизайн-токены: единственный источник правды — static/design-tokens/tokens.json.
++# tokens.css / design-tokens.js / design_colors.py генерируются скриптом.
++# CI не даёт им разъехаться: если кто-то правил сгенерированный файл руками
++# (или забыл перегенерировать после правки tokens.json) — сборка падает.
++on:
++  push:
++    paths:
++      - 'static/design-tokens/**'
++      - 'static/js/design-tokens.js'
++      - 'storage/domain/design_colors.py'
++      - 'scripts/build_design_tokens.py'
++      - '.github/workflows/design-tokens.yml'
++  pull_request:
++    paths:
++      - 'static/design-tokens/**'
++      - 'static/js/design-tokens.js'
++      - 'storage/domain/design_colors.py'
++      - 'scripts/build_design_tokens.py'
++      - '.github/workflows/design-tokens.yml'
++
++jobs:
++  drift-check:
++    runs-on: ubuntu-latest
++    steps:
++      - uses: actions/checkout@v4
++
++      - uses: actions/setup-python@v5
++        with:
++          python-version: '3.12'
++
++      - name: Проверка дрейфа дизайн-токенов
++        run: python scripts/build_design_tokens.py --check
+diff --git a/issues/templates/issues/registry.html b/issues/templates/issues/registry.html
+new file mode 100644
+index 0000000..b7249a2
+--- /dev/null
++++ b/issues/templates/issues/registry.html
+@@ -0,0 +1,220 @@
++{% extends 'storage/base.html' %}
++{% load static issue_extras %}
++
++{% block title %}Замечания — {{ project.code }} — Stream-CAD{% endblock %}
++
++{% block topbar %}
++    {% include 'storage/_topbar.html' with topbar_project=project topbar_title="Реестр замечаний" %}
++{% endblock %}
++
++{% block content %}
++<main class="container-fluid px-3 py-3 pb-5">
++    <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
++        <div>
++            <h1 class="h4 mb-0">Реестр замечаний</h1>
++            <div class="small text-muted">
++                {{ project.code }} — {{ project.name }} ·
++                всего {{ counts.total }} замечание{{ counts.total|pluralize:"я,й" }}
++            </div>
++        </div>
++        <div class="d-flex gap-2">
++            <a href="{% url 'storage:project_detail' project.pk %}"
++               class="btn btn-sm btn-outline-secondary">
++                <i class="bi bi-arrow-left me-1" aria-hidden="true"></i>К проекту
++            </a>
++            <a href="{{ export_url }}" class="btn btn-sm btn-outline-secondary"
++               title="Выгрузить реестр в Excel (с текущими фильтрами)">
++                <i class="bi bi-file-earmark-excel me-1" aria-hidden="true"></i>Excel
++            </a>
++        </div>
++    </div>
++
++    <div id="registryPanel"
++         data-project-id="{{ project.pk }}">
++
++        {# ---- Сводка: счётчики по группам — «что требует внимания» ---- #}
++        <div class="card shadow-sm mb-3">
++            <div class="card-body py-2">
++                <div class="d-flex flex-wrap gap-2 align-items-center">
++                    <a class="cde-badge {% if not filters.flag and not filters.status %}cde-badge--accent{% else %}cde-badge--closed{% endif %} text-decoration-none"
++                       href="{% url 'issues:issue_registry' project.pk %}">
++                        Все <span class="cde-tnum">{{ counts.total }}</span>
++                    </a>
++                    <a class="cde-badge {% if filters.flag == 'open' %}cde-badge--accent{% else %}cde-badge--wait{% endif %} text-decoration-none"
++                       href="{% url 'issues:issue_registry' project.pk %}?flag=open">
++                        Открытые <span class="cde-tnum">{{ counts.groups.open }}</span>
++                    </a>
++                    <a class="cde-badge {% if filters.status == 'IN_PROGRESS' %}cde-badge--accent{% else %}cde-badge--progress{% endif %} text-decoration-none"
++                       href="{% url 'issues:issue_registry' project.pk %}?status=IN_PROGRESS">
++                        В работе <span class="cde-tnum">{{ counts.groups.progress }}</span>
++                    </a>
++                    <a class="cde-badge {% if filters.status == 'DONE' %}cde-badge--accent{% else %}cde-badge--review{% endif %} text-decoration-none"
++                       href="{% url 'issues:issue_registry' project.pk %}?status=DONE">
++                        На проверке <span class="cde-tnum">{{ counts.groups.review }}</span>
++                    </a>
++                    <a class="cde-badge {% if filters.flag == 'closed' %}cde-badge--accent{% else %}cde-badge--closed{% endif %} text-decoration-none"
++                       href="{% url 'issues:issue_registry' project.pk %}?flag=closed">
++                        Закрытые <span class="cde-tnum">{{ counts.groups.closed }}</span>
++                    </a>
++                    <a class="cde-badge {% if filters.flag == 'overdue' %}cde-deadline cde-deadline--overdue{% else %}cde-deadline cde-deadline--soon{% endif %} text-decoration-none"
++                       href="{% url 'issues:issue_registry' project.pk %}?flag=overdue"
++                       title="Активные замечания с истёкшим сроком ответа">
++                        <i class="bi bi-exclamation-triangle" aria-hidden="true"></i>
++                        Просрочено <span class="cde-tnum">{{ counts.overdue }}</span>
++                    </a>
++                </div>
++            </div>
++        </div>
++
++        {# ---- Фильтры: применяются сразу (htmx), без кнопки «Найти» ---- #}
++        <div class="card shadow-sm mb-3">
++            <form id="registryFilters"
++                  class="card-body py-2"
++                  method="get"
++                  action="{% url 'issues:issue_registry' project.pk %}"
++                  hx-get="{% url 'issues:issue_registry' project.pk %}"
++                  hx-target="#registryPanel"
++                  hx-select="#registryPanel"
++                  hx-swap="outerHTML"
++                  hx-push-url="true"
++                  hx-trigger="change, keyup changed delay:350ms from:#registrySearch, submit">
++                {% if filters.flag %}
++                    <input type="hidden" name="flag" value="{{ filters.flag }}">
++                {% endif %}
++                <div class="d-flex flex-wrap align-items-end gap-2">
++                    <div class="filter-field">
++                        <label class="form-label" for="registryStatus">Статус</label>
++                        <select class="form-select form-select-sm" id="registryStatus" name="status">
++                            <option value="">Все статусы</option>
++                            {% for value, label in status_choices %}
++                                <option value="{{ value }}" {% if filters.status == value %}selected{% endif %}>{{ label }}</option>
++                            {% endfor %}
++                        </select>
++                    </div>
++                    <div class="filter-field">
++                        <label class="form-label" for="registryAssignee">Ответственный</label>
++                        <select class="form-select form-select-sm" id="registryAssignee" name="assignee">
++                            <option value="">Любой</option>
++                            <option value="none" {% if filters.assignee == 'none' %}selected{% endif %}>— не назначен —</option>
++                            {% for person in assignee_choices %}
++                                <option value="{{ person.pk }}" {% if filters.assignee == person.pk|stringformat:"s" %}selected{% endif %}>
++                                    {{ person.get_full_name|default:person.username }}
++                                </option>
++                            {% endfor %}
++                        </select>
++                    </div>
++                    <div class="filter-field filter-search">
++                        <label class="form-label" for="registrySearch">Поиск</label>
++                        <input type="search" class="form-control form-control-sm" id="registrySearch"
++                               name="q" value="{{ filters.q }}"
++                               placeholder="Текст, шифр или название документа">
++                    </div>
++                    <div class="filter-actions d-flex gap-2">
++                        <button type="submit" class="visually-hidden">Найти</button>
++                        <a href="{% url 'issues:issue_registry' project.pk %}"
++                           class="btn btn-sm btn-outline-secondary" title="Сбросить фильтры">
++                            <i class="bi bi-x-lg" aria-hidden="true"></i> Сбросить
++                        </a>
++                    </div>
++                </div>
++            </form>
++        </div>
++
++        {# ---- Таблица реестра ---- #}
++        <div class="card shadow-sm">
++            <div class="table-responsive">
++                <table class="table table-hover align-middle mb-0">
++                    <thead class="table-light">
++                        <tr>
++                            <th>№</th>
++                            <th>Документ</th>
++                            <th>Статус</th>
++                            <th style="min-width: 280px;">Текст замечания</th>
++                            <th>Автор</th>
++                            <th>Ответственный</th>
++                            <th>Срок ответа</th>
++                            <th>Создано</th>
++                        </tr>
++                    </thead>
++                    <tbody>
++                    {% for issue in issues %}
++                        <tr>
++                            <td><span class="cde-chip">{{ issue.pk }}</span></td>
++                            <td>
++                                <a href="{% url 'storage:document_detail' issue.document.pk %}"
++                                   class="fw-semibold text-decoration-none">
++                                    {{ issue.document.code }}
++                                </a>
++                                <div class="small text-muted text-truncate" style="max-width: 220px;">
++                                    {{ issue.document.name }}
++                                </div>
++                            </td>
++                            <td>
++                                <span class="{{ issue|status_badge_class }}">
++                                    {{ issue.get_status_display }}
++                                </span>
++                            </td>
++                            <td>
++                                <span title="{{ issue.description }}">{{ issue.description|truncatechars:110 }}</span>
++                            </td>
++                            <td class="small">
++                                {{ issue.author.get_full_name|default:issue.author.username }}
++                            </td>
++                            <td class="small">
++                                {% if issue.assignee %}
++                                    {{ issue.assignee.get_full_name|default:issue.assignee.username }}
++                                {% else %}—{% endif %}
++                            </td>
++                            <td>
++                                {% if issue.due_date %}
++                                    <span class="cde-tnum">{{ issue.due_date|date:"d.m.Y" }}</span>
++                                    {% if issue|deadline_label %}
++                                        <div class="mt-1">
++                                            <span class="{{ issue|deadline_class }}">{{ issue|deadline_label }}</span>
++                                        </div>
++                                    {% endif %}
++                                {% else %}—{% endif %}
++                            </td>
++                            <td class="small cde-tnum">{{ issue.created_at|date:"d.m.Y" }}</td>
++                        </tr>
++                    {% empty %}
++                        <tr>
++                            <td colspan="8" class="text-center text-muted py-4">
++                                {% if filters.q or filters.status or filters.flag or filters.assignee %}
++                                    Ничего не найдено — измените фильтры.
++                                {% else %}
++                                    По проекту пока нет замечаний.
++                                {% endif %}
++                            </td>
++                        </tr>
++                    {% endfor %}
++                    </tbody>
++                </table>
++            </div>
++
++            {% if is_paginated %}
++                <div class="card-footer bg-white d-flex justify-content-between align-items-center">
++                    <span class="small text-muted cde-tnum">
++                        Показаны {{ page_obj.start_index }}–{{ page_obj.end_index }} из {{ paginator.count }}
++                    </span>
++                    <div class="btn-group btn-group-sm">
++                        {% if page_obj.has_previous %}
++                            <a class="btn btn-outline-secondary"
++                               href="?{% if filters.q %}q={{ filters.q|urlencode }}&{% endif %}{% if filters.status %}status={{ filters.status }}&{% endif %}{% if filters.flag %}flag={{ filters.flag }}&{% endif %}{% if filters.assignee %}assignee={{ filters.assignee }}&{% endif %}page={{ page_obj.previous_page_number }}">← Назад</a>
++                        {% endif %}
++                        <span class="btn btn-secondary disabled cde-tnum">{{ page_obj.number }} / {{ paginator.num_pages }}</span>
++                        {% if page_obj.has_next %}
++                            <a class="btn btn-outline-secondary"
++                               href="?{% if filters.q %}q={{ filters.q|urlencode }}&{% endif %}{% if filters.status %}status={{ filters.status }}&{% endif %}{% if filters.flag %}flag={{ filters.flag }}&{% endif %}{% if filters.assignee %}assignee={{ filters.assignee }}&{% endif %}page={{ page_obj.next_page_number }}">Вперёд →</a>
++                        {% endif %}
++                    </div>
++                </div>
++            {% endif %}
++        </div>
++    </div>
++</main>
++{% endblock %}
++
++{% block extra_js %}
++<script src="{% static 'js/vendor/htmx.min.js' %}"></script>
++{% endblock %}
+diff --git a/issues/templatetags/issue_extras.py b/issues/templatetags/issue_extras.py
+index bb53f13..44227c3 100644
+--- a/issues/templatetags/issue_extras.py
++++ b/issues/templatetags/issue_extras.py
+@@ -1,4 +1,4 @@
+-"""Живой дедлайн-бейдж для карточки замечания.
++"""Живой дедлайн-бейдж и статус-бейдж для карточки замечания.
+ 
+ Возвращает человеческий ярлык («осталось 5 дней», «просрочено на 2 дня»)
+ и CSS-класс из дизайн-токенов (cde-deadline / --soon / --overdue).
+@@ -6,11 +6,14 @@
+     {% load issue_extras %}
+     {{ issue|deadline_label }}
+     {{ issue|deadline_class }}
++    <span class="{{ issue|status_badge_class }}">{{ issue.get_status_display }}</span>
+ """
+ from datetime import date
+ 
+ from django import template
+ 
++from storage.domain.design_colors import DEFAULT_STATUS, ISSUE_STATUS_CLASS
++
+ register = template.Library()
+ 
+ # Живой срок показываем только по активным замечаниям:
+@@ -58,3 +61,12 @@ def deadline_class(issue):
+     if days <= 3:
+         return "cde-deadline cde-deadline--soon"
+     return "cde-deadline"
++
++
++@register.filter
++def status_badge_class(issue):
++    """CSS-класс статусного бейджа из дизайн-токенов (единый источник:
++    tokens.json -> design_colors.py), чтобы реестр, вьювер и экспорт
++    красили статусы одинаково."""
++    status = getattr(issue, "status", "")
++    return ISSUE_STATUS_CLASS.get(status) or ISSUE_STATUS_CLASS[DEFAULT_STATUS]
+diff --git a/issues/urls.py b/issues/urls.py
+index efea16d..a5b77c2 100644
+--- a/issues/urls.py
++++ b/issues/urls.py
+@@ -5,6 +5,8 @@ from issues import views
+ app_name = 'issues'
+ 
+ urlpatterns = [
++    path('projects/<int:project_id>/issues/', views.IssueRegistryView.as_view(), name='issue_registry'),
++    path('projects/<int:project_id>/issues/export/', views.IssueRegistryExportView.as_view(), name='issue_registry_export'),
+     path('documents/<int:document_id>/issues/create/', views.IssueCreateView.as_view(), name='issue_create'),
+     path('issues/<int:issue_id>/status/', views.IssueUpdateStatusView.as_view(), name='issue_status'),
+     path('issues/<int:issue_id>/answer/', views.IssueAnswerUpdateView.as_view(), name='issue_answer'),
+diff --git a/issues/views.py b/issues/views.py
+index ed257de..de430c8 100644
+--- a/issues/views.py
++++ b/issues/views.py
+@@ -4,12 +4,20 @@ import re
+ from django.contrib import messages
+ from django.contrib.auth import get_user_model
+ from django.contrib.auth.decorators import login_required
++from django.contrib.auth.mixins import LoginRequiredMixin
+ from django.core.exceptions import PermissionDenied
+-from django.http import HttpResponseForbidden, JsonResponse
++from django.db.models import Count, Q
++from django.http import FileResponse, HttpResponseForbidden, JsonResponse
+ from django.shortcuts import get_object_or_404, redirect, render
++from django.urls import reverse
++from django.utils import timezone
+ from django.utils.dateparse import parse_date
++from django.utils.text import get_valid_filename
+ from django.views import View
+-from django.views.generic import CreateView
++from django.views.generic import CreateView, ListView
++from io import BytesIO
++from openpyxl import Workbook
++from openpyxl.styles import Alignment, Font, PatternFill
+ 
+ from storage.adapters.views import _issue_payload
+ from storage.domain.services import (
+@@ -18,6 +26,7 @@ from storage.domain.services import (
+     check_issue_permission,
+     check_read_permission,
+     get_accessible_documents,
++    get_accessible_projects,
+     create_issue,
+     delete_issue,
+     delete_issue_crop,
+@@ -328,3 +337,261 @@ def add_comment(request, issue_id):
+     return redirect(
+         request.META.get('HTTP_REFERER', 'storage:project_list')
+     )
++
++
++# ============================================================================
++# Реестр замечаний проекта
++# ============================================================================
++
++# Группы статусов — те же, что в табах панели замечаний вьювера,
++# чтобы «Открытые» означало одно и то же на обоих экранах.
++ISSUE_STATUS_GROUPS = {
++    'open': ('NEW', 'REJECTED', 'DISCUSSION'),
++    'progress': ('IN_PROGRESS',),
++    'review': ('DONE',),
++    'closed': ('CLOSED', 'CANCELLED'),
++}
++ACTIVE_ISSUE_STATUSES = ISSUE_STATUS_GROUPS['open'] + ISSUE_STATUS_GROUPS['progress']
++
++
++def _registry_issues(user, project):
++    """Все замечания проекта, видимые пользователю (по правам на документы)."""
++    return Issue.objects.filter(
++        document__project=project,
++        document__in=get_accessible_documents(user),
++    ).select_related(
++        'document',
++        'document__project',
++        'document__section',
++        'author',
++        'assignee',
++    )
++
++
++def _apply_registry_filters(queryset, params):
++    """Точечные GET-фильтры реестра (те же параметры принимает Excel-экспорт)."""
++    status = (params.get('status') or '').strip()
++    if status in dict(Issue.STATUS_CHOICES):
++        queryset = queryset.filter(status=status)
++
++    flag = (params.get('flag') or '').strip()
++    if flag == 'open':
++        queryset = queryset.exclude(status__in=ISSUE_STATUS_GROUPS['closed'])
++    elif flag == 'closed':
++        queryset = queryset.filter(status__in=ISSUE_STATUS_GROUPS['closed'])
++    elif flag == 'overdue':
++        queryset = queryset.filter(
++            due_date__isnull=False,
++            due_date__lt=timezone.localdate(),
++            status__in=ACTIVE_ISSUE_STATUSES,
++        )
++
++    assignee = (params.get('assignee') or '').strip()
++    if assignee == 'none':
++        queryset = queryset.filter(assignee__isnull=True)
++    elif assignee.isdigit():
++        queryset = queryset.filter(assignee_id=int(assignee))
++
++    query = (params.get('q') or '').strip()
++    if query:
++        queryset = queryset.filter(
++            Q(description__icontains=query)
++            | Q(document__code__icontains=query)
++            | Q(document__name__icontains=query)
++        )
++    return queryset
++
++
++def _registry_context_counts(user, project):
++    """Счётчики по группам статусов + просрочка (по полному, нефильнутому набору)."""
++    counts = dict(
++        _registry_issues(user, project)
++        .values_list('status')
++        .annotate(total=Count('pk'))
++    )
++    today = timezone.localdate()
++    overdue = _registry_issues(user, project).filter(
++        due_date__isnull=False,
++        due_date__lt=today,
++        status__in=ACTIVE_ISSUE_STATUSES,
++    ).count()
++    groups = {
++        group: sum(counts.get(status, 0) for status in statuses)
++        for group, statuses in ISSUE_STATUS_GROUPS.items()
++    }
++    return {
++        'total': sum(counts.values()),
++        'groups': groups,
++        'overdue': overdue,
++    }
++
++
++class IssueRegistryView(LoginRequiredMixin, ListView):
++    """Реестр всех замечаний проекта: один экран — вся переписка по качеству.
++
++    Отвечает на вопрос ГИПа «что требует внимания прямо сейчас»:
++    счётчики по группам статусов, просрочка, фильтры, Excel-выгрузка.
++    """
++
++    template_name = 'issues/registry.html'
++    context_object_name = 'issues'
++    paginate_by = 50
++
++    def dispatch(self, request, *args, **kwargs):
++        self.project = get_object_or_404(
++            get_accessible_projects(request.user),
++            pk=kwargs['project_id'],
++        )
++        return super().dispatch(request, *args, **kwargs)
++
++    def get_queryset(self):
++        return _apply_registry_filters(
++            _registry_issues(self.request.user, self.project),
++            self.request.GET,
++        ).order_by('-created_at')
++
++    def get_context_data(self, **kwargs):
++        context = super().get_context_data(**kwargs)
++        user = self.request.user
++        project = self.project
++
++        assignee_choices = list(
++            get_user_model()
++            .objects.filter(
++                assigned_issues__document__project=project,
++                assigned_issues__document__in=get_accessible_documents(user),
++            )
++            .distinct()
++            .order_by('last_name', 'first_name')
++        )
++
++        context.update({
++            'project': project,
++            'status_choices': Issue.STATUS_CHOICES,
++            'assignee_choices': assignee_choices,
++            'counts': _registry_context_counts(user, project),
++            'filters': {
++                'status': (self.request.GET.get('status') or '').strip(),
++                'flag': (self.request.GET.get('flag') or '').strip(),
++                'assignee': (self.request.GET.get('assignee') or '').strip(),
++                'q': (self.request.GET.get('q') or '').strip(),
++            },
++            'export_url': self._export_url(),
++        })
++        return context
++
++    def _export_url(self):
++        """Ссылка на Excel-выгрузку с текущими фильтрами."""
++        query = self.request.GET.urlencode()
++        url = reverse('issues:issue_registry_export', args=[self.project.pk])
++        return url + ('?' + query if query else '')
++
++
++class IssueRegistryExportView(LoginRequiredMixin, View):
++    """Excel-выгрузка реестра (с учётом активных фильтров)."""
++
++    def get(self, request, project_id):
++        project = get_object_or_404(
++            get_accessible_projects(request.user),
++            pk=project_id,
++        )
++        issues = list(
++            _apply_registry_filters(
++                _registry_issues(request.user, project),
++                request.GET,
++            ).order_by('document__code', 'pk')
++        )
++
++        workbook = Workbook()
++        sheet = workbook.active
++        sheet.title = 'Замечания'
++
++        headers = [
++            '№', 'Документ', 'Раздел', 'Статус', 'Текст замечания',
++            'Автор', 'Ответственный', 'Срок ответа', 'Просрочено',
++            'Создано', 'Ответ', 'Закрыто',
++        ]
++        sheet.append(headers)
++        header_fill = PatternFill('solid', fgColor='EFEFEC')
++        for cell in sheet[1]:
++            cell.font = Font(bold=True)
++            cell.fill = header_fill
++            cell.alignment = Alignment(vertical='center')
++        sheet.freeze_panes = 'A2'
++        sheet.auto_filter.ref = sheet.dimensions
++
++        today = timezone.localdate()
++        for row, issue in enumerate(issues, start=2):
++            doc = issue.document
++            sheet.cell(row=row, column=1, value=issue.pk)
++
++            code_cell = sheet.cell(row=row, column=2, value=doc.code)
++            code_cell.hyperlink = request.build_absolute_uri(
++                reverse('storage:document_detail', args=[doc.pk])
++            )
++            code_cell.font = Font(color='0563C1', underline='single')
++
++            sheet.cell(row=row, column=3, value=doc.section.code if doc.section else '')
++            sheet.cell(row=row, column=4, value=issue.get_status_display())
++
++            text_cell = sheet.cell(row=row, column=5, value=issue.description)
++            text_cell.alignment = Alignment(wrap_text=True, vertical='top')
++
++            sheet.cell(
++                row=row, column=6,
++                value=issue.author.get_full_name() or issue.author.username,
++            )
++            sheet.cell(
++                row=row, column=7,
++                value=(
++                    issue.assignee.get_full_name() or issue.assignee.username
++                ) if issue.assignee else '',
++            )
++            sheet.cell(
++                row=row, column=8,
++                value=issue.due_date.strftime('%d.%m.%Y') if issue.due_date else '',
++            )
++            overdue = bool(
++                issue.due_date
++                and issue.due_date < today
++                and issue.status in ACTIVE_ISSUE_STATUSES
++            )
++            overdue_cell = sheet.cell(row=row, column=9, value='да' if overdue else '')
++            if overdue:
++                overdue_cell.font = Font(color='B02A37', bold=True)
++            sheet.cell(
++                row=row, column=10,
++                value=timezone.localtime(issue.created_at).strftime('%d.%m.%Y %H:%M'),
++            )
++            answer_cell = sheet.cell(row=row, column=11, value=issue.answer_text)
++            answer_cell.alignment = Alignment(wrap_text=True, vertical='top')
++            sheet.cell(
++                row=row, column=12,
++                value=(
++                    timezone.localtime(issue.closed_at).strftime('%d.%m.%Y')
++                    if issue.closed_at else ''
++                ),
++            )
++
++        for column, width in {
++            'A': 6, 'B': 18, 'C': 10, 'D': 16, 'E': 52, 'F': 24, 'G': 24,
++            'H': 13, 'I': 12, 'J': 17, 'K': 40, 'L': 12,
++        }.items():
++            sheet.column_dimensions[column].width = width
++
++        buffer = BytesIO()
++        workbook.save(buffer)
++        buffer.seek(0)
++
++        filename = 'reestr_zamechanij_{code}.xlsx'.format(
++            code=get_valid_filename(project.code or project.pk),
++        )
++        return FileResponse(
++            buffer,
++            as_attachment=True,
++            filename=filename,
++            content_type=(
++                'application/vnd.openxmlformats-officedocument'
++                '.spreadsheetml.sheet'
++            ),
++        )
+diff --git a/scripts/build_design_tokens.py b/scripts/build_design_tokens.py
+new file mode 100644
+index 0000000..aca686d
+--- /dev/null
++++ b/scripts/build_design_tokens.py
+@@ -0,0 +1,450 @@
++#!/usr/bin/env python3
++"""Генератор дизайн-токенов СОД (Stream-CAD).
++
++Единый источник правды — static/design-tokens/tokens.json.
++Скрипт порождает три артефакта, которые коммитятся в репозиторий:
++
++  1. static/design-tokens/tokens.css          — CSS-переменные + семантические классы
++  2. static/js/design-tokens.js               — window.CDE_TOKENS (цвета статусов для JS)
++  3. storage/domain/design_colors.py          — константы для Python (вкл. PyMuPDF RGB)
++
++Использование:
++    python scripts/build_design_tokens.py           # перегенерировать файлы
++    python scripts/build_design_tokens.py --check   # проверка дрейфа (exit 1, если
++                                                     # артефакты не совпадают с tokens.json)
++
++Правило: НИКТО не редактирует сгенерированные файлы руками — только tokens.json
++и этот шаблонизатор. CI (.github/workflows/design-tokens.yml) ловит дрейф.
++"""
++from __future__ import annotations
++
++import json
++import sys
++from pathlib import Path
++
++REPO_ROOT = Path(__file__).resolve().parent.parent
++TOKENS_JSON = REPO_ROOT / 'static' / 'design-tokens' / 'tokens.json'
++OUTPUTS = (
++    REPO_ROOT / 'static' / 'design-tokens' / 'tokens.css',
++    REPO_ROOT / 'static' / 'js' / 'design-tokens.js',
++    REPO_ROOT / 'storage' / 'domain' / 'design_colors.py',
++)
++
++GENERATED_NOTE_CSS = (
++    '/* ==========================================================================\n'
++    '   АВТОГЕНЕРАТ из design-tokens/tokens.json — НЕ РЕДАКТИРОВАТЬ ВРУЧНУЮ.\n'
++    '   Правки вносить в tokens.json, затем: python scripts/build_design_tokens.py\n'
++    '   ========================================================================== */'
++)
++GENERATED_NOTE_JS = (
++    '/* АВТОГЕНЕРАТ из design-tokens/tokens.json — НЕ РЕДАКТИРОВАТЬ ВРУЧНУЮ.\n'
++    '   Правки вносить в tokens.json, затем: python scripts/build_design_tokens.py */'
++)
++GENERATED_NOTE_PY = (
++    '"""АВТОГЕНЕРАТ из static/design-tokens/tokens.json — не редактировать вручную.\n'
++    '\n'
++    'Правки вносить в tokens.json, затем: python scripts/build_design_tokens.py\n'
++    '"""'
++)
++
++
++def load_tokens() -> dict:
++    with TOKENS_JSON.open(encoding='utf-8') as handle:
++        return json.load(handle)
++
++
++# ---------------------------------------------------------------------------
++# tokens.css
++# ---------------------------------------------------------------------------
++
++def _var(name: str, value: str, comment: str = '') -> str:
++    line = '  --{name}: {value};'.format(name=name, value=value)
++    if comment:
++        line += '  /* {comment} */'.format(comment=comment)
++    return line
++
++
++def render_css(tokens: dict) -> str:
++    color = tokens['color']
++    surface = color['surface']
++    border = color['border']
++    text = color['text']
++    accent = color['accent']
++    statuses = color['status']
++    typo = tokens['typography']
++    scale = typo['scale']
++    spacing = tokens['spacing']
++    controls = tokens['controls']
++    radius = tokens['radius']
++    shadow = tokens['shadow']
++    motion = tokens['motion']
++    status_map = tokens['status_map']
++
++    lines: list[str] = []
++    add = lines.append
++
++    add(GENERATED_NOTE_CSS)
++    add('/*')
++    add('   CDE «Среда общих данных» — дизайн-токены (CSS Custom Properties)')
++    add('   Источник истины: tokens.json · Версия {version}'.format(version=tokens['version']))
++    add('   ----------------------------------------------------------------------------')
++    add('   Подключение:  <link rel="stylesheet" href="tokens.css">')
++    add('   Шрифты (опционально, есть системные фолбэки):')
++    add('     <link href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">')
++    add('')
++    add('   ГЛАВНЫЕ ПРАВИЛА СИСТЕМЫ')
++    add('   1. Один смысл — один цвет. Статусные цвета одинаковы в панели замечаний,')
++    add('      в бейджах таблиц и в маркерах на листе документа.')
++    add('   2. Акцентный цвет ({accent}) — единственный. Не красить им статусы.'.format(accent=accent['solid']))
++    add('   3. Статус никогда не кодируется только цветом: всегда иконка + текст.')
++    add('   4. Цвет + контекст применения:')
++    add('        solid   — маркеры, иконки, точки')
++    add('        subtle  — фон бейджа/строки   (текст на нём — on, контраст AA)')
++    add('   5. Формат дат и версий: 30.10.2026, 13:41 · v1 · R6 · tabular-nums.')
++    add('   ========================================================================== */')
++    add('')
++    add(':root {')
++    add('  /* --- Поверхности --- */')
++    add(_var('c-bg-app', surface['app']))
++    add(_var('c-bg-surface', surface['surface']))
++    add(_var('c-bg-surface-hover', surface['surface-hover']))
++    add(_var('c-bg-surface-sunken', surface['surface-sunken']))
++    add(_var('c-bg-canvas', surface['canvas'], 'тёмный canvas вьювера'))
++    add(_var('c-bg-header', surface['header'], 'фирменный mint-хедер'))
++    add(_var('c-bg-row-hover', surface['row-hover'], 'ховер кликабельной строки'))
++    add('')
++    add('  /* --- Границы --- */')
++    add(_var('c-border-hairline', border['hairline']))
++    add(_var('c-border-default', border['default']))
++    add(_var('c-border-header', border['header'], 'граница mint-хедера'))
++    add('')
++    add('  /* --- Текст --- */')
++    add(_var('c-text-primary', text['primary']))
++    add(_var('c-text-secondary', text['secondary']))
++    add(_var('c-text-muted', text['muted']))
++    add(_var('c-text-on-dark', text['on-dark']))
++    add(_var('c-text-on-dark-muted', text['on-dark-muted']))
++    add(_var('c-text-inverse', text['inverse']))
++    add('')
++    add('  /* --- Акцент (единственный) --- */')
++    add(_var('c-accent', accent['solid']))
++    add(_var('c-accent-hover', accent['hover']))
++    add(_var('c-accent-pressed', accent['pressed']))
++    add(_var('c-accent-subtle', accent['subtle']))
++    add(_var('c-accent-on-subtle', accent['on-subtle']))
++    add('')
++    add('  /* --- Статусы: solid / subtle / on --- */')
++    for name, values in statuses.items():
++        add('  --s-{name}-solid: {solid};  --s-{name}-subtle: {subtle};  --s-{name}-on: {on}; /* {comment} */'.format(
++            name=name,
++            solid=values['solid'],
++            subtle=values['subtle'],
++            on=values['on'],
++            comment=values['comment'],
++        ))
++    add('')
++    add('  /* --- Типографика --- */')
++    add(_var('font-sans', typo['sans']))
++    add(_var('font-mono', typo['mono']))
++    add('')
++    for token_name, spec in scale.items():
++        add(_var(
++            'text-{name}'.format(name=token_name),
++            spec['size'],
++            spec['comment'],
++        ))
++        add(_var('lh-{name}'.format(name=token_name), spec['line']))
++    add('')
++    add('  /* --- Сетка 8pt --- */')
++    add('  ' + ' '.join(
++        '--sp-{key}: {value};'.format(key=key, value=value)
++        for key, value in spacing.items()
++    ))
++    add('')
++    add('  /* --- Контролы и плотность --- */')
++    add('  ' + ' '.join(
++        '--{key}: {value};'.format(key=key, value=value)
++        for key, value in controls.items()
++    ))
++    add('')
++    add('  /* --- Радиусы --- */')
++    add('  ' + ' '.join(
++        '--r-{key}: {value};'.format(key=key, value=value)
++        for key, value in radius.items()
++    ))
++    add('')
++    add('  /* --- Тени --- */')
++    for key, value in shadow.items():
++        add(_var('shadow-{key}'.format(key=key), value))
++    add('')
++    add('  /* --- Моушн --- */')
++    add('  ' + ' '.join(
++        '--dur-{key}: {value};'.format(key=key, value=value)
++        for key, value in motion.items()
++        if key != 'ease-out'
++    ))
++    add(_var('ease-out', motion['ease-out']))
++    add('')
++    add('  /* --- Фокус (не отключать!) --- */')
++    add(_var('focus-ring', tokens['focus']['ring']))
++    add('}')
++
++    # --- Алиасы статусов: коды моделей -> семантические токены ---
++    add('')
++    add('/* ---------------------------------------------------------------------------')
++    add('   Алиасы статусов: код из модели (Issue / Document / Project) -> токен.')
++    add('   Позволяют писать var(--status-{{ status|lower }}-bg) прямо в шаблонах.')
++    add('   ------------------------------------------------------------------------- */')
++    add(':root {')
++    seen: set[str] = set()
++    for entity in ('issue', 'document', 'project'):
++        for code, semantic in status_map[entity].items():
++            if code in seen:
++                continue
++            seen.add(code)
++            add('  --status-{code}: var(--s-{semantic}-solid);'.format(code=code.lower(), semantic=semantic))
++            add('  --status-{code}-bg: var(--s-{semantic}-subtle);'.format(code=code.lower(), semantic=semantic))
++            add('  --status-{code}-on: var(--s-{semantic}-on);'.format(code=code.lower(), semantic=semantic))
++    add('}')
++
++    # --- Тёмная тема ---
++    dark = color['dark']
++    add('')
++    add('/* ---------------------------------------------------------------------------')
++    add('   Тёмная тема: применяется атрибутом  <html data-theme="dark">')
++    add('   Рекомендуется для вьювера при работе с документом > 1 часа.')
++    add('   ------------------------------------------------------------------------- */')
++    add('[data-theme="dark"] {')
++    add('  ' + _var('c-bg-app', dark['surface']['app']))
++    add('  ' + _var('c-bg-surface', dark['surface']['surface']))
++    add('  ' + _var('c-bg-surface-hover', dark['surface']['surface-hover']))
++    add('  ' + _var('c-bg-surface-sunken', dark['surface']['surface-sunken']))
++    add('  ' + _var('c-border-hairline', dark['border']['hairline']))
++    add('  ' + _var('c-border-default', dark['border']['default']))
++    add('  ' + _var('c-text-primary', dark['text']['primary']))
++    add('  ' + _var('c-text-secondary', dark['text']['secondary']))
++    add('  ' + _var('c-text-muted', dark['text']['muted']))
++    add('  ' + _var('c-accent', dark['accent']['solid']))
++    add('  ' + _var('c-accent-hover', dark['accent']['hover']))
++    add('  ' + _var('c-accent-subtle', dark['accent']['subtle']))
++    add('  ' + _var('c-accent-on-subtle', dark['accent']['on-subtle']))
++    for key, value in dark['shadow'].items():
++        add('  ' + _var('shadow-{key}'.format(key=key), value))
++    add('}')
++
++    # --- Семантические классы ---
++    add('')
++    add('/* ---------------------------------------------------------------------------')
++    add('   Готовые семантические классы')
++    add('   ------------------------------------------------------------------------- */')
++    add('')
++    add('/* Статусный бейдж: <span class="cde-badge cde-badge--attention">Не принято</span>')
++    add('   Иконку добавлять обязательным префиксом (SVG/шрифтовой), не только цветом */')
++    add('.cde-badge {')
++    add('  display: inline-flex; align-items: center; gap: 6px;')
++    add('  padding: 2px 10px;')
++    add('  border-radius: var(--r-pill);')
++    add('  font: 500 var(--text-caption)/var(--lh-caption) var(--font-sans);')
++    add('  white-space: nowrap;')
++    add('}')
++    for name in statuses:
++        add('.cde-badge--{name} {{ background: var(--s-{name}-subtle); color: var(--s-{name}-on); }}'.format(name=name))
++    add('.cde-badge--accent    { background: var(--c-accent-subtle);    color: var(--c-accent-on-subtle); }')
++    add('')
++
++    add('/* Классы по кодам статусов (совместимость с моделями):')
++    add('   {% if project.status == \'active\' %}cde-badge--active{% endif %} и т.п. */')
++    seen = set()
++    for entity in ('issue', 'document', 'project'):
++        for code, semantic in status_map[entity].items():
++            if code in seen:
++                continue
++            seen.add(code)
++            add('.cde-badge--{code} {{ background: var(--s-{semantic}-subtle); color: var(--s-{semantic}-on); }}'.format(code=code.lower(), semantic=semantic))
++    add('')
++
++    add('/* Дедлайн: живой индикатор срока ответа */')
++    add('.cde-deadline { background: var(--s-wait-subtle); color: var(--s-wait-on); }')
++    add('.cde-deadline--soon     { background: var(--s-attention-subtle); color: var(--s-attention-on); } /* <= 3 дней */')
++    add('.cde-deadline--overdue  { background: var(--s-attention-solid);  color: var(--c-text-inverse); } /* просрочено */')
++    add('')
++    add('/* Чипы версий: <span class="cde-chip">v1</span> */')
++    add('.cde-chip {')
++    add('  display: inline-flex; align-items: center;')
++    add('  padding: 1px 8px;')
++    add('  border: 1px solid var(--c-border-hairline);')
++    add('  border-radius: var(--r-sm);')
++    add('  font: 500 var(--text-caption)/var(--lh-caption) var(--font-mono);')
++    add('  color: var(--c-text-secondary);')
++    add('  font-variant-numeric: tabular-nums;')
++    add('}')
++    add('')
++    add('/* Маркер замечания на листе: цвет = СТАТУС, не номер */')
++    add('.cde-marker {')
++    add('  display: inline-flex; align-items: center; justify-content: center;')
++    add('  width: 24px; height: 24px;')
++    add('  border-radius: var(--r-pill);')
++    add('  color: var(--c-text-inverse);')
++    add('  font: 600 12px/1 var(--font-mono);')
++    add('  box-shadow: var(--shadow-2);')
++    add('  cursor: pointer;')
++    add('  font-variant-numeric: tabular-nums;')
++    add('}')
++    for name in statuses:
++        add('.cde-marker[data-status="{name}"] {{ background: var(--s-{name}-solid); }}'.format(name=name))
++    add('.cde-marker.is-active { outline: 3px solid var(--c-text-inverse); outline-offset: 1px; }')
++    add('')
++    add('/* Табличные данные: даты/версии не «пляшут» */')
++    add('.cde-tnum { font-variant-numeric: tabular-nums; }')
++    add('')
++    add('/* Клавиатурный фокус */')
++    add(':focus-visible { outline: none; box-shadow: var(--focus-ring); }')
++    add('')
++    add('/* Уважение к prefers-reduced-motion */')
++    add('@media (prefers-reduced-motion: reduce) {')
++    add('  *, *::before, *::after { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; }')
++    add('}')
++    return '\n'.join(lines) + '\n'
++
++
++# ---------------------------------------------------------------------------
++# design-tokens.js
++# ---------------------------------------------------------------------------
++
++def render_js(tokens: dict) -> str:
++    status_map = tokens['status_map']['issue']
++    statuses = tokens['color']['status']
++
++    hex_entries = []
++    class_entries = []
++    for code in sorted(status_map):
++        semantic = status_map[code]
++        values = statuses[semantic]
++        hex_entries.append(
++            "            {code}: '{solid}',".format(code=code, solid=values['solid'])
++        )
++        class_entries.append(
++            "            {code}: 'cde-badge cde-badge--{semantic}',".format(
++                code=code, semantic=semantic,
++            )
++        )
++
++    return '\n'.join([
++        GENERATED_NOTE_JS,
++        '/* Подключать ДО pdf_viewer.js: цвета статусов замечаний берутся отсюда,',
++        '   чтобы бейдж в панели, маркер на листе и рамка в экспорте PDF совпадали. */',
++        '(function () {',
++        "    'use strict';",
++        '',
++        '    window.CDE_TOKENS = {',
++        "        version: '{version}',".format(version=tokens['version']),
++        '        /* HEX-цвет маркера по коду статуса (для canvas и рамок) */',
++        '        statusHex: {',
++        *hex_entries,
++        '        },',
++        '        /* CSS-класс бейджа по коду статуса */',
++        '        statusClass: {',
++        *class_entries,
++        '        },',
++        "        defaultStatus: 'NEW'",
++        '    };',
++        '})();',
++    ]) + '\n'
++
++
++# ---------------------------------------------------------------------------
++# storage/domain/design_colors.py
++# ---------------------------------------------------------------------------
++
++def render_py(tokens: dict) -> str:
++    status_map = tokens['status_map']['issue']
++    statuses = tokens['color']['status']
++
++    def hex_to_rgb01(hex_value: str) -> tuple[float, float, float]:
++        value = hex_value.lstrip('#')
++        return tuple(round(int(value[index:index + 2], 16) / 255, 2) for index in (0, 2, 4))
++
++    hex_entries = []
++    rgb_entries = []
++    class_entries = []
++    for code in sorted(status_map):
++        semantic = status_map[code]
++        values = statuses[semantic]
++        rgb = hex_to_rgb01(values['solid'])
++        hex_entries.append(
++            "    '{code}': '{solid}',".format(code=code, solid=values['solid'])
++        )
++        rgb_entries.append(
++            "    '{code}': ({r}, {g}, {b}),  # {hex}".format(
++                code=code, r=rgb[0], g=rgb[1], b=rgb[2], hex=values['solid'],
++            )
++        )
++        class_entries.append(
++            "    '{code}': 'cde-badge cde-badge--{semantic}',".format(code=code, semantic=semantic)
++        )
++
++    return '\n'.join([
++        GENERATED_NOTE_PY,
++        '',
++        'TOKENS_VERSION = {version!r}'.format(version=tokens['version']),
++        'DEFAULT_STATUS = {default!r}'.format(default='NEW'),
++        '',
++        '# HEX-цвета статусов замечаний (совпадают с tokens.css и design-tokens.js).',
++        'ISSUE_STATUS_HEX = {',
++        *hex_entries,
++        '}',
++        '',
++        '# RGB 0..1 для PyMuPDF (экспорт PDF с маркапами): services.PDF_ISSUE_COLORS.',
++        'ISSUE_STATUS_RGB = {',
++        *rgb_entries,
++        '}',
++        '',
++        '# CSS-классы бейджей для шаблонов и экспорта.',
++        'ISSUE_STATUS_CLASS = {',
++        *class_entries,
++        '}',
++    ]) + '\n'
++
++
++# ---------------------------------------------------------------------------
++# CLI
++# ---------------------------------------------------------------------------
++
++def build_all(tokens: dict) -> dict[Path, str]:
++    return {
++        OUTPUTS[0]: render_css(tokens),
++        OUTPUTS[1]: render_js(tokens),
++        OUTPUTS[2]: render_py(tokens),
++    }
++
++
++def main() -> int:
++    check_only = '--check' in sys.argv[1:]
++    tokens = load_tokens()
++    rendered = build_all(tokens)
++
++    if check_only:
++        drifted = []
++        for path, content in rendered.items():
++            if not path.exists():
++                drifted.append('{path} (отсутствует)'.format(path=path.relative_to(REPO_ROOT)))
++            elif path.read_text(encoding='utf-8') != content:
++                drifted.append(path.relative_to(REPO_ROOT))
++        if drifted:
++            print('ДИЗАЙН-ДРЕЙФ: артефакты не совпадают с tokens.json:')
++            for item in drifted:
++                print('  - {item}'.format(item=item))
++            print('Перегенерируйте: python scripts/build_design_tokens.py и закоммитьте.')
++            return 1
++        print('OK: tokens.css, design-tokens.js, design_colors.py синхронны с tokens.json.')
++        return 0
++
++    for path, content in rendered.items():
++        path.parent.mkdir(parents=True, exist_ok=True)
++        path.write_text(content, encoding='utf-8')
++        print('written: {path}'.format(path=path.relative_to(REPO_ROOT)))
++    return 0
++
++
++if __name__ == '__main__':
++    raise SystemExit(main())
+diff --git a/static/css/redesign.css b/static/css/redesign.css
+index 1aa6182..c842ee8 100644
+--- a/static/css/redesign.css
++++ b/static/css/redesign.css
+@@ -1,18 +1,19 @@
+-.topbar { height: 52px; background: #fff; border-bottom: 1px solid #E4E4E0; display: flex; align-items: center; padding: 0 16px; gap: 12px; }
++/* Цвета — только через дизайн-токены (tokens.css, источник: tokens.json) */
++.topbar { height: 52px; background: var(--c-bg-surface); border-bottom: 1px solid var(--c-border-hairline); display: flex; align-items: center; padding: 0 16px; gap: 12px; }
+ .topbar .brand { font-weight: 600; font-size: 15px; display: flex; align-items: center; gap: 8px; }
+-.topbar .brand-mark { width: 24px; height: 24px; border-radius: 7px; background: #2F5BEA; color: #fff; display: grid; place-items: center; font-size: 11px; }
+-.topbar .crumb { color: #6E6E68; font-size: 13.5px; display: flex; gap: 6px; }
+-.topbar .crumb .doc { color: #191917; font-weight: 500; }
++.topbar .brand-mark { width: 24px; height: 24px; border-radius: 7px; background: var(--c-accent); color: var(--c-text-inverse); display: grid; place-items: center; font-size: 11px; }
++.topbar .crumb { color: var(--c-text-secondary); font-size: 13.5px; display: flex; gap: 6px; }
++.topbar .crumb .doc { color: var(--c-text-primary); font-weight: 500; }
+ .topbar .spacer { flex: 1; }
+-.topbar .btn { height: 32px; padding: 0 12px; border-radius: 8px; border: 1px solid #E4E4E0; background: #fff; font-size: 13px; font-weight: 500; display: inline-flex; align-items: center; gap: 6px; text-decoration: none; color: #191917; }
+-.topbar .btn.primary { background: #2F5BEA; border-color: #2F5BEA; color: #fff; }
+-.topbar .avatar { width: 28px; height: 28px; border-radius: 50%; background: #191917; color: #fff; display: grid; place-items: center; font-size: 11px; font-weight: 500; }
+-body { background: #F6F6F4; font-family: 'Golos Text', 'Inter', system-ui, sans-serif; }
++.topbar .btn { height: 32px; padding: 0 12px; border-radius: 8px; border: 1px solid var(--c-border-hairline); background: var(--c-bg-surface); font-size: 13px; font-weight: 500; display: inline-flex; align-items: center; gap: 6px; text-decoration: none; color: var(--c-text-primary); }
++.topbar .btn.primary { background: var(--c-accent); border-color: var(--c-accent); color: var(--c-text-inverse); }
++.topbar .avatar { width: 28px; height: 28px; border-radius: 50%; background: var(--c-text-primary); color: var(--c-text-inverse); display: grid; place-items: center; font-size: 11px; font-weight: 500; }
++body { background: var(--c-bg-app); font-family: 'Golos Text', 'Inter', system-ui, sans-serif; }
+ .container { max-width: 1060px; margin: 0 auto; padding: 24px; }
+ 
+ .permission-checkbox:checked {
+-    background-color: #198754;
+-    border-color: #198754;
++    background-color: var(--s-done-solid);
++    border-color: var(--s-done-solid);
+ }
+ 
+ .permission-checkbox {
+@@ -44,20 +45,20 @@ body { background: #F6F6F4; font-family: 'Golos Text', 'Inter', system-ui, sans-
+     font-size: 18px;
+     font-weight: 600;
+     letter-spacing: 1px;
+-    color: #191917;
++    color: var(--c-text-primary);
+ }
+ 
+ .brand-slogan {
+     display: block;
+     font-size: 10px;
+-    color: #6E6E68;
++    color: var(--c-text-secondary);
+     margin-top: 1px;
+ }
+ 
+ /* T85: header/breadcrumbs/table polish */
+ .topbar {
+-    background: #DCFCE7 !important;
+-    border-bottom: 1px solid #86EFAC;
++    background: var(--c-bg-header) !important;
++    border-bottom: 1px solid var(--c-border-header);
+ }
+ 
+ .topbar .brand {
+@@ -66,25 +67,25 @@ body { background: #F6F6F4; font-family: 'Golos Text', 'Inter', system-ui, sans-
+ 
+ .company-link {
+     text-decoration: none;
+-    color: #191917;
++    color: var(--c-text-primary);
+     font-weight: 600;
+     transition: color 0.2s;
+     border-bottom: 1px solid transparent;
+ }
+ 
+ .company-link:hover {
+-    color: #2F5BEA;
+-    border-bottom-color: #2F5BEA;
++    color: var(--c-accent);
++    border-bottom-color: var(--c-accent);
+ }
+ 
+ .crumb a {
+     text-decoration: none;
+-    color: #6E6E68;
++    color: var(--c-text-secondary);
+     transition: color 0.2s;
+ }
+ 
+ .crumb a:hover {
+-    color: #2F5BEA;
++    color: var(--c-accent);
+     text-decoration: underline;
+ }
+ 
+@@ -112,7 +113,7 @@ body { background: #F6F6F4; font-family: 'Golos Text', 'Inter', system-ui, sans-
+ }
+ 
+ .clickable-row:hover {
+-    background: #F0FDF4;
++    background: var(--c-bg-row-hover);
+ }
+ 
+ /* Sprint 1 (аудит 2.0): кликабельные строки списка проектов */
+diff --git a/static/css/viewer.css b/static/css/viewer.css
+index de5598e..89ceefb 100644
+--- a/static/css/viewer.css
++++ b/static/css/viewer.css
+@@ -1,27 +1,5 @@
+-:root {
+-    --status-new: var(--s-wait-solid);
+-    --status-new-bg: var(--s-wait-subtle);
+-    --status-new-on: var(--s-wait-on);
+-    --status-in_progress: var(--s-progress-solid);
+-    --status-in_progress-bg: var(--s-progress-subtle);
+-    --status-in_progress-on: var(--s-progress-on);
+-    --status-discussion: var(--s-review-solid);
+-    --status-discussion-bg: var(--s-review-subtle);
+-    --status-discussion-on: var(--s-review-on);
+-    --status-rejected: var(--s-attention-solid);
+-    --status-rejected-bg: var(--s-attention-subtle);
+-    --status-rejected-on: var(--s-attention-on);
+-    --status-done: var(--s-done-solid);
+-    --status-done-bg: var(--s-done-subtle);
+-    --status-done-on: var(--s-done-on);
+-    --status-closed: var(--s-closed-solid);
+-    --status-closed-bg: var(--s-closed-subtle);
+-    --status-closed-on: var(--s-closed-on);
+-    --status-cancelled: var(--s-canceled-solid);
+-    --status-cancelled-bg: var(--s-canceled-subtle);
+-    --status-cancelled-on: var(--s-canceled-on);
+-}
+-
++/* Алиасы --status-* (коды моделей -> токены) генерируются в tokens.css
++   из tokens.json. Здесь — только вьювер-специфика. */
+ body {
+     margin: 0;
+     height: 100vh;
+@@ -429,3 +407,64 @@ body {
+     font-size: 11px;
+     padding: 0 6px;
+ }
++
++/* ==========================================================================
++   Мини-карта (Спринт 2): живое превью листа + рамка видимой области.
++   Плавающая поверх тёмного канваса — не отнимает ширину у панели замечаний
++   (в отличие от старой sidebar-миникарты, которую снесли в 4d3620b).
++   ========================================================================== */
++.stage {
++    position: relative;
++}
++
++.pdf-minimap {
++    position: absolute;
++    right: 16px;
++    bottom: 16px;
++    z-index: 30;
++    padding: 6px;
++    background: var(--c-bg-surface, #fff);
++    border: 1px solid var(--c-border-default, #D4D4CE);
++    border-radius: var(--r-md, 8px);
++    box-shadow: var(--shadow-3, 0 8px 24px rgba(25, 25, 23, 0.14));
++    cursor: crosshair;
++    user-select: none;
++}
++
++.pdf-minimap.is-hidden {
++    display: none;
++}
++
++.pdf-minimap-label {
++    font: 500 11px/16px var(--font-mono, monospace);
++    color: var(--c-text-secondary, #6E6E68);
++    padding: 0 2px 4px;
++    white-space: nowrap;
++    font-variant-numeric: tabular-nums;
++}
++
++.pdf-minimap-view {
++    position: relative;
++}
++
++.pdf-minimap canvas {
++    display: block;
++    border: 1px solid var(--c-border-hairline, #E4E4E0);
++    background: #fff;
++}
++
++.pdf-minimap-rect {
++    position: absolute;
++    border: 2px solid var(--c-accent, #2F5BEA);
++    background: rgba(47, 91, 234, 0.12);
++    border-radius: 2px;
++    pointer-events: none;
++    box-sizing: border-box;
++}
++
++/* На узких экранах мини-карта только мешает — прячем (как и старую) */
++@media (max-width: 1000px) {
++    .pdf-minimap {
++        display: none;
++    }
++}
+diff --git a/static/design-tokens/tokens.css b/static/design-tokens/tokens.css
+index 3619991..e4d0370 100644
+--- a/static/design-tokens/tokens.css
++++ b/static/design-tokens/tokens.css
+@@ -1,6 +1,10 @@
+-/* ============================================================================
++/* ==========================================================================
++   АВТОГЕНЕРАТ из design-tokens/tokens.json — НЕ РЕДАКТИРОВАТЬ ВРУЧНУЮ.
++   Правки вносить в tokens.json, затем: python scripts/build_design_tokens.py
++   ========================================================================== */
++/*
+    CDE «Среда общих данных» — дизайн-токены (CSS Custom Properties)
+-   Источник истины: tokens.json · Версия 1.0 · 31.10.2026
++   Источник истины: tokens.json · Версия 20261102
+    ----------------------------------------------------------------------------
+    Подключение:  <link rel="stylesheet" href="tokens.css">
+    Шрифты (опционально, есть системные фолбэки):
+@@ -13,74 +17,81 @@
+    3. Статус никогда не кодируется только цветом: всегда иконка + текст.
+    4. Цвет + контекст применения:
+         solid   — маркеры, иконки, точки
+-        subtle  — фон бейджа/строки   (текст на нём — onSubtle, контраст AA)
++        subtle  — фон бейджа/строки   (текст на нём — on, контраст AA)
+    5. Формат дат и версий: 30.10.2026, 13:41 · v1 · R6 · tabular-nums.
+    ========================================================================== */
+ 
+ :root {
+   /* --- Поверхности --- */
+-  --c-bg-app:           #F6F6F4;
+-  --c-bg-surface:       #FFFFFF;
++  --c-bg-app: #F6F6F4;
++  --c-bg-surface: #FFFFFF;
+   --c-bg-surface-hover: #FAFAF8;
+-  --c-bg-surface-sunken:#EFEFEC;
+-  --c-bg-canvas:        #26272B;   /* тёмный canvas вьювера */
++  --c-bg-surface-sunken: #EFEFEC;
++  --c-bg-canvas: #26272B;  /* тёмный canvas вьювера */
++  --c-bg-header: #DCFCE7;  /* фирменный mint-хедер */
++  --c-bg-row-hover: #F0FDF4;  /* ховер кликабельной строки */
+ 
+   /* --- Границы --- */
+   --c-border-hairline: #E4E4E0;
+-  --c-border-default:  #D4D4CE;
++  --c-border-default: #D4D4CE;
++  --c-border-header: #86EFAC;  /* граница mint-хедера */
+ 
+   /* --- Текст --- */
+-  --c-text-primary:     #191917;
+-  --c-text-secondary:   #6E6E68;
+-  --c-text-muted:       #9C9C94;
+-  --c-text-on-dark:     #F2F2EF;
+-  --c-text-on-dark-muted:#A6A7AC;
+-  --c-text-inverse:     #FFFFFF;
++  --c-text-primary: #191917;
++  --c-text-secondary: #6E6E68;
++  --c-text-muted: #9C9C94;
++  --c-text-on-dark: #F2F2EF;
++  --c-text-on-dark-muted: #A6A7AC;
++  --c-text-inverse: #FFFFFF;
+ 
+   /* --- Акцент (единственный) --- */
+-  --c-accent:           #2F5BEA;
+-  --c-accent-hover:     #2447C4;
+-  --c-accent-pressed:   #1D3BA8;
+-  --c-accent-subtle:    #ECF0FE;
++  --c-accent: #2F5BEA;
++  --c-accent-hover: #2447C4;
++  --c-accent-pressed: #1D3BA8;
++  --c-accent-subtle: #ECF0FE;
+   --c-accent-on-subtle: #1E41B8;
+ 
+-  /* --- Статусы: solid / subtle / onSubtle --- */
+-  --s-attention-solid: #dc3545;  --s-attention-subtle: #FDEBED;  --s-attention-on: #B02A37; /* Не принято (REJECTED) */
+-  --s-wait-solid:      #0d6efd;  --s-wait-subtle:      #E7F0FF;  --s-wait-on:      #0B5ED7; /* Открыто (NEW) */
+-  --s-progress-solid:  #0dcaf0;  --s-progress-subtle:  #E0F8FC;  --s-progress-on:  #087990; /* В работе (IN_PROGRESS) */
+-  --s-review-solid:    #ffc107;  --s-review-subtle:    #FFF8E1;  --s-review-on:    #997404; /* К обсуждению (DISCUSSION) */
+-  --s-done-solid:      #198754;  --s-done-subtle:      #E6F4EE;  --s-done-on:      #146C43; /* Выполнено (DONE) */
+-  --s-closed-solid:    #6c757d;  --s-closed-subtle:    #F0F1F2;  --s-closed-on:    #565E64; /* Закрыто (CLOSED) */
+-  --s-canceled-solid:  #212529;  --s-canceled-subtle:  #E9EAEA;  --s-canceled-on:  #000000; /* Аннулировано (CANCELLED) */
++  /* --- Статусы: solid / subtle / on --- */
++  --s-wait-solid: #0d6efd;  --s-wait-subtle: #E7F0FF;  --s-wait-on: #0B5ED7; /* Открыто (NEW), черновик */
++  --s-progress-solid: #0dcaf0;  --s-progress-subtle: #E0F8FC;  --s-progress-on: #087990; /* В работе (IN_PROGRESS) */
++  --s-review-solid: #ffc107;  --s-review-subtle: #FFF8E1;  --s-review-on: #997404; /* К обсуждению (DISCUSSION), на проверке */
++  --s-attention-solid: #dc3545;  --s-attention-subtle: #FDEBED;  --s-attention-on: #B02A37; /* Не принято (REJECTED), просрочено */
++  --s-done-solid: #198754;  --s-done-subtle: #E6F4EE;  --s-done-on: #146C43; /* Выполнено (DONE), утверждено */
++  --s-closed-solid: #6c757d;  --s-closed-subtle: #F0F1F2;  --s-closed-on: #565E64; /* Закрыто (CLOSED), архив */
++  --s-canceled-solid: #212529;  --s-canceled-subtle: #E9EAEA;  --s-canceled-on: #000000; /* Аннулировано (CANCELLED) */
+ 
+   /* --- Типографика --- */
+   --font-sans: "Golos Text", "Inter", -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+   --font-mono: "JetBrains Mono", "SF Mono", Consolas, "Liberation Mono", monospace;
+ 
+-  --text-display: 22px;  --lh-display: 28px;  /* заголовок экрана      600 */
+-  --text-heading: 18px;  --lh-heading: 24px;  /* заголовок панели      600 */
+-  --text-subhead: 16px;  --lh-subhead: 22px;  /* подзаголовок          600 */
+-  --text-body-lg: 15px;  --lh-body-lg: 22px;  /* тексты замечаний      400 */
+-  --text-body:    14px;  --lh-body:    20px;  /* таблицы, реестры      400 */
+-  --text-second:  13px;  --lh-second:  18px;  /* лейблы, без CAPS      400 */
+-  --text-caption: 12px;  --lh-caption: 16px;  /* метаданные, бейджи    500 */
++  --text-display: 22px;  /* заголовок экрана      600 */
++  --lh-display: 28px;
++  --text-heading: 18px;  /* заголовок панели      600 */
++  --lh-heading: 24px;
++  --text-subhead: 16px;  /* подзаголовок          600 */
++  --lh-subhead: 22px;
++  --text-body-lg: 15px;  /* тексты замечаний      400 */
++  --lh-body-lg: 22px;
++  --text-body: 14px;  /* таблицы, реестры      400 */
++  --lh-body: 20px;
++  --text-second: 13px;  /* лейблы, без CAPS      400 */
++  --lh-second: 18px;
++  --text-caption: 12px;  /* метаданные, бейджи    500 */
++  --lh-caption: 16px;
+ 
+   /* --- Сетка 8pt --- */
+-  --sp-1: 4px;  --sp-2: 8px;  --sp-3: 12px; --sp-4: 16px; --sp-5: 20px;
+-  --sp-6: 24px; --sp-8: 32px; --sp-10: 40px; --sp-12: 48px; --sp-16: 64px;
++  --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 20px; --sp-6: 24px; --sp-8: 32px; --sp-10: 40px; --sp-12: 48px; --sp-16: 64px;
+ 
+   /* --- Контролы и плотность --- */
+-  --ctl-sm: 28px; --ctl-md: 32px; --ctl-lg: 40px;
+-  --row-comfortable: 48px; --row-compact: 36px;
+-  --panel-remarks: 380px;
++  --sm: 28px; --md: 32px; --lg: 40px; --row-comfortable: 48px; --row-compact: 36px; --panel-remarks: 380px;
+ 
+   /* --- Радиусы --- */
+   --r-sm: 6px; --r-md: 8px; --r-lg: 12px; --r-pill: 999px;
+ 
+   /* --- Тени --- */
+-  --shadow-1:   0 1px 2px rgba(25, 25, 23, 0.05);
+-  --shadow-2:   0 2px 8px rgba(25, 25, 23, 0.08);
+-  --shadow-3:   0 8px 24px rgba(25, 25, 23, 0.14);
++  --shadow-1: 0 1px 2px rgba(25, 25, 23, 0.05);
++  --shadow-2: 0 2px 8px rgba(25, 25, 23, 0.08);
++  --shadow-3: 0 8px 24px rgba(25, 25, 23, 0.14);
+   --shadow-doc: 0 8px 28px rgba(0, 0, 0, 0.30);
+ 
+   /* --- Моушн --- */
+@@ -91,27 +102,70 @@
+   --focus-ring: 0 0 0 2px #FFFFFF, 0 0 0 4px #2F5BEA;
+ }
+ 
++/* ---------------------------------------------------------------------------
++   Алиасы статусов: код из модели (Issue / Document / Project) -> токен.
++   Позволяют писать var(--status-{{ status|lower }}-bg) прямо в шаблонах.
++   ------------------------------------------------------------------------- */
++:root {
++  --status-new: var(--s-wait-solid);
++  --status-new-bg: var(--s-wait-subtle);
++  --status-new-on: var(--s-wait-on);
++  --status-in_progress: var(--s-progress-solid);
++  --status-in_progress-bg: var(--s-progress-subtle);
++  --status-in_progress-on: var(--s-progress-on);
++  --status-discussion: var(--s-review-solid);
++  --status-discussion-bg: var(--s-review-subtle);
++  --status-discussion-on: var(--s-review-on);
++  --status-rejected: var(--s-attention-solid);
++  --status-rejected-bg: var(--s-attention-subtle);
++  --status-rejected-on: var(--s-attention-on);
++  --status-done: var(--s-done-solid);
++  --status-done-bg: var(--s-done-subtle);
++  --status-done-on: var(--s-done-on);
++  --status-closed: var(--s-closed-solid);
++  --status-closed-bg: var(--s-closed-subtle);
++  --status-closed-on: var(--s-closed-on);
++  --status-cancelled: var(--s-canceled-solid);
++  --status-cancelled-bg: var(--s-canceled-subtle);
++  --status-cancelled-on: var(--s-canceled-on);
++  --status-draft: var(--s-wait-solid);
++  --status-draft-bg: var(--s-wait-subtle);
++  --status-draft-on: var(--s-wait-on);
++  --status-in_review: var(--s-review-solid);
++  --status-in_review-bg: var(--s-review-subtle);
++  --status-in_review-on: var(--s-review-on);
++  --status-approved: var(--s-done-solid);
++  --status-approved-bg: var(--s-done-subtle);
++  --status-approved-on: var(--s-done-on);
++  --status-archived: var(--s-closed-solid);
++  --status-archived-bg: var(--s-closed-subtle);
++  --status-archived-on: var(--s-closed-on);
++  --status-active: var(--s-done-solid);
++  --status-active-bg: var(--s-done-subtle);
++  --status-active-on: var(--s-done-on);
++}
++
+ /* ---------------------------------------------------------------------------
+    Тёмная тема: применяется атрибутом  <html data-theme="dark">
+    Рекомендуется для вьювера при работе с документом > 1 часа.
+    ------------------------------------------------------------------------- */
+ [data-theme="dark"] {
+-  --c-bg-app:            #1B1C1F;
+-  --c-bg-surface:        #232429;
+-  --c-bg-surface-hover:  #2A2B31;
+-  --c-bg-surface-sunken: #1F2024;
+-  --c-border-hairline:   #32333A;
+-  --c-border-default:    #3E3F47;
+-  --c-text-primary:      #F2F2EF;
+-  --c-text-secondary:    #A6A7AC;
+-  --c-text-muted:        #6E6F76;
+-  --c-accent:            #6B8BFF;
+-  --c-accent-hover:      #8AA2FF;
+-  --c-accent-subtle:     #26304F;
+-  --c-accent-on-subtle:  #B9C8FF;
+-  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.40);
+-  --shadow-2: 0 2px 8px rgba(0, 0, 0, 0.45);
+-  --shadow-3: 0 8px 24px rgba(0, 0, 0, 0.55);
++    --c-bg-app: #1B1C1F;
++    --c-bg-surface: #232429;
++    --c-bg-surface-hover: #2A2B31;
++    --c-bg-surface-sunken: #1F2024;
++    --c-border-hairline: #32333A;
++    --c-border-default: #3E3F47;
++    --c-text-primary: #F2F2EF;
++    --c-text-secondary: #A6A7AC;
++    --c-text-muted: #6E6F76;
++    --c-accent: #6B8BFF;
++    --c-accent-hover: #8AA2FF;
++    --c-accent-subtle: #26304F;
++    --c-accent-on-subtle: #B9C8FF;
++    --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.40);
++    --shadow-2: 0 2px 8px rgba(0, 0, 0, 0.45);
++    --shadow-3: 0 8px 24px rgba(0, 0, 0, 0.55);
+ }
+ 
+ /* ---------------------------------------------------------------------------
+@@ -127,24 +181,30 @@
+   font: 500 var(--text-caption)/var(--lh-caption) var(--font-sans);
+   white-space: nowrap;
+ }
++.cde-badge--wait { background: var(--s-wait-subtle); color: var(--s-wait-on); }
++.cde-badge--progress { background: var(--s-progress-subtle); color: var(--s-progress-on); }
++.cde-badge--review { background: var(--s-review-subtle); color: var(--s-review-on); }
+ .cde-badge--attention { background: var(--s-attention-subtle); color: var(--s-attention-on); }
+-.cde-badge--wait      { background: var(--s-wait-subtle);      color: var(--s-wait-on); }
+-.cde-badge--progress  { background: var(--s-progress-subtle);  color: var(--s-progress-on); }
+-.cde-badge--review    { background: var(--s-review-subtle);    color: var(--s-review-on); }
+-.cde-badge--done      { background: var(--s-done-subtle);      color: var(--s-done-on); }
+-.cde-badge--closed    { background: var(--s-closed-subtle);    color: var(--s-closed-on); }
+-.cde-badge--canceled  { background: var(--s-canceled-subtle);  color: var(--s-canceled-on); }
+-.cde-badge--new,
+-.cde-badge--draft     { background: var(--s-wait-subtle);      color: var(--s-wait-on); }
+-.cde-badge--in_progress { background: var(--s-progress-subtle); color: var(--s-progress-on); }
+-.cde-badge--discussion,
+-.cde-badge--in_review { background: var(--s-review-subtle);    color: var(--s-review-on); }
+-.cde-badge--rejected  { background: var(--s-attention-subtle); color: var(--s-attention-on); }
+-.cde-badge--approved  { background: var(--s-done-subtle);      color: var(--s-done-on); }
+-.cde-badge--archived  { background: var(--s-closed-subtle);    color: var(--s-closed-on); }
+-.cde-badge--cancelled { background: var(--s-canceled-subtle);  color: var(--s-canceled-on); }
++.cde-badge--done { background: var(--s-done-subtle); color: var(--s-done-on); }
++.cde-badge--closed { background: var(--s-closed-subtle); color: var(--s-closed-on); }
++.cde-badge--canceled { background: var(--s-canceled-subtle); color: var(--s-canceled-on); }
+ .cde-badge--accent    { background: var(--c-accent-subtle);    color: var(--c-accent-on-subtle); }
+ 
++/* Классы по кодам статусов (совместимость с моделями):
++   {% if project.status == 'active' %}cde-badge--active{% endif %} и т.п. */
++.cde-badge--new { background: var(--s-wait-subtle); color: var(--s-wait-on); }
++.cde-badge--in_progress { background: var(--s-progress-subtle); color: var(--s-progress-on); }
++.cde-badge--discussion { background: var(--s-review-subtle); color: var(--s-review-on); }
++.cde-badge--rejected { background: var(--s-attention-subtle); color: var(--s-attention-on); }
++.cde-badge--done { background: var(--s-done-subtle); color: var(--s-done-on); }
++.cde-badge--closed { background: var(--s-closed-subtle); color: var(--s-closed-on); }
++.cde-badge--cancelled { background: var(--s-canceled-subtle); color: var(--s-canceled-on); }
++.cde-badge--draft { background: var(--s-wait-subtle); color: var(--s-wait-on); }
++.cde-badge--in_review { background: var(--s-review-subtle); color: var(--s-review-on); }
++.cde-badge--approved { background: var(--s-done-subtle); color: var(--s-done-on); }
++.cde-badge--archived { background: var(--s-closed-subtle); color: var(--s-closed-on); }
++.cde-badge--active { background: var(--s-done-subtle); color: var(--s-done-on); }
++
+ /* Дедлайн: живой индикатор срока ответа */
+ .cde-deadline { background: var(--s-wait-subtle); color: var(--s-wait-on); }
+ .cde-deadline--soon     { background: var(--s-attention-subtle); color: var(--s-attention-on); } /* <= 3 дней */
+@@ -172,13 +232,13 @@
+   cursor: pointer;
+   font-variant-numeric: tabular-nums;
+ }
++.cde-marker[data-status="wait"] { background: var(--s-wait-solid); }
++.cde-marker[data-status="progress"] { background: var(--s-progress-solid); }
++.cde-marker[data-status="review"] { background: var(--s-review-solid); }
+ .cde-marker[data-status="attention"] { background: var(--s-attention-solid); }
+-.cde-marker[data-status="wait"]      { background: var(--s-wait-solid); }
+-.cde-marker[data-status="progress"]  { background: var(--s-progress-solid); }
+-.cde-marker[data-status="review"]    { background: var(--s-review-solid); }
+-.cde-marker[data-status="done"]      { background: var(--s-done-solid); opacity: 0.55; }
+-.cde-marker[data-status="closed"]    { background: var(--s-closed-solid); opacity: 0.55; }
+-.cde-marker[data-status="canceled"]  { background: var(--s-canceled-solid); opacity: 0.45; }
++.cde-marker[data-status="done"] { background: var(--s-done-solid); }
++.cde-marker[data-status="closed"] { background: var(--s-closed-solid); }
++.cde-marker[data-status="canceled"] { background: var(--s-canceled-solid); }
+ .cde-marker.is-active { outline: 3px solid var(--c-text-inverse); outline-offset: 1px; }
+ 
+ /* Табличные данные: даты/версии не «пляшут» */
+diff --git a/static/design-tokens/tokens.json b/static/design-tokens/tokens.json
+index e6b1151..b0ce4df 100644
+--- a/static/design-tokens/tokens.json
++++ b/static/design-tokens/tokens.json
+@@ -1,135 +1,183 @@
+ {
+-  "$description": "Дизайн-токены CDE «Среда общих данных» (проектная организация, строительство). Единый источник истины: из этого файла генерируются tokens.css и tailwind.config.js. Версия 1.0 · 31.10.2026 · по итогам UI/UX-аудита",
++  "version": "20261102",
++  "product": "СОД «Среда общих данных» · Stream-CAD",
++  "description": "Единый источник правды дизайн-системы. Из этого файла генерируются: static/design-tokens/tokens.css, static/js/design-tokens.js, storage/domain/design_colors.py. Генератор: python scripts/build_design_tokens.py (проверка дрейфа: --check, гоняется в CI).",
+   "color": {
+-    "$type": "color",
+-    "bg": {
+-      "app":           { "$value": "#F6F6F4", "$description": "Фон приложения — тёплый «бумажный» серый (замена холодного #F8F9FA)" },
+-      "surface":       { "$value": "#FFFFFF", "$description": "Карточки, панели, строки таблиц" },
+-      "surfaceHover":  { "$value": "#FAFAF8", "$description": "Ховер строк таблиц и пунктов списков" },
+-      "surfaceSunken": { "$value": "#EFEFEC", "$description": "Утопленные зоны: подвалы карточек, поля composer" },
+-      "canvas":        { "$value": "#26272B", "$description": "Тёмный canvas вьювера под листом документа" }
++    "surface": {
++      "app": "#F6F6F4",
++      "surface": "#FFFFFF",
++      "surface-hover": "#FAFAF8",
++      "surface-sunken": "#EFEFEC",
++      "canvas": "#26272B",
++      "header": "#DCFCE7",
++      "row-hover": "#F0FDF4"
+     },
+     "border": {
+-      "hairline": { "$value": "#E4E4E0", "$description": "Основные тонкие границы (1px)" },
+-      "default":  { "$value": "#D4D4CE", "$description": "Поля ввода, акцентные границы" }
++      "hairline": "#E4E4E0",
++      "default": "#D4D4CE",
++      "header": "#86EFAC"
+     },
+     "text": {
+-      "primary":     { "$value": "#191917", "$description": "Основной текст — мягкий чёрный" },
+-      "secondary":   { "$value": "#6E6E68" },
+-      "muted":       { "$value": "#9C9C94", "$description": "Метаданные, плейсхолдеры" },
+-      "onDark":      { "$value": "#F2F2EF", "$description": "Текст на тёмном canvas" },
+-      "onDarkMuted": { "$value": "#A6A7AC" },
+-      "inverse":     { "$value": "#FFFFFF", "$description": "Текст на акценте и статусах solid" }
++      "primary": "#191917",
++      "secondary": "#6E6E68",
++      "muted": "#9C9C94",
++      "on-dark": "#F2F2EF",
++      "on-dark-muted": "#A6A7AC",
++      "inverse": "#FFFFFF"
+     },
+     "accent": {
+-      "base":     { "$value": "#2F5BEA", "$description": "ЕДИНСТВЕННЫЙ бренд-акцент: primary-кнопки, ссылки, активные состояния" },
+-      "hover":    { "$value": "#2447C4" },
+-      "pressed":  { "$value": "#1D3BA8" },
+-      "subtle":   { "$value": "#ECF0FE", "$description": "Фон выделения активных пунктов, инфо-плашек" },
+-      "onSubtle": { "$value": "#1E41B8" }
++      "solid": "#2F5BEA",
++      "hover": "#2447C4",
++      "pressed": "#1D3BA8",
++      "subtle": "#ECF0FE",
++      "on-subtle": "#1E41B8"
+     },
+     "status": {
+-      "$description": "Семантика статусов. Правило: solid — иконки/маркеры/мелкие бейджи, subtle — фоны бейджей (текст onSubtle), контраст WCAG AA. Один смысл — один цвет во ВСЕХ контекстах: панель, бейдж, маркер на листе",
+       "wait": {
+-        "$description": "Открыто (NEW)",
+-        "solid":    { "$value": "#0d6efd" },
+-        "subtle":   { "$value": "#E7F0FF" },
+-        "onSubtle": { "$value": "#0B5ED7" }
++        "solid": "#0d6efd",
++        "subtle": "#E7F0FF",
++        "on": "#0B5ED7",
++        "comment": "Открыто (NEW), черновик"
+       },
+       "progress": {
+-        "$description": "В работе (IN_PROGRESS)",
+-        "solid":    { "$value": "#0dcaf0" },
+-        "subtle":   { "$value": "#E0F8FC" },
+-        "onSubtle": { "$value": "#087990" }
++        "solid": "#0dcaf0",
++        "subtle": "#E0F8FC",
++        "on": "#087990",
++        "comment": "В работе (IN_PROGRESS)"
+       },
+       "review": {
+-        "$description": "К обсуждению (DISCUSSION)",
+-        "solid":    { "$value": "#ffc107" },
+-        "subtle":   { "$value": "#FFF8E1" },
+-        "onSubtle": { "$value": "#997404" }
++        "solid": "#ffc107",
++        "subtle": "#FFF8E1",
++        "on": "#997404",
++        "comment": "К обсуждению (DISCUSSION), на проверке"
+       },
+       "attention": {
+-        "$description": "Не принято (REJECTED)",
+-        "solid":    { "$value": "#dc3545" },
+-        "subtle":   { "$value": "#FDEBED" },
+-        "onSubtle": { "$value": "#B02A37" }
++        "solid": "#dc3545",
++        "subtle": "#FDEBED",
++        "on": "#B02A37",
++        "comment": "Не принято (REJECTED), просрочено"
+       },
+       "done": {
+-        "$description": "Выполнено (DONE)",
+-        "solid":    { "$value": "#198754" },
+-        "subtle":   { "$value": "#E6F4EE" },
+-        "onSubtle": { "$value": "#146C43" }
++        "solid": "#198754",
++        "subtle": "#E6F4EE",
++        "on": "#146C43",
++        "comment": "Выполнено (DONE), утверждено"
+       },
+       "closed": {
+-        "$description": "Закрыто (CLOSED)",
+-        "solid":    { "$value": "#6c757d" },
+-        "subtle":   { "$value": "#F0F1F2" },
+-        "onSubtle": { "$value": "#565E64" }
++        "solid": "#6c757d",
++        "subtle": "#F0F1F2",
++        "on": "#565E64",
++        "comment": "Закрыто (CLOSED), архив"
+       },
+       "canceled": {
+-        "$description": "Аннулировано (CANCELLED)",
+-        "solid":    { "$value": "#212529" },
+-        "subtle":   { "$value": "#E9EAEA" },
+-        "onSubtle": { "$value": "#000000" }
++        "solid": "#212529",
++        "subtle": "#E9EAEA",
++        "on": "#000000",
++        "comment": "Аннулировано (CANCELLED)"
+       }
+-    }
+-  },
+-  "font": {
+-    "$type": "font",
+-    "family": {
+-      "sans": { "$value": "\"Golos Text\", \"Inter\", -apple-system, \"Segoe UI\", Roboto, \"Helvetica Neue\", Arial, sans-serif", "$description": "Открытая гарнитура с развитой кириллицей; Inter — нейтральная альтернатива" },
+-      "mono": { "$value": "\"JetBrains Mono\", \"SF Mono\", Consolas, \"Liberation Mono\", monospace", "$description": "Шифры, версии, ревизии, даты в колонках: PDF-01, v1, R6" }
+     },
+-    "size": {
+-      "$description": "Шкала по 8pt-сетке. tabular-nums обязателен для табличных данных (даты, версии)",
+-      "display":    { "$value": "22px", "lineHeight": "28px", "weight": 600, "$description": "Заголовок экрана («Проекты»)" },
+-      "heading":    { "$value": "18px", "lineHeight": "24px", "weight": 600, "$description": "Заголовок панели (панель замечаний)" },
+-      "subheading": { "$value": "16px", "lineHeight": "22px", "weight": 600 },
+-      "bodyLg":     { "$value": "15px", "lineHeight": "22px", "weight": 400, "$description": "Длинное чтение: тексты замечаний" },
+-      "body":       { "$value": "14px", "lineHeight": "20px", "weight": 400, "$description": "Таблицы, реестры, основной UI" },
+-      "secondary":  { "$value": "13px", "lineHeight": "18px", "weight": 400, "$description": "Вторичный текст, лейблы фильтров (минимум, без CAPS)" },
+-      "caption":    { "$value": "12px", "lineHeight": "16px", "weight": 500, "$description": "Метаданные, бейджи. Младше 12px в UI не использовать" }
++    "dark": {
++      "surface": {
++        "app": "#1B1C1F",
++        "surface": "#232429",
++        "surface-hover": "#2A2B31",
++        "surface-sunken": "#1F2024"
++      },
++      "border": {
++        "hairline": "#32333A",
++        "default": "#3E3F47"
++      },
++      "text": {
++        "primary": "#F2F2EF",
++        "secondary": "#A6A7AC",
++        "muted": "#6E6F76"
++      },
++      "accent": {
++        "solid": "#6B8BFF",
++        "hover": "#8AA2FF",
++        "subtle": "#26304F",
++        "on-subtle": "#B9C8FF"
++      },
++      "shadow": {
++        "1": "0 1px 2px rgba(0, 0, 0, 0.40)",
++        "2": "0 2px 8px rgba(0, 0, 0, 0.45)",
++        "3": "0 8px 24px rgba(0, 0, 0, 0.55)"
++      }
+     }
+   },
+-  "dimension": {
+-    "$type": "dimension",
+-    "space": {
+-      "$description": "8pt-сетка: 4, 8, 12, 16, 20, 24, 32, 40, 48, 64",
+-      "1": "4px", "2": "8px", "3": "12px", "4": "16px", "5": "20px",
+-      "6": "24px", "8": "32px", "10": "40px", "12": "48px", "16": "64px"
+-    },
+-    "control": {
+-      "$description": "Высоты контролов. Радиус единый: 8px (кнопки/поля), 12px (карточки)",
+-      "sm": "28px", "md": "32px", "lg": "40px"
++  "status_map": {
++    "issue": {
++      "NEW": "wait",
++      "IN_PROGRESS": "progress",
++      "DISCUSSION": "review",
++      "REJECTED": "attention",
++      "DONE": "done",
++      "CLOSED": "closed",
++      "CANCELLED": "canceled"
+     },
+-    "tableRow": {
+-      "comfortable": "48px", "compact": "36px",
+-      "$description": "Переключатель плотности таблиц обязателен для CDE"
++    "document": {
++      "draft": "wait",
++      "in_review": "review",
++      "approved": "done",
++      "archived": "closed"
+     },
+-    "panel": {
+-      "remarks": "380px",
+-      "$description": "Панель замечаний: ресайзабельная 360–420px, с collapse"
++    "project": {
++      "active": "done",
++      "archived": "closed"
++    }
++  },
++  "typography": {
++    "sans": "\"Golos Text\", \"Inter\", -apple-system, \"Segoe UI\", Roboto, \"Helvetica Neue\", Arial, sans-serif",
++    "mono": "\"JetBrains Mono\", \"SF Mono\", Consolas, \"Liberation Mono\", monospace",
++    "scale": {
++      "display": { "size": "22px", "line": "28px", "comment": "заголовок экрана      600" },
++      "heading": { "size": "18px", "line": "24px", "comment": "заголовок панели      600" },
++      "subhead": { "size": "16px", "line": "22px", "comment": "подзаголовок          600" },
++      "body-lg": { "size": "15px", "line": "22px", "comment": "тексты замечаний      400" },
++      "body": { "size": "14px", "line": "20px", "comment": "таблицы, реестры      400" },
++      "second": { "size": "13px", "line": "18px", "comment": "лейблы, без CAPS      400" },
++      "caption": { "size": "12px", "line": "16px", "comment": "метаданные, бейджи    500" }
+     }
+   },
++  "spacing": {
++    "1": "4px",
++    "2": "8px",
++    "3": "12px",
++    "4": "16px",
++    "5": "20px",
++    "6": "24px",
++    "8": "32px",
++    "10": "40px",
++    "12": "48px",
++    "16": "64px"
++  },
++  "controls": {
++    "sm": "28px",
++    "md": "32px",
++    "lg": "40px",
++    "row-comfortable": "48px",
++    "row-compact": "36px",
++    "panel-remarks": "380px"
++  },
+   "radius": {
+-    "$type": "dimension",
+-    "sm": "6px", "md": "8px", "lg": "12px", "pill": "999px"
++    "sm": "6px",
++    "md": "8px",
++    "lg": "12px",
++    "pill": "999px"
+   },
+   "shadow": {
+-    "$type": "shadow",
+-    "1":   { "$value": "0 1px 2px rgba(25, 25, 23, 0.05)", "$description": "Покой: карточки в потоке" },
+-    "2":   { "$value": "0 2px 8px rgba(25, 25, 23, 0.08)", "$description": "Приподнятые: дропдауны, поповеры" },
+-    "3":   { "$value": "0 8px 24px rgba(25, 25, 23, 0.14)", "$description": "Модальные окна" },
+-    "doc": { "$value": "0 8px 28px rgba(0, 0, 0, 0.30)", "$description": "Лист документа на тёмном canvas вьювера" }
++    "1": "0 1px 2px rgba(25, 25, 23, 0.05)",
++    "2": "0 2px 8px rgba(25, 25, 23, 0.08)",
++    "3": "0 8px 24px rgba(25, 25, 23, 0.14)",
++    "doc": "0 8px 28px rgba(0, 0, 0, 0.30)"
+   },
+-  "duration": {
+-    "$type": "duration",
+-    "fast": "120ms", "base": "180ms", "slow": "240ms",
+-    "$description": "Панели и модалки — slow; hover/press — fast/base. Всегда уважать prefers-reduced-motion"
++  "motion": {
++    "fast": "120ms",
++    "base": "180ms",
++    "slow": "240ms",
++    "ease-out": "cubic-bezier(0.16, 1, 0.3, 1)"
+   },
+-  "focusRing": {
+-    "$type": "shadow",
+-    "$value": "0 0 0 2px #FFFFFF, 0 0 0 4px #2F5BEA",
+-    "$description": "Видимый фокус-ринг для клавиатурной навигации (WCAG 2.2 AA), не убирать outline программно"
++  "focus": {
++    "ring": "0 0 0 2px #FFFFFF, 0 0 0 4px #2F5BEA"
+   }
+ }
+diff --git a/static/js/design-tokens.js b/static/js/design-tokens.js
+new file mode 100644
+index 0000000..aa50127
+--- /dev/null
++++ b/static/js/design-tokens.js
+@@ -0,0 +1,32 @@
++/* АВТОГЕНЕРАТ из design-tokens/tokens.json — НЕ РЕДАКТИРОВАТЬ ВРУЧНУЮ.
++   Правки вносить в tokens.json, затем: python scripts/build_design_tokens.py */
++/* Подключать ДО pdf_viewer.js: цвета статусов замечаний берутся отсюда,
++   чтобы бейдж в панели, маркер на листе и рамка в экспорте PDF совпадали. */
++(function () {
++    'use strict';
++
++    window.CDE_TOKENS = {
++        version: '20261102',
++        /* HEX-цвет маркера по коду статуса (для canvas и рамок) */
++        statusHex: {
++            CANCELLED: '#212529',
++            CLOSED: '#6c757d',
++            DISCUSSION: '#ffc107',
++            DONE: '#198754',
++            IN_PROGRESS: '#0dcaf0',
++            NEW: '#0d6efd',
++            REJECTED: '#dc3545',
++        },
++        /* CSS-класс бейджа по коду статуса */
++        statusClass: {
++            CANCELLED: 'cde-badge cde-badge--canceled',
++            CLOSED: 'cde-badge cde-badge--closed',
++            DISCUSSION: 'cde-badge cde-badge--review',
++            DONE: 'cde-badge cde-badge--done',
++            IN_PROGRESS: 'cde-badge cde-badge--progress',
++            NEW: 'cde-badge cde-badge--wait',
++            REJECTED: 'cde-badge cde-badge--attention',
++        },
++        defaultStatus: 'NEW'
++    };
++})();
+diff --git a/static/js/pdf_viewer.js b/static/js/pdf_viewer.js
+index f6c80a9..d004a96 100644
+--- a/static/js/pdf_viewer.js
++++ b/static/js/pdf_viewer.js
+@@ -40,15 +40,10 @@
+         ? window.bootstrap.Modal.getOrCreateInstance(modalElement)
+         : null;
+ 
+-    const STATUS_COLORS = {
+-        NEW: '#0d6efd',
+-        IN_PROGRESS: '#0dcaf0',
+-        DISCUSSION: '#ffc107',
+-        REJECTED: '#dc3545',
+-        DONE: '#198754',
+-        CLOSED: '#6c757d',
+-        CANCELLED: '#212529',
+-    };
++    // Цвета статусов приходят из дизайн-токенов (static/js/design-tokens.js,
++    // генерируется из tokens.json). Фолбэк — только аварийный синий.
++    const STATUS_COLORS = (window.CDE_TOKENS && window.CDE_TOKENS.statusHex) || {};
++    const STATUS_FALLBACK_COLOR = '#0d6efd';
+ 
+     const pages = new Map();
+     const pageCleanups = [];
+@@ -63,7 +58,7 @@
+     let pendingCrop = '';
+ 
+     function statusColor(status) {
+-        return STATUS_COLORS[status] || '#0d6efd';
++        return STATUS_COLORS[status] || STATUS_FALLBACK_COLOR;
+     }
+ 
+     function withAlpha(hex, alpha) {
+@@ -448,8 +443,8 @@
+             };
+             preview = document.createElement('div');
+             preview.className = 'pdf-markup pdf-markup-preview';
+-            preview.style.borderColor = STATUS_COLORS.NEW;
+-            preview.style.backgroundColor = withAlpha(STATUS_COLORS.NEW, 0.1);
++            preview.style.borderColor = statusColor('NEW');
++            preview.style.backgroundColor = withAlpha(statusColor('NEW'), 0.1);
+             wrapper.querySelector('.pdf-pin-layer').appendChild(preview);
+             event.preventDefault();
+         });
+@@ -545,12 +540,7 @@
+         if (totalLabel) {
+             totalLabel.textContent = String(total);
+         }
+-        document.querySelectorAll('#minimap .thumb').forEach(function (thumb) {
+-            thumb.classList.toggle(
+-                'active',
+-                Number(thumb.dataset.page) === currentPage
+-            );
+-        });
++        updateMinimapLabel();
+     }
+ 
+     function renderPage(pageNumber) {
+@@ -608,6 +598,7 @@
+                 viewport: viewport,
+             }).promise.then(function () {
+                 drawMarks(currentPage);
++                renderMinimap();
+             });
+         });
+     }
+@@ -865,30 +856,185 @@
+         }
+     }
+ 
+-    function buildMinimap(pageCount) {
+-        const minimap = document.getElementById('minimap');
+-        if (!minimap) {
++    /* ====================================================================
++       Мини-карта: живое превью текущего листа + рамка видимой области.
++       В отличие от старой (удаляли её в 4d3620b — статичные SVG-заглушки
++       «01/02»), здесь настоящий рендер страницы в маленьком масштабе:
++       видно, где находишься на листе A1; клик/протяжка по мини-карте
++       перемещает вьюпорт. Плавающая — не отнимает ширину у панели.
++       ==================================================================== */
++    const MINIMAP_WIDTH = 168;
++    let minimapBox = null;
++    let minimapView = null;
++    let minimapCanvas = null;
++    let minimapRect = null;
++    let minimapLabel = null;
++    let minimapVisible = true;
++
++    function minimapStage() {
++        return viewer.closest('.stage') || viewer;
++    }
++
++    function updateMinimapLabel() {
++        if (minimapLabel && pdfDocument) {
++            minimapLabel.textContent = 'Лист ' + currentPage + ' / ' + pdfDocument.numPages;
++        }
++    }
++
++    function initMinimap() {
++        const stage = minimapStage();
++        if (!stage) {
+             return;
+         }
+-        minimap.innerHTML = '';
+-        for (let number = 1; number <= pageCount; number += 1) {
+-            const button = document.createElement('button');
+-            button.type = 'button';
+-            button.className = 'thumb' + (number === 1 ? ' active' : '');
+-            button.dataset.page = String(number);
+-            button.title = 'Лист ' + number;
+-            button.innerHTML =
+-                '<svg viewBox="0 0 92 64"><rect x="6" y="5" width="80" height="54" '
+-                + 'fill="#fff" stroke="#E4E4E0"/><text x="46" y="46" font-size="7" '
+-                + 'fill="#9C9C94" text-anchor="middle">'
+-                + String(number).padStart(2, '0') + '</text></svg>';
+-            button.addEventListener('click', function () {
+-                window.goToPage(number);
+-            });
+-            minimap.appendChild(button);
++        minimapBox = document.createElement('div');
++        minimapBox.className = 'pdf-minimap';
++        minimapBox.id = 'pdfMinimap';
++        minimapLabel = document.createElement('div');
++        minimapLabel.className = 'pdf-minimap-label num';
++        minimapView = document.createElement('div');
++        minimapView.className = 'pdf-minimap-view';
++        minimapCanvas = document.createElement('canvas');
++        minimapRect = document.createElement('div');
++        minimapRect.className = 'pdf-minimap-rect';
++        minimapView.appendChild(minimapCanvas);
++        minimapView.appendChild(minimapRect);
++        minimapBox.appendChild(minimapLabel);
++        minimapBox.appendChild(minimapView);
++        stage.appendChild(minimapBox);
++
++        try {
++            minimapVisible = window.localStorage.getItem('cde-minimap') !== 'off';
++        } catch (error) {
++            minimapVisible = true;
++        }
++        minimapBox.classList.toggle('is-hidden', !minimapVisible);
++        const toggle = document.getElementById('minimapToggle');
++        if (toggle) {
++            toggle.classList.toggle('active', minimapVisible);
++        }
++
++        minimapBox.addEventListener('mousedown', function (event) {
++            if (event.button !== 0) {
++                return;
++            }
++            event.preventDefault();
++            minimapNavigate(event);
++            const onMove = function (moveEvent) {
++                minimapNavigate(moveEvent);
++            };
++            const onUp = function () {
++                window.removeEventListener('mousemove', onMove);
++                window.removeEventListener('mouseup', onUp);
++            };
++            window.addEventListener('mousemove', onMove);
++            window.addEventListener('mouseup', onUp);
++        });
++
++        stage.addEventListener('scroll', function () {
++            window.requestAnimationFrame(updateMinimapRect);
++        }, { passive: true });
++        window.addEventListener('resize', updateMinimapRect);
++    }
++
++    function minimapNavigate(event) {
++        const stage = minimapStage();
++        const page = pages.get(currentPage);
++        if (!stage || !page || !minimapView) {
++            return;
++        }
++        const viewRect = minimapView.getBoundingClientRect();
++        if (!viewRect.width || !viewRect.height) {
++            return;
+         }
++        const ratioX = Math.min(1, Math.max(0, (event.clientX - viewRect.left) / viewRect.width));
++        const ratioY = Math.min(1, Math.max(0, (event.clientY - viewRect.top) / viewRect.height));
++        const pageRect = page.wrapper.getBoundingClientRect();
++        const stageRect = stage.getBoundingClientRect();
++        // Хотим, чтобы точка ratio листа оказалась в той же доле вьюпорта.
++        const targetX = ratioX * pageRect.width;
++        const targetY = ratioY * pageRect.height;
++        const currentX = (stageRect.left - pageRect.left) + stageRect.width * ratioX;
++        const currentY = (stageRect.top - pageRect.top) + stageRect.height * ratioY;
++        stage.scrollLeft += targetX - currentX;
++        stage.scrollTop += targetY - currentY;
++        updateMinimapRect();
+     }
+ 
++    function renderMinimap() {
++        if (!minimapVisible || !pdfDocument || !minimapCanvas) {
++            return;
++        }
++        pdfDocument.getPage(currentPage).then(function (page) {
++            const base = page.getViewport({ scale: 1, rotation: currentRotation });
++            if (!base.width) {
++                return null;
++            }
++            const scale = MINIMAP_WIDTH / base.width;
++            const viewport = page.getViewport({ scale: scale, rotation: currentRotation });
++            const outputScale = window.devicePixelRatio || 1;
++            minimapCanvas.width = Math.floor(viewport.width * outputScale);
++            minimapCanvas.height = Math.floor(viewport.height * outputScale);
++            minimapCanvas.style.width = Math.floor(viewport.width) + 'px';
++            minimapCanvas.style.height = Math.floor(viewport.height) + 'px';
++            const context = minimapCanvas.getContext('2d');
++            context.setTransform(outputScale, 0, 0, outputScale, 0, 0);
++            updateMinimapLabel();
++            return page.render({
++                canvasContext: context,
++                viewport: viewport,
++            }).promise;
++        }).then(function () {
++            updateMinimapRect();
++        }).catch(function () {});
++    }
++
++    function updateMinimapRect() {
++        if (!minimapVisible || !minimapRect || !minimapCanvas) {
++            return;
++        }
++        const stage = minimapStage();
++        const page = pages.get(currentPage);
++        if (!stage || !page) {
++            return;
++        }
++        const pageRect = page.wrapper.getBoundingClientRect();
++        if (!pageRect.width || !pageRect.height) {
++            return;
++        }
++        const stageRect = stage.getBoundingClientRect();
++        // Видимая область в координатах листа (с обрезкой по границам).
++        const left = Math.max(0, stageRect.left - pageRect.left);
++        const top = Math.max(0, stageRect.top - pageRect.top);
++        const right = Math.min(pageRect.width, stageRect.left + stageRect.width - pageRect.left);
++        const bottom = Math.min(pageRect.height, stageRect.top + stageRect.height - pageRect.top);
++        const scaleX = minimapCanvas.clientWidth / pageRect.width;
++        const scaleY = minimapCanvas.clientHeight / pageRect.height;
++        minimapRect.style.left = (left * scaleX) + 'px';
++        minimapRect.style.top = (top * scaleY) + 'px';
++        minimapRect.style.width = Math.max(6, (right - left) * scaleX) + 'px';
++        minimapRect.style.height = Math.max(6, (bottom - top) * scaleY) + 'px';
++    }
++
++    window.toggleMinimap = function () {
++        if (!minimapBox) {
++            return;
++        }
++        minimapVisible = !minimapVisible;
++        minimapBox.classList.toggle('is-hidden', !minimapVisible);
++        try {
++            window.localStorage.setItem('cde-minimap', minimapVisible ? 'on' : 'off');
++        } catch (error) {
++            /* приватный режим — просто не запоминаем */
++        }
++        const toggle = document.getElementById('minimapToggle');
++        if (toggle) {
++            toggle.classList.toggle('active', minimapVisible);
++        }
++        if (minimapVisible) {
++            renderMinimap();
++        }
++    };
++
+     window.goToPage = function (pageNumber) {
+         return renderPage(pageNumber);
+     };
+@@ -921,7 +1067,6 @@
+         window.pdfjsLib.GlobalWorkerOptions.workerSrc = viewer.dataset.workerUrl;
+         window.pdfjsLib.getDocument(pdfUrl).promise.then(function (pdf) {
+             pdfDocument = pdf;
+-            buildMinimap(pdf.numPages);
+             return renderPages();
+         }).catch(function () {
+             viewer.innerHTML = '<div class="alert alert-warning m-3 mb-0">Не удалось загрузить PDF.</div>';
+@@ -1129,6 +1274,7 @@
+     initPan();
+     initContextMenu();
+     initDetails();
++    initMinimap();
+     if (issues.length) {
+         selectIssue(issues[0].id);
+     }
+diff --git a/storage/adapters/templates/storage/_documents_panel.html b/storage/adapters/templates/storage/_documents_panel.html
+index 416436f..cc03ac5 100644
+--- a/storage/adapters/templates/storage/_documents_panel.html
++++ b/storage/adapters/templates/storage/_documents_panel.html
+@@ -10,6 +10,11 @@
+ 
+     {% include 'storage/_breadcrumbs.html' %}
+ 
++    {% comment %}
++    Спринт 2: фильтры применяются сразу — по change у селектов и с
++    задержкой 350 мс при наборе в поиске. Кнопка «Найти» больше не нужна
++    (скрытый submit оставлен для доступности/Enter).
++    {% endcomment %}
+     <form id="filtersForm"
+           class="filter-panel"
+           method="get"
+@@ -19,7 +24,8 @@
+           hx-select="#documentsPanel"
+           hx-swap="outerHTML"
+           hx-push-url="true"
+-          hx-trigger="change, submit, keyup changed delay:350ms from:#quickFilter">
++          hx-trigger="change, keyup changed delay:350ms from:find input[name='q'], submit"
++          hx-indicator="#documentsPanel">
+         <input type="hidden" name="tab" value="documents">
+         {% if selected_view %}
+             <input type="hidden" name="view" value="{{ selected_view.pk }}">
+@@ -85,12 +91,13 @@
+                 {{ filter.form.q }}
+             </div>
+             <div class="filter-actions">
+-                <button type="submit" class="btn btn-primary btn-sm">
+-                    <i class="bi bi-search me-1" aria-hidden="true"></i>Найти
+-                </button>
++                {% comment %}доступность: Enter в любом поле всё ещё отправляет форму{% endcomment %}
++                <button type="submit" class="visually-hidden" aria-hidden="true" tabindex="-1">Найти</button>
+                 <a href="{% url 'storage:project_detail' project.pk %}"
+                    class="btn btn-outline-secondary btn-sm"
+-                   title="Сбросить фильтры">Сбросить</a>
++                   title="Сбросить фильтры">
++                    <i class="bi bi-x-lg me-1" aria-hidden="true"></i>Сбросить
++                </a>
+             </div>
+         </div>
+     </form>
+@@ -110,6 +117,17 @@
+         </div>
+         <div class="toolbar-spacer"></div>
+         <div class="toolbar-actions">
++            <a class="btn btn-outline-secondary btn-sm" href="{% url 'issues:issue_registry' project.pk %}"
++               title="Реестр замечаний проекта">
++                <i class="bi bi-chat-left-text" aria-hidden="true"></i>
++                <span class="d-none d-xl-inline">Замечания</span>
++                {% if issue_counts %}
++                    <span class="cde-badge {% if issue_counts.overdue %}cde-deadline cde-deadline--overdue{% elif issue_counts.open %}cde-badge--attention{% else %}cde-badge--done{% endif %} cde-tnum ms-1"
++                          title="Открытых: {{ issue_counts.open }} · просрочено: {{ issue_counts.overdue }}">
++                        {{ issue_counts.open }}
++                    </span>
++                {% endif %}
++            </a>
+             <form method="post" action="{% url 'storage:simulate_mail_import' project.pk %}" class="mb-0">
+                 {% csrf_token %}
+                 <button type="submit" class="btn btn-outline-secondary btn-sm" title="Импортировать из почты">
+diff --git a/storage/adapters/templates/storage/base.html b/storage/adapters/templates/storage/base.html
+new file mode 100644
+index 0000000..a9ddba6
+--- /dev/null
++++ b/storage/adapters/templates/storage/base.html
+@@ -0,0 +1,37 @@
++{% load static %}
++{% comment %}
++Базовый шаблон всех «приложных» страниц СОД (кроме полноэкранного вьювера
++document_detail — у него своя разметка и свой набор стилей).
++
++Что даёт:
++  - один <head> на все страницы: viewport, bootstrap, ДИЗАЙН-ТОКЕНЫ,
++    bootstrap-icons, redesign, app.css;
++  - tokens.css теперь грузится везде — cde-badge/cde-chip/cde-deadline
++    работают на любой странице, а не только во вьювере;
++  - единая точка подключения скриптов: bootstrap.bundle всегда доступен
++    (раньше на части страниц модалки не работали без can_create_project).
++
++Блоки: title, extra_css, topbar, body_class, content, extra_js.
++{% endcomment %}
++<!DOCTYPE html>
++<html lang="ru">
++<head>
++    <meta charset="utf-8">
++    <meta name="viewport" content="width=device-width, initial-scale=1">
++    <title>{% block title %}Stream-CAD{% endblock %}</title>
++    <link rel="stylesheet" href="{% static 'css/bootstrap.min.css' %}">
++    <link rel="stylesheet" href="{% static 'design-tokens/tokens.css' %}?v=20261102">
++    <link rel="stylesheet" href="{% static 'css/redesign.css' %}">
++    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
++    <link rel="stylesheet" href="{% static 'css/app.css' %}?v=20261102">
++    {% block extra_css %}{% endblock %}
++</head>
++<body class="{% block body_class %}bg-light{% endblock %}">
++{% block topbar %}
++    {% include 'storage/_topbar.html' %}
++{% endblock %}
++{% block content %}{% endblock %}
++<script src="{% static 'js/vendor/bootstrap.bundle.min.js' %}"></script>
++{% block extra_js %}{% endblock %}
++</body>
++</html>
+diff --git a/storage/adapters/templates/storage/dashboard.html b/storage/adapters/templates/storage/dashboard.html
+index 19c31ae..91a6d39 100644
+--- a/storage/adapters/templates/storage/dashboard.html
++++ b/storage/adapters/templates/storage/dashboard.html
+@@ -1,17 +1,12 @@
+-{% load static %}
+-<!DOCTYPE html>
+-<html lang="ru">
+-<head>
+-    <meta charset="utf-8">
+-    <meta name="viewport" content="width=device-width, initial-scale=1">
+-    <title>Панель управления — Stream-CAD</title>
+-    <link rel="stylesheet" href="{% static 'css/bootstrap.min.css' %}">
+-    <link rel="stylesheet" href="{% static 'css/redesign.css' %}">
+-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+-    <link rel="stylesheet" href="{% static 'css/app.css' %}">
+-</head>
+-<body class="bg-light">
+-{% include 'storage/_topbar.html' with topbar_company=company topbar_title="Панель управления" %}
++{% extends 'storage/base.html' %}
++
++{% block title %}Панель управления — Stream-CAD{% endblock %}
++
++{% block topbar %}
++    {% include 'storage/_topbar.html' with topbar_company=company topbar_title="Панель управления" %}
++{% endblock %}
++
++{% block content %}
+ <main class="container-fluid px-3 py-3 pb-5">
+     <div class="d-flex justify-content-between align-items-center mb-3">
+         <div>
+@@ -251,7 +246,9 @@
+         <div class="alert alert-warning">Компания не найдена.</div>
+     {% endif %}
+ </main>
+-<script src="{% static 'js/vendor/bootstrap.bundle.min.js' %}"></script>
++{% endblock %}
++
++{% block extra_js %}
+ <script>
+     document.querySelectorAll('.clickable-row').forEach(function (row) {
+         row.addEventListener('click', function () {
+@@ -259,5 +256,4 @@
+         });
+     });
+ </script>
+-</body>
+-</html>
++{% endblock %}
+diff --git a/storage/adapters/templates/storage/document_detail.html b/storage/adapters/templates/storage/document_detail.html
+index 9f98765..b2f4db4 100644
+--- a/storage/adapters/templates/storage/document_detail.html
++++ b/storage/adapters/templates/storage/document_detail.html
+@@ -8,10 +8,10 @@
+ <link href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+ <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+ <link rel="stylesheet" href="{% static 'css/bootstrap.min.css' %}">
+-<link rel="stylesheet" href="{% static 'design-tokens/tokens.css' %}?v=20261031-viewer">
++<link rel="stylesheet" href="{% static 'design-tokens/tokens.css' %}?v=20261102">
+ <link rel="stylesheet" href="{% static 'css/redesign.css' %}">
+-<link rel="stylesheet" href="{% static 'css/viewer.css' %}?v=20261031-viewer">
+-<link rel="stylesheet" href="{% static 'css/app.css' %}?v=20261031-viewer">
++<link rel="stylesheet" href="{% static 'css/viewer.css' %}?v=20261102">
++<link rel="stylesheet" href="{% static 'css/app.css' %}?v=20261102">
+ </head>
+ <body>
+ 
+@@ -122,6 +122,10 @@
+     <button class="tbtn" onclick="rotatePage()" title="Повернуть" type="button">⟲</button>
+     <button class="tbtn" onclick="togglePan()" title="Рука" type="button">✋</button>
+     <button class="tbtn" onclick="toggleSelect()" title="Выделение" type="button">⍝</button>
++    <button class="tbtn active" id="minimapToggle" onclick="toggleMinimap()" type="button"
++            title="Мини-карта: превью листа и видимой области" aria-label="Мини-карта">
++      <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.4"/><rect x="8" y="7" width="4.5" height="4" fill="currentColor" opacity="0.55"/></svg>
++    </button>
+   </div>
+ </div>
+ 
+@@ -303,9 +307,10 @@
+ 
+ <script src="{% static 'js/vendor/bootstrap.bundle.min.js' %}"></script>
+ <script src="{% static 'js/pdfjs/pdf.min.js' %}"></script>
+-<script src="{% static 'js/sync.js' %}?v=20261031-viewer"></script>
+-<script src="{% static 'js/pdf_viewer.js' %}?v=20261031-viewer"></script>
+-<script src="{% static 'js/splitter.js' %}?v=20261031-viewer"></script>
++<script src="{% static 'js/design-tokens.js' %}?v=20261102"></script>
++<script src="{% static 'js/sync.js' %}?v=20261102"></script>
++<script src="{% static 'js/pdf_viewer.js' %}?v=20261102"></script>
++<script src="{% static 'js/splitter.js' %}?v=20261102"></script>
+ <script>
+   let currentIssueId = null;
+ 
+@@ -352,12 +357,6 @@
+     updateIssueCounters();
+   }
+ 
+-  function setMinimapActive(button) {
+-    document.querySelectorAll('#minimap .thumb').forEach(function (thumb) {
+-      thumb.classList.toggle('active', thumb === button);
+-    });
+-  }
+-
+   function openIssueCard(id) {
+     const card = document.querySelector('#list .card[data-id="' + id + '"]');
+     if (!card) return;
+diff --git a/storage/adapters/templates/storage/edit_member.html b/storage/adapters/templates/storage/edit_member.html
+index 3a60fc2..b1ebf3e 100644
+--- a/storage/adapters/templates/storage/edit_member.html
++++ b/storage/adapters/templates/storage/edit_member.html
+@@ -1,17 +1,12 @@
+-{% load static %}
+-<!DOCTYPE html>
+-<html lang="ru">
+-<head>
+-    <meta charset="utf-8">
+-    <meta name="viewport" content="width=device-width, initial-scale=1">
+-    <title>Редактирование участника — Stream-CAD</title>
+-    <link rel="stylesheet" href="{% static 'css/bootstrap.min.css' %}">
+-    <link rel="stylesheet" href="{% static 'design-tokens/tokens.css' %}">
+-    <link rel="stylesheet" href="{% static 'css/redesign.css' %}">
+-    <link rel="stylesheet" href="{% static 'css/app.css' %}">
+-</head>
+-<body class="bg-light">
+-{% include 'storage/_topbar.html' with topbar_company=object.company topbar_title="Редактирование участника" %}
++{% extends 'storage/base.html' %}
++
++{% block title %}Редактирование участника — Stream-CAD{% endblock %}
++
++{% block topbar %}
++    {% include 'storage/_topbar.html' with topbar_company=object.company topbar_title="Редактирование участника" %}
++{% endblock %}
++
++{% block content %}
+ <main class="container py-3 pb-5">
+     <div class="d-flex justify-content-between align-items-center mb-3">
+         <div>
+@@ -107,6 +102,4 @@
+         </div>
+     </div>
+ </main>
+-<script src="{% static 'js/vendor/bootstrap.bundle.min.js' %}"></script>
+-</body>
+-</html>
++{% endblock %}
+diff --git a/storage/adapters/templates/storage/project_detail.html b/storage/adapters/templates/storage/project_detail.html
+index 2dcc751..e90cdb3 100644
+--- a/storage/adapters/templates/storage/project_detail.html
++++ b/storage/adapters/templates/storage/project_detail.html
+@@ -1,16 +1,17 @@
++{% extends 'storage/base.html' %}
+ {% load static %}
+-<!DOCTYPE html>
+-<html lang="ru">
+-<head>
+-    <meta charset="utf-8">
+-    <meta name="viewport" content="width=device-width, initial-scale=1">
+-    <title>{{ project.name }} — Stream-CAD</title>
+-    <link rel="stylesheet" href="{% static 'css/bootstrap.min.css' %}">
+-    <link rel="stylesheet" href="{% static 'css/redesign.css' %}">
+-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+-    <link rel="stylesheet" href="{% static 'css/app.css' %}">
+-</head>
+-<body class="app-body">
++
++{% block title %}{{ project.name }} — Stream-CAD{% endblock %}
++
++{% block body_class %}app-body{% endblock %}
++
++{% comment %}
++Экран проекта — полноэкранный: топбар живёт ВНУТРИ .app-shell (flex на 100vh),
++поэтому базовый блок топбара отключаем и включаем его в content.
++{% endcomment %}
++{% block topbar %}{% endblock %}
++
++{% block content %}
+ <div class="app-shell" id="appShell">
+     {% include 'storage/_topbar.html' with topbar_project=project %}
+ 
+@@ -498,9 +499,11 @@
+     </div>
+ {% endif %}
+ 
+-<script src="{% static 'js/vendor/bootstrap.bundle.min.js' %}"></script>
++</div>
++{% endblock %}
++
++{% block extra_js %}
+ <script src="{% static 'js/vendor/htmx.min.js' %}"></script>
+ <script src="{% static 'js/vendor/Sortable.min.js' %}"></script>
+ <script src="{% static 'js/app.js' %}"></script>
+-</body>
+-</html>
++{% endblock %}
+diff --git a/storage/adapters/templates/storage/project_list.html b/storage/adapters/templates/storage/project_list.html
+index 79e0302..a8ac8e1 100644
+--- a/storage/adapters/templates/storage/project_list.html
++++ b/storage/adapters/templates/storage/project_list.html
+@@ -1,18 +1,12 @@
+-{% load static %}
+-<!DOCTYPE html>
+-<html lang="ru">
+-<head>
+-    <meta charset="utf-8">
+-    <meta name="viewport" content="width=device-width, initial-scale=1">
+-    <title>Проекты — Stream-CAD</title>
+-    <link rel="stylesheet" href="{% static 'css/bootstrap.min.css' %}">
+-    <link rel="stylesheet" href="{% static 'design-tokens/tokens.css' %}?v=20261101">
+-    <link rel="stylesheet" href="{% static 'css/redesign.css' %}">
+-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+-    <link rel="stylesheet" href="{% static 'css/app.css' %}">
+-</head>
+-<body class="bg-light">
+-{% include 'storage/_topbar.html' with topbar_company=projects.0.company topbar_title="Проекты" %}
++{% extends 'storage/base.html' %}
++
++{% block title %}Проекты — Stream-CAD{% endblock %}
++
++{% block topbar %}
++    {% include 'storage/_topbar.html' with topbar_company=projects.0.company topbar_title="Проекты" %}
++{% endblock %}
++
++{% block content %}
+ <main class="container py-3 pb-5">
+     <div class="d-flex justify-content-between align-items-center mb-3">
+         <h1 class="h3 mb-0">Проекты</h1>
+@@ -49,7 +43,7 @@
+                         <td><a href="{% url 'storage:project_detail' project.pk %}">{{ project.name }}</a></td>
+                         <td>{{ project.customer|default:"—" }}</td>
+                         <td>
+-                            <span class="cde-badge {% if project.status == 'active' %}cde-badge--done{% else %}cde-badge--closed{% endif %}">
++                            <span class="cde-badge {% if project.status == 'active' %}cde-badge--active{% else %}cde-badge--archived{% endif %}">
+                                 {{ project.get_status_display }}
+                             </span>
+                         </td>
+@@ -121,8 +115,10 @@
+             </div>
+         </div>
+     </div>
+-    <script src="{% static 'js/vendor/bootstrap.bundle.min.js' %}"></script>
+ {% endif %}
++{% endblock %}
++
++{% block extra_js %}
+ <script>
+     document.querySelectorAll('tr[data-href]').forEach(function (row) {
+         row.addEventListener('click', function (event) {
+@@ -133,5 +129,4 @@
+         });
+     });
+ </script>
+-</body>
+-</html>
++{% endblock %}
+diff --git a/storage/adapters/templates/storage/search.html b/storage/adapters/templates/storage/search.html
+index d62a713..db964cb 100644
+--- a/storage/adapters/templates/storage/search.html
++++ b/storage/adapters/templates/storage/search.html
+@@ -1,17 +1,12 @@
+-{% load static %}
+-<!DOCTYPE html>
+-<html lang="ru">
+-<head>
+-    <meta charset="utf-8">
+-    <meta name="viewport" content="width=device-width, initial-scale=1">
+-    <title>Поиск — {{ project.code }} — Stream-CAD</title>
+-    <link rel="stylesheet" href="{% static 'css/bootstrap.min.css' %}">
+-    <link rel="stylesheet" href="{% static 'css/redesign.css' %}">
+-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+-    <link rel="stylesheet" href="{% static 'css/app.css' %}">
+-</head>
+-<body class="bg-light">
+-{% include 'storage/_topbar.html' with topbar_project=project %}
++{% extends 'storage/base.html' %}
++
++{% block title %}Поиск — {{ project.code }} — Stream-CAD{% endblock %}
++
++{% block topbar %}
++    {% include 'storage/_topbar.html' with topbar_project=project %}
++{% endblock %}
++
++{% block content %}
+ <main class="container-fluid py-3 pb-5">
+     <a href="{% url 'storage:project_detail' project.pk %}" class="btn btn-sm btn-outline-secondary mb-3">
+         ← К проекту {{ project.code }}
+@@ -154,6 +149,4 @@
+         </div>
+     </div>
+ </main>
+-<script src="{% static 'js/vendor/bootstrap.bundle.min.js' %}"></script>
+-</body>
+-</html>
++{% endblock %}
+diff --git a/storage/adapters/templates/storage/upload.html b/storage/adapters/templates/storage/upload.html
+index 121b7b7..38a1335 100644
+--- a/storage/adapters/templates/storage/upload.html
++++ b/storage/adapters/templates/storage/upload.html
+@@ -1,17 +1,12 @@
+-{% load static %}
+-<!DOCTYPE html>
+-<html lang="ru">
+-<head>
+-    <meta charset="utf-8">
+-    <meta name="viewport" content="width=device-width, initial-scale=1">
+-    <title>Загрузка документа — Stream-CAD</title>
+-    <link rel="stylesheet" href="{% static 'css/bootstrap.min.css' %}">
+-    <link rel="stylesheet" href="{% static 'css/redesign.css' %}">
+-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+-    <link rel="stylesheet" href="{% static 'css/app.css' %}">
+-</head>
+-<body class="bg-light">
+-{% include 'storage/_topbar.html' with topbar_project=project %}
++{% extends 'storage/base.html' %}
++
++{% block title %}Загрузка документа — Stream-CAD{% endblock %}
++
++{% block topbar %}
++    {% include 'storage/_topbar.html' with topbar_project=project %}
++{% endblock %}
++
++{% block content %}
+ <main class="container py-3 pb-5">
+     <a href="{% url 'storage:project_detail' project.pk %}" class="btn btn-sm btn-outline-secondary mb-3">← К проекту</a>
+ 
+@@ -56,5 +51,4 @@
+         </div>
+     </div>
+ </main>
+-</body>
+-</html>
++{% endblock %}
+diff --git a/storage/adapters/views.py b/storage/adapters/views.py
+index f9842b4..ead128c 100644
+--- a/storage/adapters/views.py
++++ b/storage/adapters/views.py
+@@ -9,7 +9,7 @@ from django.contrib.auth.decorators import login_required
+ from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
+ from django.core.exceptions import PermissionDenied
+ from django.core.files.uploadedfile import SimpleUploadedFile
+-from django.db.models import Q
++from django.db.models import Count, Q
+ from django.http import (
+     FileResponse,
+     Http404,
+@@ -645,6 +645,24 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
+             'CANONICAL_ZONE_NAMES': CANONICAL_ZONE_NAMES,
+         })
+ 
++        # Счётчики замечаний проекта — «нервная система» для ГИПа:
++        # видно из тулбара таблицы, сколько требует внимания прямо сейчас.
++        # (Тот же смысл, что и в реестре: issues:issue_registry.)
++        active_issue_statuses = ('NEW', 'IN_PROGRESS', 'DISCUSSION', 'REJECTED')
++        context['issue_counts'] = Issue.objects.filter(
++            document__project=project,
++            document__in=get_accessible_documents(user),
++        ).aggregate(
++            total=Count('pk'),
++            open=Count('pk', filter=~Q(status__in=('CLOSED', 'CANCELLED'))),
++            overdue=Count(
++                'pk',
++                filter=Q(due_date__isnull=False)
++                & Q(due_date__lt=timezone.localdate())
++                & Q(status__in=active_issue_statuses),
++            ),
++        )
++
+         if can_manage_participants:
+             context['participants'] = list_project_participants(user, project)
+             context['membership_role_choices'] = ProjectMembership.ROLE_IN_PROJECT_CHOICES
+diff --git a/storage/domain/design_colors.py b/storage/domain/design_colors.py
+new file mode 100644
+index 0000000..0c68b65
+--- /dev/null
++++ b/storage/domain/design_colors.py
+@@ -0,0 +1,40 @@
++"""АВТОГЕНЕРАТ из static/design-tokens/tokens.json — не редактировать вручную.
++
++Правки вносить в tokens.json, затем: python scripts/build_design_tokens.py
++"""
++
++TOKENS_VERSION = '20261102'
++DEFAULT_STATUS = 'NEW'
++
++# HEX-цвета статусов замечаний (совпадают с tokens.css и design-tokens.js).
++ISSUE_STATUS_HEX = {
++    'CANCELLED': '#212529',
++    'CLOSED': '#6c757d',
++    'DISCUSSION': '#ffc107',
++    'DONE': '#198754',
++    'IN_PROGRESS': '#0dcaf0',
++    'NEW': '#0d6efd',
++    'REJECTED': '#dc3545',
++}
++
++# RGB 0..1 для PyMuPDF (экспорт PDF с маркапами): services.PDF_ISSUE_COLORS.
++ISSUE_STATUS_RGB = {
++    'CANCELLED': (0.13, 0.15, 0.16),  # #212529
++    'CLOSED': (0.42, 0.46, 0.49),  # #6c757d
++    'DISCUSSION': (1.0, 0.76, 0.03),  # #ffc107
++    'DONE': (0.1, 0.53, 0.33),  # #198754
++    'IN_PROGRESS': (0.05, 0.79, 0.94),  # #0dcaf0
++    'NEW': (0.05, 0.43, 0.99),  # #0d6efd
++    'REJECTED': (0.86, 0.21, 0.27),  # #dc3545
++}
++
++# CSS-классы бейджей для шаблонов и экспорта.
++ISSUE_STATUS_CLASS = {
++    'CANCELLED': 'cde-badge cde-badge--canceled',
++    'CLOSED': 'cde-badge cde-badge--closed',
++    'DISCUSSION': 'cde-badge cde-badge--review',
++    'DONE': 'cde-badge cde-badge--done',
++    'IN_PROGRESS': 'cde-badge cde-badge--progress',
++    'NEW': 'cde-badge cde-badge--wait',
++    'REJECTED': 'cde-badge cde-badge--attention',
++}
+diff --git a/storage/domain/services.py b/storage/domain/services.py
+index 957e971..38f9a0a 100644
+--- a/storage/domain/services.py
++++ b/storage/domain/services.py
+@@ -25,6 +25,7 @@ from storage.domain.models import (
+     UserProfile,
+ )
+ from issues.models import Issue, IssueComment
++from storage.domain.design_colors import ISSUE_STATUS_RGB as PDF_ISSUE_COLORS
+ from storage.domain.project_templates import PROJECT_TEMPLATES
+ 
+ 
+@@ -1830,15 +1831,9 @@ def delete_issue(user: User, issue: Issue) -> None:
+     issue.delete()
+ 
+ 
+-PDF_ISSUE_COLORS = {
+-    'NEW': (0.05, 0.43, 0.99),
+-    'IN_PROGRESS': (0.05, 0.79, 0.94),
+-    'DISCUSSION': (1.0, 0.76, 0.03),
+-    'REJECTED': (0.86, 0.21, 0.27),
+-    'DONE': (0.10, 0.53, 0.33),
+-    'CLOSED': (0.42, 0.46, 0.49),
+-    'CANCELLED': (0.13, 0.15, 0.16),
+-}
++# Цвета рамок замечаний в экспорте PDF приходят из дизайн-токенов:
++# static/design-tokens/tokens.json -> scripts/build_design_tokens.py -> design_colors.py.
++# Правится в tokens.json, не здесь.
+ 
+ 
+ def export_pdf_with_issues(user: User, document: Document) -> bytes:

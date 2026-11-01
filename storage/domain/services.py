@@ -25,6 +25,7 @@ from storage.domain.models import (
     UserProfile,
 )
 from issues.models import Issue, IssueComment
+from storage.domain.design_colors import ISSUE_STATUS_RGB as PDF_ISSUE_COLORS
 from storage.domain.project_templates import PROJECT_TEMPLATES
 
 
@@ -1871,15 +1872,9 @@ def delete_issue(user: User, issue: Issue) -> None:
     issue.delete()
 
 
-PDF_ISSUE_COLORS = {
-    'NEW': (0.05, 0.43, 0.99),
-    'IN_PROGRESS': (0.05, 0.79, 0.94),
-    'DISCUSSION': (1.0, 0.76, 0.03),
-    'REJECTED': (0.86, 0.21, 0.27),
-    'DONE': (0.10, 0.53, 0.33),
-    'CLOSED': (0.42, 0.46, 0.49),
-    'CANCELLED': (0.13, 0.15, 0.16),
-}
+# Цвета рамок замечаний в экспорте PDF приходят из дизайн-токенов:
+# static/design-tokens/tokens.json -> scripts/build_design_tokens.py -> design_colors.py.
+# Правится в tokens.json, не здесь.
 
 
 def export_pdf_with_issues(user: User, document: Document) -> bytes:
