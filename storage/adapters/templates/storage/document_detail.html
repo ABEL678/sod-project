@@ -9,7 +9,7 @@
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
 <link rel="stylesheet" href="{% static 'css/bootstrap.min.css' %}">
 <link rel="stylesheet" href="{% static 'design-tokens/tokens.css' %}?v=20261101">
-<link rel="stylesheet" href="{% static 'css/redesign.css' %}?v=20261102">
+<link rel="stylesheet" href="{% static 'css/redesign.css' %}?v=20261103">
 <link rel="stylesheet" href="{% static 'css/viewer.css' %}?v=20261101-t64">
 <link rel="stylesheet" href="{% static 'css/app.css' %}?v=20261031-viewer">
 </head>
@@ -29,29 +29,31 @@
     <span class="brand-text">Stream-CAD</span>
     <span class="brand-slogan">Управляйте потоком чертежей</span>
   </div>
-  <nav aria-label="Хлебные крошки" class="crumb">
-    <a href="{% url 'storage:project_list' %}" class="company-link">
-      {{ document.project.company.name|default:"Моя компания" }}
-    </a>
-    <span class="sep">/</span>
-    <a href="{% url 'storage:project_detail' document.project.pk %}">{{ document.project.code }}</a>
-    <span class="sep">/</span>
-    <a href="{% url 'storage:project_detail' document.project.pk %}?section={{ document.section.pk }}">{{ document.section.code }}</a>
-    <span class="sep">/</span>
-    {% if document.folder %}
-      <a href="{% url 'storage:project_detail' document.project.pk %}?folder={{ document.folder.pk }}">{{ document.folder.name }}</a>
+  <div class="topbar-left">
+    <nav aria-label="Хлебные крошки" class="crumb">
+      <a href="{% url 'storage:project_list' %}" class="company-link">
+        {{ document.project.company.name|default:"Моя компания" }}
+      </a>
       <span class="sep">/</span>
-    {% endif %}
-    <span class="doc">{{ document.code }}</span>
-  </nav>
+      <a href="{% url 'storage:project_detail' document.project.pk %}">{{ document.project.code }}</a>
+      <span class="sep">/</span>
+      <a href="{% url 'storage:project_detail' document.project.pk %}?section={{ document.section.pk }}">{{ document.section.code }}</a>
+      <span class="sep">/</span>
+      {% if document.folder %}
+        <a href="{% url 'storage:project_detail' document.project.pk %}?folder={{ document.folder.pk }}">{{ document.folder.name }}</a>
+        <span class="sep">/</span>
+      {% endif %}
+      <span class="doc">{{ document.code }}</span>
+    </nav>
+    <span class="chip">
+      <span class="mono">v{{ document.current_version.version_number }} · R{{ document.current_version.revision|default:"0" }}</span>
+      · {{ document.get_status_display }}
+    </span>
+  </div>
   <form action="{% url 'storage:search' document.project.pk %}" method="get" class="d-flex">
     <input type="search" name="q" class="form-control form-control-sm"
            placeholder="Поиск по шифру, названию" value="{{ request.GET.q }}">
   </form>
-  <span class="chip">
-    <span class="mono">v{{ document.current_version.version_number }} · R{{ document.current_version.revision|default:"0" }}</span>
-    · {{ document.get_status_display }}
-  </span>
   <div class="spacer"></div>
   {% if user.is_authenticated %}
     {% if user.userprofile.role == 'admin' or user.userprofile.role == 'gip' or user.is_superuser %}

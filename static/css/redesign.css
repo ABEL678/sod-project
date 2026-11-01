@@ -158,11 +158,19 @@ tr[data-href],
     min-width: 0;
 }
 
+.topbar-left {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+    max-width: 46%;
+    margin-right: auto;
+    overflow: hidden;
+}
+
 .topbar .crumb {
     flex: 0 1 auto;
     min-width: 0;
-    max-width: 34%;
-    margin-right: auto;
     overflow: hidden;
     white-space: nowrap;
 }
@@ -193,7 +201,7 @@ tr[data-href],
 }
 
 .topbar .chip {
-    flex: 0 1 auto;
+    flex: 0 0 auto;
     min-width: 0;
     max-width: 200px;
     overflow: hidden;

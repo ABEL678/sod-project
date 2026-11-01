@@ -12,13 +12,15 @@
         <span class="brand-text">Stream-CAD</span>
         <span class="brand-slogan">Управляйте потоком чертежей</span>
     </div>
-    <nav class="crumb">
-        <a href="{% url 'storage:project_list' %}" class="company-link">
-            <span class="topbar-company">{% firstof user.userprofile.company.name topbar_company.name topbar_project.company.name "Моя компания" %}</span>
-        </a>
-        <span>/</span>
-        <span class="doc">{% firstof topbar_title topbar_project.name "Проекты" %}</span>
-    </nav>
+    <div class="topbar-left">
+        <nav class="crumb">
+            <a href="{% url 'storage:project_list' %}" class="company-link">
+                <span class="topbar-company">{% firstof user.userprofile.company.name topbar_company.name topbar_project.company.name "Моя компания" %}</span>
+            </a>
+            <span>/</span>
+            <span class="doc">{% firstof topbar_title topbar_project.name "Проекты" %}</span>
+        </nav>
+    </div>
     {% if topbar_project %}
         <form action="{% url 'storage:search' topbar_project.pk %}" method="get" class="d-flex">
             <input type="search" name="q" class="form-control form-control-sm"
