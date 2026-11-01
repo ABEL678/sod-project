@@ -1,9 +1,11 @@
 from django.urls import reverse
 from django.utils.html import format_html
+from django.utils.safestring import mark_safe
 import django_tables2 as tables
 from django_tables2.utils import AttributeDict
 
 from storage.domain.models import Document
+from storage.domain.services import document_workflow_actions
 
 
 STATUS_BADGE_CLASSES = {
@@ -57,6 +59,10 @@ class DocumentTable(tables.Table):
         verbose_name='Зона',
         attrs=_column_attrs('zone'),
         order_by=('folder__zone',),
+        # Волна 3, бонус-фикс: accessor 'zone' у Document отсутствует -> None
+        # попадал в empty_values и render_zone не вызывался (в колонке всегда
+        # был прочерк). Разрешаем пустые значения — '—' рисует сам render_zone.
+        empty_values=(),
     )
     current_version = tables.Column(
         verbose_name='Версия',
@@ -65,6 +71,18 @@ class DocumentTable(tables.Table):
     )
     updated_at = tables.Column(verbose_name='Дата', attrs=_column_attrs('date'))
     created_by = tables.Column(verbose_name='Автор', attrs=_column_attrs('author'))
+    actions = tables.Column(
+        verbose_name='Действия',
+        orderable=False,
+        exclude_from_export=True,
+        # Пустой аксессуар нельзя пропускать: иначе django_tables2 рендерит
+        # «—» вместо render_actions (None в empty_values).
+        empty_values=(),
+        attrs={
+            'th': {'data-column': 'actions', 'scope': 'col', 'class': 'doc-actions-col'},
+            'td': {'data-column': 'actions', 'class': 'doc-actions-col'},
+        },
+    )
 
     class Meta:
         model = Document
@@ -83,6 +101,7 @@ class DocumentTable(tables.Table):
             'current_version',
             'updated_at',
             'created_by',
+            'actions',
         )
         order_by = '-updated_at'
         template_name = 'storage/tables/bootstrap5.html'
@@ -176,3 +195,29 @@ class DocumentTable(tables.Table):
 
     def render_created_by(self, record):
         return record.created_by.get_full_name() or record.created_by.username
+
+    def render_actions(self, record):
+        """Workflow-кнопки зон ISO 19650 (Волна 3), только доступные роли."""
+        user = getattr(self.request, 'user', None)
+        actions = document_workflow_actions(user, record)
+        if not actions:
+            return mark_safe('<span class="text-muted">—</span>')
+        buttons = [
+            format_html(
+                '<button type="button" class="wf-btn" data-workflow-action="{code}" '
+                'data-workflow-url="{url}" title="{title}" '
+                'aria-label="{title}">'
+                '<i class="bi {icon}" aria-hidden="true"></i>'
+                '</button>',
+                code=action['code'],
+                url=reverse('storage:document_workflow', args=[record.pk]),
+                title=action['label'],
+                icon=action['icon'],
+            )
+            for action in actions
+        ]
+        return mark_safe(
+            '<span class="wf-actions" data-role="workflow-actions">{}</span>'.format(
+                ''.join(str(button) for button in buttons)
+            )
+        )

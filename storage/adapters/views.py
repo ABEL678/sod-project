@@ -20,6 +20,7 @@ from django.http import (
     JsonResponse,
 )
 from django import forms
+from django.contrib.staticfiles import finders
 from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse, reverse_lazy
 from django.utils import timezone
@@ -84,6 +85,10 @@ from storage.domain.services import (
     get_trash,
     get_company_members,
     get_user_company,
+    get_zone_counts,
+    document_workflow_actions,
+    transition_document_zone,
+    ZONE_WORKFLOW_ACTIONS,
     list_document_views,
     list_project_participants,
     move_document,
@@ -144,7 +149,15 @@ DOCUMENT_TABLE_COLUMN_MAP = {
     'created_by': 'author',
 }
 
-ALWAYS_VISIBLE_TABLE_COLUMNS = {'selection'}
+ALWAYS_VISIBLE_TABLE_COLUMNS = {'selection', 'actions'}
+
+# Иконки зон ISO 19650 для сегмент-контрола (синхронно с tables.py)
+ZONE_WORKFLOW_ICONS = {
+    'WIP': 'bi-pencil-square',
+    'SHARED': 'bi-people',
+    'PUBLISHED': 'bi-shield-check',
+    'ARCHIVE': 'bi-lock',
+}
 
 FILTER_QUERY_KEYS = ('section', 'doc_type', 'status', 'code', 'name')
 
@@ -389,6 +402,15 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
             )
         return self._project_cache
 
+    def _get_active_zone(self):
+        """Сегмент-контрол зон ISO 19650 (?zone=WIP/SHARED/PUBLISHED/ARCHIVE)."""
+        if not hasattr(self, '_active_zone_cache'):
+            zone = (self.request.GET.get('zone') or '').strip()
+            if zone not in dict(Folder.ZONE_CHOICES):
+                zone = ''
+            self._active_zone_cache = zone
+        return self._active_zone_cache
+
     def _get_selected_folder(self):
         if not hasattr(self, '_selected_folder_cache'):
             folder = None
@@ -474,6 +496,7 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
             self._get_project(),
             self._get_view_state()[2],
             folder=self._get_selected_folder(),
+            zone=self._get_active_zone() or None,
         )
 
     def get_table_data(self):
@@ -576,11 +599,13 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
         selected_section = self._get_selected_section()
 
         column_defs = _document_column_defs(view_config)
+        active_zone = self._get_active_zone()
         documents = get_project_documents_for_view(
             user,
             project,
             view_config,
             folder=selected_folder,
+            zone=active_zone or None,
         )
         active_search = (self.request.GET.get('q') or '').strip()
         if active_search:
@@ -645,6 +670,16 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
             'doc_type_choices': Document.DOC_TYPE_CHOICES,
             'status_choices': Document.STATUS_CHOICES,
             'CANONICAL_ZONE_NAMES': CANONICAL_ZONE_NAMES,
+            'active_zone': active_zone,
+            'zone_segments': [
+                {
+                    'code': code,
+                    'label': label,
+                    'icon': ZONE_WORKFLOW_ICONS[code],
+                }
+                for code, label in Folder.ZONE_CHOICES
+            ],
+            'zone_counts': get_zone_counts(user, project),
         })
 
         # Счётчики замечаний проекта — «нервная система» для ГИПа:
@@ -977,6 +1012,135 @@ class DocumentMoveView(LoginRequiredMixin, View):
             'folder_id': document.folder_id,
             'section_id': document.section_id,
         })
+
+
+class DocumentWorkflowView(LoginRequiredMixin, View):
+    """Workflow зон ISO 19650 (Волна 3): «Подать на согласование» и т.д.
+
+    POST action=submit_review|return_wip|publish|archive.
+    Возвращает JSON с новой зоной/статусом и списком доступных действий —
+    строка таблицы обновляется точечно, без перезагрузки.
+    """
+
+    def post(self, request, document_id):
+        document = get_object_or_404(
+            get_accessible_documents(request.user),
+            pk=document_id,
+            is_deleted=False,
+        )
+        action = (request.POST.get('action') or '').strip()
+        try:
+            transition_document_zone(request.user, document, action)
+        except PermissionDenied as exc:
+            return JsonResponse(
+                {'status': 'error', 'error': str(exc)},
+                status=403,
+            )
+        except ValueError as exc:
+            return JsonResponse(
+                {'status': 'error', 'error': str(exc)},
+                status=400,
+            )
+
+        folder = document.folder
+        zone_name = folder.get_zone_display() if folder else ''
+        return JsonResponse({
+            'status': 'ok',
+            'document_id': document.pk,
+            'zone_code': folder.zone if folder else '',
+            'zone_name': zone_name,
+            'status_code': document.status,
+            'status_display': document.get_status_display(),
+            'message': '{} — {}'.format(document.code, zone_name),
+            'actions': document_workflow_actions(request.user, document),
+        })
+
+
+class PaletteSearchView(LoginRequiredMixin, View):
+    """Командная палитра (Волна 3): JSON-поиск по Ctrl+K.
+
+    Ищет по проектам, документам и замечаниям, доступным пользователю.
+    """
+
+    def get(self, request):
+        query = (request.GET.get('q') or '').strip()
+        if len(query) < 2:
+            return JsonResponse(
+                {'projects': [], 'documents': [], 'issues': []}
+            )
+
+        projects = (
+            get_accessible_projects(request.user)
+            .filter(Q(code__icontains=query) | Q(name__icontains=query))
+            .order_by('code')[:5]
+        )
+        documents = (
+            get_accessible_documents(request.user)
+            .filter(Q(code__icontains=query) | Q(name__icontains=query))
+            .select_related('project')
+            .order_by('code')[:6]
+        )
+        issues = (
+            Issue.objects.filter(
+                document__in=get_accessible_documents(request.user),
+                document__is_deleted=False,
+            )
+            .filter(
+                Q(description__icontains=query)
+                | Q(document__code__icontains=query)
+            )
+            .select_related('document')[:6]
+        )
+
+        def _doc_url(document):
+            return reverse('storage:document_detail', args=[document.pk])
+
+        return JsonResponse({
+            'projects': [
+                {
+                    'title': '{} — {}'.format(p.code, p.name),
+                    'url': reverse('storage:project_detail', args=[p.pk]),
+                }
+                for p in projects
+            ],
+            'documents': [
+                {
+                    'title': '{} — {}'.format(d.code, d.name),
+                    'meta': d.project.code,
+                    'url': _doc_url(d),
+                }
+                for d in documents
+            ],
+            'issues': [
+                {
+                    'title': 'Замечание №{}: {}'.format(
+                        i.pk, (i.description or '')[:80]
+                    ),
+                    'meta': i.document.code,
+                    'url': _doc_url(i.document),
+                }
+                for i in issues
+            ],
+        })
+
+
+class ServiceWorkerView(View):
+    """Отдаёт sw.js из корня сайта — PWA для площадки (Волна 3).
+
+    Scope сервис-воркера определяется расположением файла, поэтому
+    маршрут обязан жить на ``/sw.js``, а не в ``/static/js/``.
+    """
+
+    def get(self, request):
+        sw_path = finders.find('js/sw.js')
+        if sw_path is None:
+            raise Http404('sw.js не найден в static')
+        response = FileResponse(
+            open(sw_path, 'rb'),
+            content_type='application/javascript',
+        )
+        response['Service-Worker-Allowed'] = '/'
+        return response
 
 
 class DocumentDeleteView(LoginRequiredMixin, View):

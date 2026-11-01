@@ -39,6 +39,37 @@
             {% endif %}
         {% endif %}
 
+        {# Волна 3: личный инбокс замечаний + колокольчик уведомлений #}
+        <a href="{% url 'issues:my_issues' %}" class="btn btn-sm btn-outline-secondary position-relative"
+           title="Мои замечания — назначенные мне и созданные мной">
+            <i class="bi bi-chat-left-text" aria-hidden="true"></i>
+            <span class="d-none d-xl-inline ms-1">Мои замечания</span>
+            {% if my_open_issues_count %}
+                <span class="badge rounded-pill text-bg-primary ms-1">{{ my_open_issues_count }}</span>
+            {% endif %}
+        </a>
+
+        <div class="dropdown notif-bell">
+            <button type="button"
+                    class="btn btn-sm btn-outline-secondary dropdown-toggle"
+                    data-bs-toggle="dropdown"
+                    data-bs-auto-close="outside"
+                    aria-expanded="false"
+                    title="Уведомления">
+                <i class="bi bi-bell" aria-hidden="true"></i>
+                {% if unread_notifications_count %}
+                    <span class="notif-count">{{ unread_notifications_count }}</span>
+                {% endif %}
+            </button>
+            <div class="dropdown-menu notif-menu"
+                 hx-get="{% url 'issues:notifications_partial' %}"
+                 hx-trigger="show.bs.dropdown from:closest .dropdown"
+                 hx-swap="innerHTML"
+                 aria-label="Список уведомлений">
+                <div class="notif-empty"><i class="bi bi-bell me-1" aria-hidden="true"></i>Загрузка…</div>
+            </div>
+        </div>
+
         <div class="avatar" title="{{ user.get_full_name|default:user.username }}">
             {{ user.username|slice:":2"|upper }}
         </div>

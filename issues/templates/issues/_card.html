@@ -30,43 +30,39 @@
 
     <div class="tab-content">
         <div class="tab-pane fade show active" id="card-element-{{ issue.pk }}" role="tabpanel">
-            <dl class="row small mb-0">
-                <dt class="col-sm-5">Элемент проекта</dt>
-                <dd class="col-sm-7">
-                    <a href="{% url 'storage:document_detail' issue.document.pk %}">
-                        {{ issue.document.name }}
-                    </a>
-                </dd>
 
-                <dt class="col-sm-5">Текст замечания</dt>
-                <dd class="col-sm-7">
-                    <div class="bg-light border rounded p-2">{{ issue.description|linebreaksbr }}</div>
-                </dd>
+            {# ==== Волна 3: секции карточки — суть всегда открыта, реквизиты свёрнуты ==== #}
+            <details class="issue-card-section" open>
+                <summary>Суть замечания</summary>
+                <div class="pb-2">
+                    <div class="bg-light border rounded p-2 mb-2">{{ issue.description|linebreaksbr }}</div>
+                    <div class="d-flex flex-wrap justify-content-between gap-1 small">
+                        <span class="text-muted">
+                            <i class="bi bi-file-earmark" aria-hidden="true"></i>
+                            {% if issue.page_number %}стр. {{ issue.page_number }}{% else %}без привязки к листу{% endif %}
+                            {% if issue.version %} · v{{ issue.version.version_number }}{% endif %}
+                        </span>
+                        <span>
+                            <span class="text-muted">Срок:</span>
+                            {% if issue.due_date %}
+                                <span class="cde-tnum">{{ issue.due_date|date:"d.m.Y" }}</span>
+                                {% if issue|deadline_label %}
+                                    <span class="cde-badge {{ issue|deadline_class }}">{{ issue|deadline_label }}</span>
+                                {% endif %}
+                            {% else %}—{% endif %}
+                        </span>
+                    </div>
+                </div>
+            </details>
 
-                <dt class="col-sm-5">Маркап</dt>
-                <dd class="col-sm-7">
-                    {% if issue.page_number %}Стр. {{ issue.page_number }}{% else %}—{% endif %}
-                </dd>
-
-                <dt class="col-sm-5">
-                    Срок ответа
-                    <span class="text-muted" data-bs-toggle="tooltip" title="Дата, к которой разработчик должен ответить на замечание. Вычисляется автоматически (например, +3 дня от даты создания).">
-                        <i class="bi bi-question-circle"></i>
-                    </span>
-                </dt>
-                <dd class="col-sm-7">
-                    {% if issue.due_date %}
-                        <span class="cde-tnum">{{ issue.due_date|date:"d.m.Y" }}</span>
-                        {% if issue|deadline_label %}
-                            <span class="cde-badge {{ issue|deadline_class }}">{{ issue|deadline_label }}</span>
-                        {% endif %}
-                    {% else %}—{% endif %}
-                </dd>
-
-                <dt class="col-sm-5">Ответ</dt>
-                <dd class="col-sm-7">
+            <details class="issue-card-section" {% if issue.answer_text %}open{% endif %}>
+                <summary>
+                    Ответ
+                    {% if issue.answer_text %}<span class="issue-section-count">есть</span>{% endif %}
+                </summary>
+                <div class="pb-2 small">
                     {% if issue.answer_text %}
-                        <div class="small text-muted mb-1">
+                        <div class="text-muted mb-1">
                             Ответ разработчика
                             ({% if issue.assignee %}{{ issue.assignee.get_full_name|default:issue.assignee.username }}{% else %}Разработчик{% endif %},
                             {{ issue.updated_at|date:"d.m.Y" }}):
@@ -75,47 +71,59 @@
                             {{ answer_text_display|linebreaksbr }}
                         </div>
                     {% else %}
-                        —
+                        <span class="text-muted">Ответ пока не дан</span>
                     {% endif %}
-                </dd>
+                </div>
+            </details>
 
-                <dt class="col-sm-5">Автор замечания</dt>
-                <dd class="col-sm-7">{{ issue.author.get_full_name|default:issue.author.username }}</dd>
+            <details class="issue-card-section">
+                <summary>Реквизиты</summary>
+                <dl class="row small mb-0 pb-2">
+                    <dt class="col-sm-5">Элемент проекта</dt>
+                    <dd class="col-sm-7">
+                        <a href="{% url 'storage:document_detail' issue.document.pk %}">
+                            {{ issue.document.name }}
+                        </a>
+                    </dd>
 
-                <dt class="col-sm-5">От подразделения</dt>
-                <dd class="col-sm-7">{{ issue.department|default:"—" }}</dd>
+                    <dt class="col-sm-5">Автор замечания</dt>
+                    <dd class="col-sm-7">{{ issue.author.get_full_name|default:issue.author.username }}</dd>
 
-                <dt class="col-sm-5">Ответственный</dt>
-                <dd class="col-sm-7">
-                    {% if issue.assignee %}
-                        {{ issue.assignee.get_full_name|default:issue.assignee.username }}
-                    {% else %}
-                        —
-                    {% endif %}
-                </dd>
+                    <dt class="col-sm-5">От подразделения</dt>
+                    <dd class="col-sm-7">{{ issue.department|default:"—" }}</dd>
 
-                <dt class="col-sm-5">Проектная организация</dt>
-                <dd class="col-sm-7">{{ issue.project_organization|default:"—" }}</dd>
+                    <dt class="col-sm-5">Ответственный</dt>
+                    <dd class="col-sm-7">
+                        {% if issue.assignee %}
+                            {{ issue.assignee.get_full_name|default:issue.assignee.username }}
+                        {% else %}
+                            —
+                        {% endif %}
+                    </dd>
 
-                <dt class="col-sm-5">Версия файла</dt>
-                <dd class="col-sm-7">
-                    {% if issue.version %}v{{ issue.version.version_number }}{% else %}—{% endif %}
-                </dd>
+                    <dt class="col-sm-5">Проектная организация</dt>
+                    <dd class="col-sm-7">{{ issue.project_organization|default:"—" }}</dd>
 
-                <dt class="col-sm-5">Фактическая дата устранения</dt>
-                <dd class="col-sm-7">
-                    {% if issue.status == 'CLOSED' or issue.status == 'CANCELLED' %}
-                        {% if issue.actual_fix_date %}{{ issue.actual_fix_date|date:"d.m.Y" }}{% else %}—{% endif %}
-                    {% else %}
-                        —
-                    {% endif %}
-                </dd>
+                    <dt class="col-sm-5">Версия файла</dt>
+                    <dd class="col-sm-7">
+                        {% if issue.version %}v{{ issue.version.version_number }}{% else %}—{% endif %}
+                    </dd>
 
-                <dt class="col-sm-5">Ревизия</dt>
-                <dd class="col-sm-7">{{ issue.revision|default:"—" }}</dd>
-            </dl>
+                    <dt class="col-sm-5">Фактическая дата устранения</dt>
+                    <dd class="col-sm-7">
+                        {% if issue.status == 'CLOSED' or issue.status == 'CANCELLED' %}
+                            {% if issue.actual_fix_date %}{{ issue.actual_fix_date|date:"d.m.Y" }}{% else %}—{% endif %}
+                        {% else %}
+                            —
+                        {% endif %}
+                    </dd>
 
-            <div class="d-flex align-items-center mb-2">
+                    <dt class="col-sm-5">Ревизия</dt>
+                    <dd class="col-sm-7">{{ issue.revision|default:"—" }}</dd>
+                </dl>
+            </details>
+
+            <div class="d-flex align-items-center my-2">
                 <strong class="me-2">Статус:</strong>
                 {% if allowed_status_options %}
                     <select class="form-select form-select-sm" style="width: auto;" onchange="changeStatus({{ issue.pk }}, this.value, this.selectedOptions[0] ? this.selectedOptions[0].textContent.trim() : '')">
@@ -131,42 +139,46 @@
                 {% endif %}
             </div>
 
-            <hr class="my-3">
-            <h6 class="mb-2">Переписка</h6>
-            <div class="comments-list mb-2" style="max-height: 200px; overflow-y: auto;">
-                {% if issue.answer_text %}
-                    <div class="border rounded p-2 mb-1 bg-light">
-                        <div class="d-flex justify-content-between small text-muted mb-1">
-                            <span class="fw-bold">
-                                {% if issue.assignee %}{{ issue.assignee.get_full_name|default:issue.assignee.username }}{% else %}Разработчик{% endif %}
-                            </span>
-                            <span>{{ issue.updated_at|date:"d.m.Y H:i" }}</span>
+            <details class="issue-card-section" open>
+                <summary>
+                    Переписка
+                    <span class="issue-section-count">{{ comments|length }}{% if issue.answer_text %}+ответ{% endif %}</span>
+                </summary>
+                <div class="comments-list mb-2" style="max-height: 200px; overflow-y: auto;">
+                    {% if issue.answer_text %}
+                        <div class="border rounded p-2 mb-1 bg-light">
+                            <div class="d-flex justify-content-between small text-muted mb-1">
+                                <span class="fw-bold">
+                                    {% if issue.assignee %}{{ issue.assignee.get_full_name|default:issue.assignee.username }}{% else %}Разработчик{% endif %}
+                                </span>
+                                <span>{{ issue.updated_at|date:"d.m.Y H:i" }}</span>
+                            </div>
+                            <div style="font-size: 0.85rem;">{{ answer_text_display }}</div>
                         </div>
-                        <div style="font-size: 0.85rem;">{{ answer_text_display }}</div>
-                    </div>
-                {% endif %}
-                {% for comment in comments %}
-                    <div class="border rounded p-2 mb-1 bg-light">
-                        <div class="d-flex justify-content-between small text-muted mb-1">
-                            <span class="fw-bold">{{ comment.author.get_full_name|default:comment.author.username }}</span>
-                            <span>{{ comment.created_at|date:"d.m.Y H:i" }}</span>
-                        </div>
-                        <div style="font-size: 0.85rem;">{{ comment.text_display }}</div>
-                    </div>
-                {% empty %}
-                    {% if not issue.answer_text %}
-                        <p class="text-muted small">Нет комментариев</p>
                     {% endif %}
-                {% endfor %}
-            </div>
-
-            <form method="post" action="{% url 'issues:add_comment' issue.pk %}" class="mt-2">
-                {% csrf_token %}
-                <div class="input-group input-group-sm">
-                    <input type="text" name="text" class="form-control" placeholder="Написать комментарий..." required>
-                    <button class="btn btn-primary" type="submit">Отправить</button>
+                    {% for comment in comments %}
+                        <div class="border rounded p-2 mb-1 bg-light">
+                            <div class="d-flex justify-content-between small text-muted mb-1">
+                                <span class="fw-bold">{{ comment.author.get_full_name|default:comment.author.username }}</span>
+                                <span>{{ comment.created_at|date:"d.m.Y H:i" }}</span>
+                            </div>
+                            <div style="font-size: 0.85rem;">{{ comment.text_display }}</div>
+                        </div>
+                    {% empty %}
+                        {% if not issue.answer_text %}
+                            <p class="text-muted small">Нет комментариев</p>
+                        {% endif %}
+                    {% endfor %}
                 </div>
-            </form>
+
+                <form method="post" action="{% url 'issues:add_comment' issue.pk %}" class="mt-2 pb-2">
+                    {% csrf_token %}
+                    <div class="input-group input-group-sm">
+                        <input type="text" name="text" class="form-control" placeholder="Написать комментарий..." required>
+                        <button class="btn btn-primary" type="submit">Отправить</button>
+                    </div>
+                </form>
+            </details>
         </div>
 
         <div class="tab-pane fade" id="card-files-{{ issue.pk }}" role="tabpanel">

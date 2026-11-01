@@ -1,5 +1,5 @@
 /* Цвета — только через дизайн-токены (tokens.css, источник: tokens.json) */
-.topbar { height: 52px; background: var(--c-bg-surface); border-bottom: 1px solid var(--c-border-hairline); display: flex; align-items: center; padding: 0 16px; gap: 12px; }
+.topbar { position: relative; z-index: 1045; height: 52px; background: var(--c-bg-surface); border-bottom: 1px solid var(--c-border-hairline); display: flex; align-items: center; padding: 0 16px; gap: 12px; }
 .topbar .brand { font-weight: 600; font-size: 15px; display: flex; align-items: center; gap: 8px; }
 .topbar .brand-mark { width: 24px; height: 24px; border-radius: 7px; background: var(--c-accent); color: var(--c-text-inverse); display: grid; place-items: center; font-size: 11px; }
 .topbar .crumb { color: var(--c-text-secondary); font-size: 13.5px; display: flex; gap: 6px; }
@@ -144,11 +144,14 @@ tr[data-href],
     border-left: 0 !important;
 }
 
-/* A21: one-line topbar */
+/* A21: one-line topbar.
+   Волна 3: overflow: visible — иначе topbar клиппит дропдаун колокольчика
+   уведомлений по своей границе (52px). Однострочность обеспечивают
+   flex-wrap: nowrap и собственные overflow: hidden у детей (.topbar-left,
+   .crumb, форма поиска, водяной знак). */
 .topbar {
     flex-wrap: nowrap;
-    overflow: hidden;
-    overflow-x: hidden;
+    overflow: visible;
     gap: 8px;
     min-width: 0;
     isolation: isolate;
@@ -238,4 +241,258 @@ tr[data-href],
 .topbar .spacer {
     flex: 0 0 auto;
     min-width: 8px;
+}
+
+/* ==========================================================================
+   Волна 3: зоны ISO 19650 (сегмент-контрол + workflow-кнопки)
+   ========================================================================== */
+.zone-segment {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+    margin-bottom: 12px;
+}
+
+.zone-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 30px;
+    padding: 0 12px;
+    border: 1px solid var(--c-border-hairline);
+    border-radius: 999px;
+    background: var(--c-bg-surface);
+    color: var(--c-text-secondary);
+    font-size: 12.5px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background-color .15s ease, border-color .15s ease, color .15s ease;
+}
+
+.zone-chip:hover {
+    border-color: var(--c-accent);
+    color: var(--c-accent);
+}
+
+.zone-chip.is-active {
+    background: var(--c-accent-subtle);
+    border-color: var(--c-accent);
+    color: var(--c-accent-on-subtle);
+}
+
+.zone-chip .zone-count {
+    display: inline-block;
+    min-width: 20px;
+    padding: 0 6px;
+    border-radius: 999px;
+    background: var(--c-bg-app);
+    font: 500 11px/18px var(--font-mono, monospace);
+    text-align: center;
+}
+
+.zone-chip.is-active .zone-count {
+    background: var(--c-accent);
+    color: var(--c-text-inverse);
+}
+
+.zone-chip--published.is-active { border-color: var(--s-done-solid); color: var(--s-done-on); background: var(--s-done-subtle); }
+.zone-chip--published.is-active .zone-count { background: var(--s-done-solid); color: #fff; }
+.zone-chip--shared.is-active { border-color: var(--s-review-solid); color: var(--s-review-on); background: var(--s-review-subtle); }
+.zone-chip--shared.is-active .zone-count { background: var(--s-review-solid); color: var(--c-text-primary); }
+.zone-chip--archive.is-active { border-color: var(--s-closed-solid); color: var(--s-closed-on); background: var(--s-closed-subtle); }
+.zone-chip--archive.is-active .zone-count { background: var(--s-closed-solid); color: #fff; }
+
+/* Workflow-кнопки в колонке «Действия» */
+.wf-actions { display: inline-flex; gap: 4px; }
+
+.wf-btn {
+    display: inline-grid;
+    place-items: center;
+    width: 26px;
+    height: 26px;
+    border: 1px solid var(--c-border-hairline);
+    border-radius: 6px;
+    background: var(--c-bg-surface);
+    color: var(--c-text-secondary);
+    cursor: pointer;
+    transition: all .15s ease;
+}
+
+.wf-btn:hover {
+    border-color: var(--c-accent);
+    background: var(--c-accent-subtle);
+    color: var(--c-accent-on-subtle);
+}
+
+.wf-btn.is-busy { opacity: .5; pointer-events: none; }
+
+.doc-actions-col { width: 1%; white-space: nowrap; }
+
+@keyframes wf-row-flash {
+    0% { background-color: var(--c-accent-subtle); }
+    100% { background-color: transparent; }
+}
+
+tr.doc-row-flash > td { animation: wf-row-flash 1.5s ease; }
+
+/* Тост об ошибке/успехе workflow */
+.wf-toast {
+    position: fixed;
+    left: 50%;
+    bottom: 24px;
+    transform: translate(-50%, 16px);
+    z-index: 2000;
+    max-width: 420px;
+    padding: 10px 16px;
+    border-radius: 10px;
+    background: var(--c-text-primary);
+    color: var(--c-text-inverse);
+    font-size: 13px;
+    box-shadow: var(--shadow-3, 0 8px 24px rgba(25, 25, 23, .2));
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .2s ease, transform .2s ease;
+}
+
+.wf-toast.is-visible { opacity: 1; transform: translate(-50%, 0); }
+
+/* Колокольчик уведомлений в топбаре */
+.topbar .notif-bell { position: relative; }
+
+.topbar .notif-bell .notif-count {
+    position: absolute;
+    top: -4px;
+    right: -4px;
+    min-width: 16px;
+    height: 16px;
+    padding: 0 4px;
+    border-radius: 999px;
+    background: var(--s-attention-solid);
+    color: #fff;
+    font: 700 10px/16px var(--font-sans, sans-serif);
+    text-align: center;
+}
+
+.notif-menu {
+    width: 360px;
+    max-height: 420px;
+    overflow-y: auto;
+    padding: 0;
+}
+
+.notif-menu .notif-item {
+    display: block;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--c-border-hairline);
+    color: var(--c-text-primary);
+    text-decoration: none;
+    font-size: 13px;
+    line-height: 1.4;
+}
+
+.notif-menu .notif-item:hover { background: var(--c-bg-row-hover, #F3F3F0); }
+.notif-menu .notif-item.is-unread { background: var(--c-accent-subtle); }
+.notif-menu .notif-item .notif-time { color: var(--c-text-secondary); font-size: 11.5px; }
+.notif-menu .notif-empty { padding: 18px 14px; color: var(--c-text-secondary); font-size: 13px; text-align: center; }
+.notif-menu .notif-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 14px;
+    border-bottom: 1px solid var(--c-border-hairline);
+    font-weight: 600;
+    font-size: 13px;
+}
+
+/* ==========================================================================
+   Волна 3: командная палитра Ctrl+K
+   ========================================================================== */
+.cmdk-dialog { max-width: 560px; }
+
+.cmdk-content {
+    border-radius: 14px;
+    border: 1px solid var(--c-border-hairline);
+    box-shadow: 0 16px 48px rgba(25, 25, 23, .24);
+    overflow: hidden;
+}
+
+.cmdk-input-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--c-border-hairline);
+    color: var(--c-text-secondary);
+}
+
+.cmdk-input {
+    flex: 1;
+    border: 0;
+    outline: none;
+    font: 400 15px/22px var(--font-sans, sans-serif);
+    color: var(--c-text-primary);
+    background: transparent;
+}
+
+.cmdk-hint {
+    flex: 0 0 auto;
+    padding: 2px 8px;
+    border: 1px solid var(--c-border-hairline);
+    border-radius: 6px;
+    background: var(--c-bg-app);
+    font-size: 10.5px;
+    color: var(--c-text-secondary);
+}
+
+.cmdk-results {
+    max-height: 380px;
+    overflow-y: auto;
+    padding: 6px;
+}
+
+.cmdk-group-label {
+    padding: 8px 12px 4px;
+    font: 600 10.5px/14px var(--font-sans, sans-serif);
+    text-transform: uppercase;
+    letter-spacing: .04em;
+    color: var(--c-text-secondary);
+}
+
+.cmdk-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    width: 100%;
+    padding: 9px 12px;
+    border: 0;
+    border-radius: 8px;
+    background: transparent;
+    text-align: left;
+    cursor: pointer;
+}
+
+.cmdk-item:hover,
+.cmdk-item.is-active { background: var(--c-accent-subtle); }
+
+.cmdk-item-title {
+    font-size: 13.5px;
+    color: var(--c-text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.cmdk-item-meta {
+    flex: 0 0 auto;
+    font: 500 11px/16px var(--font-mono, monospace);
+    color: var(--c-text-secondary);
+}
+
+.cmdk-empty {
+    padding: 26px 16px;
+    text-align: center;
+    color: var(--c-text-secondary);
+    font-size: 13px;
 }

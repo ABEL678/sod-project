@@ -9,7 +9,8 @@ document_detail — у него своя разметка и свой набор
   - tokens.css теперь грузится везде — cde-badge/cde-chip/cde-deadline
     работают на любой странице, а не только во вьювере;
   - единая точка подключения скриптов: bootstrap.bundle всегда доступен
-    (раньше на части страниц модалки не работали без can_create_project).
+    (раньше на части страниц модалки не работали без can_create_project);
+  - Волна 3: PWA (manifest + service worker), командная палитра Ctrl+K.
 
 Блоки: title, extra_css, topbar, body_class, content, extra_js.
 {% endcomment %}
@@ -19,6 +20,9 @@ document_detail — у него своя разметка и свой набор
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% block title %}Stream-CAD{% endblock %}</title>
+    <meta name="theme-color" content="#2F5BEA">
+    <link rel="manifest" href="/static/manifest.webmanifest">
+    <link rel="icon" type="image/png" href="/static/icons/icon-192.png">
     <link rel="stylesheet" href="{% static 'css/bootstrap.min.css' %}">
     <link rel="stylesheet" href="{% static 'design-tokens/tokens.css' %}?v=20261102">
     <link rel="stylesheet" href="{% static 'css/redesign.css' %}?v=20261104-s2">
@@ -31,7 +35,18 @@ document_detail — у него своя разметка и свой набор
     {% include 'storage/_topbar.html' %}
 {% endblock %}
 {% block content %}{% endblock %}
+{% include 'storage/_palette.html' %}
 <script src="{% static 'js/vendor/bootstrap.bundle.min.js' %}"></script>
+<script src="{% static 'js/vendor/htmx.min.js' %}" defer></script>
+<script src="{% static 'js/palette.js' %}?v=20261103" defer></script>
+<script>
+    /* Волна 3: PWA — регистрация сервис-воркера из корня (scope '/') */
+    if ('serviceWorker' in navigator) {
+        window.addEventListener('load', function () {
+            navigator.serviceWorker.register('/sw.js').catch(function () {});
+        });
+    }
+</script>
 {% block extra_js %}{% endblock %}
 </body>
 </html>

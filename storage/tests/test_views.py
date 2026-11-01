@@ -94,7 +94,8 @@ class ViewTests(TestCase):
     def test_project_list_uses_shared_topbar(self):
         self.client.force_login(self.user_gip)
         response = self.client.get(reverse('storage:project_list'))
-        self.assertContains(response, 'class="app-topbar"')
+        # Топбар переименован в .topbar (redesign.css), проверяем общий каркас
+        self.assertContains(response, '<header class="topbar">')
         self.assertContains(
             response,
             f'class="topbar-company">{self.company.name}</span>',
@@ -452,7 +453,10 @@ class ViewTests(TestCase):
             reverse('storage:document_detail', args=[version.document_id]),
         )
 
-        self.assertContains(response, '?version=')
+        # С 8aff57e выбор версии переехал в breadcrumbs (чип v{{ current }}
+        # + changeVersion() через ?version= в URLSearchParams):
+        # проверяем и разметку чипа, и ссылку на скачивание версии.
+        self.assertContains(response, 'changeVersion')
         self.assertContains(
             response,
             reverse('storage:document_download', args=[version.pk]),

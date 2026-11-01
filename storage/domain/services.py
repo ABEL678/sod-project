@@ -25,6 +25,11 @@ from storage.domain.models import (
     UserProfile,
 )
 from issues.models import Issue, IssueComment
+from issues.notify import (
+    notify_issue_assigned,
+    notify_issue_commented,
+    notify_issue_status_changed,
+)
 from storage.domain.design_colors import ISSUE_STATUS_RGB as PDF_ISSUE_COLORS
 from storage.domain.project_templates import PROJECT_TEMPLATES
 
@@ -412,16 +417,21 @@ def get_project_documents_queryset(
     project: Project,
     config: dict | None = None,
     folder: Folder | None = None,
+    zone: str | None = None,
 ) -> QuerySet:
     """Возвращает queryset документов проекта с учётом сохранённого вида.
 
     ``folder`` ограничивает выборку документами конкретной папки: навигация
     по дереву папок не должна подмешивать документы соседних папок.
+    ``zone`` — сегмент-контрол зон ISO 19650 (Волна 3).
     """
     _ensure_project_access(user, project)
 
     normalized_config = normalize_document_view_config(config or {})
     queryset = get_accessible_documents(user).filter(project=project)
+
+    if zone in dict(Folder.ZONE_CHOICES):
+        queryset = queryset.filter(folder__zone=zone)
 
     if folder is not None:
         if folder.project_id != project.pk:
@@ -468,9 +478,12 @@ def get_project_documents_for_view(
     project: Project,
     config: dict | None = None,
     folder: Folder | None = None,
+    zone: str | None = None,
 ) -> list[dict]:
     """Документы проекта для таблицы с учётом сохранённого вида и папки."""
-    documents = get_project_documents_queryset(user, project, config, folder=folder)
+    documents = get_project_documents_queryset(
+        user, project, config, folder=folder, zone=zone
+    )
     return [_document_row(document) for document in documents]
 
 
@@ -1362,6 +1375,204 @@ def check_read_permission(user: User, document: Document) -> bool:
     return False
 
 
+# ============================================================================
+# Волна 3: workflow зон ISO 19650 — «Подать на согласование» / «Опубликовать»
+# ============================================================================
+
+# Контролируемые переходы между зонами. В отличие от свободного DnD
+# (move_document), здесь матрица ролей соответствует потоку ISO 19650:
+# разработчик подаёт, проверяющий возвращает, ГИП публикует и архивирует.
+ZONE_WORKFLOW_ACTIONS = {
+    'submit_review': {
+        'label': 'Подать на согласование',
+        'icon': 'bi-arrow-right-circle',
+        'from': 'WIP',
+        'to': 'SHARED',
+        'roles': ('admin', 'gip', 'developer', 'contractor'),
+    },
+    'return_wip': {
+        'label': 'Вернуть в работу',
+        'icon': 'bi-arrow-return-left',
+        'from': 'SHARED',
+        'to': 'WIP',
+        'roles': ('admin', 'gip', 'checker', 'normocontrol'),
+    },
+    'publish': {
+        'label': 'Опубликовать',
+        'icon': 'bi-shield-check',
+        'from': 'SHARED',
+        'to': 'PUBLISHED',
+        'roles': ('admin', 'gip'),
+    },
+    'archive': {
+        'label': 'В архив',
+        'icon': 'bi-lock',
+        'from': 'PUBLISHED',
+        'to': 'ARCHIVE',
+        'roles': ('admin', 'gip'),
+    },
+}
+
+_ZONE_BY_STATUS = {status: zone for zone, status in ZONE_STATUS_MAP.items()}
+
+
+def _effective_zone(document: Document) -> str:
+    """Зона документа; документы вне зон-папок считаются в WIP (черновик)."""
+    folder = document.folder
+    if folder is not None and _is_canonical_zone_folder(folder):
+        return folder.zone
+    return _ZONE_BY_STATUS.get(document.status, 'WIP')
+
+
+def _is_project_gip(user: User, project: Project) -> bool:
+    """ГИП проекта: прямой owner или членство с ролью gip."""
+    if project.gip_id == user.id:
+        return True
+    return project.memberships.filter(
+        user=user, role_in_project='gip'
+    ).exists()
+
+
+def _workflow_role_allowed(user: User, document: Document, action_code: str) -> bool:
+    """Матрица ролей для контролируемого перехода зон."""
+    if user.is_superuser:
+        return True
+    profile = getattr(user, 'userprofile', None)
+    if profile is None:
+        return False
+    if not _check_company_access(user, document.project.company_id):
+        return False
+    action = ZONE_WORKFLOW_ACTIONS.get(action_code)
+    if action is None or profile.role not in action['roles']:
+        return False
+    if profile.role == 'gip':
+        return _is_project_gip(user, document.project)
+    if profile.role in ('developer', 'contractor'):
+        # подать может автор работы в своём разделе
+        return check_write_permission(user, document.section)
+    return True
+
+
+def document_workflow_actions(user: User, document: Document) -> list[dict]:
+    """Доступные документу workflow-действия для отрисовки кнопок."""
+    if user is None or not user.is_authenticated or document.is_deleted:
+        return []
+    current_zone = _effective_zone(document)
+    actions = []
+    for code, spec in ZONE_WORKFLOW_ACTIONS.items():
+        if spec['from'] != current_zone:
+            continue
+        if _workflow_role_allowed(user, document, code):
+            actions.append({
+                'code': code,
+                'label': spec['label'],
+                'icon': spec['icon'],
+            })
+    return actions
+
+
+def _get_or_create_zone_folder(project: Project, zone: str, user: User) -> Folder:
+    """Каноническая папка-зона проекта; создаётся, если её снесли."""
+    folder = Folder.objects.filter(
+        project=project,
+        zone=zone,
+        parent=None,
+        section=None,
+        is_deleted=False,
+    ).first()
+    if folder is not None:
+        return folder
+    name = dict(Folder.ZONE_CHOICES)[zone]
+    order = Folder.objects.filter(project=project).count() + 1
+    return Folder.objects.create(
+        project=project,
+        name=name,
+        zone=zone,
+        parent=None,
+        section=None,
+        order=order,
+        created_by=user,
+    )
+
+
+def transition_document_zone(
+    user: User,
+    document: Document,
+    action_code: str,
+) -> Document:
+    """Контролируемый переход документа между зонами ISO 19650.
+
+    Проверяет матрицу ролей, переносит документ в каноническую папку
+    целевой зоны, синхронизирует статус документа и рассылает
+    уведомления участникам (issues.Notification).
+    """
+    action = ZONE_WORKFLOW_ACTIONS.get(action_code)
+    if action is None:
+        raise ValueError("Неизвестное workflow-действие")
+    if document.is_deleted:
+        raise ValueError("Документ находится в корзине")
+    if not _workflow_role_allowed(user, document, action_code):
+        raise PermissionDenied(
+            f"Нет прав на действие «{action['label']}»"
+        )
+
+    current_zone = _effective_zone(document)
+    if current_zone != action['from']:
+        raise ValueError(
+            "Действие недоступно: документ находится в зоне «{}»".format(
+                document.folder.get_zone_display()
+                if (document.folder and _is_canonical_zone_folder(document.folder))
+                else dict(Folder.ZONE_CHOICES).get(current_zone, current_zone)
+            )
+        )
+
+    target_folder = _get_or_create_zone_folder(
+        document.project, action['to'], user
+    )
+    document.folder = target_folder
+    target_status = _status_for_zone(target_folder)
+    if target_status is not None and target_status != document.status:
+        document.status = target_status
+    document.save(update_fields=['folder', 'status', 'updated_at'])
+
+    _notify_zone_transition(user, document, action_code)
+    return document
+
+
+def _notify_zone_transition(
+    user: User,
+    document: Document,
+    action_code: str,
+) -> None:
+    """Уведомления о переходе зоны — точка интеграции с issues.notify."""
+    try:
+        from issues.notify import notify_document_workflow
+    except Exception:  # pragma: no cover — уведомления не должны ронять workflow
+        return
+    notify_document_workflow(document, action_code, user)
+
+
+def get_zone_counts(user: User, project: Project) -> dict:
+    """Счётчики документов по зонам для сегмент-контрола."""
+    _ensure_project_access(user, project)
+    rows = (
+        get_accessible_documents(user)
+        .filter(project=project, is_deleted=False)
+        .values('folder__zone')
+        .annotate(total=Count('pk'))
+    )
+    counts = {row['folder__zone']: row['total'] for row in rows}
+    counts.pop(None, None)
+    total = sum(counts.values())
+    return {
+        'total': total,
+        'WIP': counts.get('WIP', 0),
+        'SHARED': counts.get('SHARED', 0),
+        'PUBLISHED': counts.get('PUBLISHED', 0),
+        'ARCHIVE': counts.get('ARCHIVE', 0),
+    }
+
+
 def upload_document(
     user: User,
     project: Project,
@@ -1713,6 +1924,7 @@ def update_issue_status(user: User, issue: Issue, new_status: str) -> Issue:
         update_fields.append('assignee')
 
     issue.save(update_fields=update_fields)
+    notify_issue_status_changed(issue, user, current_status)
     return issue
 
 
@@ -1828,7 +2040,7 @@ def create_issue(
 
     crop_image = _decode_crop_image(crop_image_base64)
 
-    return Issue.objects.create(
+    issue = Issue.objects.create(
         document=document,
         version=version,
         author=user,
@@ -1849,6 +2061,8 @@ def create_issue(
         due_date=due_date,
         revision=revision,
     )
+    notify_issue_assigned(issue, user)
+    return issue
 
 
 def update_issue_answer(user: User, issue: Issue, answer_text: str) -> Issue:
@@ -1946,11 +2160,13 @@ def add_issue_comment(user: User, issue: Issue, text: str):
     text = (text or '').strip()
     if not text:
         return None
-    return IssueComment.objects.create(
+    comment = IssueComment.objects.create(
         issue=issue,
         author=user,
         text=text,
     )
+    notify_issue_commented(issue, user)
+    return comment
 
 
 def delete_issue_crop(user: User, issue: Issue) -> Issue:

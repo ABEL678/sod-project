@@ -1,0 +1,15 @@
+{# Волна 3: командная палитра Ctrl+K — быстрый переход по проектам, документам и замечаниям #}
+<div class="modal fade cmdk-modal" id="cmdkModal" tabindex="-1" aria-hidden="true" aria-label="Командная палитра">
+    <div class="modal-dialog modal-dialog-centered cmdk-dialog">
+        <div class="modal-content cmdk-content">
+            <div class="cmdk-input-row">
+                <i class="bi bi-search" aria-hidden="true"></i>
+                <input type="search" id="cmdkInput" class="cmdk-input" autocomplete="off" spellcheck="false"
+                       placeholder="Проект, документ или замечание… (Esc — закрыть)"
+                       aria-label="Поиск по проектам, документам и замечаниям">
+                <span class="cmdk-hint cde-tnum">Ctrl+K</span>
+            </div>
+            <div class="cmdk-results" id="cmdkResults" role="listbox" aria-label="Результаты поиска"></div>
+        </div>
+    </div>
+</div>

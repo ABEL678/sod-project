@@ -11,6 +11,36 @@
     {% include 'storage/_breadcrumbs.html' %}
 
     {% comment %}
+    Волна 3: сегмент-контрол зон ISO 19650. Клик по чипу подставляет
+    скрытый input zone в форму фильтров и перезагружает панель через htmx
+    (те же фильтры + зона). Счётчики — по всем доступным документам проекта.
+    {% endcomment %}
+    <nav class="zone-segment" aria-label="Зоны ISO 19650" id="zoneSegment">
+        <button type="button"
+                class="zone-chip {% if not active_zone %}is-active{% endif %}"
+                data-zone="" data-role="zone-chip">
+            <i class="bi bi-collection" aria-hidden="true"></i>
+            Все зоны
+            <span class="zone-count cde-tnum" data-zone-count="">{{ zone_counts.total }}</span>
+        </button>
+        {% for zone in zone_segments %}
+            <button type="button"
+                    class="zone-chip zone-chip--{{ zone.code|lower }} {% if active_zone == zone.code %}is-active{% endif %}"
+                    data-zone="{{ zone.code }}" data-role="zone-chip"
+                    title="{{ zone.label }}">
+                <i class="bi {{ zone.icon }}" aria-hidden="true"></i>
+                {{ zone.label }}
+                <span class="zone-count cde-tnum" data-zone-count="{{ zone.code }}">
+                    {% if zone.code == 'WIP' %}{{ zone_counts.WIP }}
+                    {% elif zone.code == 'SHARED' %}{{ zone_counts.SHARED }}
+                    {% elif zone.code == 'PUBLISHED' %}{{ zone_counts.PUBLISHED }}
+                    {% else %}{{ zone_counts.ARCHIVE }}{% endif %}
+                </span>
+            </button>
+        {% endfor %}
+    </nav>
+
+    {% comment %}
     Спринт 2: фильтры применяются сразу — по change у селектов и с
     задержкой 350 мс при наборе в поиске. Кнопка «Найти» больше не нужна
     (скрытый submit оставлен для доступности/Enter).
@@ -27,6 +57,7 @@
           hx-trigger="change, keyup changed delay:350ms from:find input[name='q'], submit"
           hx-indicator="#documentsPanel">
         <input type="hidden" name="tab" value="documents">
+        <input type="hidden" name="zone" value="{{ active_zone|default:'' }}" data-role="zone-input">
         {% if selected_view %}
             <input type="hidden" name="view" value="{{ selected_view.pk }}">
         {% endif %}

@@ -1,5 +1,6 @@
 import json
 import re
+from datetime import timedelta
 
 from django.contrib import messages
 from django.contrib.auth import get_user_model
@@ -39,7 +40,7 @@ from storage.domain.services import (
     update_issue_status,
 )
 
-from issues.models import Issue
+from issues.models import Issue, Notification
 
 
 STATUS_CODE_RE = re.compile(
@@ -629,3 +630,172 @@ class IssueRegistryExportView(LoginRequiredMixin, View):
                 '.spreadsheetml.sheet'
             ),
         )
+
+
+# ============================================================================
+# Волна 3: «Мои замечания» + уведомления
+# ============================================================================
+
+def _my_issues_base(user):
+    """Замечания, где пользователь автор или ответственный (по правам)."""
+    accessible = get_accessible_documents(user)
+    return (
+        Issue.objects.filter(
+            document__in=accessible,
+            document__is_deleted=False,
+        )
+        .filter(Q(author=user) | Q(assignee=user))
+        .select_related(
+            'document',
+            'document__project',
+            'document__section',
+            'author',
+            'assignee',
+        )
+    )
+
+
+def _my_issues_counts(user):
+    """Дайджест «на вас 5, просрочено 2» — по личному набору замечаний."""
+    issues = _my_issues_base(user)
+    today = timezone.localdate()
+    assigned_open = issues.filter(
+        assignee=user, status__in=ACTIVE_ISSUE_STATUSES,
+    ).count()
+    created_open = issues.filter(
+        author=user, status__in=ACTIVE_ISSUE_STATUSES,
+    ).count()
+    overdue = issues.filter(
+        assignee=user,
+        due_date__isnull=False,
+        due_date__lt=today,
+        status__in=ACTIVE_ISSUE_STATUSES,
+    ).count()
+    due_soon = issues.filter(
+        assignee=user,
+        due_date__isnull=False,
+        due_date__gte=today,
+        due_date__lte=today + timedelta(days=3),
+        status__in=ACTIVE_ISSUE_STATUSES,
+    ).count()
+    return {
+        'assigned_open': assigned_open,
+        'created_open': created_open,
+        'overdue': overdue,
+        'due_soon': due_soon,
+    }
+
+
+class MyIssuesView(LoginRequiredMixin, ListView):
+    """«Мои замечания» (Волна 3): личный инбокс по всем проектам.
+
+    Дайджест-сводка «на вас N, просрочено K, срок в ближайшие 3 дня»
+    и таблица с фильтрами assigned/created/open/overdue.
+    """
+
+    template_name = 'issues/my_issues.html'
+    context_object_name = 'issues'
+    paginate_by = 50
+
+    def get_queryset(self):
+        queryset = _my_issues_base(self.request.user)
+        scope = (self.request.GET.get('scope') or '').strip()
+        flag = (self.request.GET.get('flag') or '').strip()
+
+        if scope == 'assigned':
+            queryset = queryset.filter(assignee=self.request.user)
+        elif scope == 'created':
+            queryset = queryset.filter(author=self.request.user)
+
+        if flag == 'open':
+            queryset = queryset.filter(status__in=ACTIVE_ISSUE_STATUSES)
+        elif flag == 'overdue':
+            queryset = queryset.filter(
+                assignee=self.request.user,
+                due_date__isnull=False,
+                due_date__lt=timezone.localdate(),
+                status__in=ACTIVE_ISSUE_STATUSES,
+            )
+        elif flag == 'due_soon':
+            queryset = queryset.filter(
+                assignee=self.request.user,
+                due_date__isnull=False,
+                due_date__gte=timezone.localdate(),
+                due_date__lte=timezone.localdate() + timedelta(days=3),
+                status__in=ACTIVE_ISSUE_STATUSES,
+            )
+        elif flag == 'closed':
+            queryset = queryset.filter(status__in=ISSUE_STATUS_GROUPS['closed'])
+
+        query = (self.request.GET.get('q') or '').strip()
+        if query:
+            queryset = queryset.filter(
+                Q(description__icontains=query)
+                | Q(document__code__icontains=query)
+                | Q(document__name__icontains=query)
+                | Q(document__project__name__icontains=query)
+            )
+        return queryset.order_by(
+            'due_date', '-created_at'
+        )
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context.update({
+            'counts': _my_issues_counts(self.request.user),
+            'filters': {
+                'scope': (self.request.GET.get('scope') or '').strip(),
+                'flag': (self.request.GET.get('flag') or '').strip(),
+                'q': (self.request.GET.get('q') or '').strip(),
+            },
+        })
+        return context
+
+
+# Коды статусов замечаний → семантические имена токенов (для бейджей)
+STATUS_BADGE_MAP = {
+    'NEW': 'wait',
+    'IN_PROGRESS': 'progress',
+    'DISCUSSION': 'review',
+    'REJECTED': 'attention',
+    'DONE': 'done',
+    'CLOSED': 'closed',
+    'CANCELLED': 'closed',
+}
+
+
+def _notification_list(request):
+    """Последние уведомления пользователя для выпадающего списка."""
+    return (
+        Notification.objects.filter(recipient=request.user)
+        .select_related('actor', 'issue', 'document')[:12]
+    )
+
+
+@login_required
+def notifications_partial(request):
+    """HTMX-фрагмент колокольчика: список + счётчик непрочитанных."""
+    unread = Notification.objects.filter(
+        recipient=request.user, is_read=False,
+    ).count()
+    return render(
+        request,
+        'issues/_notifications_list.html',
+        {
+            'notifications': _notification_list(request),
+            'unread_count': unread,
+        },
+    )
+
+
+@login_required
+def notifications_read_all(request):
+    """Отметить все уведомления прочитанными (htmx-post из колокольчика)."""
+    if request.method == 'POST':
+        Notification.objects.filter(
+            recipient=request.user, is_read=False,
+        ).update(is_read=True)
+        if request.headers.get('HX-Request'):
+            return notifications_partial(request)
+        return redirect('issues:my_issues')
+    return HttpResponseForbidden('POST only')

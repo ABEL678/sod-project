@@ -23,6 +23,7 @@ urlpatterns = [
     path('projects/<int:project_id>/folders/create/', views.FolderCreateView.as_view(), name='folder_create'),
     path('projects/<int:project_id>/folders/create-form/', views.FolderCreateFormView.as_view(), name='folder_create_form'),
     path('documents/<int:document_id>/move/', views.DocumentMoveView.as_view(), name='document_move'),
+    path('documents/<int:document_id>/workflow/', views.DocumentWorkflowView.as_view(), name='document_workflow'),
     path('documents/<int:document_id>/copy/', views.DocumentCopyView.as_view(), name='document_copy'),
     path('documents/<int:document_id>/delete/', views.DocumentDeleteView.as_view(), name='document_delete'),
     path('folders/<int:folder_id>/move/', views.FolderMoveView.as_view(), name='folder_move'),
@@ -51,4 +52,6 @@ urlpatterns = [
     ),
     path('projects/<int:project_id>/export/', views.ExportVedomostView.as_view(), name='export_vedomost'),
     path('projects/<int:project_id>/mail-import/', views.SimulateMailImportView.as_view(), name='simulate_mail_import'),
+    path('palette/', views.PaletteSearchView.as_view(), name='palette_search'),
+    path('sw.js', views.ServiceWorkerView.as_view(), name='service_worker'),
 ]

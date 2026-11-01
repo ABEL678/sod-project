@@ -2,7 +2,7 @@ from django.contrib.auth.models import User
 from django.db import models
 from django.db.models import CheckConstraint, Q
 
-from storage.domain.models import Document, DocumentVersion
+from storage.domain.models import Document, DocumentVersion, Project
 
 
 class Issue(models.Model):
@@ -104,3 +104,77 @@ class IssueComment(models.Model):
 
     def __str__(self):
         return f'Комментарий от {self.author.username} к #{self.issue.pk}'
+
+
+class Notification(models.Model):
+    """Внутреннее уведомление (Волна 3): колокольчик в топбаре.
+
+    Создаётся в сервисных функциях при смене статуса/назначении/комментарии
+    замечания и при workflow-переходах зон ISO 19650. Личный инбокс —
+    экран «Мои замечания» /issues/my-issues/.
+    """
+
+    VERB_CHOICES = [
+        ('assigned', 'Назначено замечание'),
+        ('commented', 'Новый комментарий'),
+        ('status_changed', 'Изменён статус замечания'),
+        ('doc_submitted', 'Документ подан на согласование'),
+        ('doc_published', 'Документ опубликован'),
+        ('doc_returned', 'Документ возвращён в работу'),
+        ('doc_archived', 'Документ отправлен в архив'),
+    ]
+
+    recipient = models.ForeignKey(
+        'auth.User',
+        on_delete=models.CASCADE,
+        related_name='notifications',
+        verbose_name='Получатель',
+    )
+    actor = models.ForeignKey(
+        'auth.User',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='+',
+        verbose_name='Инициатор',
+    )
+    issue = models.ForeignKey(
+        Issue,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='notifications',
+        verbose_name='Замечание',
+    )
+    document = models.ForeignKey(
+        Document,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='notifications',
+        verbose_name='Документ',
+    )
+    project = models.ForeignKey(
+        Project,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='notifications',
+        verbose_name='Проект',
+    )
+    verb = models.CharField(max_length=30, choices=VERB_CHOICES)
+    message = models.CharField(max_length=300, blank=True, default='')
+    url = models.CharField(max_length=300, blank=True, default='')
+    is_read = models.BooleanField(default=False, verbose_name='Прочитано')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['recipient', 'is_read', '-created_at']),
+        ]
+        verbose_name = 'Уведомление'
+        verbose_name_plural = 'Уведомления'
+
+    def __str__(self):
+        return f'{self.get_verb_display()} → {self.recipient.username}'

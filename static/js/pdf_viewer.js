@@ -193,9 +193,15 @@
         if (!page) {
             return;
         }
-        page.layer.querySelectorAll('.pdf-markup, .pdf-pin').forEach(function (mark) {
-            mark.remove();
-        });
+        page.layer.querySelectorAll('.pdf-markup, .pdf-pin, .pdf-pin-cluster, .pdf-cluster-popup')
+            .forEach(function (mark) {
+                mark.remove();
+            });
+
+        // Волна 3: кластеризация перекрывающихся маркеров. Пины, центры
+        // которых ближе CLUSTER_THRESHOLD_PX на экране, сворачиваются в один
+        // бейдж с количеством; клик — приблизить к группе или раскрыть список.
+        const items = [];
         issues
             .filter(function (issue) {
                 return Number(issue.page_number) === Number(pageNumber);
@@ -226,62 +232,33 @@
                     y2 = Math.min(1, y + 0.02);
                 }
 
-                const frame = document.createElement('div');
-                frame.className = 'pdf-markup';
-                frame.dataset.issueId = issue.id;
-                frame.style.left = (x1 * 100) + '%';
-                frame.style.top = (y1 * 100) + '%';
-                frame.style.width = ((x2 - x1) * 100) + '%';
-                frame.style.height = ((y2 - y1) * 100) + '%';
-                frame.style.borderColor = statusColor(issue.status);
-                frame.style.backgroundColor = 'transparent';
-                frame.style.pointerEvents = 'auto';
-                frame.style.cursor = 'pointer';
-                frame.title = issue.description;
-                frame.addEventListener('click', function (event) {
-                    event.stopPropagation();
-                    if (window.selectIssueFromPdf) {
-                        window.selectIssueFromPdf(issue.id);
-                    }
+                items.push({
+                    issue: issue,
+                    cx: x,
+                    cy: y,
+                    x1: x1,
+                    y1: y1,
+                    x2: x2,
+                    y2: y2,
                 });
-                frame.addEventListener('contextmenu', function (event) {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    openContextMenu(event.clientX, event.clientY, issue.id);
-                });
-                page.layer.appendChild(frame);
-
-                const badge = document.createElement('span');
-                const badgeColor = statusColor(issue.status);
-                badge.className = 'pdf-issue-badge';
-                badge.dataset.issueId = issue.id;
-                badge.style.position = 'absolute';
-                badge.style.top = '-12px';
-                badge.style.left = '-12px';
-                badge.style.transform = 'none';
-                badge.style.backgroundColor = badgeColor;
-                badge.style.color = ['IN_PROGRESS', 'DISCUSSION'].includes(issue.status)
-                    ? '#212529'
-                    : '#fff';
-                badge.style.border = '2px solid #fff';
-                badge.style.borderRadius = '50%';
-                badge.style.padding = '0';
-                badge.style.fontSize = '10px';
-                badge.style.fontWeight = 'bold';
-                badge.style.lineHeight = '1';
-                badge.style.width = '24px';
-                badge.style.height = '16px';
-                badge.style.display = 'flex';
-                badge.style.alignItems = 'center';
-                badge.style.justifyContent = 'center';
-                badge.style.textAlign = 'center';
-                badge.style.boxShadow = '0 2px 4px rgba(0,0,0,0.2)';
-                badge.style.pointerEvents = 'none';
-                badge.style.zIndex = '2';
-                badge.textContent = issue.id;
-                badge.title = issue.description;
-                frame.appendChild(badge);
             });
+
+        const clusters = clusterMarkers(
+            items,
+            page.layer.clientWidth || 800,
+            page.layer.clientHeight || 1000,
+            CLUSTER_THRESHOLD_PX
+        );
+
+        clusters.forEach(function (cluster) {
+            if (cluster.items.length === 1) {
+                const item = cluster.items[0];
+                drawMarkupFrame(page, item);
+            } else {
+                drawClusterBadge(page, cluster);
+            }
+        });
+
         if (selectedIssueId != null) {
             document.querySelectorAll(
                 '[data-issue-id="' + selectedIssueId + '"].pdf-markup, '
@@ -289,6 +266,254 @@
             ).forEach(function (mark) {
                 mark.classList.add('is-active');
             });
+        }
+    }
+
+    const CLUSTER_THRESHOLD_PX = 28;
+
+    function clusterMarkers(items, layerWidth, layerHeight, thresholdPx) {
+        /* Жадная группировка по экранным пикселям: при увеличении масштаба
+           кластер естественно распадается, потому что drawMarks вызывается
+           после каждого рендера. */
+        const clusters = [];
+        items.forEach(function (item) {
+            let best = null;
+            let bestDistance = Infinity;
+            clusters.forEach(function (cluster) {
+                const dx = (cluster.cx - item.cx) * layerWidth;
+                const dy = (cluster.cy - item.cy) * layerHeight;
+                const distance = Math.sqrt(dx * dx + dy * dy);
+                if (distance < thresholdPx && distance < bestDistance) {
+                    best = cluster;
+                    bestDistance = distance;
+                }
+            });
+            if (best) {
+                best.items.push(item);
+                const n = best.items.length;
+                best.cx = best.items.reduce(function (sum, part) {
+                    return sum + part.cx;
+                }, 0) / n;
+                best.cy = best.items.reduce(function (sum, part) {
+                    return sum + part.cy;
+                }, 0) / n;
+                best.x1 = Math.min(best.x1, item.x1);
+                best.y1 = Math.min(best.y1, item.y1);
+                best.x2 = Math.max(best.x2, item.x2);
+                best.y2 = Math.max(best.y2, item.y2);
+            } else {
+                clusters.push({
+                    cx: item.cx,
+                    cy: item.cy,
+                    x1: item.x1,
+                    y1: item.y1,
+                    x2: item.x2,
+                    y2: item.y2,
+                    items: [item],
+                });
+            }
+        });
+        return clusters;
+    }
+
+    function drawMarkupFrame(page, item) {
+        const issue = item.issue;
+
+        const frame = document.createElement('div');
+        frame.className = 'pdf-markup';
+        frame.dataset.issueId = issue.id;
+        frame.style.left = (item.x1 * 100) + '%';
+        frame.style.top = (item.y1 * 100) + '%';
+        frame.style.width = ((item.x2 - item.x1) * 100) + '%';
+        frame.style.height = ((item.y2 - item.y1) * 100) + '%';
+        frame.style.borderColor = statusColor(issue.status);
+        frame.style.backgroundColor = 'transparent';
+        frame.style.pointerEvents = 'auto';
+        frame.style.cursor = 'pointer';
+        frame.title = issue.description;
+        frame.addEventListener('click', function (event) {
+            event.stopPropagation();
+            if (window.selectIssueFromPdf) {
+                window.selectIssueFromPdf(issue.id);
+            }
+        });
+        frame.addEventListener('contextmenu', function (event) {
+            event.preventDefault();
+            event.stopPropagation();
+            openContextMenu(event.clientX, event.clientY, issue.id);
+        });
+        page.layer.appendChild(frame);
+
+        const badge = document.createElement('span');
+        const badgeColor = statusColor(issue.status);
+        badge.className = 'pdf-issue-badge';
+        badge.dataset.issueId = issue.id;
+        badge.style.position = 'absolute';
+        badge.style.top = '-12px';
+        badge.style.left = '-12px';
+        badge.style.transform = 'none';
+        badge.style.backgroundColor = badgeColor;
+        badge.style.color = ['IN_PROGRESS', 'DISCUSSION'].includes(issue.status)
+            ? '#212529'
+            : '#fff';
+        badge.style.border = '2px solid #fff';
+        badge.style.borderRadius = '50%';
+        badge.style.padding = '0';
+        badge.style.fontSize = '10px';
+        badge.style.fontWeight = 'bold';
+        badge.style.lineHeight = '1';
+        badge.style.width = '24px';
+        badge.style.height = '16px';
+        badge.style.display = 'flex';
+        badge.style.alignItems = 'center';
+        badge.style.justifyContent = 'center';
+        badge.style.textAlign = 'center';
+        badge.style.boxShadow = '0 2px 4px rgba(0,0,0,0.2)';
+        badge.style.pointerEvents = 'none';
+        badge.style.zIndex = '2';
+        badge.textContent = issue.id;
+        badge.title = issue.description;
+        frame.appendChild(badge);
+    }
+
+    function drawClusterBadge(page, cluster) {
+        /* Доминирующий статус — цвет кластера. */
+        const counts = {};
+        cluster.items.forEach(function (item) {
+            counts[item.issue.status] = (counts[item.issue.status] || 0) + 1;
+        });
+        const dominantStatus = Object.keys(counts).sort(function (a, b) {
+            return counts[b] - counts[a];
+        })[0];
+
+        const badge = document.createElement('button');
+        badge.type = 'button';
+        badge.className = 'pdf-pin-cluster';
+        badge.style.left = (cluster.cx * 100) + '%';
+        badge.style.top = (cluster.cy * 100) + '%';
+        badge.style.backgroundColor = statusColor(dominantStatus);
+        badge.style.color = ['IN_PROGRESS', 'DISCUSSION'].includes(dominantStatus)
+            ? '#212529'
+            : '#fff';
+        badge.textContent = String(cluster.items.length);
+        badge.title = 'Замечаний в группе: ' + cluster.items.length
+            + ' — клик приблизит, повторный клик раскроет список';
+        badge.setAttribute('aria-label', 'Группа из ' + cluster.items.length + ' замечаний');
+
+        badge.addEventListener('click', function (event) {
+            event.stopPropagation();
+            const existingPopup = page.layer.querySelector('.pdf-cluster-popup');
+            if (existingPopup) {
+                existingPopup.remove();
+            }
+            const spreadPx = clusterSpreadPx(page, cluster);
+            if (spreadPx <= CLUSTER_THRESHOLD_PX * 1.6) {
+                zoomToRectangle(cluster.x1, cluster.y1, cluster.x2, cluster.y2);
+                return;
+            }
+            openClusterPopup(page, cluster);
+        });
+
+        page.layer.appendChild(badge);
+    }
+
+    function clusterSpreadPx(page, cluster) {
+        const rect = page.layer.getBoundingClientRect();
+        if (!rect.width || !rect.height) {
+            return Infinity;
+        }
+        return Math.sqrt(
+            Math.pow((cluster.x2 - cluster.x1) * rect.width, 2)
+            + Math.pow((cluster.y2 - cluster.y1) * rect.height, 2)
+        );
+    }
+
+    function openClusterPopup(page, cluster) {
+        const popup = document.createElement('div');
+        popup.className = 'pdf-cluster-popup';
+        popup.style.left = (cluster.cx * 100) + '%';
+        popup.style.top = (cluster.cy * 100) + '%';
+
+        const head = document.createElement('div');
+        head.className = 'pdf-cluster-popup-head';
+        head.textContent = 'Замечания группы: ' + cluster.items.length;
+        popup.appendChild(head);
+
+        cluster.items.forEach(function (item) {
+            const row = document.createElement('button');
+            row.type = 'button';
+            row.className = 'pdf-cluster-popup-item';
+            row.innerHTML = '<span class="pdf-cluster-popup-id" style="background:'
+                + statusColor(item.issue.status) + '">#' + item.issue.id + '</span>'
+                + '<span class="pdf-cluster-popup-text"></span>';
+            row.querySelector('.pdf-cluster-popup-text').textContent =
+                (item.issue.description || '').slice(0, 60);
+            row.addEventListener('click', function (event) {
+                event.stopPropagation();
+                popup.remove();
+                if (window.selectIssueFromPdf) {
+                    window.selectIssueFromPdf(item.issue.id);
+                }
+            });
+            popup.appendChild(row);
+        });
+
+        popup.addEventListener('click', function (event) {
+            event.stopPropagation();
+        });
+        page.layer.appendChild(popup);
+
+        setTimeout(function () {
+            document.addEventListener('click', function handler() {
+                if (popup.parentNode) {
+                    popup.remove();
+                }
+                document.removeEventListener('click', handler);
+            });
+        }, 0);
+    }
+
+    function zoomToRectangle(x1, y1, x2, y2) {
+        /* Приближает текущий лист так, чтобы прямоугольник (доли 0..1)
+           занял ~70% окна вьювера, и прокручивает к его центру. */
+        const entry = pages.get(currentPage);
+        if (!entry || !viewer) {
+            return;
+        }
+        const canvas = entry.canvas;
+        const width = canvas.clientWidth || canvas.width;
+        const height = canvas.clientHeight || canvas.height;
+        const viewerRect = viewer.getBoundingClientRect();
+        const boxWidth = Math.max(1, (x2 - x1) * width);
+        const boxHeight = Math.max(1, (y2 - y1) * height);
+        let nextScale = Math.min(
+            (viewerRect.width * 0.7) / boxWidth,
+            (viewerRect.height * 0.7) / boxHeight
+        );
+        nextScale = Math.min(4, Math.max(0.5, nextScale));
+
+        const doScroll = function () {
+            const fresh = pages.get(currentPage);
+            if (!fresh) {
+                return;
+            }
+            const rect = fresh.canvas.getBoundingClientRect();
+            const box = viewer.getBoundingClientRect();
+            const centerX = rect.left + ((x1 + x2) / 2) * rect.width;
+            const centerY = rect.top + ((y1 + y2) / 2) * rect.height;
+            viewer.scrollBy({
+                left: centerX - box.left - box.width / 2,
+                top: centerY - box.top - box.height / 2,
+                behavior: 'smooth',
+            });
+        };
+
+        if (Math.abs(nextScale - currentScale) > 0.01) {
+            window.setZoom(nextScale);
+            /* renderPages внутри setZoom асинхронный — ждём рендер и центрируем */
+            setTimeout(doScroll, 350);
+        } else {
+            doScroll();
         }
     }
 

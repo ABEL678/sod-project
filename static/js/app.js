@@ -1045,6 +1045,199 @@
         });
     }
 
+    /* ---------- Волна 3: зоны ISO 19650 (сегмент-контрол + workflow) ---------- */
+
+    function initZoneWorkflow() {
+        var panel = document.getElementById('documentsPanel');
+        if (!panel) {
+            return;
+        }
+
+        // Клик по чипу зоны: подставить zone в скрытый input формы фильтров
+        // и отправить её через htmx — фильтры раздела/типа/поиска сохраняются.
+        document.addEventListener('click', function (event) {
+            var chip = event.target.closest('[data-role="zone-chip"]');
+            if (chip) {
+                event.preventDefault();
+                var form = document.getElementById('filtersForm');
+                var input = form && form.querySelector('[data-role="zone-input"]');
+                if (form && input) {
+                    input.value = chip.getAttribute('data-zone') || '';
+                    if (window.htmx) {
+                        window.htmx.trigger(form, 'submit');
+                    } else {
+                        form.submit();
+                    }
+                }
+                return;
+            }
+
+            var btn = event.target.closest('[data-workflow-action]');
+            if (!btn) {
+                return;
+            }
+            event.preventDefault();
+            applyWorkflowAction(btn);
+        });
+    }
+
+    function applyWorkflowAction(btn) {
+        var action = btn.getAttribute('data-workflow-action');
+        var url = btn.getAttribute('data-workflow-url');
+        if (!action || !url || btn.dataset.busy === '1') {
+            return;
+        }
+        btn.dataset.busy = '1';
+        btn.classList.add('is-busy');
+
+        var body = new URLSearchParams();
+        body.set('action', action);
+
+        fetch(url, {
+            method: 'POST',
+            headers: {
+                'X-CSRFToken': csrfToken(),
+                'X-Requested-With': 'XMLHttpRequest'
+            },
+            body: body
+        })
+            .then(function (response) {
+                return response.json().then(function (data) {
+                    return { ok: response.ok, data: data };
+                });
+            })
+            .then(function (result) {
+                if (!result.ok || result.data.status !== 'ok') {
+                    showToast(result.data && result.data.error
+                        ? result.data.error
+                        : 'Не удалось выполнить действие');
+                    return;
+                }
+                updateDocumentRow(result.data);
+                updateZoneCounts(result.data.zone_code);
+            })
+            .catch(function () {
+                showToast('Сеть недоступна — попробуйте ещё раз');
+            })
+            .finally(function () {
+                delete btn.dataset.busy;
+                btn.classList.remove('is-busy');
+            });
+    }
+
+    function updateDocumentRow(data) {
+        var row = document.querySelector(
+            'tr[data-document-id="' + data.document_id + '"]'
+        );
+        if (!row) {
+            return;
+        }
+        var zoneCell = row.querySelector('[data-column="zone"]');
+        if (zoneCell) {
+            var icons = {
+                WIP: 'bi-pencil-square',
+                SHARED: 'bi-people',
+                PUBLISHED: 'bi-shield-check',
+                ARCHIVE: 'bi-lock'
+            };
+            var colors = {
+                WIP: 'text-primary',
+                SHARED: 'text-warning',
+                PUBLISHED: 'text-success',
+                ARCHIVE: 'text-secondary'
+            };
+            zoneCell.innerHTML = data.zone_code
+                ? '<i class="bi ' + (icons[data.zone_code] || 'bi-folder') + ' ' +
+                  (colors[data.zone_code] || '') + ' me-1" aria-hidden="true"></i>' +
+                  escapeHtml(data.zone_name || '')
+                : '—';
+        }
+
+        var statusCell = row.querySelector('[data-column="status"]');
+        if (statusCell) {
+            var badge = STATUS_BADGE_CLASSES[data.status_code] || 'doc-badge-draft';
+            statusCell.innerHTML = '<span class="doc-badge ' + badge + '">' +
+                escapeHtml(data.status_display || '') + '</span>';
+        }
+
+        var actionsCell = row.querySelector('[data-column="actions"]');
+        if (actionsCell && data.actions) {
+            if (!data.actions.length) {
+                actionsCell.innerHTML = '<span class="text-muted">—</span>';
+            } else {
+                var buttons = data.actions.map(function (item) {
+                    return '<button type="button" class="wf-btn" ' +
+                        'data-workflow-action="' + item.code + '" ' +
+                        'data-workflow-url="' + urlForWorkflow(data.document_id) + '" ' +
+                        'title="' + escapeHtml(item.label) + '" ' +
+                        'aria-label="' + escapeHtml(item.label) + '">' +
+                        '<i class="bi ' + item.icon + '" aria-hidden="true"></i></button>';
+                });
+                actionsCell.innerHTML = '<span class="wf-actions" data-role="workflow-actions">' +
+                    buttons.join('') + '</span>';
+            }
+        }
+
+        row.classList.remove('doc-row-flash');
+        void row.offsetWidth; /* reflow — перезапуск анимации */
+        row.classList.add('doc-row-flash');
+        setTimeout(function () {
+            row.classList.remove('doc-row-flash');
+        }, 1600);
+    }
+
+    var STATUS_BADGE_CLASSES = {
+        approved: 'doc-badge-approved',
+        in_review: 'doc-badge-review',
+        archived: 'doc-badge-archived',
+        draft: 'doc-badge-draft'
+    };
+
+    function urlForWorkflow(documentId) {
+        return '/documents/' + documentId + '/workflow/';
+    }
+
+    function updateZoneCounts(activeZone) {
+        // Точные счётчики пересчитает сервер при следующем запросе панели;
+        // здесь — мгновенный локальный сдвиг ±1 для обратной связи.
+        var chips = document.querySelectorAll('[data-zone-count]');
+        chips.forEach(function (el) {
+            var zone = el.getAttribute('data-zone-count') || '';
+            var value = parseInt(el.textContent, 10);
+            if (isNaN(value)) {
+                return;
+            }
+            if (zone === activeZone) {
+                el.textContent = String(value + 1);
+            }
+        });
+    }
+
+    function escapeHtml(text) {
+        var div = document.createElement('div');
+        div.textContent = text == null ? '' : String(text);
+        return div.innerHTML;
+    }
+
+    var TOAST_TIMEOUT = null;
+
+    function showToast(message) {
+        var toast = document.getElementById('wfToast');
+        if (!toast) {
+            toast = document.createElement('div');
+            toast.id = 'wfToast';
+            toast.className = 'wf-toast';
+            toast.setAttribute('role', 'status');
+            document.body.appendChild(toast);
+        }
+        toast.textContent = message;
+        toast.classList.add('is-visible');
+        clearTimeout(TOAST_TIMEOUT);
+        TOAST_TIMEOUT = setTimeout(function () {
+            toast.classList.remove('is-visible');
+        }, 3500);
+    }
+
     function init() {
         initSidebar();
         initBulkSelection();
@@ -1052,6 +1245,7 @@
         initDocumentDragAndDrop();
         initContextMenus();
         initDocumentsPanel();
+        initZoneWorkflow();
         initHtmx();
     }
 

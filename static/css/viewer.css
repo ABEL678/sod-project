@@ -697,3 +697,108 @@ body {
         display: none;
     }
 }
+
+
+/* ==========================================================================
+   Волна 3: кластеризация маркеров
+   ========================================================================== */
+.pdf-pin-cluster {
+    position: absolute;
+    transform: translate(-50%, -50%);
+    z-index: 6;
+    min-width: 26px;
+    height: 26px;
+    padding: 0 6px;
+    border: 2px solid #fff;
+    border-radius: 999px;
+    font: 700 11.5px/22px var(--font-mono, monospace);
+    text-align: center;
+    cursor: pointer;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.28);
+    transition: transform .12s ease;
+}
+
+.pdf-pin-cluster:hover { transform: translate(-50%, -50%) scale(1.12); }
+
+.pdf-cluster-popup {
+    position: absolute;
+    transform: translate(-10%, 12px);
+    z-index: 40;
+    min-width: 240px;
+    max-width: 300px;
+    background: var(--c-bg-surface, #fff);
+    border: 1px solid var(--c-border-default, #D4D4CE);
+    border-radius: var(--r-md, 8px);
+    box-shadow: var(--shadow-3, 0 8px 24px rgba(25, 25, 23, 0.2));
+    overflow: hidden;
+}
+
+.pdf-cluster-popup-head {
+    padding: 7px 12px;
+    border-bottom: 1px solid var(--c-border-hairline, #E4E4E0);
+    background: var(--c-bg-app, #F6F6F4);
+    font: 600 12px/16px var(--font-sans, sans-serif);
+    color: var(--c-text-primary, #191917);
+}
+
+.pdf-cluster-popup-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 7px 12px;
+    border: 0;
+    border-bottom: 1px solid var(--c-border-hairline, #E4E4E0);
+    background: transparent;
+    text-align: left;
+    cursor: pointer;
+}
+
+.pdf-cluster-popup-item:last-child { border-bottom: 0; }
+.pdf-cluster-popup-item:hover { background: var(--c-bg-row-hover, #F3F3F0); }
+
+.pdf-cluster-popup-id {
+    flex: 0 0 auto;
+    padding: 1px 6px;
+    border-radius: 999px;
+    color: #fff;
+    font: 700 10.5px/15px var(--font-mono, monospace);
+}
+
+.pdf-cluster-popup-text {
+    font-size: 12px;
+    color: var(--c-text-primary, #191917);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* ==========================================================================
+   Волна 3: секции карточки замечания
+   ========================================================================== */
+.issue-card-section { border-top: 1px solid var(--c-border-hairline, #E4E4E0); }
+.issue-card-section:first-of-type { border-top: 0; }
+
+.issue-card-section > summary {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 0;
+    font: 600 11.5px/16px var(--font-sans, sans-serif);
+    color: var(--c-text-secondary, #6E6E68);
+    cursor: pointer;
+    user-select: none;
+    list-style: none;
+}
+
+.issue-card-section > summary::-webkit-details-marker { display: none; }
+.issue-card-section > summary::before { content: '\F282'; font-family: 'bootstrap-icons'; font-size: 10px; transition: transform .15s ease; }
+.issue-card-section[open] > summary::before { transform: rotate(90deg); }
+.issue-card-section[open] > summary { color: var(--c-text-primary, #191917); }
+
+.issue-section-count {
+    background: var(--c-bg-app, #F6F6F4);
+    border-radius: 999px;
+    font: 500 10.5px/16px var(--font-mono, monospace);
+    padding: 0 7px;
+}
