@@ -4,8 +4,8 @@ from django.utils.safestring import mark_safe
 import django_tables2 as tables
 from django_tables2.utils import AttributeDict
 
-from storage.domain.models import Document
-from storage.domain.services import document_workflow_actions
+from storage.domain.models import Document, Folder
+from storage.domain.services import _effective_zone, document_workflow_actions
 
 
 STATUS_BADGE_CLASSES = {
@@ -58,7 +58,7 @@ class DocumentTable(tables.Table):
     zone = tables.Column(
         verbose_name='Зона',
         attrs=_column_attrs('zone'),
-        order_by=('folder__zone',),
+        order_by=('status',),
         # Волна 3, бонус-фикс: accessor 'zone' у Document отсутствует -> None
         # попадал в empty_values и render_zone не вызывался (в колонке всегда
         # был прочерк). Разрешаем пустые значения — '—' рисует сам render_zone.
@@ -164,26 +164,27 @@ class DocumentTable(tables.Table):
         )
 
     def render_zone(self, record):
-        if record.folder and record.folder.zone:
-            zone_icons = {
-                'WIP': 'bi-pencil-square',
-                'SHARED': 'bi-people',
-                'PUBLISHED': 'bi-shield-check',
-                'ARCHIVE': 'bi-lock',
-            }
-            icon = zone_icons.get(record.folder.zone, 'bi-folder')
-            zone_name = record.folder.get_zone_display()
-            zone_class = {
-                'WIP': 'text-primary',
-                'SHARED': 'text-warning',
-                'PUBLISHED': 'text-success',
-                'ARCHIVE': 'text-secondary',
-            }.get(record.folder.zone, '')
-            return format_html(
-                '<i class="bi {} {} me-1" title="{}" aria-hidden="true"></i>{}',
-                icon, zone_class, zone_name, zone_name,
-            )
-        return '—'
+        zone_code = _effective_zone(record)
+        if not zone_code:
+            return '—'
+        zone_icons = {
+            'WIP': 'bi-pencil-square',
+            'SHARED': 'bi-people',
+            'PUBLISHED': 'bi-shield-check',
+            'ARCHIVE': 'bi-lock',
+        }
+        icon = zone_icons.get(zone_code, 'bi-folder')
+        zone_name = dict(Folder.ZONE_CHOICES).get(zone_code, zone_code)
+        zone_class = {
+            'WIP': 'text-primary',
+            'SHARED': 'text-warning',
+            'PUBLISHED': 'text-success',
+            'ARCHIVE': 'text-secondary',
+        }.get(zone_code, '')
+        return format_html(
+            '<i class="bi {} {} me-1" title="{}" aria-hidden="true"></i>{}',
+            icon, zone_class, zone_name, zone_name,
+        )
 
     def render_current_version(self, record):
         if record.current_version is None:

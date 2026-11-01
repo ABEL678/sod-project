@@ -17,7 +17,9 @@ from storage.domain.services import (
     create_folder,
     create_section,
     move_document,
+    transition_document_zone,
     upload_document,
+    _effective_zone,
     _ensure_project_zones,
 )
 
@@ -961,3 +963,90 @@ class FolderTreeTemplateTest(TestCase):
         result = template.render(context)
         self.assertIn('bi-people', result)
         self.assertNotIn('bi-pencil-square', result)
+
+
+class VirtualZoneTest(TestCase):
+    """T66: виртуальные зоны для документов в типовых папках и без папки."""
+
+    def setUp(self):
+        data = _create_test_data()
+        self.admin = data['admin']
+        self.developer = data['developer']
+        self.project = data['project']
+        self.section = data['section']
+        self.folder = create_folder(
+            self.admin, self.project, 'Планы', section=self.section
+        )
+
+    def _make_file(self):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+
+        return SimpleUploadedFile(
+            'test.pdf', b'%PDF-1.4 test content', content_type='application/pdf'
+        )
+
+    def _upload(self, user, code='VZ-001', folder=None):
+        upload_document(
+            user=user,
+            project=self.project,
+            section=self.section,
+            code=code,
+            name='Virtual zone document',
+            doc_type='drawing',
+            file=self._make_file(),
+            folder=folder,
+        )
+        return Document.objects.get(
+            project=self.project, section=self.section, code=code
+        )
+
+    def test_transition_preserves_folder_and_uses_virtual_zone(self):
+        document = self._upload(self.admin, 'VZ-TRANSITION', folder=self.folder)
+        original_folder_id = document.folder_id
+
+        transition_document_zone(self.admin, document, 'submit_review')
+        document.refresh_from_db()
+
+        self.assertEqual(document.folder_id, original_folder_id)
+        self.assertEqual(document.status, 'in_review')
+        self.assertEqual(_effective_zone(document), 'SHARED')
+
+    def test_effective_zone_without_folder_uses_status(self):
+        document = self._upload(self.admin, 'VZ-STATUS')
+        self.assertIsNone(document.folder)
+
+        expected = {
+            'draft': 'WIP',
+            'in_review': 'SHARED',
+            'approved': 'PUBLISHED',
+            'archived': 'ARCHIVE',
+        }
+        for status, zone in expected.items():
+            document.status = status
+            document.save(update_fields=['status'])
+            self.assertEqual(_effective_zone(document), zone)
+
+    def test_developer_cannot_upload_to_folderless_published_document(self):
+        document = self._upload(self.admin, 'VZ-PUBLISHED')
+        document.status = 'approved'
+        document.save(update_fields=['status'])
+
+        with self.assertRaises(PermissionDenied):
+            self._upload(self.developer, 'VZ-PUBLISHED')
+
+    def test_folderless_archive_rejects_developer_and_admin(self):
+        document = self._upload(self.admin, 'VZ-ARCHIVE')
+        document.status = 'archived'
+        document.save(update_fields=['status'])
+
+        for user in (self.developer, self.admin):
+            with self.assertRaises(PermissionDenied):
+                self._upload(user, 'VZ-ARCHIVE')
+
+    def test_developer_can_upload_to_folderless_wip_document(self):
+        document = self._upload(self.admin, 'VZ-WIP')
+        self.assertEqual(document.status, 'draft')
+
+        self._upload(self.developer, 'VZ-WIP')
+        document.refresh_from_db()
+        self.assertGreater(document.versions.count(), 1)

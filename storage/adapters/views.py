@@ -88,6 +88,7 @@ from storage.domain.services import (
     get_user_company,
     get_zone_counts,
     document_workflow_actions,
+    _effective_zone,
     transition_document_zone,
     ZONE_WORKFLOW_ACTIONS,
     list_document_views,
@@ -1052,12 +1053,12 @@ class DocumentWorkflowView(LoginRequiredMixin, View):
                 status=400,
             )
 
-        folder = document.folder
-        zone_name = folder.get_zone_display() if folder else ''
+        effective_zone = _effective_zone(document)
+        zone_name = dict(Folder.ZONE_CHOICES).get(effective_zone, effective_zone)
         return JsonResponse({
             'status': 'ok',
             'document_id': document.pk,
-            'zone_code': folder.zone if folder else '',
+            'zone_code': effective_zone,
             'zone_name': zone_name,
             'status_code': document.status,
             'status_display': document.get_status_display(),

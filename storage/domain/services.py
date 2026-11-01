@@ -1265,22 +1265,27 @@ def check_zone_permission(
     section: Section | None = None,
     zone: str | None = None,
 ) -> bool:
-    """Проверка прав записи с учётом зоны папки.
+    """Проверка прав записи с учётом зоны папки или виртуальной зоны.
 
     Правила зон:
     - WIP: разработчики, смежники, ГИП, админ (через check_write_permission).
     - SHARED: только ГИП и админ.
     - PUBLISHED: только админ.
     - ARCHIVE: никто не может писать (только чтение).
-    - folder=None: используются стандартные правила check_write_permission.
+    - folder=None и zone=None: стандартные правила check_write_permission.
     """
-    if folder is None:
-        # Нет папки — стандартная проверка по секции
+    project = (
+        folder.project
+        if folder is not None
+        else (section.project if section is not None else None)
+    )
+    actual_zone = zone or (folder.zone if folder is not None else None)
+    if actual_zone is None:
+        # Нет зоны — стандартная проверка по секции
         if section is not None:
             return check_write_permission(user, section)
         return True
 
-    zone = zone or folder.zone
     if user.is_superuser:
         return True
 
@@ -1290,19 +1295,18 @@ def check_zone_permission(
 
     # ARCHIVE — админ может перемещать документы (архивировать)
     # Но загрузка новых версий в документ из ARCHIVE блокируется отдельно в upload_document
-    if zone == 'ARCHIVE':
+    if actual_zone == 'ARCHIVE':
         return profile.role == 'admin'
 
     # PUBLISHED — только админ компании
-    if zone == 'PUBLISHED':
+    if actual_zone == 'PUBLISHED':
         return profile.role == 'admin'
 
     # SHARED — только ГИП проекта и админ
-    if zone == 'SHARED':
+    if actual_zone == 'SHARED':
         if profile.role == 'admin':
             return True
-        if profile.role == 'gip':
-            project = folder.project
+        if profile.role == 'gip' and project is not None:
             if project.gip_id == user.id:
                 return True
             if project.memberships.filter(
@@ -1317,7 +1321,8 @@ def check_zone_permission(
     if profile.role == 'admin':
         return True
     if profile.role == 'gip':
-        project = folder.project
+        if project is None:
+            return False
         if project.gip_id == user.id:
             return True
         if project.memberships.filter(
@@ -1646,7 +1651,7 @@ def upload_document(
         section=section,
         code=code,
     ).select_related('folder').first()
-    if existing_doc is not None and existing_doc.folder is not None:
+    if existing_doc is not None:
         existing_zone = _effective_zone(existing_doc)
         if existing_zone == 'ARCHIVE':
             raise PermissionDenied(
@@ -1655,7 +1660,11 @@ def upload_document(
         if not check_zone_permission(
             user, existing_doc.folder, section, zone=existing_zone
         ):
-            zone_name = existing_doc.folder.get_zone_display()
+            zone_name = (
+                existing_doc.folder.get_zone_display()
+                if existing_doc.folder is not None
+                else dict(Folder.ZONE_CHOICES).get(existing_zone, existing_zone)
+            )
             raise PermissionDenied(
                 f"Нет прав на запись в текущую зону «{zone_name}»"
             )
