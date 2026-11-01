@@ -141,16 +141,19 @@ function refreshIssueAfterStatusChange(issueId, newStatus, label) {
         window.updateIssueCounters();
     }
 
-    // 4. Если активен фильтр статуса — скрыть строку, выпавшую из него.
+    // 4. Если активен фильтр статуса — скрыть/показать строку по фильтру.
     const activeTab = document.querySelector('#statusTabs .status-tab.active');
     if (
         row
         && activeTab
         && activeTab.dataset.filter !== 'all'
         && typeof window.statusGroup === 'function'
-        && window.statusGroup(newStatus) !== activeTab.dataset.filter
     ) {
-        row.style.display = 'none';
+        if (window.statusGroup(newStatus) !== activeTab.dataset.filter) {
+            row.style.display = 'none';
+        } else {
+            row.style.display = '';
+        }
     }
 
     // 5. Перерисовать маркеры на листе PDF (слушатель внутри pdf_viewer.js).

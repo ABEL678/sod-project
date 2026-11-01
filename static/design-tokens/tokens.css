@@ -147,7 +147,7 @@
 
 /* Дедлайн: живой индикатор срока ответа */
 .cde-deadline { background: var(--s-wait-subtle); color: var(--s-wait-on); }
-.cde-deadline--soon     { background: var(--s-attention-subtle); color: var(--s-attention-on); } /* <= 3 дней */
+.cde-deadline--soon     { background: var(--s-review-subtle);    color: var(--s-review-on); } /* <= 3 дней */
 .cde-deadline--overdue  { background: var(--s-attention-solid);  color: var(--c-text-inverse); } /* просрочено */
 
 /* Чипы версий: <span class="cde-chip">v1</span> */

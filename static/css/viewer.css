@@ -533,3 +533,43 @@ body {
     width: auto;
     margin: 0 auto;
 }
+
+/* A21: toolbar layout */
+.toolbar.viewer-toolbar {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+}
+
+.toolbar.viewer-toolbar::-webkit-scrollbar {
+    display: none;
+}
+
+.toolbar.viewer-toolbar .group,
+.toolbar.viewer-toolbar .divider,
+.toolbar.viewer-toolbar .tbtn,
+.toolbar.viewer-toolbar .form-select,
+.toolbar.viewer-toolbar .form-control,
+.toolbar.viewer-toolbar .page-input,
+.toolbar.viewer-toolbar .zoom-select,
+.toolbar.viewer-toolbar .version-badge,
+.toolbar.viewer-toolbar .version-back {
+    flex: 0 0 auto;
+}
+
+.toolbar.viewer-toolbar .page-label {
+    flex: 0 0 auto;
+    white-space: nowrap;
+}
+
+.toolbar.viewer-toolbar .compare-toggle {
+    width: auto;
+    padding: 0 10px;
+    font-size: 12px;
+}
+
+.toolbar.viewer-toolbar .tbtn:disabled {
+    opacity: .5;
+    cursor: not-allowed;
+}

@@ -120,3 +120,87 @@ tr[data-href],
 .project-row {
     cursor: pointer;
 }
+
+/* A21: one-line topbar */
+.topbar {
+    flex-wrap: nowrap;
+    overflow: hidden;
+    gap: 8px;
+    min-width: 0;
+}
+
+.topbar .brand {
+    flex: 0 0 auto;
+    min-width: 0;
+}
+
+.topbar .crumb {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+}
+
+.topbar .crumb .sep,
+.topbar .crumb > span:not(.doc) {
+    flex: 0 0 auto;
+}
+
+.topbar .crumb a,
+.topbar .crumb .doc {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.topbar form.d-flex {
+    flex: 0 1 240px;
+    min-width: 120px;
+    margin: 0;
+}
+
+.topbar form.d-flex input {
+    width: 100%;
+    min-width: 0;
+}
+
+.topbar .chip {
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: 200px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.topbar .btn {
+    flex: 0 0 auto;
+    white-space: nowrap;
+}
+
+.topbar .btn.primary {
+    max-width: 220px;
+    overflow: hidden;
+}
+
+.topbar .topbar-btn-label {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.topbar .avatar {
+    flex: 0 0 auto;
+}
+
+.topbar form.d-inline {
+    flex: 0 0 auto;
+    margin: 0;
+}
+
+.topbar .spacer {
+    flex: 1 1 auto;
+    min-width: 8px;
+}
