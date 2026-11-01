@@ -1846,6 +1846,29 @@ class EditMemberView(LoginRequiredMixin, UserPassesTestMixin, UpdateView):
         return super().form_valid(form)
 
 
+class DeleteMemberView(LoginRequiredMixin, UserPassesTestMixin, View):
+    def test_func(self):
+        user = self.request.user
+        if user.is_superuser:
+            return True
+        profile = getattr(user, 'userprofile', None)
+        return profile is not None and profile.role == 'admin'
+
+    def post(self, request, pk):
+        queryset = UserProfile.objects.select_related('user', 'company')
+        if not request.user.is_superuser:
+            actor_profile = getattr(request.user, 'userprofile', None)
+            queryset = queryset.filter(company=actor_profile.company)
+        profile = get_object_or_404(queryset, pk=pk)
+        remove_company_member(
+            request.user,
+            profile.company,
+            profile.user,
+        )
+        messages.success(request, 'Участник удалён из компании.')
+        return redirect('storage:dashboard')
+
+
 class DashboardView(LoginRequiredMixin, UserPassesTestMixin, TemplateView):
     template_name = 'storage/dashboard.html'
 

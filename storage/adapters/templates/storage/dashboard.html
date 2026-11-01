@@ -96,21 +96,21 @@
                         <table class="table table-hover align-middle mb-0">
                             <thead class="table-light">
                                 <tr>
-                                    <th>ФИО</th>
+                                    <th style="width: 15%;">ФИО</th>
                                     <th>Логин</th>
                                     <th>Компания</th>
                                     <th>Роль</th>
                                     <th>Email</th>
                                     <th>Телефон</th>
-                                    <th>Проекты</th>
+                                    <th style="width: 15%;">Проекты</th>
                                     <th>Разделы</th>
                                     <th style="width: 150px;">Права</th>
-                                    <th class="text-end">Действия</th>
                                 </tr>
                             </thead>
                             <tbody>
                             {% for member in members %}
-                                <tr>
+                                <tr class="clickable-row"
+                                    data-href="{% url 'storage:edit_member' member.pk %}">
                                     <td class="fw-semibold">
                                         {{ member.user.get_full_name|default:member.user.username }}
                                     </td>
@@ -147,25 +147,10 @@
                                                {% if member.role == 'admin' %}checked{% endif %}>
                                         Управление (участники)
                                     </td>
-                                    <td class="text-end">
-                                        <a href="{% url 'storage:edit_member' member.pk %}"
-                                           class="btn btn-sm btn-link p-0 me-2" title="Редактировать">
-                                            <i class="bi bi-pencil"></i>
-                                        </a>
-                                        <form method="post" action="{% url 'storage:dashboard' %}" class="d-inline"
-                                              onsubmit="return confirm('Удалить?');">
-                                            {% csrf_token %}
-                                            <input type="hidden" name="action" value="remove_member">
-                                            <input type="hidden" name="user_id" value="{{ member.user_id }}">
-                                            <button class="btn btn-sm btn-link text-danger p-0" type="submit" title="Удалить">
-                                                <i class="bi bi-trash"></i>
-                                            </button>
-                                        </form>
-                                    </td>
                                 </tr>
                             {% empty %}
                                 <tr>
-                                    <td colspan="10" class="text-center text-muted py-5">
+                                    <td colspan="9" class="text-center text-muted py-5">
                                         Участников пока нет
                                     </td>
                                 </tr>
@@ -267,5 +252,12 @@
     {% endif %}
 </main>
 <script src="{% static 'js/vendor/bootstrap.bundle.min.js' %}"></script>
+<script>
+    document.querySelectorAll('.clickable-row').forEach(function (row) {
+        row.addEventListener('click', function () {
+            window.location.href = this.dataset.href;
+        });
+    });
+</script>
 </body>
 </html>

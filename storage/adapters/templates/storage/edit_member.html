@@ -91,6 +91,19 @@
                 <button type="submit" class="btn btn-primary btn-sm">Сохранить</button>
                 <a href="{% url 'storage:dashboard' %}" class="btn btn-outline-secondary btn-sm">Отмена</a>
             </form>
+
+            {% if user.is_superuser or user.userprofile.role == 'admin' %}
+                <form method="post" action="{% url 'storage:delete_member' object.pk %}"
+                      class="d-inline mt-3" onsubmit="return confirm('Удалить участника?');">
+                    {% csrf_token %}
+                    <button type="submit" class="btn btn-danger btn-sm">Удалить участника</button>
+                </form>
+            {% else %}
+                <button type="button" class="btn btn-secondary btn-sm mt-3" disabled
+                        title="Только администратор или суперюзер может удалять участников">
+                    Удалить участника (нет прав)
+                </button>
+            {% endif %}
         </div>
     </div>
 </main>
