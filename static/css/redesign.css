@@ -53,3 +53,54 @@ body { background: #F6F6F4; font-family: 'Golos Text', 'Inter', system-ui, sans-
     color: #6E6E68;
     margin-top: 1px;
 }
+
+/* T85: header/breadcrumbs/table polish */
+.topbar {
+    background: #F0FDF4 !important;
+    border-bottom: 1px solid #D1FAE5;
+}
+
+.topbar .brand {
+    height: 100%;
+}
+
+.company-link {
+    text-decoration: none;
+    color: #191917;
+    font-weight: 600;
+    transition: color 0.2s;
+    border-bottom: 1px solid transparent;
+}
+
+.company-link:hover {
+    color: #2F5BEA;
+    border-bottom-color: #2F5BEA;
+}
+
+.crumb a {
+    text-decoration: none;
+    color: #6E6E68;
+    transition: color 0.2s;
+}
+
+.crumb a:hover {
+    color: #2F5BEA;
+    text-decoration: underline;
+}
+
+.table td,
+.table th {
+    padding: 4px 8px;
+    font-size: 12px;
+    line-height: 1.2;
+    vertical-align: middle;
+}
+
+.permission-cell {
+    width: 150px;
+    font-size: 11px;
+}
+
+.permission-cell .permission-checkbox {
+    margin-right: 3px;
+}

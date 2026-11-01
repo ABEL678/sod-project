@@ -3,7 +3,7 @@
         {% if user.userprofile.company.logo %}
             <img src="{{ user.userprofile.company.logo.url }}"
                  alt="{{ user.userprofile.company.name }}"
-                 style="height: 24px; width: auto; margin-right: 8px;">
+                 style="height: 100%; max-height: 48px; width: auto; object-fit: contain; margin-right: 8px;">
         {% else %}
             <span class="brand-mark">СОД</span>
         {% endif %}
@@ -13,7 +13,7 @@
         <span class="brand-slogan">Управляйте потоком чертежей</span>
     </div>
     <nav class="crumb">
-        <a href="{% url 'storage:project_list' %}" class="text-decoration-none text-dark fw-bold">
+        <a href="{% url 'storage:project_list' %}" class="company-link">
             {% firstof user.userprofile.company.name topbar_company.name topbar_project.company.name "Моя компания" %}
         </a>
         <span>/</span>
