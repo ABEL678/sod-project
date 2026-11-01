@@ -10,7 +10,7 @@
 <link rel="stylesheet" href="{% static 'css/bootstrap.min.css' %}">
 <link rel="stylesheet" href="{% static 'design-tokens/tokens.css' %}?v=20261101">
 <link rel="stylesheet" href="{% static 'css/redesign.css' %}?v=20261103">
-<link rel="stylesheet" href="{% static 'css/viewer.css' %}?v=20261101-t64">
+<link rel="stylesheet" href="{% static 'css/viewer.css' %}?v=20261101-t65">
 <link rel="stylesheet" href="{% static 'css/app.css' %}?v=20261031-viewer">
 </head>
 <body>
@@ -103,8 +103,15 @@
       <a class="version-back" href="{{ current_version_url }}">Вернуться к текущей</a>
     {% endif %}
     <button class="tbtn compare-toggle" id="compareToggleBtn" type="button"
+            title="Сравнить рядом"
             {% if is_current_version or not document.current_version %}disabled{% endif %}>
       Сравнить с текущей
+    </button>
+    <button class="tbtn compare-toggle" id="sliderToggleBtn" type="button"
+            title="Сравнить версии шторкой"
+            {% if is_current_version or not document.current_version %}disabled{% endif %}>
+      <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M8 2.5v11" fill="none" stroke="currentColor" stroke-width="1.4"/></svg>
+      <span id="sliderToggleLabel">Шторка</span>
     </button>
   </div>
   <span class="divider"></span>
@@ -173,6 +180,16 @@
         </div>
         <div class="pdf-viewer compare-viewer" id="compareViewerCurrent"></div>
       </section>
+    </div>
+
+    <div class="slider-stage d-none" id="sliderStage">
+      <div class="slider-frame" id="sliderFrame">
+        <div class="slider-layer slider-layer-selected" id="sliderViewerSelected"></div>
+        <div class="slider-layer slider-layer-current" id="sliderViewerCurrent"></div>
+        <div class="slider-divider" id="sliderDivider" role="separator" aria-label="Разделитель версий" aria-valuemin="0" aria-valuemax="100" aria-valuenow="50" tabindex="0">
+          <span class="slider-handle" aria-hidden="true">⇔</span>
+        </div>
+      </div>
     </div>
   </section>
 
@@ -346,7 +363,7 @@
 <script src="{% static 'js/vendor/bootstrap.bundle.min.js' %}"></script>
 <script src="{% static 'js/pdfjs/pdf.min.js' %}"></script>
 <script src="{% static 'js/sync.js' %}?v=20261031-viewer"></script>
-<script src="{% static 'js/pdf_viewer.js' %}?v=20261101-t64"></script>
+<script src="{% static 'js/pdf_viewer.js' %}?v=20261101-t65"></script>
 <script src="{% static 'js/splitter.js' %}?v=20261031-viewer"></script>
 <script>
   function changeVersion(value) {

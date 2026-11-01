@@ -567,9 +567,94 @@ body {
     width: auto;
     padding: 0 10px;
     font-size: 12px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.toolbar.viewer-toolbar .compare-toggle svg {
+    flex: 0 0 auto;
 }
 
 .toolbar.viewer-toolbar .tbtn:disabled {
     opacity: .5;
     cursor: not-allowed;
+}
+
+/* T65: slider comparison */
+.slider-stage {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: flex-start;
+    justify-content: flex-start;
+}
+
+.slider-frame {
+    position: relative;
+    flex: 0 0 auto;
+    margin: 0 auto;
+    overflow: hidden;
+    background: #fff;
+    border: 1px solid #3a3b40;
+}
+
+.slider-layer {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+}
+
+.slider-layer .pdf-page {
+    position: absolute;
+    top: 0;
+    left: 0;
+    margin: 0;
+}
+
+.slider-layer-selected {
+    z-index: 0;
+}
+
+.slider-layer-current {
+    clip-path: inset(0 calc(100% - var(--split, 50%)) 0 0);
+    z-index: 1;
+}
+
+.slider-divider {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: var(--split, 50%);
+    width: 2px;
+    transform: translateX(-1px);
+    background: #fff;
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, .35);
+    cursor: col-resize;
+    z-index: 3;
+    touch-action: none;
+    user-select: none;
+}
+
+.slider-handle {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 30px;
+    height: 30px;
+    transform: translate(-50%, -50%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid #cbd5e1;
+    border-radius: 50%;
+    background: #fff;
+    color: #334155;
+    font-size: 14px;
+    line-height: 1;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, .25);
+}
+
+.stage.is-sliding {
+    padding: 10px;
 }
