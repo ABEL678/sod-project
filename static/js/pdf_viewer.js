@@ -1203,6 +1203,7 @@
         comparison.page = currentPage;
         comparison.scale = currentScale;
         comparison.rotation = currentRotation;
+        updateMinimapVisibility();
         comparison.selected = comparisonPane(selectedViewer, pdfUrl, false);
         comparison.current = comparisonPane(currentViewer, pdfUrlCurrent, true);
         comparison.selected.pdfDocument = selectedDocument || null;
@@ -1328,6 +1329,7 @@
         const page = comparison.page;
         comparison.active = false;
         comparison.mode = null;
+        updateMinimapVisibility();
         comparison.requestId += 1;
         comparison.loading = false;
         comparison.split = 50;
@@ -1428,6 +1430,13 @@
     let minimapRect = null;
     let minimapLabel = null;
     let minimapVisible = true;
+
+    function updateMinimapVisibility() {
+        if (!minimapBox) {
+            return;
+        }
+        minimapBox.style.display = comparison.active ? 'none' : '';
+    }
 
     function minimapStage() {
         return viewer.closest('.stage') || viewer;

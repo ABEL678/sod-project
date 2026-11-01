@@ -38,3 +38,8 @@ ISSUE_STATUS_CLASS = {
     'NEW': 'cde-badge cde-badge--wait',
     'REJECTED': 'cde-badge cde-badge--attention',
 }
+
+# Цвета Excel-экспорта (не входят в CSS/JS).
+EXCEL_HEADER_FILL = '#EFEFEC'
+EXCEL_OVERDUE_TEXT = '#B02A37'
+EXCEL_LINK = '#0563C1'

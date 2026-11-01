@@ -200,12 +200,12 @@
                     <div class="btn-group btn-group-sm">
                         {% if page_obj.has_previous %}
                             <a class="btn btn-outline-secondary"
-                               href="?{% if filters.q %}q={{ filters.q|urlencode }}&{% endif %}{% if filters.status %}status={{ filters.status }}&{% endif %}{% if filters.flag %}flag={{ filters.flag }}&{% endif %}{% if filters.assignee %}assignee={{ filters.assignee }}&{% endif %}page={{ page_obj.previous_page_number }}">← Назад</a>
+                               href="?{% if filters.q %}q={{ filters.q|urlencode }}&{% endif %}{% if filters.status %}status={{ filters.status|urlencode }}&{% endif %}{% if filters.flag %}flag={{ filters.flag|urlencode }}&{% endif %}{% if filters.assignee %}assignee={{ filters.assignee|urlencode }}&{% endif %}page={{ page_obj.previous_page_number }}">← Назад</a>
                         {% endif %}
                         <span class="btn btn-secondary disabled cde-tnum">{{ page_obj.number }} / {{ paginator.num_pages }}</span>
                         {% if page_obj.has_next %}
                             <a class="btn btn-outline-secondary"
-                               href="?{% if filters.q %}q={{ filters.q|urlencode }}&{% endif %}{% if filters.status %}status={{ filters.status }}&{% endif %}{% if filters.flag %}flag={{ filters.flag }}&{% endif %}{% if filters.assignee %}assignee={{ filters.assignee }}&{% endif %}page={{ page_obj.next_page_number }}">Вперёд →</a>
+                               href="?{% if filters.q %}q={{ filters.q|urlencode }}&{% endif %}{% if filters.status %}status={{ filters.status|urlencode }}&{% endif %}{% if filters.flag %}flag={{ filters.flag|urlencode }}&{% endif %}{% if filters.assignee %}assignee={{ filters.assignee|urlencode }}&{% endif %}page={{ page_obj.next_page_number }}">Вперёд →</a>
                         {% endif %}
                     </div>
                 </div>

@@ -20,6 +20,11 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 
 from storage.adapters.views import _issue_payload
+from storage.domain.design_colors import (
+    EXCEL_HEADER_FILL,
+    EXCEL_LINK,
+    EXCEL_OVERDUE_TEXT,
+)
 from storage.domain.services import (
     add_issue_comment,
     allowed_issue_statuses,
@@ -354,12 +359,28 @@ ISSUE_STATUS_GROUPS = {
 ACTIVE_ISSUE_STATUSES = ISSUE_STATUS_GROUPS['open'] + ISSUE_STATUS_GROUPS['progress']
 
 
+def _safe_excel_value(value):
+    """Защита от Formula Injection: =, +, -, @ в начале экранируются."""
+    if value is None:
+        return ''
+    if not isinstance(value, str):
+        return value
+    if value[:1] in ('=', '+', '-', '@'):
+        return "'" + value
+    return value
+
+
+def _readable_document_pks(user, project):
+    qs = get_accessible_documents(user).filter(project=project).select_related(
+        'project', 'section'
+    )
+    return [doc.pk for doc in qs if check_read_permission(user, doc)]
+
+
 def _registry_issues(user, project):
     """Все замечания проекта, видимые пользователю (по правам на документы)."""
-    return Issue.objects.filter(
-        document__project=project,
-        document__in=get_accessible_documents(user),
-    ).select_related(
+    pks = _readable_document_pks(user, project)
+    return Issue.objects.filter(document_id__in=pks).select_related(
         'document',
         'document__project',
         'document__section',
@@ -455,11 +476,11 @@ class IssueRegistryView(LoginRequiredMixin, ListView):
         user = self.request.user
         project = self.project
 
+        readable_pks = _readable_document_pks(user, project)
         assignee_choices = list(
             get_user_model()
             .objects.filter(
-                assigned_issues__document__project=project,
-                assigned_issues__document__in=get_accessible_documents(user),
+                assigned_issues__document_id__in=readable_pks,
             )
             .distinct()
             .order_by('last_name', 'first_name')
@@ -512,7 +533,7 @@ class IssueRegistryExportView(LoginRequiredMixin, View):
             'Создано', 'Ответ', 'Закрыто',
         ]
         sheet.append(headers)
-        header_fill = PatternFill('solid', fgColor='EFEFEC')
+        header_fill = PatternFill('solid', fgColor=EXCEL_HEADER_FILL)
         for cell in sheet[1]:
             cell.font = Font(bold=True)
             cell.fill = header_fill
@@ -525,27 +546,38 @@ class IssueRegistryExportView(LoginRequiredMixin, View):
             doc = issue.document
             sheet.cell(row=row, column=1, value=issue.pk)
 
-            code_cell = sheet.cell(row=row, column=2, value=doc.code)
+            code_cell = sheet.cell(
+                row=row, column=2, value=_safe_excel_value(doc.code)
+            )
             code_cell.hyperlink = request.build_absolute_uri(
                 reverse('storage:document_detail', args=[doc.pk])
             )
-            code_cell.font = Font(color='0563C1', underline='single')
+            code_cell.font = Font(color=EXCEL_LINK, underline='single')
 
-            sheet.cell(row=row, column=3, value=doc.section.code if doc.section else '')
+            sheet.cell(
+                row=row, column=3,
+                value=_safe_excel_value(doc.section.code if doc.section else ''),
+            )
             sheet.cell(row=row, column=4, value=issue.get_status_display())
 
-            text_cell = sheet.cell(row=row, column=5, value=issue.description)
+            text_cell = sheet.cell(
+                row=row, column=5, value=_safe_excel_value(issue.description)
+            )
             text_cell.alignment = Alignment(wrap_text=True, vertical='top')
 
             sheet.cell(
                 row=row, column=6,
-                value=issue.author.get_full_name() or issue.author.username,
+                value=_safe_excel_value(
+                    issue.author.get_full_name() or issue.author.username
+                ),
             )
             sheet.cell(
                 row=row, column=7,
-                value=(
-                    issue.assignee.get_full_name() or issue.assignee.username
-                ) if issue.assignee else '',
+                value=_safe_excel_value(
+                    (
+                        issue.assignee.get_full_name() or issue.assignee.username
+                    ) if issue.assignee else ''
+                ),
             )
             sheet.cell(
                 row=row, column=8,
@@ -558,12 +590,14 @@ class IssueRegistryExportView(LoginRequiredMixin, View):
             )
             overdue_cell = sheet.cell(row=row, column=9, value='да' if overdue else '')
             if overdue:
-                overdue_cell.font = Font(color='B02A37', bold=True)
+                overdue_cell.font = Font(color=EXCEL_OVERDUE_TEXT, bold=True)
             sheet.cell(
                 row=row, column=10,
                 value=timezone.localtime(issue.created_at).strftime('%d.%m.%Y %H:%M'),
             )
-            answer_cell = sheet.cell(row=row, column=11, value=issue.answer_text)
+            answer_cell = sheet.cell(
+                row=row, column=11, value=_safe_excel_value(issue.answer_text)
+            )
             answer_cell.alignment = Alignment(wrap_text=True, vertical='top')
             sheet.cell(
                 row=row, column=12,

@@ -359,6 +359,7 @@ def render_js(tokens: dict) -> str:
 def render_py(tokens: dict) -> str:
     status_map = tokens['status_map']['issue']
     statuses = tokens['color']['status']
+    excel = tokens.get('excel', {})
 
     def hex_to_rgb01(hex_value: str) -> tuple[float, float, float]:
         value = hex_value.lstrip('#')
@@ -403,6 +404,17 @@ def render_py(tokens: dict) -> str:
         'ISSUE_STATUS_CLASS = {',
         *class_entries,
         '}',
+        '',
+        '# Цвета Excel-экспорта (не входят в CSS/JS).',
+        'EXCEL_HEADER_FILL = {value!r}'.format(
+            value=excel.get('header_fill', '#EFEFEC')
+        ),
+        'EXCEL_OVERDUE_TEXT = {value!r}'.format(
+            value=excel.get('overdue_text', '#B02A37')
+        ),
+        'EXCEL_LINK = {value!r}'.format(
+            value=excel.get('link', '#0563C1')
+        ),
     ]) + '\n'
 
 
