@@ -585,7 +585,16 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
             active_tab = requested_tab
 
         sections = list(get_sections_with_counts(user, project))
-        folder_roots = get_folder_tree(user, project)
+        folder_roots = [
+            folder
+            for folder in get_folder_tree(user, project)
+            if not (folder.parent_id is None and folder.section_id is None)
+        ]
+        all_folders = [
+            folder
+            for folder in get_flat_folders(user, project)
+            if not (folder.parent_id is None and folder.section_id is None)
+        ]
         folders_by_section = {}
         project_folders = []
         for folder in folder_roots:
@@ -635,7 +644,7 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
             'sections': sections,
             'folder_tree': folder_roots,
             'project_folders': project_folders,
-            'all_folders': get_flat_folders(user, project),
+            'all_folders': all_folders,
             'recent_documents': _recent_documents(
                 self.request,
                 user,

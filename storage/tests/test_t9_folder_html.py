@@ -19,11 +19,12 @@ class T9FolderHtmlTests(T8UltimateTestBase):
         )
         html = response.content.decode()
 
-        for folder in (root, nested, project_root):
+        for folder in (root, nested):
             self.assertRegex(
                 html,
                 r'<div[^>]*class="folder-row[^"]*"[^>]*data-folder-id="%d"' % folder.pk,
             )
             self.assertIn(f'data-folder-id="{folder.pk}"', html)
-        self.assertEqual(html.count('data-folder-row'), 3)
-        self.assertEqual(html.count('data-folder-menu'), 3)
+        self.assertNotIn(f'data-folder-id="{project_root.pk}"', html)
+        self.assertEqual(html.count('data-folder-row'), 2)
+        self.assertEqual(html.count('data-folder-menu'), 2)

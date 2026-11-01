@@ -431,7 +431,7 @@ def get_project_documents_queryset(
     queryset = get_accessible_documents(user).filter(project=project)
 
     if zone in dict(Folder.ZONE_CHOICES):
-        queryset = queryset.filter(folder__zone=zone)
+        queryset = queryset.filter(_zone_filter_q(zone))
 
     if folder is not None:
         if folder.project_id != project.pk:
@@ -740,6 +740,9 @@ def create_folder(
     max_order = Folder.objects.filter(project=project, parent=parent).aggregate(
         Max('order')
     )['order__max']
+    folder_zone = 'WIP'
+    if parent is not None:
+        folder_zone = parent.zone or 'WIP'
     code = (code or '').strip()
     folder_full_code = (full_code or '').strip() or generate_gost_code(
         project.base_code,
@@ -754,6 +757,7 @@ def create_folder(
         code=code,
         full_code=folder_full_code,
         order=(max_order or 0) + 1,
+        zone=folder_zone,
         created_by=user,
     )
 
@@ -832,7 +836,7 @@ def move_document(user: User, document: Document, folder: Folder | None) -> Docu
         raise ValueError("Нельзя перемещать документ из корзины")
 
     # Проверка прав на покидание текущей зоны
-    current_zone = getattr(document.folder, 'zone', None) if document.folder else None
+    current_zone = _effective_zone(document)
     if current_zone in ('ARCHIVE', 'PUBLISHED', 'SHARED'):
         profile = getattr(user, 'userprofile', None)
         if profile is None or profile.role != 'admin':
@@ -1259,6 +1263,7 @@ def check_zone_permission(
     user: User,
     folder: Folder | None,
     section: Section | None = None,
+    zone: str | None = None,
 ) -> bool:
     """Проверка прав записи с учётом зоны папки.
 
@@ -1275,7 +1280,7 @@ def check_zone_permission(
             return check_write_permission(user, section)
         return True
 
-    zone = folder.zone
+    zone = zone or folder.zone
     if user.is_superuser:
         return True
 
@@ -1434,6 +1439,25 @@ def _effective_zone(document: Document) -> str:
     return _ZONE_BY_STATUS.get(document.status, 'WIP')
 
 
+def _zone_filter_q(zone: str) -> Q:
+    """Условие фильтра по виртуальной зоне (канонические зоны + статус)."""
+    canonical = Folder.objects.filter(
+        parent__isnull=True,
+        section__isnull=True,
+        name__in=CANONICAL_ZONE_NAMES,
+    )
+    return (
+        Q(folder_id__in=canonical.filter(zone=zone).values('pk'))
+        | (
+            Q(status=ZONE_STATUS_MAP[zone])
+            & (
+                Q(folder__isnull=True)
+                | ~Q(folder_id__in=canonical.values('pk'))
+            )
+        )
+    )
+
+
 def _is_project_gip(user: User, project: Project) -> bool:
     """ГИП проекта: прямой owner или членство с ролью gip."""
     if project.gip_id == user.id:
@@ -1539,11 +1563,13 @@ def transition_document_zone(
             )
         )
 
-    target_folder = _get_or_create_zone_folder(
-        document.project, action['to'], user
-    )
+    target_folder = document.folder
+    if target_folder is None or _is_canonical_zone_folder(target_folder):
+        target_folder = _get_or_create_zone_folder(
+            document.project, action['to'], user
+        )
     document.folder = target_folder
-    target_status = _status_for_zone(target_folder)
+    target_status = ZONE_STATUS_MAP.get(action['to'])
     if target_status is not None and target_status != document.status:
         document.status = target_status
     document.save(update_fields=['folder', 'status', 'updated_at'])
@@ -1568,21 +1594,22 @@ def _notify_zone_transition(
 def get_zone_counts(user: User, project: Project) -> dict:
     """Счётчики документов по зонам для сегмент-контрола."""
     _ensure_project_access(user, project)
-    rows = (
+    counts = {'WIP': 0, 'SHARED': 0, 'PUBLISHED': 0, 'ARCHIVE': 0}
+    documents = (
         get_accessible_documents(user)
         .filter(project=project, is_deleted=False)
-        .values('folder__zone')
-        .annotate(total=Count('pk'))
+        .select_related('folder')
     )
-    counts = {row['folder__zone']: row['total'] for row in rows}
-    counts.pop(None, None)
-    total = sum(counts.values())
+    for document in documents:
+        zone = _effective_zone(document)
+        if zone in counts:
+            counts[zone] += 1
     return {
-        'total': total,
-        'WIP': counts.get('WIP', 0),
-        'SHARED': counts.get('SHARED', 0),
-        'PUBLISHED': counts.get('PUBLISHED', 0),
-        'ARCHIVE': counts.get('ARCHIVE', 0),
+        'total': sum(counts.values()),
+        'WIP': counts['WIP'],
+        'SHARED': counts['SHARED'],
+        'PUBLISHED': counts['PUBLISHED'],
+        'ARCHIVE': counts['ARCHIVE'],
     }
 
 
@@ -1620,11 +1647,14 @@ def upload_document(
         code=code,
     ).select_related('folder').first()
     if existing_doc is not None and existing_doc.folder is not None:
-        if existing_doc.folder.zone == 'ARCHIVE':
+        existing_zone = _effective_zone(existing_doc)
+        if existing_zone == 'ARCHIVE':
             raise PermissionDenied(
                 "Документ в архиве — загрузка новых версий запрещена"
             )
-        if not check_zone_permission(user, existing_doc.folder, section):
+        if not check_zone_permission(
+            user, existing_doc.folder, section, zone=existing_zone
+        ):
             zone_name = existing_doc.folder.get_zone_display()
             raise PermissionDenied(
                 f"Нет прав на запись в текущую зону «{zone_name}»"
@@ -1659,7 +1689,10 @@ def upload_document(
             defaults={
                 'name': name,
                 'doc_type': doc_type,
-                'status': 'draft',
+                'status': (
+                    ZONE_STATUS_MAP.get(folder.zone, 'draft')
+                    if folder is not None else 'draft'
+                ),
                 'folder': folder,
                 'created_by': user,
             },
