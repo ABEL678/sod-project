@@ -853,7 +853,8 @@ def rename_section(
         if not code:
             raise ValueError("Код раздела обязателен")
         section.code = code
-        update_fields.append('code')
+        section.full_code = generate_gost_code(section.project.base_code, code)
+        update_fields.extend(['code', 'full_code'])
     section.save(update_fields=update_fields)
     for folder in Folder.objects.filter(
         section=section, parent__isnull=True, is_deleted=False

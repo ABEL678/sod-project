@@ -1314,6 +1314,78 @@
         });
     }
 
+    function initSectionAccordion() {
+        document.querySelectorAll('[data-section-toggle]').forEach(function (button) {
+            var sectionId = button.getAttribute('data-section-toggle');
+            var content = document.querySelector(
+                '[data-section-content="' + sectionId + '"]'
+            );
+            var storageKey = 'section-open-' + sectionId;
+            var open = localStorage.getItem(storageKey) !== '0';
+
+            function apply() {
+                if (content) {
+                    content.classList.toggle('d-none', !open);
+                }
+                button.setAttribute('aria-expanded', open ? 'true' : 'false');
+                button.classList.toggle('collapsed', !open);
+                button.title = open ? 'Свернуть раздел' : 'Развернуть раздел';
+            }
+
+            apply();
+            button.addEventListener('click', function (event) {
+                event.preventDefault();
+                event.stopPropagation();
+                open = !open;
+                localStorage.setItem(storageKey, open ? '1' : '0');
+                apply();
+            });
+        });
+    }
+
+    function updateGostForm(form) {
+        if (!form) {
+            return;
+        }
+        var preview = form.querySelector('[data-gost-preview]');
+        if (!preview) {
+            return;
+        }
+        var kind = form.getAttribute('data-gost-kind') || '';
+        var base = form.getAttribute('data-gost-base') || '';
+        var section = form.getAttribute('data-gost-section') || '';
+        var markInput = form.querySelector('[data-gost-mark]');
+        var codeInput = form.querySelector('[data-gost-folder-code]');
+        if (kind === 'section') {
+            var mark = markInput ? markInput.value.trim() : '';
+            preview.value = [base, mark].filter(Boolean).join('-');
+        } else {
+            var code = codeInput ? codeInput.value.trim() : '';
+            preview.value = [base, section, code].filter(Boolean).join('-');
+        }
+    }
+
+    function initGostFields() {
+        document.querySelectorAll('form[data-gost-kind]').forEach(updateGostForm);
+    }
+
+    document.addEventListener('input', function (event) {
+        var markInput = event.target.closest('[data-gost-mark]');
+        if (markInput) {
+            markInput.value = markInput.value
+                .toUpperCase()
+                .replace(/[^А-ЯЁ]/g, '')
+                .slice(0, 3);
+            updateGostForm(markInput.closest('form'));
+            return;
+        }
+        var codeInput = event.target.closest('[data-gost-folder-code]');
+        if (codeInput) {
+            codeInput.value = codeInput.value.replace(/\D/g, '').slice(0, 10);
+            updateGostForm(codeInput.closest('form'));
+        }
+    });
+
     function initSectionRename() {
         var modalElement = document.getElementById('sectionRenameModal');
         var form = document.getElementById('sectionRenameForm');
@@ -1331,6 +1403,7 @@
             form.action = trigger.getAttribute('data-section-url') || '';
             nameInput.value = trigger.getAttribute('data-section-name') || '';
             codeInput.value = trigger.getAttribute('data-section-code') || '';
+            updateGostForm(form);
             if (window.bootstrap) {
                 window.bootstrap.Modal.getOrCreateInstance(modalElement).show();
             }
@@ -1396,6 +1469,9 @@
         initZoneWorkflow();
         initFolderMove();
         initSectionRename();
+        initSectionAccordion();
+        initGostFields();
+        document.body.addEventListener('htmx:afterSwap', initGostFields);
         initFolderReorder();
         initHtmx();
     }

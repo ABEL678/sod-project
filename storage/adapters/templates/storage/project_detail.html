@@ -77,6 +77,14 @@
                 {% for section in sections %}
                     <div class="section-node list-group-item" data-section-node="{{ section.pk }}">
                         <div class="section-row">
+                            <button type="button"
+                                    class="btn btn-sm btn-link p-0 section-toggle"
+                                    data-section-toggle="{{ section.pk }}"
+                                    aria-expanded="true"
+                                    title="Свернуть раздел"
+                                    aria-label="Свернуть раздел">
+                                <i class="bi bi-chevron-down" aria-hidden="true"></i>
+                            </button>
                             <a class="section-item list-group-item-action {% if selected_section.pk == section.pk and not selected_folder %}active{% endif %}"
                                href="{% url 'storage:project_detail' project.pk %}?section={{ section.pk }}{% if selected_view %}&amp;view={{ selected_view.pk }}{% endif %}"
                                data-role="section-item"
@@ -84,7 +92,8 @@
                                data-code="{{ section.code }}"
                                data-name="{{ section.name }}"
                                data-drop-section="{{ section.pk }}"
-                               data-drop-name="{{ section.code }} — {{ section.name }}">
+                               data-drop-name="{{ section.code }} — {{ section.name }}"
+                               title="{{ section.full_code|default:section.code }}">
                                 <i class="bi bi-folder2" aria-hidden="true"></i>
                                 <span class="fw-semibold section-code">{{ section.code }}</span>
                                 <span class="section-name" title="{{ section.name }}">{{ section.name }}</span>
@@ -196,6 +205,8 @@
 
                         {% if section.folder_nodes %}
                             <div class="folder-tree-list ms-2"
+                                 id="sectionFolders-{{ section.pk }}"
+                                 data-section-content="{{ section.pk }}"
                                  data-folder-sortable
                                  data-folder-reorder-url="{% url 'storage:folder_reorder' project.pk %}">
                                 {% for folder in section.folder_nodes %}
@@ -430,7 +441,8 @@
     <div class="modal fade" id="sectionCreateModal" tabindex="-1" aria-labelledby="sectionCreateTitle" aria-hidden="true">
         <div class="modal-dialog modal-dialog-centered">
             <div class="modal-content">
-                <form method="post" action="{% url 'storage:section_create' project.pk %}">
+                <form method="post" action="{% url 'storage:section_create' project.pk %}"
+                      data-gost-kind="section" data-gost-base="{{ project.base_code }}">
                     {% csrf_token %}
                     <div class="modal-header">
                         <h5 class="modal-title" id="sectionCreateTitle">Новый раздел</h5>
@@ -439,8 +451,8 @@
                     <div class="modal-body">
                         <div class="row g-2">
                             <div class="col-4">
-                                <label class="form-label small" for="sectionCodeInput">Код</label>
-                                <input class="form-control form-control-sm" id="sectionCodeInput" name="code" maxlength="20" required placeholder="АР">
+                                <label class="form-label small" for="sectionCodeInput">Марка</label>
+                                <input class="form-control form-control-sm" id="sectionCodeInput" name="code" maxlength="3" pattern="[А-ЯЁ]{2,3}" required placeholder="АР" data-gost-mark>
                             </div>
                             <div class="col-8">
                                 <label class="form-label small" for="sectionNameInput">Название</label>
@@ -449,6 +461,10 @@
                             <div class="col-4">
                                 <label class="form-label small" for="sectionOrderInput">Порядок</label>
                                 <input class="form-control form-control-sm" id="sectionOrderInput" name="order" type="number" value="0">
+                            </div>
+                            <div class="col-12">
+                                <label class="form-label small" for="sectionFullCodePreview">Полный шифр</label>
+                                <input class="form-control form-control-sm" id="sectionFullCodePreview" readonly data-gost-preview>
                             </div>
                         </div>
                     </div>
@@ -464,7 +480,8 @@
     <div class="modal fade" id="sectionRenameModal" tabindex="-1" aria-labelledby="sectionRenameTitle" aria-hidden="true">
         <div class="modal-dialog modal-dialog-centered">
             <div class="modal-content">
-                <form id="sectionRenameForm" method="post">
+                <form id="sectionRenameForm" method="post"
+                      data-gost-kind="section" data-gost-base="{{ project.base_code }}">
                     {% csrf_token %}
                     <div class="modal-header">
                         <h5 class="modal-title" id="sectionRenameTitle">Переименовать раздел</h5>
@@ -473,12 +490,16 @@
                     <div class="modal-body">
                         <div class="row g-2">
                             <div class="col-4">
-                                <label class="form-label small" for="sectionRenameCode">Код</label>
-                                <input class="form-control form-control-sm" id="sectionRenameCode" name="code" maxlength="20" required>
+                                <label class="form-label small" for="sectionRenameCode">Марка</label>
+                                <input class="form-control form-control-sm" id="sectionRenameCode" name="code" maxlength="3" pattern="[А-ЯЁ]{2,3}" required data-gost-mark>
                             </div>
                             <div class="col-8">
                                 <label class="form-label small" for="sectionRenameName">Название</label>
                                 <input class="form-control form-control-sm" id="sectionRenameName" name="name" maxlength="255" required>
+                            </div>
+                            <div class="col-12">
+                                <label class="form-label small" for="sectionRenameFullCode">Полный шифр</label>
+                                <input class="form-control form-control-sm" id="sectionRenameFullCode" readonly data-gost-preview>
                             </div>
                         </div>
                     </div>

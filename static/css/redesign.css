@@ -496,3 +496,22 @@ tr.doc-row-flash > td { animation: wf-row-flash 1.5s ease; }
     color: var(--c-text-secondary);
     font-size: 13px;
 }
+
+.section-toggle {
+    flex: 0 0 auto;
+    color: var(--c-text-secondary);
+    text-decoration: none;
+}
+
+.section-toggle i {
+    transition: transform .15s ease;
+}
+
+.section-toggle.collapsed i {
+    transform: rotate(-90deg);
+}
+
+.section-row .section-item {
+    flex: 1 1 auto;
+    min-width: 0;
+}

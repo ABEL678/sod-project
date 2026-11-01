@@ -1,4 +1,7 @@
-<form method="post" action="{% url 'storage:folder_create' project.pk %}">
+<form method="post" action="{% url 'storage:folder_create' project.pk %}"
+      data-gost-kind="folder"
+      data-gost-base="{{ project.base_code }}"
+      data-gost-section="{{ section.code|default:'' }}">
     {% csrf_token %}
     <div class="modal-body">
         <input type="hidden" name="section" value="{{ section.pk|default:'' }}">
@@ -14,13 +17,16 @@
             </p>
         {% endif %}
 
-        <label for="folderCodeInput" class="form-label">Код папки</label>
+        <label for="folderCodeInput" class="form-label">Шифр папки</label>
         <input type="text"
                class="form-control mb-3"
                id="folderCodeInput"
                name="code"
-               maxlength="50"
+               maxlength="10"
+               inputmode="numeric"
+               pattern="[0-9]+"
                required
+               data-gost-folder-code
                placeholder="Например, 01">
 
         <label for="folderNameInput" class="form-label">Название папки</label>
@@ -32,6 +38,14 @@
                required
                autofocus
                placeholder="Например, Рабочая документация">
+
+        <label for="folderFullCodePreview" class="form-label mt-3">Полный шифр</label>
+        <input type="text"
+               class="form-control"
+               id="folderFullCodePreview"
+               readonly
+               data-gost-preview>
+
         <div class="form-text text-muted mt-3">
             Создавать и менять структуру могут только ГИП и Администратор.
         </div>
