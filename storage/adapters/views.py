@@ -124,6 +124,8 @@ DOCUMENT_VIEW_COLUMN_LABELS = {
     'name': 'Название',
     'doc_type': 'Тип',
     'status': 'Статус',
+    'suitability': 'Код',
+    'internal_status': 'Внутренний статус',
     'zone': 'Зона',
     'version': 'Версия',
     'date': 'Дата',
@@ -136,6 +138,8 @@ DEFAULT_COLUMN_WIDTHS = {
     'name': 315,
     'doc_type': 100,
     'status': 100,
+    'suitability': 70,
+    'internal_status': 170,
     'zone': 120,
     'version': 70,
     'date': 130,
@@ -148,13 +152,17 @@ DOCUMENT_TABLE_COLUMN_MAP = {
     'name': 'name',
     'doc_type': 'doc_type',
     'status': 'status',
+    'suitability_code': 'suitability',
+    'internal_status': 'internal_status',
     'zone': 'zone',
     'current_version': 'version',
     'updated_at': 'date',
     'created_by': 'author',
 }
 
-ALWAYS_VISIBLE_TABLE_COLUMNS = {'selection', 'actions'}
+ALWAYS_VISIBLE_TABLE_COLUMNS = {
+    'selection', 'actions', 'suitability_code', 'internal_status',
+}
 
 # Иконки зон ISO 19650 для сегмент-контрола (синхронно с tables.py)
 ZONE_WORKFLOW_ICONS = {

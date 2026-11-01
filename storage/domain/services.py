@@ -34,7 +34,10 @@ from storage.domain.design_colors import ISSUE_STATUS_RGB as PDF_ISSUE_COLORS
 from storage.domain.project_templates import PROJECT_TEMPLATES
 
 
-DOCUMENT_VIEW_COLUMNS = ('code', 'name', 'doc_type', 'status', 'zone', 'version', 'date', 'author')
+DOCUMENT_VIEW_COLUMNS = (
+    'code', 'name', 'doc_type', 'status', 'suitability', 'internal_status',
+    'zone', 'version', 'date', 'author',
+)
 DOCUMENT_VIEW_FILTERS = ('section', 'doc_type', 'status', 'code', 'name')
 DOCUMENT_VIEW_SORT_FIELDS = ('code', 'name', 'date', 'version')
 DOCUMENT_VIEW_MIN_WIDTH = 50
@@ -1655,7 +1658,7 @@ def update_internal_status(
         return document
 
     allowed = {
-        'draft': {'internal_review'},
+        'draft': {'internal_review', 'ready_to_share'},
         'internal_review': {'ready_to_share', 'rework'},
         'rework': {'internal_review'},
         'ready_to_share': {'internal_review', 'rework'},
