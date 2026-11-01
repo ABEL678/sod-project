@@ -33,11 +33,22 @@ body { background: #F6F6F4; font-family: 'Golos Text', 'Inter', system-ui, sans-
 
 .brand-watermark {
     position: absolute;
+    top: 50%;
     left: 50%;
-    transform: translateX(-50%);
+    transform: translate(-50%, -50%);
+    z-index: 0;
+    max-width: 46%;
+    overflow: hidden;
     text-align: center;
     opacity: 0.25;
     pointer-events: none;
+    user-select: none;
+    white-space: nowrap;
+}
+
+.topbar > *:not(.brand-watermark) {
+    position: relative;
+    z-index: 1;
 }
 
 .brand-text {
@@ -121,12 +132,24 @@ tr[data-href],
     cursor: pointer;
 }
 
+.project-row,
+.project-row > td {
+    outline: none;
+}
+
+.project-row.table-active,
+.project-row.table-active > td {
+    background: transparent !important;
+    border-left: 0 !important;
+}
+
 /* A21: one-line topbar */
 .topbar {
     flex-wrap: nowrap;
     overflow: hidden;
     gap: 8px;
     min-width: 0;
+    isolation: isolate;
 }
 
 .topbar .brand {
