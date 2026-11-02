@@ -46,7 +46,7 @@
     (скрытый submit оставлен для доступности/Enter).
     {% endcomment %}
     <form id="filtersForm"
-          class="filter-panel"
+          class="d-none"
           method="get"
           action="{% url 'storage:project_detail' project.pk %}"
           hx-get="{% url 'storage:project_detail' project.pk %}"
@@ -54,7 +54,7 @@
           hx-select="#documentsPanel"
           hx-swap="outerHTML"
           hx-push-url="true"
-          hx-trigger="change, keyup changed delay:350ms from:find input[name='q'], submit"
+          hx-trigger="submit"
           hx-indicator="#documentsPanel">
         <input type="hidden" name="tab" value="documents">
         <input type="hidden" name="zone" value="{{ active_zone|default:'' }}" data-role="zone-input">
@@ -65,72 +65,13 @@
             <input type="hidden" name="folder" value="{{ selected_folder.pk }}">
         {% endif %}
         <input type="hidden" name="sort" value="{{ active_sort|default:'' }}">
-
-        <div class="filter-panel-main">
-            <div class="dropdown filter-view">
-                <button class="btn btn-outline-secondary btn-sm dropdown-toggle"
-                        type="button"
-                        data-bs-toggle="dropdown"
-                        aria-expanded="false">
-                    <i class="bi bi-layout-text-window-reverse me-1" aria-hidden="true"></i>
-                    <span class="text-muted">Вид:</span>
-                    <span class="fw-semibold">{{ selected_view.name|default:"все документы" }}</span>
-                </button>
-                <ul class="dropdown-menu view-menu">
-                    <li>
-                        <a class="dropdown-item {% if not selected_view %}active{% endif %}"
-                           href="{% url 'storage:project_detail' project.pk %}">
-                            <i class="bi bi-inbox me-2" aria-hidden="true"></i>Все документы
-                        </a>
-                    </li>
-                    {% for view in document_views %}
-                        <li>
-                            <a class="dropdown-item {% if selected_view.pk == view.pk %}active{% endif %}"
-                               href="{% url 'storage:project_detail' project.pk %}?view={{ view.pk }}">
-                                <span class="text-truncate">{{ view.name }}</span>
-                                {% if view.is_shared %}<span class="badge text-bg-light border ms-2">общий</span>{% endif %}
-                            </a>
-                        </li>
-                    {% empty %}
-                        <li><span class="dropdown-item-text text-muted small">Сохранённых видов пока нет</span></li>
-                    {% endfor %}
-                    <li><hr class="dropdown-divider"></li>
-                    <li>
-                        <button type="button" class="dropdown-item"
-                                data-bs-toggle="modal"
-                                data-bs-target="#viewSettingsModal">
-                            <i class="bi bi-sliders me-2" aria-hidden="true"></i>Настроить и сохранить вид…
-                        </button>
-                    </li>
-                </ul>
-            </div>
-
-            <div class="filter-field">
-                <label class="form-label" for="{{ filter.form.section.id_for_label }}">Раздел</label>
-                {{ filter.form.section }}
-            </div>
-            <div class="filter-field">
-                <label class="form-label" for="{{ filter.form.doc_type.id_for_label }}">Тип</label>
-                {{ filter.form.doc_type }}
-            </div>
-            <div class="filter-field">
-                <label class="form-label" for="{{ filter.form.status.id_for_label }}">Статус</label>
-                {{ filter.form.status }}
-            </div>
-            <div class="filter-field filter-search">
-                <label class="form-label" for="{{ filter.form.q.id_for_label }}">Поиск</label>
-                {{ filter.form.q }}
-            </div>
-            <div class="filter-actions">
-                {% comment %}доступность: Enter в любом поле всё ещё отправляет форму{% endcomment %}
-                <button type="submit" class="visually-hidden" aria-hidden="true" tabindex="-1">Найти</button>
-                <a href="{% url 'storage:project_detail' project.pk %}"
-                   class="btn btn-outline-secondary btn-sm"
-                   title="Сбросить фильтры">
-                    <i class="bi bi-x-lg me-1" aria-hidden="true"></i>Сбросить
-                </a>
-            </div>
-        </div>
+        {{ filter.form.section }}
+        {{ filter.form.doc_type }}
+        {{ filter.form.suitability_code }}
+        {{ filter.form.internal_status }}
+        {{ filter.form.code }}
+        {{ filter.form.name }}
+        {{ filter.form.q }}
     </form>
 
     <div class="toolbar" data-role="toolbar">
@@ -138,6 +79,15 @@
             <span class="toolbar-count text-muted small text-nowrap">
                 {% if table.paginator %}{{ table.paginator.count }}{% else %}{{ documents|length }}{% endif %} док.
             </span>
+            <div class="toolbar-search">
+                <i class="bi bi-search" aria-hidden="true"></i>
+                <input type="search"
+                       id="globalSearch"
+                       class="form-control form-control-sm"
+                       placeholder="Поиск: шифр, название, автор"
+                       aria-label="Поиск по документам"
+                       value="{{ active_search }}">
+            </div>
             <span class="drag-hint text-muted small">
                 <i class="bi bi-grip-vertical" aria-hidden="true"></i>
                 Перетащите строку в папку · Ctrl — копировать

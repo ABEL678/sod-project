@@ -123,6 +123,7 @@ RECENT_DOCUMENTS_LIMIT = 10
 
 DOCUMENT_VIEW_COLUMN_LABELS = {
     'code': 'Шифр',
+    'section': 'Раздел',
     'name': 'Название',
     'doc_type': 'Тип',
     'suitability': 'Статус для передачи',
@@ -136,6 +137,7 @@ DOCUMENT_VIEW_COLUMN_LABELS = {
 DEFAULT_COLUMN_WIDTHS = {
     'selection': 36,
     'code': 120,
+    'section': 100,
     'name': 315,
     'doc_type': 100,
     'suitability': 180,
@@ -149,6 +151,7 @@ DEFAULT_COLUMN_WIDTHS = {
 DOCUMENT_TABLE_COLUMN_MAP = {
     'selection': 'selection',
     'code': 'code',
+    'section': 'section',
     'name': 'name',
     'doc_type': 'doc_type',
     'suitability_code': 'suitability',
@@ -171,7 +174,10 @@ ZONE_WORKFLOW_ICONS = {
     'ARCHIVE': 'bi-lock',
 }
 
-FILTER_QUERY_KEYS = ('section', 'doc_type', 'status', 'code', 'name')
+FILTER_QUERY_KEYS = (
+    'section', 'doc_type', 'status', 'suitability_code', 'internal_status',
+    'code', 'name',
+)
 
 DOCUMENT_SORT_COLUMN_MAP = {
     'code': 'code',
@@ -636,6 +642,7 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
                 for document in documents
                 if needle in document['code'].lower()
                 or needle in document['name'].lower()
+                or needle in str(document.get('author', '')).lower()
             ]
 
         highlight_id = None

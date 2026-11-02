@@ -1269,6 +1269,121 @@
         }
     }
 
+    function refreshColumnFilters() {
+        var form = document.getElementById('filtersForm');
+        if (!form) {
+            return;
+        }
+        if (window.htmx) {
+            window.htmx.trigger(form, 'submit');
+        } else {
+            form.submit();
+        }
+    }
+
+    function bindColumnFilter(column, fieldId, kind) {
+        var header = document.querySelector(
+            'th[data-column="' + column + '"]'
+        );
+        var hidden = document.getElementById(fieldId);
+        if (!header || !hidden || header.querySelector('.th-filter')) {
+            return;
+        }
+        var wrapper = document.createElement('span');
+        wrapper.className = 'th-filter dropdown';
+        var button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'th-filter-btn';
+        button.setAttribute('data-bs-toggle', 'dropdown');
+        button.setAttribute('aria-expanded', 'false');
+        button.title = 'Фильтр';
+        button.innerHTML = '<i class="bi bi-funnel" aria-hidden="true"></i>';
+        var menu = document.createElement('div');
+        menu.className = 'dropdown-menu p-2';
+        var control;
+        var timer = null;
+
+        function syncActive() {
+            button.classList.toggle('is-active', Boolean(hidden.value));
+        }
+
+        function scheduleRefresh() {
+            syncActive();
+            if (timer) {
+                window.clearTimeout(timer);
+            }
+            timer = window.setTimeout(refreshColumnFilters, kind === 'text' ? 350 : 0);
+        }
+
+        if (kind === 'select') {
+            control = document.createElement('select');
+            control.className = 'form-select form-select-sm';
+            Array.from(hidden.options).forEach(function (option) {
+                var cloned = document.createElement('option');
+                cloned.value = option.value;
+                cloned.textContent = option.textContent;
+                control.appendChild(cloned);
+            });
+            control.value = hidden.value || '';
+            control.addEventListener('change', function () {
+                hidden.value = control.value;
+                scheduleRefresh();
+            });
+        } else {
+            control = document.createElement('input');
+            control.type = 'search';
+            control.className = 'form-control form-control-sm';
+            control.placeholder = header.textContent.trim() || 'Поиск';
+            control.value = hidden.value || '';
+            control.addEventListener('input', function () {
+                hidden.value = control.value;
+                scheduleRefresh();
+            });
+            control.addEventListener('keydown', function (event) {
+                if (event.key === 'Enter') {
+                    event.preventDefault();
+                    refreshColumnFilters();
+                }
+            });
+        }
+
+        menu.appendChild(control);
+        wrapper.appendChild(button);
+        wrapper.appendChild(menu);
+        header.appendChild(wrapper);
+        syncActive();
+    }
+
+    function initColumnFilters() {
+        bindColumnFilter('section', 'id_section', 'select');
+        bindColumnFilter('doc_type', 'id_doc_type', 'select');
+        bindColumnFilter('suitability', 'id_suitability_code', 'select');
+        bindColumnFilter('internal-status', 'id_internal_status', 'select');
+        bindColumnFilter('code', 'id_code', 'text');
+        bindColumnFilter('name', 'id_name', 'text');
+
+        var search = document.getElementById('globalSearch');
+        var hiddenSearch = document.getElementById('quickFilter');
+        if (!search || !hiddenSearch || search.dataset.filterReady === '1') {
+            return;
+        }
+        search.dataset.filterReady = '1';
+        var timer = null;
+        search.addEventListener('input', function () {
+            hiddenSearch.value = search.value;
+            if (timer) {
+                window.clearTimeout(timer);
+            }
+            timer = window.setTimeout(refreshColumnFilters, 350);
+        });
+        search.addEventListener('keydown', function (event) {
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                refreshColumnFilters();
+            }
+        });
+    }
+
     function initDocumentsPanel() {
         var table = documentsTable();
         if (table) {
@@ -1277,6 +1392,7 @@
             });
         }
         initColumnOrder();
+        initColumnFilters();
         updateBulkBar();
         updateUploadTarget();
         highlightNewRow();

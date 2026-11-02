@@ -35,10 +35,13 @@ from storage.domain.project_templates import PROJECT_TEMPLATES
 
 
 DOCUMENT_VIEW_COLUMNS = (
-    'code', 'name', 'doc_type', 'suitability', 'internal_status',
+    'code', 'section', 'name', 'doc_type', 'suitability', 'internal_status',
     'issues', 'version', 'date', 'author',
 )
-DOCUMENT_VIEW_FILTERS = ('section', 'doc_type', 'status', 'code', 'name')
+DOCUMENT_VIEW_FILTERS = (
+    'section', 'doc_type', 'status', 'suitability_code', 'internal_status',
+    'code', 'name',
+)
 DOCUMENT_VIEW_SORT_FIELDS = ('code', 'name', 'date', 'version')
 DOCUMENT_VIEW_MIN_WIDTH = 50
 DOCUMENT_VIEW_MAX_WIDTH = 800

@@ -541,3 +541,48 @@ tr.doc-row-flash > td { animation: wf-row-flash 1.5s ease; }
     min-width: 220px;
     max-width: 280px;
 }
+
+.th-filter {
+    display: inline-flex;
+    position: relative;
+    margin-left: 4px;
+    vertical-align: middle;
+}
+
+.th-filter-btn {
+    border: 0;
+    background: transparent;
+    color: var(--c-text-secondary);
+    padding: 0 3px;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.th-filter-btn:hover,
+.th-filter-btn.is-active {
+    color: var(--c-accent);
+}
+
+.th-filter .dropdown-menu {
+    min-width: 200px;
+    z-index: 1080;
+}
+
+.toolbar-search {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+}
+
+.toolbar-search > i {
+    position: absolute;
+    left: 8px;
+    color: var(--c-text-secondary);
+    font-size: 12px;
+    pointer-events: none;
+}
+
+.toolbar-search input {
+    width: 260px;
+    padding-left: 26px;
+}

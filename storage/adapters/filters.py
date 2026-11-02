@@ -45,6 +45,30 @@ class DocumentFilter(django_filters.FilterSet):
             'aria-label': 'Фильтр по статусу',
         }),
     )
+    suitability_code = django_filters.ChoiceFilter(
+        field_name='suitability_code',
+        choices=Document.SUITABILITY_CHOICES,
+        label='Статус для передачи',
+        empty_label='Все статусы',
+        widget=forms.Select(attrs={
+            'form': FILTER_FORM_ID,
+            'id': 'id_suitability_code',
+            'class': 'form-select form-select-sm',
+            'aria-label': 'Фильтр по статусу для передачи',
+        }),
+    )
+    internal_status = django_filters.ChoiceFilter(
+        field_name='internal_status',
+        choices=Document.INTERNAL_STATUS_CHOICES,
+        label='Внутренний статус',
+        empty_label='Все внутренние статусы',
+        widget=forms.Select(attrs={
+            'form': FILTER_FORM_ID,
+            'id': 'id_internal_status',
+            'class': 'form-select form-select-sm',
+            'aria-label': 'Фильтр по внутреннему статусу',
+        }),
+    )
     code = django_filters.CharFilter(
         field_name='code',
         lookup_expr='icontains',
@@ -82,12 +106,19 @@ class DocumentFilter(django_filters.FilterSet):
 
     class Meta:
         model = Document
-        fields = ['section', 'doc_type', 'status', 'code', 'name']
+        fields = [
+            'section', 'doc_type', 'status', 'suitability_code',
+            'internal_status', 'code', 'name',
+        ]
 
     def filter_search(self, queryset, name, value):
         value = (value or '').strip()
         if not value:
             return queryset
         return queryset.filter(
-            Q(code__icontains=value) | Q(name__icontains=value)
+            Q(code__icontains=value)
+            | Q(name__icontains=value)
+            | Q(created_by__first_name__icontains=value)
+            | Q(created_by__last_name__icontains=value)
+            | Q(created_by__username__icontains=value)
         )

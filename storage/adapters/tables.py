@@ -56,6 +56,12 @@ class DocumentTable(tables.Table):
         },
     )
     code = tables.Column(verbose_name='Шифр', attrs=_column_attrs('code'))
+    section = tables.Column(
+        verbose_name='Раздел',
+        accessor='section.code',
+        order_by=('section__code',),
+        attrs=_column_attrs('section'),
+    )
     name = tables.Column(verbose_name='Название', attrs=_column_attrs('name'))
     doc_type = tables.Column(verbose_name='Тип', attrs=_column_attrs('doc_type'))
     suitability_code = tables.Column(
@@ -107,6 +113,7 @@ class DocumentTable(tables.Table):
         sequence = (
             'selection',
             'code',
+            'section',
             'name',
             'doc_type',
             'suitability_code',
