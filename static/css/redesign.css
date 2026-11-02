@@ -1,5 +1,5 @@
 /* Цвета — только через дизайн-токены (tokens.css, источник: tokens.json) */
-/* Спринт 4: топбар — графит #1F2937. Кнопки — ghost-стиль со светлой рамкой,
+/* Спринт 4: топбар — графит #2B3545. Кнопки — ghost-стиль со светлой рамкой,
    лого-марка и аватар — светлые, крошки — светло-серые (текст on-dark). */
 .topbar { position: relative; z-index: 1045; height: 52px; background: var(--c-bg-header); border-bottom: 1px solid var(--c-border-header); display: flex; align-items: center; padding: 0 16px; gap: 12px; }
 .topbar .brand { font-weight: 600; font-size: 15px; display: flex; align-items: center; gap: 8px; }
@@ -45,10 +45,10 @@ body { background: var(--c-bg-app); font-family: 'Golos Text', 'Inter', system-u
     left: 50%;
     transform: translate(-50%, -50%);
     z-index: 0;
-    max-width: 46%;
+    max-width: 42%;
     overflow: hidden;
     text-align: center;
-    opacity: 0.12; /* Спринт 3: 0.25 → 0.12, чтобы не спорить с контентом */
+    opacity: 0.22; /* заметный, но не спорящий с контентом водяной знак */
     pointer-events: none;
     user-select: none;
     white-space: nowrap;
@@ -74,7 +74,7 @@ body { background: var(--c-bg-app); font-family: 'Golos Text', 'Inter', system-u
 }
 
 /* T85: header/breadcrumbs/table polish.
-   Спринт 4: --c-bg-header теперь графит #1F2937 (см. tokens.json). */
+   Спринт 4: --c-bg-header теперь графит #2B3545 (см. tokens.json). */
 .topbar {
     background: var(--c-bg-header) !important;
     border-bottom: 1px solid var(--c-border-header);
@@ -162,6 +162,10 @@ tr[data-href],
     overflow: visible;
     gap: 8px;
     min-width: 0;
+    min-height: 52px;
+    height: auto;
+    padding-top: 4px;
+    padding-bottom: 4px;
     isolation: isolate;
 }
 
@@ -174,17 +178,23 @@ tr[data-href],
     display: flex;
     align-items: center;
     gap: 12px;
+    flex: 1 1 auto;
     min-width: 0;
-    max-width: 46%;
+    max-width: 50%;
     margin-right: auto;
-    overflow: hidden;
+    overflow: visible;
 }
 
 .topbar .crumb {
     flex: 0 1 auto;
+    flex-wrap: wrap;
+    align-items: baseline;
     min-width: 0;
-    overflow: hidden;
-    white-space: nowrap;
+    max-width: 100%;
+    overflow: visible;
+    white-space: normal;
+    line-height: 1.25;
+    row-gap: 2px;
 }
 
 .topbar .crumb .sep,
@@ -196,15 +206,17 @@ tr[data-href],
 .topbar .crumb .doc {
     flex: 0 1 auto;
     min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    overflow: visible;
+    text-overflow: clip;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    line-height: 1.25;
 }
 
 .topbar form.d-flex {
     flex: 0 1 240px;
     min-width: 120px;
-    margin: 0;
+    margin: 0 0 0 8px;
 }
 
 .topbar form.d-flex input {

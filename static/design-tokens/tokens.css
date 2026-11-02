@@ -28,7 +28,7 @@
   --c-bg-surface-hover: #FAFAF8;
   --c-bg-surface-sunken: #EFEFEC;
   --c-bg-canvas: #26272B;  /* тёмный canvas вьювера */
-  --c-bg-header: #1F2937;  /* графитовый хедер */
+  --c-bg-header: #2B3545;  /* графитовый хедер */
   --c-bg-header-hover: rgba(255, 255, 255, 0.08);  /* ховер ghost-кнопок на тёмном */
   --c-bg-row-hover: #EDF2F9;  /* ховер кликабельной строки */
 
