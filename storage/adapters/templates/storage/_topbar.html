@@ -39,6 +39,17 @@
             {% endif %}
         {% endif %}
 
+        {# T68: сводный реестр замечаний текущего проекта #}
+        {% if topbar_project %}
+            <a href="{% url 'issues:issue_registry' topbar_project.pk %}"
+               class="btn btn-sm btn-outline-secondary{% if request.resolver_match.url_name == 'issue_registry' %} active{% endif %}"
+               title="Замечания проекта {{ topbar_project.code }}"
+               {% if request.resolver_match.url_name == 'issue_registry' %}aria-current="page"{% endif %}>
+                <i class="bi bi-list-check" aria-hidden="true"></i>
+                <span class="d-none d-xl-inline ms-1">Замечания проекта</span>
+            </a>
+        {% endif %}
+
         {# Волна 3: личный инбокс замечаний + колокольчик уведомлений #}
         <a href="{% url 'issues:my_issues' %}" class="btn btn-sm btn-outline-secondary position-relative"
            title="Мои замечания — назначенные мне и созданные мной">

@@ -397,7 +397,9 @@ def _apply_registry_filters(queryset, params):
         queryset = queryset.filter(status=status)
 
     flag = (params.get('flag') or '').strip()
-    if flag == 'open':
+    if flag == 'active':
+        queryset = queryset.filter(status__in=ACTIVE_ISSUE_STATUSES)
+    elif flag == 'open':
         queryset = queryset.exclude(status__in=ISSUE_STATUS_GROUPS['closed'])
     elif flag == 'closed':
         queryset = queryset.filter(status__in=ISSUE_STATUS_GROUPS['closed'])
@@ -444,6 +446,7 @@ def _registry_context_counts(user, project):
     return {
         'total': sum(counts.values()),
         'groups': groups,
+        'active': groups['open'] + groups['progress'],
         'overdue': overdue,
     }
 

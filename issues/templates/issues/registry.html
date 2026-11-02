@@ -1,17 +1,17 @@
 {% extends 'storage/base.html' %}
 {% load static issue_extras %}
 
-{% block title %}Замечания — {{ project.code }} — Stream-CAD{% endblock %}
+{% block title %}Замечания проекта {{ project.code }} — Stream-CAD{% endblock %}
 
 {% block topbar %}
-    {% include 'storage/_topbar.html' with topbar_project=project topbar_title="Реестр замечаний" %}
+    {% include 'storage/_topbar.html' with topbar_project=project topbar_title="Замечания проекта" %}
 {% endblock %}
 
 {% block content %}
 <main class="container-fluid px-3 py-3 pb-5">
     <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
         <div>
-            <h1 class="h4 mb-0">Реестр замечаний</h1>
+            <h1 class="h4 mb-0">Замечания проекта {{ project.code }}</h1>
             <div class="small text-muted">
                 {{ project.code }} — {{ project.name }} ·
                 всего {{ counts.total }} замечание{{ counts.total|pluralize:"я,й" }}
@@ -32,37 +32,51 @@
     <div id="registryPanel"
          data-project-id="{{ project.pk }}">
 
-        {# ---- Сводка: счётчики по группам — «что требует внимания» ---- #}
-        <div class="card shadow-sm mb-3">
-            <div class="card-body py-2">
-                <div class="d-flex flex-wrap gap-2 align-items-center">
-                    <a class="cde-badge {% if not filters.flag and not filters.status %}cde-badge--accent{% else %}cde-badge--closed{% endif %} text-decoration-none"
-                       href="{% url 'issues:issue_registry' project.pk %}">
-                        Все <span class="cde-tnum">{{ counts.total }}</span>
-                    </a>
-                    <a class="cde-badge {% if filters.flag == 'open' %}cde-badge--accent{% else %}cde-badge--wait{% endif %} text-decoration-none"
-                       href="{% url 'issues:issue_registry' project.pk %}?flag=open">
-                        Открытые <span class="cde-tnum">{{ counts.groups.open }}</span>
-                    </a>
-                    <a class="cde-badge {% if filters.status == 'IN_PROGRESS' %}cde-badge--accent{% else %}cde-badge--progress{% endif %} text-decoration-none"
-                       href="{% url 'issues:issue_registry' project.pk %}?status=IN_PROGRESS">
-                        В работе <span class="cde-tnum">{{ counts.groups.progress }}</span>
-                    </a>
-                    <a class="cde-badge {% if filters.status == 'DONE' %}cde-badge--accent{% else %}cde-badge--review{% endif %} text-decoration-none"
-                       href="{% url 'issues:issue_registry' project.pk %}?status=DONE">
-                        На проверке <span class="cde-tnum">{{ counts.groups.review }}</span>
-                    </a>
-                    <a class="cde-badge {% if filters.flag == 'closed' %}cde-badge--accent{% else %}cde-badge--closed{% endif %} text-decoration-none"
-                       href="{% url 'issues:issue_registry' project.pk %}?flag=closed">
-                        Закрытые <span class="cde-tnum">{{ counts.groups.closed }}</span>
-                    </a>
-                    <a class="cde-badge {% if filters.flag == 'overdue' %}cde-deadline cde-deadline--overdue{% else %}cde-deadline cde-deadline--soon{% endif %} text-decoration-none"
-                       href="{% url 'issues:issue_registry' project.pk %}?flag=overdue"
-                       title="Активные замечания с истёкшим сроком ответа">
-                        <i class="bi bi-exclamation-triangle" aria-hidden="true"></i>
-                        Просрочено <span class="cde-tnum">{{ counts.overdue }}</span>
-                    </a>
-                </div>
+        {# ---- Сводка: четыре ключевых показателя ---- #}
+        <div class="row g-2 mb-3">
+            <div class="col-6 col-xl-3">
+                <a class="card shadow-sm h-100 text-decoration-none text-body"
+                   href="{% url 'issues:issue_registry' project.pk %}"
+                   title="Показать все замечания проекта">
+                    <div class="card-body py-2">
+                        <div class="small text-muted">Всего замечаний</div>
+                        <div class="h4 mb-0 cde-tnum">{{ counts.total }}</div>
+                    </div>
+                </a>
+            </div>
+            <div class="col-6 col-xl-3">
+                <a class="card shadow-sm h-100 text-decoration-none text-body"
+                   href="{% url 'issues:issue_registry' project.pk %}?flag=active"
+                   title="NEW + IN_PROGRESS + DISCUSSION + REJECTED">
+                    <div class="card-body py-2">
+                        <div class="small text-muted">Открытые</div>
+                        <div class="h4 mb-0 cde-tnum">{{ counts.active }}</div>
+                    </div>
+                </a>
+            </div>
+            <div class="col-6 col-xl-3">
+                <a class="card shadow-sm h-100 text-decoration-none text-body"
+                   href="{% url 'issues:issue_registry' project.pk %}?status=DONE"
+                   title="Замечания со статусом DONE">
+                    <div class="card-body py-2">
+                        <div class="small text-muted">На проверке</div>
+                        <div class="h4 mb-0 cde-tnum">{{ counts.groups.review }}</div>
+                    </div>
+                </a>
+            </div>
+            <div class="col-6 col-xl-3">
+                <a class="card shadow-sm h-100 text-decoration-none text-body{% if counts.overdue %} border-danger{% endif %}"
+                   href="{% url 'issues:issue_registry' project.pk %}?flag=overdue"
+                   title="Активные замечания с истёкшим сроком ответа">
+                    <div class="card-body py-2">
+                        <div class="small text-muted">
+                            <i class="bi bi-exclamation-triangle me-1" aria-hidden="true"></i>Просрочено
+                        </div>
+                        <div class="h4 mb-0 cde-tnum{% if counts.overdue %} text-danger{% endif %}">
+                            {{ counts.overdue }}
+                        </div>
+                    </div>
+                </a>
             </div>
         </div>
 
@@ -155,7 +169,7 @@
                                 </span>
                             </td>
                             <td>
-                                <span title="{{ issue.description }}">{{ issue.description|truncatechars:110 }}</span>
+                                <span title="{{ issue.description }}">{{ issue.description|truncatechars:80 }}</span>
                             </td>
                             <td class="small">
                                 {{ issue.author.get_full_name|default:issue.author.username }}
