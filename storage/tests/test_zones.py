@@ -158,6 +158,7 @@ class ZoneStatusLinkTest(TestCase):
         move_document(self.admin, doc, self.published_folder)
         doc.refresh_from_db()
         self.assertEqual(doc.status, 'approved')
+        self.assertEqual(doc.suitability_code, 'A')
 
     def test_move_to_archive_changes_status(self):
         """Перемещение в ARCHIVE меняет статус на archived."""
@@ -167,6 +168,7 @@ class ZoneStatusLinkTest(TestCase):
         move_document(self.admin, doc, self.archive_folder)
         doc.refresh_from_db()
         self.assertEqual(doc.status, 'archived')
+        self.assertEqual(doc.suitability_code, 'A')
 
     def test_move_to_shared_changes_status(self):
         """Перемещение в SHARED меняет статус на in_review."""
@@ -176,20 +178,22 @@ class ZoneStatusLinkTest(TestCase):
         move_document(self.admin, doc, self.shared_folder)
         doc.refresh_from_db()
         self.assertEqual(doc.status, 'in_review')
+        self.assertEqual(doc.suitability_code, 'S3')
 
-    def test_move_to_wip_changes_status(self):
-        """Перемещение в WIP меняет статус на draft."""
+    def test_return_from_shared_changes_status(self):
+        """Возврат из SHARED в WIP выполняется workflow-действием."""
         # Создаём документ и перемещаем в SHARED (status=in_review)
         doc = self._create_document(self.wip_folder)
         self.assertEqual(doc.status, 'draft')
         move_document(self.admin, doc, self.shared_folder)
         doc.refresh_from_db()
         self.assertEqual(doc.status, 'in_review')
-        
-        # Теперь перемещаем в WIP (status=draft)
-        move_document(self.admin, doc, self.wip_folder)
+
+        # Возврат в WIP — только через контролируемый workflow
+        transition_document_zone(self.admin, doc, 'return_wip')
         doc.refresh_from_db()
         self.assertEqual(doc.status, 'draft')
+        self.assertEqual(doc.suitability_code, 'S0')
 
     def test_move_without_folder_preserves_status(self):
         """Перемещение в None не меняет статус."""
@@ -532,8 +536,8 @@ class MoveDocumentZoneCheckTest(TestCase):
         with self.assertRaises(PermissionDenied):
             move_document(self.developer, doc, self.shared_folder)
 
-    def test_archive_document_only_admin_can_move(self):
-        """Документ в ARCHIVE может переместить только админ."""
+    def test_archive_document_cannot_be_moved_even_by_admin(self):
+        """DnD из ARCHIVE запрещён всем, включая администратора."""
         doc = self._create_document(self.archive_folder)
         # ГИП не может
         with self.assertRaises(PermissionDenied):
@@ -541,10 +545,9 @@ class MoveDocumentZoneCheckTest(TestCase):
         # Разработчик не может
         with self.assertRaises(PermissionDenied):
             move_document(self.developer, doc, self.wip_folder)
-        # Админ может
-        move_document(self.admin, doc, self.wip_folder)
-        doc.refresh_from_db()
-        self.assertEqual(doc.folder, self.wip_folder)
+        # Админ тоже не может сменить зону через DnD
+        with self.assertRaises(PermissionDenied):
+            move_document(self.admin, doc, self.wip_folder)
 
 
 class UploadDocumentZoneCheckTest(TestCase):
@@ -670,7 +673,7 @@ class CopyDocumentZoneCheckTest(TestCase):
 
 
 class MoveToRegularFolderStatusTest(TestCase):
-    """B5: Перемещение в обычную папку не меняет статус."""
+    """B5: Перемещение в обычную папку не меняет статус в пределах зоны."""
 
     def setUp(self):
         data = _create_test_data()
@@ -722,21 +725,22 @@ class MoveToRegularFolderStatusTest(TestCase):
         # Статус должен остаться draft (не изменился)
         self.assertEqual(doc.status, 'draft')
 
-    def test_move_to_regular_folder_from_approved(self):
-        """Перемещение из PUBLISHED в обычную папку не сбрасывает статус."""
+    def test_move_from_published_to_regular_folder_blocked(self):
+        """DnD из PUBLISHED в обычную папку запрещён даже администратору."""
         doc = self._create_document()
         # Сначала в PUBLISHED
         published = Folder.objects.get(project=self.project, zone='PUBLISHED')
         move_document(self.admin, doc, published)
         doc.refresh_from_db()
         self.assertEqual(doc.status, 'approved')
+        self.assertEqual(doc.suitability_code, 'A')
 
-        # Теперь в обычную папку
-        move_document(self.admin, doc, self.regular_folder)
+        # Смена effective_zone через перемещение запрещена
+        with self.assertRaises(PermissionDenied):
+            move_document(self.admin, doc, self.regular_folder)
         doc.refresh_from_db()
-
-        # Статус должен остаться approved
         self.assertEqual(doc.status, 'approved')
+        self.assertEqual(doc.folder, published)
 
 
 class ArchiveEscapePreventionTest(TestCase):

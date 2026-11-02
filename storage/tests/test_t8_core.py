@@ -521,16 +521,16 @@ class T67AuditTest(T8CoreTestBase):
 
     def test_update_internal_status_and_open_issue_block(self):
         document = self.make_document(code='T67-INTERNAL')
-        update_internal_status(self.user_gip, document, 'internal_review')
+        update_internal_status(self.user_gip, document, 'send_to_review')
         document.refresh_from_db()
         self.assertEqual(document.internal_status, 'internal_review')
 
-        update_internal_status(self.user_gip, document, 'ready_to_share')
+        update_internal_status(self.user_gip, document, 'approve_internal')
         document.refresh_from_db()
         self.assertEqual(document.internal_status, 'ready_to_share')
 
         blocked = self.make_document(code='T67-BLOCKED')
-        update_internal_status(self.user_gip, blocked, 'internal_review')
+        update_internal_status(self.user_gip, blocked, 'send_to_review')
         issue = Issue.objects.create(
             document=blocked,
             author=self.user_gip,
@@ -538,10 +538,10 @@ class T67AuditTest(T8CoreTestBase):
             status='NEW',
         )
         with self.assertRaises(ValueError):
-            update_internal_status(self.user_gip, blocked, 'ready_to_share')
+            update_internal_status(self.user_gip, blocked, 'approve_internal')
         issue.status = 'CLOSED'
         issue.save(update_fields=['status'])
-        update_internal_status(self.user_gip, blocked, 'ready_to_share')
+        update_internal_status(self.user_gip, blocked, 'approve_internal')
         blocked.refresh_from_db()
         self.assertEqual(blocked.internal_status, 'ready_to_share')
 
@@ -550,11 +550,11 @@ class T67AuditTest(T8CoreTestBase):
         document.status = 'in_review'
         document.save(update_fields=['status'])
         with self.assertRaises(ValueError):
-            update_internal_status(self.user_gip, document, 'internal_review')
+            update_internal_status(self.user_gip, document, 'send_to_review')
 
         wip = self.make_document(code='T67-PERM')
         with self.assertRaises(PermissionDenied):
-            update_internal_status(self.user_viewer, wip, 'internal_review')
+            update_internal_status(self.user_viewer, wip, 'send_to_review')
 
     def test_folder_idor_foreign_company(self):
         folder = create_folder(

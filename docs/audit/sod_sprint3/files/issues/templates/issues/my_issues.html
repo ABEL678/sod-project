@@ -1,0 +1,187 @@
+{% extends 'storage/base.html' %}
+{% load static issue_extras %}
+
+{% block title %}Мои замечания — Stream-CAD{% endblock %}
+
+{% block topbar %}
+    {% include 'storage/_topbar.html' with topbar_title="Мои замечания" %}
+{% endblock %}
+
+{% block content %}
+<main class="container-fluid px-3 py-3 pb-5">
+    <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+        <div>
+            <h1 class="h4 mb-0">Мои замечания</h1>
+            <div class="small text-muted">
+                Назначенные вам и созданные вами — по всем проектам
+            </div>
+        </div>
+        <a href="{% url 'storage:project_list' %}" class="btn btn-sm btn-outline-secondary">
+            <i class="bi bi-collection me-1" aria-hidden="true"></i>Проекты
+        </a>
+    </div>
+
+    <div id="myIssuesPanel">
+        {# ---- Дайджест: «на вас 5, просрочено 2, срок в ближайшие 3 дня: 1» ---- #}
+        <div class="card shadow-sm mb-3">
+            <div class="card-body py-2">
+                <div class="d-flex flex-wrap gap-2 align-items-center">
+                    <a class="cde-badge {% if not filters.scope and not filters.flag %}cde-badge--accent{% else %}cde-badge--closed{% endif %} text-decoration-none"
+                       href="{% url 'issues:my_issues' %}">
+                        Все мои <span class="cde-tnum">{{ page_obj.paginator.count }}</span>
+                    </a>
+                    <a class="cde-badge {% if filters.scope == 'assigned' and not filters.flag %}cde-badge--accent{% else %}cde-badge--wait{% endif %} text-decoration-none"
+                       href="{% url 'issues:my_issues' %}?scope=assigned">
+                        На вас <span class="cde-tnum">{{ counts.assigned_open }}</span>
+                    </a>
+                    <a class="cde-badge {% if filters.scope == 'created' and not filters.flag %}cde-badge--accent{% else %}cde-badge--progress{% endif %} text-decoration-none"
+                       href="{% url 'issues:my_issues' %}?scope=created">
+                        Вы автор <span class="cde-tnum">{{ counts.created_open }}</span>
+                    </a>
+                    <a class="cde-badge {% if filters.flag == 'due_soon' %}cde-badge--accent{% else %}cde-badge--review{% endif %} text-decoration-none"
+                       href="{% url 'issues:my_issues' %}?flag=due_soon"
+                       title="Срок ответа в ближайшие 3 дня">
+                        Скоро срок <span class="cde-tnum">{{ counts.due_soon }}</span>
+                    </a>
+                    <a class="cde-badge {% if filters.flag == 'overdue' %}cde-deadline cde-deadline--overdue{% else %}cde-deadline cde-deadline--soon{% endif %} text-decoration-none"
+                       href="{% url 'issues:my_issues' %}?flag=overdue"
+                       title="Ваши замечания с истёкшим сроком ответа">
+                        <i class="bi bi-exclamation-triangle" aria-hidden="true"></i>
+                        Просрочено <span class="cde-tnum">{{ counts.overdue }}</span>
+                    </a>
+                    <a class="cde-badge {% if filters.flag == 'closed' %}cde-badge--accent{% else %}cde-badge--closed{% endif %} text-decoration-none"
+                       href="{% url 'issues:my_issues' %}?flag=closed">
+                        Закрытые
+                    </a>
+                </div>
+            </div>
+        </div>
+
+        {# ---- Поиск ---- #}
+        <div class="card shadow-sm mb-3">
+            <form class="card-body py-2 d-flex flex-wrap align-items-end gap-2"
+                  method="get" action="{% url 'issues:my_issues' %}">
+                {% if filters.scope %}<input type="hidden" name="scope" value="{{ filters.scope }}">{% endif %}
+                {% if filters.flag %}<input type="hidden" name="flag" value="{{ filters.flag }}">{% endif %}
+                <div class="filter-field filter-search flex-grow-1" style="max-width: 420px;">
+                    <label class="form-label" for="myIssuesSearch">Поиск</label>
+                    <input type="search" class="form-control form-control-sm" id="myIssuesSearch"
+                           name="q" value="{{ filters.q }}"
+                           placeholder="Текст, шифр или название документа, проект">
+                </div>
+                <button type="submit" class="btn btn-sm btn-primary">
+                    <i class="bi bi-search me-1" aria-hidden="true"></i>Найти
+                </button>
+                {% if filters.q %}
+                    <a href="{% url 'issues:my_issues' %}" class="btn btn-sm btn-outline-secondary"
+                       title="Сбросить поиск">
+                        <i class="bi bi-x-lg" aria-hidden="true"></i> Сбросить
+                    </a>
+                {% endif %}
+            </form>
+        </div>
+
+        {# ---- Таблица ---- #}
+        <div class="card shadow-sm">
+            <div class="table-responsive">
+                <table class="table table-hover align-middle mb-0">
+                    <thead class="table-light">
+                        <tr>
+                            <th>№</th>
+                            <th>Проект</th>
+                            <th>Документ</th>
+                            <th>Статус</th>
+                            <th style="min-width: 260px;">Текст замечания</th>
+                            <th>Роль</th>
+                            <th>Автор</th>
+                            <th>Ответственный</th>
+                            <th>Срок ответа</th>
+                            <th>Создано</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    {% for issue in issues %}
+                        <tr>
+                            <td><span class="cde-chip">{{ issue.pk }}</span></td>
+                            <td class="text-truncate" style="max-width: 160px;"
+                                title="{{ issue.document.project.name }}">
+                                {{ issue.document.project.code }}
+                            </td>
+                            <td>
+                                <a href="{% url 'storage:document_detail' issue.document.pk %}"
+                                   class="fw-semibold text-decoration-none">
+                                    {{ issue.document.code }}
+                                </a>
+                                <div class="small text-muted text-truncate" style="max-width: 200px;">
+                                    {{ issue.document.name }}
+                                </div>
+                            </td>
+                            <td><span class="{{ issue|status_badge_class }}">{{ issue.get_status_display }}</span></td>
+                            <td>
+                                <span title="{{ issue.description }}">{{ issue.description|truncatechars:100 }}</span>
+                            </td>
+                            <td>
+                                {% if issue.assignee_id == user.pk and issue.author_id == user.pk %}
+                                    <span class="cde-chip">автор + исполнитель</span>
+                                {% elif issue.assignee_id == user.pk %}
+                                    <span class="cde-badge cde-badge--progress">исполнитель</span>
+                                {% else %}
+                                    <span class="cde-badge cde-badge--wait">автор</span>
+                                {% endif %}
+                            </td>
+                            <td>{{ issue.author.get_full_name|default:issue.author.username }}</td>
+                            <td>
+                                {% if issue.assignee %}
+                                    {{ issue.assignee.get_full_name|default:issue.assignee.username }}
+                                {% else %}
+                                    <span class="text-muted">—</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if issue.due_date %}
+                                    {{ issue.due_date|date:"d.m.Y" }}
+                                    <span class="{{ issue|deadline_class }}">{{ issue|deadline_label }}</span>
+                                {% else %}
+                                    <span class="text-muted">—</span>
+                                {% endif %}
+                            </td>
+                            <td class="cde-tnum">{{ issue.created_at|date:"d.m.Y, H:i" }}</td>
+                        </tr>
+                    {% empty %}
+                        <tr>
+                            <td colspan="10" class="text-center text-muted py-4">
+                                <i class="bi bi-inbox me-1" aria-hidden="true"></i>
+                                {% if filters.q or filters.flag or filters.scope %}
+                                    Ничего не найдено по выбранным фильтрам
+                                {% else %}
+                                    Замечаний пока нет — вы получите их здесь после назначения
+                                {% endif %}
+                            </td>
+                        </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        {# ---- Пагинация ---- #}
+        {% if page_obj.paginator.num_pages > 1 %}
+            <nav class="mt-3" aria-label="Страницы замечаний">
+                <ul class="pagination pagination-sm justify-content-center mb-0">
+                    {% if page_obj.has_previous %}
+                        <li class="page-item">
+                            <a class="page-link" href="?{% if filters.q %}q={{ filters.q|urlencode }}&amp;{% endif %}page={{ page_obj.previous_page_number }}">‹</a>
+                        </li>
+                    {% endif %}
+                    <li class="page-item disabled"><span class="page-link">{{ page_obj.number }} из {{ page_obj.paginator.num_pages }}</span></li>
+                    {% if page_obj.has_next %}
+                        <li class="page-item">
+                            <a class="page-link" href="?{% if filters.q %}q={{ filters.q|urlencode }}&amp;{% endif %}page={{ page_obj.next_page_number }}">›</a>
+                        </li>
+                    {% endif %}
+                </ul>
+            </nav>
+        {% endif %}
+    </div>
+</main>
+{% endblock %}

@@ -1141,11 +1141,7 @@ class DocumentInternalStatusView(LoginRequiredMixin, View):
             pk=document_id,
             is_deleted=False,
         )
-        action = (
-            request.POST.get('action')
-            or request.POST.get('status')
-            or ''
-        )
+        action = (request.POST.get('action') or '').strip()
         try:
             update_internal_status(request.user, document, action)
         except PermissionDenied as exc:

@@ -60,11 +60,24 @@ ZONE_STATUS_MAP = {
     'ARCHIVE': 'archived',
 }
 
+ZONE_SUITABILITY_MAP = {
+    'WIP': 'S0',
+    'SHARED': 'S3',
+    'PUBLISHED': 'A',
+    'ARCHIVE': 'A',
+}
+
 
 def _status_for_zone(folder: Folder | None) -> str | None:
     if not _is_canonical_zone_folder(folder):
         return None
     return ZONE_STATUS_MAP.get(folder.zone)
+
+
+def _suitability_for_zone(folder: Folder | None) -> str | None:
+    if not _is_canonical_zone_folder(folder):
+        return None
+    return ZONE_SUITABILITY_MAP.get(folder.zone)
 
 
 def _is_canonical_zone_folder(folder: Folder | None) -> bool:
@@ -928,15 +941,28 @@ def move_document(user: User, document: Document, folder: Folder | None) -> Docu
     if document.is_deleted:
         raise ValueError("Нельзя перемещать документ из корзины")
 
-    # Проверка прав на покидание текущей зоны
+    # Проверка прав на покидание текущей зоны: смена effective_zone
+    # через DnD запрещена всем, включая администратора. Для контролируемых
+    # переходов между зонами есть workflow-действия (transition_document_zone).
     current_zone = _effective_zone(document)
-    if current_zone in ('ARCHIVE', 'PUBLISHED', 'SHARED'):
-        profile = getattr(user, 'userprofile', None)
-        if profile is None or profile.role != 'admin':
-            zone_name = document.folder.get_zone_display() if document.folder else 'зона'
-            raise PermissionDenied(
-                f"Документ в зоне «{zone_name}» — перемещение только для администратора"
-            )
+    target_zone = (
+        folder.zone
+        if folder is not None
+        else _ZONE_BY_STATUS.get(document.status, 'WIP')
+    )
+    if (
+        current_zone in ('ARCHIVE', 'PUBLISHED', 'SHARED')
+        and target_zone != current_zone
+    ):
+        zone_name = (
+            document.folder.get_zone_display()
+            if document.folder is not None
+            else dict(Folder.ZONE_CHOICES).get(current_zone, current_zone)
+        )
+        raise PermissionDenied(
+            f"Документ в зоне «{zone_name}» — смена зоны через "
+            "перемещение запрещена"
+        )
 
     if folder is not None:
         if folder.project_id != document.project_id:
@@ -954,11 +980,20 @@ def move_document(user: User, document: Document, folder: Folder | None) -> Docu
     document.folder = folder
     update_fields = ['folder', 'updated_at']
 
-    # Автоматическое изменение статуса только для канонических зон
+    # Автоматическое изменение статуса и кода пригодности
+    # только для канонических зон.
     target_status = _status_for_zone(folder)
     if target_status is not None and target_status != document.status:
         document.status = target_status
         update_fields.append('status')
+
+    target_suitability = _suitability_for_zone(folder)
+    if (
+        target_suitability is not None
+        and target_suitability != document.suitability_code
+    ):
+        document.suitability_code = target_suitability
+        update_fields.append('suitability_code')
 
     document.save(update_fields=update_fields)
     return document
@@ -1668,9 +1703,9 @@ def update_internal_status(
 ) -> Document:
     """Выполняет внутреннее действие WIP-документа.
 
-    Принимает action-коды send_to_review / return_to_rework /
-    approve_internal / submit_review. Для обратной совместимости
-    принимает и целевой internal_status.
+    Принимает только action-коды: send_to_review / return_to_rework /
+    approve_internal / submit_review. Сырые значения internal_status
+    не принимаются.
     """
     if document.is_deleted:
         raise ValueError("Документ находится в корзине")
@@ -1683,31 +1718,17 @@ def update_internal_status(
 
     is_admin, is_author, is_gip = _internal_permissions(user, document)
     spec = INTERNAL_ACTION_SPECS.get(action)
-    if spec is not None:
-        new_status, from_statuses, mode = spec
-        if document.internal_status not in from_statuses:
-            raise ValueError("Действие недоступно для текущего внутреннего статуса")
-        if mode == 'send':
-            if not (is_admin or is_author or is_gip):
-                raise PermissionDenied("Нет прав на отправку на проверку")
-        elif not (is_admin or is_gip):
-            raise PermissionDenied("Нет прав на проверку документа")
-    else:
-        new_status = action
-        if new_status not in dict(Document.INTERNAL_STATUS_CHOICES):
-            raise ValueError("Неизвестный внутренний статус")
+    if spec is None:
+        raise ValueError("Неизвестное действие внутреннего статуса")
+
+    new_status, from_statuses, mode = spec
+    if document.internal_status not in from_statuses:
+        raise ValueError("Действие недоступно для текущего внутреннего статуса")
+    if mode == 'send':
         if not (is_admin or is_author or is_gip):
-            raise PermissionDenied("Нет прав на изменение внутреннего статуса")
-        if new_status == document.internal_status:
-            return document
-        allowed = {
-            'draft': {'internal_review', 'ready_to_share'},
-            'internal_review': {'ready_to_share', 'rework'},
-            'rework': {'internal_review'},
-            'ready_to_share': {'internal_review', 'rework'},
-        }
-        if new_status not in allowed.get(document.internal_status, set()):
-            raise ValueError("Недопустимый переход внутреннего статуса")
+            raise PermissionDenied("Нет прав на отправку на проверку")
+    elif not (is_admin or is_gip):
+        raise PermissionDenied("Нет прав на проверку документа")
 
     if new_status == 'ready_to_share' and _has_open_issues(document):
         raise ValueError(
@@ -1870,12 +1891,10 @@ def transition_document_zone(
     if target_status is not None and target_status != document.status:
         document.status = target_status
 
-    if action_code == 'submit_review':
-        document.suitability_code = 'S3'
-    elif action_code == 'publish':
-        document.suitability_code = 'A'
-    elif action_code == 'return_wip':
-        document.suitability_code = 'S0'
+    target_suitability = ZONE_SUITABILITY_MAP.get(action['to'])
+    if target_suitability is not None:
+        document.suitability_code = target_suitability
+    if action_code == 'return_wip':
         document.internal_status = 'rework'
 
     document.save(update_fields=[
@@ -2005,6 +2024,10 @@ def upload_document(
                     ZONE_STATUS_MAP.get(folder.zone, 'draft')
                     if folder is not None else 'draft'
                 ),
+                'suitability_code': (
+                    ZONE_SUITABILITY_MAP.get(folder.zone, 'S0')
+                    if folder is not None else 'S0'
+                ),
                 'folder': folder,
                 'created_by': user,
             },
@@ -2021,6 +2044,13 @@ def upload_document(
                 if target_status is not None and target_status != doc.status:
                     doc.status = target_status
                     update_fields.append('status')
+                target_suitability = _suitability_for_zone(folder)
+                if (
+                    target_suitability is not None
+                    and target_suitability != doc.suitability_code
+                ):
+                    doc.suitability_code = target_suitability
+                    update_fields.append('suitability_code')
             doc.save(update_fields=update_fields)
 
         # Вычисляем следующую версию
