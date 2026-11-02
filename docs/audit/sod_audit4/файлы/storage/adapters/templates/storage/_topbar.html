@@ -1,0 +1,98 @@
+<header class="topbar">
+    <a class="brand" href="{% url 'storage:project_list' %}" style="text-decoration: none; color: inherit;">
+        {% if user.userprofile.company.logo %}
+            <img src="{{ user.userprofile.company.logo.url }}"
+                 alt="{{ user.userprofile.company.name }}"
+                 style="height: 100%; max-height: 48px; width: auto; object-fit: contain; margin-right: 8px;">
+        {% else %}
+            <span class="brand-mark">СОД</span>
+        {% endif %}
+    </a>
+    <div class="brand-watermark">
+        <span class="brand-text">Stream-CAD</span>
+        <span class="brand-slogan">Управляйте потоком чертежей</span>
+    </div>
+    <div class="topbar-left">
+        <nav class="crumb">
+            <a href="{% url 'storage:project_list' %}" class="company-link">
+                <span class="topbar-company">{% firstof user.userprofile.company.name topbar_company.name topbar_project.company.name "Моя компания" %}</span>
+            </a>
+            <span>/</span>
+            <span class="doc">{% firstof topbar_title topbar_project.name "Проекты" %}</span>
+        </nav>
+    </div>
+    {% if topbar_project %}
+        <form action="{% url 'storage:search' topbar_project.pk %}" method="get" class="d-flex">
+            <input type="search" name="q" class="form-control form-control-sm"
+                   placeholder="Поиск по шифру, названию" value="{{ request.GET.q }}"
+                   aria-label="Поиск по документам проекта">
+        </form>
+    {% endif %}
+    <div class="spacer"></div>
+
+    {% if user.is_authenticated %}
+        {% if user.userprofile.role == 'admin' or user.userprofile.role == 'gip' or user.is_superuser %}
+            {% if request.resolver_match.url_name == 'project_list' %}
+                <a href="{% url 'storage:dashboard' %}" class="btn btn-sm btn-outline-secondary"
+                   title="Только для администратора и ГИП">
+                    <i class="bi bi-gear"></i> Управление
+                </a>
+            {% endif %}
+        {% endif %}
+
+        {# T68: сводный реестр замечаний текущего проекта #}
+        {% if topbar_project %}
+            <a href="{% url 'issues:issue_registry' topbar_project.pk %}"
+               class="btn btn-sm btn-outline-secondary{% if request.resolver_match.url_name == 'issue_registry' %} active{% endif %}"
+               title="Замечания проекта {{ topbar_project.code }}"
+               {% if request.resolver_match.url_name == 'issue_registry' %}aria-current="page"{% endif %}>
+                <i class="bi bi-list-check" aria-hidden="true"></i>
+                <span class="d-none d-xl-inline ms-1">Замечания проекта</span>
+            </a>
+        {% endif %}
+
+        {# Волна 3: личный инбокс замечаний + колокольчик уведомлений #}
+        <a href="{% url 'issues:my_issues' %}" class="btn btn-sm btn-outline-secondary position-relative"
+           title="Мои замечания — назначенные мне и созданные мной">
+            <i class="bi bi-chat-left-text" aria-hidden="true"></i>
+            <span class="d-none d-xl-inline ms-1">Мои замечания</span>
+            {% if my_open_issues_count %}
+                <span class="badge rounded-pill text-bg-primary ms-1">{{ my_open_issues_count }}</span>
+            {% endif %}
+        </a>
+
+        <div class="dropdown notif-bell">
+            <button type="button"
+                    class="btn btn-sm btn-outline-secondary dropdown-toggle"
+                    data-bs-toggle="dropdown"
+                    data-bs-auto-close="outside"
+                    aria-expanded="false"
+                    title="Уведомления">
+                <i class="bi bi-bell" aria-hidden="true"></i>
+                {% if unread_notifications_count %}
+                    <span class="notif-count">{{ unread_notifications_count }}</span>
+                {% endif %}
+            </button>
+            <div class="dropdown-menu notif-menu"
+                 hx-get="{% url 'issues:notifications_partial' %}"
+                 hx-trigger="show.bs.dropdown from:closest .dropdown"
+                 hx-swap="innerHTML"
+                 aria-label="Список уведомлений">
+                <div class="notif-empty"><i class="bi bi-bell me-1" aria-hidden="true"></i>Загрузка…</div>
+            </div>
+        </div>
+
+        <div class="avatar" title="{{ user.get_full_name|default:user.username }}">
+            {{ user.username|slice:":2"|upper }}
+        </div>
+
+        <form method="post" action="{% url 'logout' %}" class="d-inline">
+            {% csrf_token %}
+            <button type="submit" class="btn btn-sm btn-outline-secondary" title="Выйти">
+                <i class="bi bi-box-arrow-right"></i> Выйти
+            </button>
+        </form>
+    {% else %}
+        <a href="{% url 'login' %}" class="btn">Войти</a>
+    {% endif %}
+</header>

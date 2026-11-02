@@ -1,0 +1,735 @@
+/* Цвета — только через дизайн-токены (tokens.css, источник: tokens.json) */
+/* Спринт 4: топбар — графит #3A4558. Кнопки — ghost-стиль со светлой рамкой,
+   лого-марка и аватар — светлые, крошки — светло-серые (текст on-dark). */
+.topbar { position: relative; z-index: 1045; height: 52px; background: var(--c-bg-header); border-bottom: 1px solid var(--c-border-header); display: flex; align-items: center; padding: 0 16px; gap: 12px; }
+.topbar .brand { font-weight: 600; font-size: 15px; display: flex; align-items: center; gap: 8px; }
+.topbar .brand-mark { width: 26px; height: 26px; border-radius: 7px; background: var(--c-text-inverse); color: var(--c-bg-header); display: grid; place-items: center; font-size: 11px; font-weight: 700; letter-spacing: .02em; }
+.topbar .crumb { color: var(--c-text-on-dark-muted); font-size: 13.5px; display: flex; gap: 6px; }
+.topbar .crumb .doc { color: var(--c-text-on-dark); font-weight: 500; }
+.topbar .spacer { flex: 1; }
+.topbar .btn { height: 32px; padding: 0 12px; border-radius: 8px; border: 1px solid var(--c-border-header-control); background: transparent; font-size: 13px; font-weight: 500; display: inline-flex; align-items: center; gap: 6px; text-decoration: none; color: var(--c-text-on-dark); transition: background-color .15s ease, border-color .15s ease, color .15s ease; }
+.topbar .btn:hover, .topbar .btn:focus-visible { background: var(--c-bg-header-hover); border-color: var(--c-text-on-dark-muted); color: var(--c-text-on-dark); }
+.topbar .btn.primary { background: var(--c-accent-on-header); border-color: var(--c-accent-on-header); color: var(--c-bg-header); font-weight: 600; }
+.topbar .btn.primary:hover, .topbar .btn.primary:focus-visible { background: var(--c-accent-on-header-strong); border-color: var(--c-accent-on-header-strong); color: var(--c-bg-header); }
+.topbar .avatar { width: 28px; height: 28px; border-radius: 50%; background: var(--c-accent-on-header); color: var(--c-bg-header); display: grid; place-items: center; font-size: 11px; font-weight: 600; box-shadow: 0 0 0 2px var(--c-border-header-control); }
+.topbar .form-control { height: 32px; border-radius: 999px; border: 1px solid var(--c-border-header-control); background: var(--c-bg-header-hover); color: var(--c-text-on-dark); font-size: 13px; padding: 0 14px; }
+.topbar .form-control::placeholder { color: var(--c-text-on-dark-muted); opacity: 1; }
+.topbar .form-control:focus { background: var(--c-bg-header-hover); border-color: var(--c-accent-on-header); outline: none; color: var(--c-text-on-dark); }
+/* Спринт 6: фокус в поиске хедера виден — оставляем общее фокус-кольцо */
+.topbar .form-control:focus-visible { box-shadow: var(--focus-ring); }
+body { background: var(--c-bg-app); font-family: 'Golos Text', 'Inter', system-ui, sans-serif; overflow-x: hidden; }
+.container { max-width: 1060px; margin: 0 auto; padding: 24px; }
+
+.permission-checkbox:checked {
+    background-color: var(--s-done-solid);
+    border-color: var(--s-done-solid);
+}
+
+.permission-checkbox {
+    opacity: 0.7;
+    width: 14px;
+    height: 14px;
+    margin-right: 4px;
+}
+
+.permission-checkbox:disabled {
+    opacity: 0.7;
+}
+
+/* T83: watermark brand */
+.topbar {
+    position: relative;
+}
+
+.brand-watermark {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 0;
+    max-width: 42%;
+    overflow: hidden;
+    text-align: center;
+    opacity: 0.35; /* заметный, но не спорящий с контентом водяной знак */
+    pointer-events: none;
+    user-select: none;
+    white-space: nowrap;
+}
+
+.topbar > *:not(.brand-watermark) {
+    position: relative;
+    z-index: 1;
+}
+
+.brand-text {
+    font-size: 18px;
+    font-weight: 600;
+    letter-spacing: 1px;
+    color: var(--c-text-on-dark);
+}
+
+.brand-slogan {
+    display: block;
+    font-size: 10px;
+    color: var(--c-text-on-dark-muted);
+    margin-top: 1px;
+}
+
+/* T85: header/breadcrumbs/table polish.
+   Спринт 4: --c-bg-header теперь графит #3A4558 (см. tokens.json). */
+.topbar {
+    background: var(--c-bg-header) !important;
+    border-bottom: 1px solid var(--c-border-header);
+}
+
+.topbar .brand {
+    height: 100%;
+}
+
+.company-link {
+    text-decoration: none;
+    color: var(--c-text-on-dark);
+    font-weight: 600;
+    transition: color 0.2s;
+    border-bottom: 1px solid transparent;
+}
+
+.company-link:hover {
+    color: var(--c-accent-on-header-strong);
+    border-bottom-color: var(--c-accent-on-header-strong);
+}
+
+.crumb a {
+    text-decoration: none;
+    color: var(--c-text-on-dark-muted);
+    transition: color 0.2s;
+}
+
+.crumb a:hover {
+    color: var(--c-accent-on-header-strong);
+    text-decoration: underline;
+}
+
+.table td,
+.table th {
+    padding: 4px 8px;
+    font-size: 12px;
+    line-height: 1.2;
+    vertical-align: middle;
+}
+
+.permission-cell {
+    width: 150px;
+    font-size: 11px;
+}
+
+.permission-cell .permission-checkbox {
+    margin-right: 3px;
+}
+
+/* T86: clickable dashboard rows */
+.clickable-row {
+    cursor: pointer;
+    transition: background 0.2s;
+}
+
+.clickable-row:hover {
+    background: var(--c-bg-row-hover);
+}
+
+/* Sprint 1 (аудит 2.0): кликабельные строки списка проектов */
+tr[data-href],
+.project-row {
+    cursor: pointer;
+}
+
+.project-row,
+.project-row > td {
+    outline: none;
+}
+
+.project-row.table-active,
+.project-row.table-active > td {
+    background: transparent !important;
+    border-left: 0 !important;
+}
+
+/* A21: one-line topbar.
+   Волна 3: overflow: visible — иначе topbar клиппит дропдаун колокольчика
+   уведомлений по своей границе (52px). Однострочность обеспечивают
+   flex-wrap: nowrap и собственные overflow: hidden у детей (.topbar-left,
+   .crumb, форма поиска, водяной знак). */
+.topbar {
+    flex-wrap: nowrap;
+    overflow: visible;
+    gap: 8px;
+    min-width: 0;
+    min-height: 52px;
+    height: auto;
+    padding-top: 4px;
+    padding-bottom: 4px;
+    isolation: isolate;
+}
+
+.topbar .brand {
+    flex: 0 0 auto;
+    min-width: 0;
+}
+
+.topbar-left {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex: 1 1 auto;
+    min-width: 0;
+    max-width: 50%;
+    margin-right: auto;
+    overflow: visible;
+}
+
+.topbar .crumb {
+    flex: 0 1 auto;
+    flex-wrap: wrap;
+    align-items: baseline;
+    min-width: 0;
+    max-width: 100%;
+    overflow: visible;
+    white-space: normal;
+    line-height: 1.25;
+    row-gap: 2px;
+}
+
+.topbar .crumb .sep,
+.topbar .crumb > span:not(.doc) {
+    flex: 0 0 auto;
+}
+
+.topbar .crumb a,
+.topbar .crumb .doc {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: visible;
+    text-overflow: clip;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    line-height: 1.25;
+}
+
+.topbar form.d-flex {
+    flex: 0 1 240px;
+    min-width: 120px;
+    margin: 0 0 0 8px;
+}
+
+.topbar form.d-flex input {
+    width: 100%;
+    min-width: 0;
+}
+
+/* Спринт 6: чипы убраны из топбара — мёртвое правило удалено */
+
+.topbar .btn {
+    flex: 0 0 auto;
+    white-space: nowrap;
+}
+
+.topbar .btn.primary {
+    max-width: 220px;
+    overflow: hidden;
+}
+
+.topbar .topbar-btn-label {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.topbar .avatar {
+    flex: 0 0 auto;
+}
+
+.topbar form.d-inline {
+    flex: 0 0 auto;
+    margin: 0;
+}
+
+.topbar .spacer {
+    flex: 0 0 auto;
+    min-width: 8px;
+}
+
+/* ==========================================================================
+   Волна 3: зоны ISO 19650 (сегмент-контрол + workflow-кнопки)
+   ========================================================================== */
+.zone-segment {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+    margin-bottom: 12px;
+}
+
+.zone-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 30px;
+    padding: 0 12px;
+    border: 1px solid var(--c-border-hairline);
+    border-radius: 999px;
+    background: var(--c-bg-surface);
+    color: var(--c-text-secondary);
+    font-size: 12.5px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background-color .15s ease, border-color .15s ease, color .15s ease;
+}
+
+.zone-chip:hover {
+    border-color: var(--c-accent);
+    color: var(--c-accent);
+}
+
+.zone-chip.is-active {
+    background: var(--c-accent-subtle);
+    border-color: var(--c-accent);
+    color: var(--c-accent-on-subtle);
+}
+
+.zone-chip .zone-count {
+    display: inline-block;
+    min-width: 20px;
+    padding: 0 6px;
+    border-radius: 999px;
+    background: var(--c-bg-app);
+    font: 500 11px/18px var(--font-mono, monospace);
+    text-align: center;
+}
+
+.zone-chip.is-active .zone-count {
+    background: var(--c-accent);
+    color: var(--c-text-inverse);
+}
+
+.zone-chip--published.is-active { border-color: var(--s-done-solid); color: var(--s-done-on); background: var(--s-done-subtle); }
+.zone-chip--published.is-active .zone-count { background: var(--s-done-solid); color: #fff; }
+.zone-chip--shared.is-active { border-color: var(--s-review-solid); color: var(--s-review-on); background: var(--s-review-subtle); }
+.zone-chip--shared.is-active .zone-count { background: var(--s-review-solid); color: var(--c-text-primary); }
+.zone-chip--archive.is-active { border-color: var(--s-closed-solid); color: var(--s-closed-on); background: var(--s-closed-subtle); }
+.zone-chip--archive.is-active .zone-count { background: var(--s-closed-solid); color: #fff; }
+
+/* Workflow-кнопки в колонке «Действия» */
+.wf-actions {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    align-items: center;
+}
+
+.wf-btn {
+    display: inline-grid;
+    place-items: center;
+    width: 26px;
+    height: 26px;
+    border: 1px solid var(--c-border-hairline);
+    border-radius: 6px;
+    background: var(--c-bg-surface);
+    color: var(--c-text-secondary);
+    text-decoration: none;
+    cursor: pointer;
+}
+
+.wf-btn-text {
+    display: inline-flex;
+    width: auto;
+    height: auto;
+    padding: 2px 8px;
+    font-size: 11px;
+    white-space: nowrap;
+}
+
+.wf-btn:hover {
+    border-color: var(--c-accent);
+    background: var(--c-accent-subtle);
+    color: var(--c-accent-on-subtle);
+}
+
+.wf-btn.is-busy { opacity: .5; pointer-events: none; }
+
+.doc-actions-col {
+    width: 220px;
+    min-width: 220px;
+    white-space: normal;
+    vertical-align: top;
+}
+
+@keyframes wf-row-flash {
+    0% { background-color: var(--c-accent-subtle); }
+    100% { background-color: transparent; }
+}
+
+tr.doc-row-flash > td { animation: wf-row-flash 1.5s ease; }
+
+/* Тост об ошибке/успехе workflow */
+.wf-toast {
+    position: fixed;
+    left: 50%;
+    bottom: 24px;
+    transform: translate(-50%, 16px);
+    z-index: 2000;
+    max-width: 420px;
+    padding: 10px 16px;
+    border-radius: 10px;
+    background: var(--c-text-primary);
+    color: var(--c-text-inverse);
+    font-size: 13px;
+    box-shadow: var(--shadow-3, 0 8px 24px rgba(25, 25, 23, .2));
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .2s ease, transform .2s ease;
+}
+
+.wf-toast.is-visible { opacity: 1; transform: translate(-50%, 0); }
+
+/* Колокольчик уведомлений в топбаре */
+.topbar .notif-bell { position: relative; }
+
+.topbar .notif-bell .notif-count {
+    position: absolute;
+    top: -4px;
+    right: -4px;
+    min-width: 16px;
+    height: 16px;
+    padding: 0 4px;
+    border-radius: 999px;
+    background: var(--s-attention-solid);
+    color: #fff;
+    font: 700 10px/16px var(--font-sans, sans-serif);
+    text-align: center;
+}
+
+.notif-menu {
+    width: 360px;
+    max-height: 420px;
+    overflow-y: auto;
+    padding: 0;
+}
+
+.notif-menu .notif-item {
+    display: block;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--c-border-hairline);
+    color: var(--c-text-primary);
+    text-decoration: none;
+    font-size: 13px;
+    line-height: 1.4;
+}
+
+.notif-menu .notif-item:hover { background: var(--c-bg-row-hover, #F3F3F0); }
+.notif-menu .notif-item.is-unread { background: var(--c-accent-subtle); }
+.notif-menu .notif-item .notif-time { color: var(--c-text-secondary); font-size: 11.5px; }
+.notif-menu .notif-empty { padding: 18px 14px; color: var(--c-text-secondary); font-size: 13px; text-align: center; }
+.notif-menu .notif-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 14px;
+    border-bottom: 1px solid var(--c-border-hairline);
+    font-weight: 600;
+    font-size: 13px;
+}
+
+/* ==========================================================================
+   Волна 3: командная палитра Ctrl+K
+   ========================================================================== */
+.cmdk-dialog { max-width: 560px; }
+
+.cmdk-content {
+    border-radius: 14px;
+    border: 1px solid var(--c-border-hairline);
+    box-shadow: 0 16px 48px rgba(25, 25, 23, .24);
+    overflow: hidden;
+}
+
+.cmdk-input-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--c-border-hairline);
+    color: var(--c-text-secondary);
+}
+
+.cmdk-input {
+    flex: 1;
+    border: 0;
+    outline: none;
+    font: 400 15px/22px var(--font-sans, sans-serif);
+    color: var(--c-text-primary);
+    background: transparent;
+}
+
+.cmdk-hint {
+    flex: 0 0 auto;
+    padding: 2px 8px;
+    border: 1px solid var(--c-border-hairline);
+    border-radius: 6px;
+    background: var(--c-bg-app);
+    font-size: 10.5px;
+    color: var(--c-text-secondary);
+}
+
+.cmdk-results {
+    max-height: 380px;
+    overflow-y: auto;
+    padding: 6px;
+}
+
+.cmdk-group-label {
+    padding: 8px 12px 4px;
+    font: 600 10.5px/14px var(--font-sans, sans-serif);
+    text-transform: uppercase;
+    letter-spacing: .04em;
+    color: var(--c-text-secondary);
+}
+
+.cmdk-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    width: 100%;
+    padding: 9px 12px;
+    border: 0;
+    border-radius: 8px;
+    background: transparent;
+    text-align: left;
+    cursor: pointer;
+}
+
+.cmdk-item:hover,
+.cmdk-item.is-active { background: var(--c-accent-subtle); }
+
+.cmdk-item-title {
+    font-size: 13.5px;
+    color: var(--c-text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.cmdk-item-meta {
+    flex: 0 0 auto;
+    font: 500 11px/16px var(--font-mono, monospace);
+    color: var(--c-text-secondary);
+}
+
+.cmdk-empty {
+    padding: 26px 16px;
+    text-align: center;
+    color: var(--c-text-secondary);
+    font-size: 13px;
+}
+
+.section-toggle {
+    flex: 0 0 auto;
+    color: var(--c-text-secondary);
+    text-decoration: none;
+}
+
+.section-toggle i {
+    transition: transform .15s ease;
+}
+
+.section-toggle.collapsed i {
+    transform: rotate(-90deg);
+}
+
+.section-row .section-item {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.tree-context-menu {
+    position: fixed;
+    z-index: 1080;
+    min-width: 220px;
+    max-width: 280px;
+}
+
+.th-filter {
+    display: inline-flex;
+    position: relative;
+    margin-left: 4px;
+    vertical-align: middle;
+}
+
+.th-filter-btn {
+    border: 0;
+    background: transparent;
+    color: var(--c-text-secondary);
+    padding: 0 3px;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.th-filter-btn:hover,
+.th-filter-btn.is-active {
+    color: var(--c-accent);
+}
+
+.th-filter .dropdown-menu {
+    min-width: 200px;
+    z-index: 1080;
+}
+
+.toolbar-search {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+}
+
+.toolbar-search > i {
+    position: absolute;
+    left: 8px;
+    color: var(--c-text-secondary);
+    font-size: 12px;
+    pointer-events: none;
+}
+
+.toolbar-search input {
+    width: 260px;
+    padding-left: 26px;
+}
+
+/* ==========================================================================
+   Спринт 4: перекраска Bootstrap-контролов в акцент токенов.
+   Раньше .btn-primary, ссылки и фокус-кольца были бутстраповским #0d6efd —
+   «кислота» жила именно тут. Теперь всё берёт var(--c-accent) = #3D5A98.
+   RGB-константы ниже — числовые двойники #3D5A98 / #2F4A7E для rgba()Bootstrap.
+   При смене акцента в tokens.json обновить их вручную.
+   ========================================================================== */
+:root {
+    --bs-primary: var(--c-accent);
+    --bs-primary-rgb: 61, 90, 152;
+    --bs-link-color: var(--c-accent-on-subtle);
+    --bs-link-color-rgb: 47, 74, 126;
+    --bs-link-hover-color: var(--c-accent);
+}
+
+.btn-primary {
+    --bs-btn-bg: var(--c-accent);
+    --bs-btn-border-color: var(--c-accent);
+    --bs-btn-hover-bg: var(--c-accent-hover);
+    --bs-btn-hover-border-color: var(--c-accent-hover);
+    --bs-btn-active-bg: var(--c-accent-pressed);
+    --bs-btn-active-border-color: var(--c-accent-pressed);
+    --bs-btn-disabled-bg: var(--c-accent);
+    --bs-btn-disabled-border-color: var(--c-accent);
+    --bs-btn-focus-shadow-rgb: 61, 90, 152;
+}
+
+.btn-outline-primary {
+    --bs-btn-color: var(--c-accent);
+    --bs-btn-border-color: var(--c-accent);
+    --bs-btn-hover-bg: var(--c-accent);
+    --bs-btn-hover-border-color: var(--c-accent);
+    --bs-btn-active-bg: var(--c-accent-pressed);
+    --bs-btn-active-border-color: var(--c-accent-pressed);
+    --bs-btn-disabled-color: var(--c-accent);
+    --bs-btn-disabled-border-color: var(--c-accent);
+    --bs-btn-focus-shadow-rgb: 61, 90, 152;
+}
+
+.form-control:focus,
+.form-select:focus {
+    border-color: var(--c-accent);
+    box-shadow: 0 0 0 .2rem var(--c-accent-subtle);
+}
+
+.form-check-input:checked {
+    background-color: var(--c-accent);
+    border-color: var(--c-accent);
+}
+
+.form-check-input:focus {
+    border-color: var(--c-accent);
+    box-shadow: 0 0 0 .2rem var(--c-accent-subtle);
+}
+
+.nav-pills .nav-link.active,
+.nav-pills .show > .nav-link,
+.dropdown-item.active,
+.dropdown-item:active {
+    background-color: var(--c-accent);
+}
+
+.page-item.active .page-link {
+    background-color: var(--c-accent);
+    border-color: var(--c-accent);
+}
+
+.text-bg-primary {
+    background-color: var(--c-accent) !important;
+    color: var(--c-text-inverse) !important;
+}
+
+/* ==================== Спринт 6: UX-полировка ==================== */
+
+/* Skip-link: виден только при фокусе с клавиатуры */
+.skip-link {
+    position: absolute;
+    left: -9999px;
+    top: 0;
+    z-index: 2000;
+    background: var(--c-bg-header);
+    color: var(--c-text-on-dark);
+    padding: 10px 18px;
+    border-radius: 0 0 10px 0;
+    font-size: 13px;
+    text-decoration: none;
+}
+.skip-link:focus-visible {
+    left: 0;
+    outline: 2px solid var(--c-accent-on-header);
+    outline-offset: -2px;
+}
+
+/* Статус загрузки файлов в тулбаре реестра */
+.upload-status {
+    font-size: 12.5px;
+    color: var(--c-text-secondary);
+    max-width: 340px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.upload-status.is-error { color: #B42318; font-weight: 500; }
+
+/* Спиннер HTMX-запросов реестра: появляется, пока панель обновляется */
+.panel-spinner {
+    display: none;
+    color: var(--c-text-secondary);
+    font-size: 15px;
+    animation: panel-spin 0.9s linear infinite;
+}
+#documentsPanel.htmx-request .panel-spinner { display: inline-block; }
+@keyframes panel-spin { to { transform: rotate(360deg); } }
+
+/* Видимая кнопка меню папки (раньше — только правый клик) */
+.folder-kebab {
+    color: var(--c-text-secondary);
+    line-height: 1;
+    flex: 0 0 auto;
+    opacity: 0;
+    transition: opacity 120ms ease;
+}
+.folder-row:hover .folder-kebab,
+.folder-row:focus-within .folder-kebab,
+.folder-kebab:focus-visible { opacity: 1; }
+.folder-kebab:hover { color: var(--c-accent); }
+
+@media (prefers-reduced-motion: reduce) {
+    .panel-spinner { animation: none; }
+}

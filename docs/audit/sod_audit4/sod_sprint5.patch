@@ -1,0 +1,1008 @@
+diff --git a/issues/tests/test_issues.py b/issues/tests/test_issues.py
+index 0f5a772..7eec329 100644
+--- a/issues/tests/test_issues.py
++++ b/issues/tests/test_issues.py
+@@ -640,10 +640,15 @@ class IssueStatusMatrixTests(TestCase):
+         self.assertIn('status_options', payload)
+ 
+     def test_answer_update_and_delete_permissions(self):
++        # Спринт 5: редактировать официальный ответ может исполнитель,
++        # ГИП или админ — проверяющий работает только на чтение.
+         issue = self._issue()
+-        update_issue_answer(self.checker, issue, 'Ответ проверяющего')
++        with self.assertRaises(PermissionDenied):
++            update_issue_answer(self.checker, issue, 'Ответ проверяющего')
++
++        issue = update_issue_answer(self.developer, issue, 'Ответ исполнителя')
+         issue.refresh_from_db()
+-        self.assertEqual(issue.answer_text, 'Ответ проверяющего')
++        self.assertEqual(issue.answer_text, 'Ответ исполнителя')
+ 
+         with self.assertRaises(PermissionDenied):
+             delete_issue(self.checker, issue)
+diff --git a/sod_core/settings.py b/sod_core/settings.py
+index 228f080..39dac6b 100644
+--- a/sod_core/settings.py
++++ b/sod_core/settings.py
+@@ -36,17 +36,38 @@ def env_list(name: str, default=()) -> list[str]:
+ # Quick-start development settings - unsuitable for production
+ # See https://docs.djangoproject.com/en/6.1/howto/deployment/checklist/
+ 
+-# SECURITY WARNING: keep the secret key used in production secret!
+-# В production обязательно задайте DJANGO_SECRET_KEY. Значение по умолчанию
+-# предназначено только для локального запуска без настроенного окружения.
+-SECRET_KEY = os.environ.get(
+-    'DJANGO_SECRET_KEY',
+-    'django-insecure-dev-only-change-me-in-production',
+-)
+-
+-# SECURITY WARNING: don't run with debug turned on in production!
+-# По умолчанию DEBUG выключен; для локальной разработки задайте DJANGO_DEBUG=True.
+-DEBUG = env_bool('DJANGO_DEBUG', True)  # Временно для локальной разработки!
++# Спринт 5: fail-closed конфигурация безопасности.
++# - Локальный запуск без .env (ни DJANGO_DEBUG, ни DJANGO_SECRET_KEY) —
++#   автоматически поднимается dev-режим с предупреждением в консоль.
++# - Явный DJANGO_DEBUG=False без DJANGO_SECRET_KEY — жёсткая ошибка старта:
++#   прод-конфигурация с публичным dev-ключом недопустима (подделка сессий/CSRF).
++_raw_debug = os.environ.get('DJANGO_DEBUG')
++DEBUG = env_bool('DJANGO_DEBUG', False)
++
++_DEV_SECRET_KEY = 'django-insecure-dev-only-change-me-in-production'
++SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY', '')
++
++if not DEBUG and not SECRET_KEY:
++    if _raw_debug is None:
++        # Локальная разработка без настроенного окружения.
++        DEBUG = True
++        SECRET_KEY = _DEV_SECRET_KEY
++        import warnings as _warnings
++
++        _warnings.warn(
++            'СОД запущен в dev-режиме (DEBUG=True, публичный SECRET_KEY). '
++            'Для продакшена задайте DJANGO_DEBUG=False и DJANGO_SECRET_KEY.',
++            RuntimeWarning,
++            stacklevel=1,
++        )
++    else:
++        from django.core.exceptions import ImproperlyConfigured
++
++        raise ImproperlyConfigured(
++            'DJANGO_DEBUG=False требует явный DJANGO_SECRET_KEY. '
++            'Задайте его в окружении или .env — публичный dev-ключ '
++            'в продакшене запрещён.'
++        )
+ 
+ ALLOWED_HOSTS = env_list('DJANGO_ALLOWED_HOSTS', ('localhost', '127.0.0.1'))
+ 
+diff --git a/storage/adapters/templates/storage/document_detail.html b/storage/adapters/templates/storage/document_detail.html
+index d4f9213..c15a172 100644
+--- a/storage/adapters/templates/storage/document_detail.html
++++ b/storage/adapters/templates/storage/document_detail.html
+@@ -208,6 +208,7 @@
+ 
+   <div class="splitter" id="drag-divider"></div>
+ 
++  {% if not public_view %}
+   <aside class="panel" id="issues-panel">
+     <div class="panel-head">
+       <h2>Замечания</h2><span class="count num">{{ issues|length }}</span>
+@@ -291,6 +292,7 @@
+       <div class="detail-scroll" id="detailContent"></div>
+     </div>
+   </aside>
++  {% endif %}
+ </div>
+ 
+ {{ issues_json|json_script:"issues-data" }}
+diff --git a/storage/adapters/views.py b/storage/adapters/views.py
+index 93049bd..7811018 100644
+--- a/storage/adapters/views.py
++++ b/storage/adapters/views.py
+@@ -2067,32 +2067,40 @@ class DocumentDetailView(LoginRequiredMixin, DetailView):
+         context['current_version_url'] = current_version_url
+         issues = list(get_issues_for_version(self.object))
+ 
+-        status_labels = dict(Issue.STATUS_CHOICES)
+-        for issue in issues:
+-            issue.allowed_status_options = [
+-                (code, status_labels[code])
+-                for code in allowed_issue_statuses(self.request.user, issue)
+-            ]
+-            issue.allowed_status_json = json.dumps(
+-                [
++        # Спринт 5: по публичной share-ссылке аноним не должен получать
++        # тексты, статусы, авторов и ответы замечаний — отдаём пустые
++        # списки и пропускаем ролевые вычисления по каждому замечанию.
++        if getattr(self, 'public_view', False):
++            context['issues'] = []
++            context['issues_json'] = []
++            context['issue_assignees'] = []
++        else:
++            status_labels = dict(Issue.STATUS_CHOICES)
++            for issue in issues:
++                issue.allowed_status_options = [
++                    (code, status_labels[code])
++                    for code in allowed_issue_statuses(self.request.user, issue)
++                ]
++                issue.allowed_status_json = json.dumps(
++                    [
++                        {'code': code, 'label': label}
++                        for code, label in issue.allowed_status_options
++                    ],
++                    ensure_ascii=False,
++                )
++            context['issues'] = issues
++            payloads = []
++            for issue in issues:
++                payload = _issue_payload(issue)
++                payload['status_options'] = [
+                     {'code': code, 'label': label}
+                     for code, label in issue.allowed_status_options
+-                ],
+-                ensure_ascii=False,
++                ]
++                payloads.append(payload)
++            context['issues_json'] = payloads
++            context['issue_assignees'] = get_issue_assignees(
++                self.request.user, self.object
+             )
+-        context['issues'] = issues
+-        payloads = []
+-        for issue in issues:
+-            payload = _issue_payload(issue)
+-            payload['status_options'] = [
+-                {'code': code, 'label': label}
+-                for code, label in issue.allowed_status_options
+-            ]
+-            payloads.append(payload)
+-        context['issues_json'] = payloads
+-        context['issue_assignees'] = get_issue_assignees(
+-            self.request.user, self.object
+-        )
+         context['can_create_issue'] = check_issue_permission(
+             self.request.user, self.object
+         )
+@@ -2203,7 +2211,13 @@ class DocumentDownloadView(LoginRequiredMixin, View):
+             return HttpResponseNotFound('Файл не найден')
+ 
+         filename = version.file.name.rsplit('/', 1)[-1]
+-        return FileResponse(file_handle, as_attachment=True, filename=filename)
++        # Спринт 5: отдаём файл под осмысленным именем из шифра документа;
++        # get_valid_filename обезвреживает кавычки/переносы строк из кода.
++        extension = filename.rsplit('.', 1)[-1] if '.' in filename else 'pdf'
++        download_name = get_valid_filename(
++            f'{version.document.code}.{extension}'
++        )
++        return FileResponse(file_handle, as_attachment=True, filename=download_name)
+ 
+ 
+ @login_required
+@@ -2221,7 +2235,7 @@ def document_pdf_with_issues(request, document_id):
+ 
+     response = HttpResponse(pdf_bytes, content_type='application/pdf')
+     response['Content-Disposition'] = (
+-        f'attachment; filename="{document.code}.pdf"'
++        f'attachment; filename="{get_valid_filename(document.code)}.pdf"'
+     )
+     return response
+ 
+@@ -2595,6 +2609,17 @@ class DashboardView(LoginRequiredMixin, UserPassesTestMixin, TemplateView):
+                             raise ValueError(
+                                 'Для нового пользователя укажите пароль'
+                             )
++                        # Спринт 5: create_user обходит AUTH_PASSWORD_VALIDATORS —
++                        # валидируем вручную, чтобы «123» не прошёл.
++                        from django.contrib.auth.password_validation import (
++                            validate_password,
++                        )
++                        from django.core.exceptions import ValidationError as _ValidationError
++
++                        try:
++                            validate_password(password)
++                        except _ValidationError as exc:
++                            raise ValueError('; '.join(exc.messages))
+                         user = get_user_model().objects.create_user(
+                             username=username,
+                             password=password,
+diff --git a/storage/domain/services.py b/storage/domain/services.py
+index 4a30aa2..e2d6791 100644
+--- a/storage/domain/services.py
++++ b/storage/domain/services.py
+@@ -72,6 +72,15 @@ ZONE_SUITABILITY_MAP = {
+     'ARCHIVE': 'A',
+ }
+ 
++# Спринт 5: валидация загружаемых файлов — белый список расширений и лимит размера.
++# Подобран для СЭД: чертежи/CAD, документы Office, изображения, архивы, письма.
++ALLOWED_UPLOAD_EXTENSIONS = frozenset({
++    'pdf', 'dwg', 'dxf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx',
++    'png', 'jpg', 'jpeg', 'tif', 'tiff', 'zip', 'rar', '7z',
++    'rvt', 'rfa', 'ifc', 'nwd', 'nwc', 'txt', 'csv', 'msg', 'eml',
++})
++MAX_UPLOAD_SIZE = 100 * 1024 * 1024  # 100 МБ — согласовано с nginx client_max_body_size
++
+ 
+ def _status_for_zone(folder: Folder | None) -> str | None:
+     if not _is_canonical_zone_folder(folder):
+@@ -471,6 +480,10 @@ def get_project_documents_queryset(
+         queryset = queryset.filter(doc_type=filters['doc_type'])
+     if 'status' in filters:
+         queryset = queryset.filter(status=filters['status'])
++    if 'suitability_code' in filters:
++        queryset = queryset.filter(suitability_code=filters['suitability_code'])
++    if 'internal_status' in filters:
++        queryset = queryset.filter(internal_status=filters['internal_status'])
+     if 'code' in filters:
+         queryset = queryset.filter(code__icontains=filters['code'])
+     if 'name' in filters:
+@@ -1354,6 +1367,21 @@ def move_document_to_section(user: User, document: Document, section: Section) -
+     if not check_write_permission(user, section):
+         raise PermissionDenied("Нет прав на запись в целевой раздел")
+ 
++    # Спринт 5: перенос в другой раздел — это смена эффективной зоны на WIP.
++    # Запрещаем выносить документы из канонических зон, как и в move_document:
++    # иначе утверждённый документ «исчезает» из папки зоны через обходной путь.
++    current_zone = _effective_zone(document)
++    if current_zone in ('ARCHIVE', 'PUBLISHED', 'SHARED'):
++        zone_name = (
++            document.folder.get_zone_display()
++            if document.folder is not None
++            else dict(Folder.ZONE_CHOICES).get(current_zone, current_zone)
++        )
++        raise PermissionDenied(
++            f"Документ в зоне «{zone_name}» — перенос в другой раздел "
++            "запрещён, используйте workflow-кнопки"
++        )
++
+     document.section = section
+     document.folder = None
+     document.save(update_fields=['section', 'folder', 'updated_at'])
+@@ -1418,7 +1446,17 @@ def copy_document(
+             code=_unique_copy_code(document, target_section),
+             name=f'{document.name} (копия)'[:255],
+             doc_type=document.doc_type,
+-            status=document.status,
++            # Спринт 5: статус-триплет синхронизируем с целевой папкой,
++            # иначе копия утверждённого документа попадает в WIP со статусом
++            # approved и ломает маппинг статус-зона и сегмент-контрол.
++            status=(
++                ZONE_STATUS_MAP.get(folder.zone, 'draft')
++                if folder is not None else 'draft'
++            ),
++            suitability_code=(
++                ZONE_SUITABILITY_MAP.get(folder.zone, 'S0')
++                if folder is not None else 'S0'
++            ),
+             created_by=user,
+         )
+         current_copy = None
+@@ -1687,14 +1725,33 @@ def empty_trash(user: User, project: Project, file_storage) -> dict:
+     versions = list(
+         DocumentVersion.objects.filter(document__in=documents).only('file')
+     )
+-    for version in versions:
+-        if version.file:
+-            file_storage.delete(version.file.name)
++    # Спринт 5: маркапы замечаний удаляемых документов тоже подлежат очистке,
++    # иначе в issues/crops/ накапливается мусор, на который нет ссылок.
++    crop_paths = list(
++        Issue.objects.filter(document__in=documents)
++        .exclude(crop_image='')
++        .values_list('crop_image', flat=True)
++    )
++    stale_paths = [
++        version.file.name for version in versions if version.file
++    ] + list(crop_paths)
+ 
+     with transaction.atomic():
+         Document.objects.filter(project=project, is_deleted=True).delete()
+         Folder.objects.filter(project=project, is_deleted=True).delete()
+ 
++    # Спринт 5: файлы удаляем только после фиксации транзакции (on_commit).
++    # Раньше физическое удаление шло до БД: падение БД оставляло записи
++    # без файлов. Теперь наоборот — при откате файлы остаются на месте.
++    def _cleanup_files() -> None:
++        for path in stale_paths:
++            try:
++                file_storage.delete(path)
++            except OSError:
++                continue
++
++    transaction.on_commit(_cleanup_files)
++
+     return {'documents': document_count, 'folders': folder_count}
+ 
+ 
+@@ -2049,7 +2106,10 @@ def _workflow_role_allowed(user: User, document: Document, action_code: str) ->
+         return check_write_permission(user, document.section)
+     if profile.role in ('checker', 'normocontrol'):
+         # проверяющий действует только в проектах, где состоит
+-        return document.project.memberships.filter(user=user).exists()
++        # с осмысленной ролью (Спринт 5: наблюдатель не считается)
++        return document.project.memberships.filter(user=user).exclude(
++            role_in_project='viewer'
++        ).exists()
+     return True
+ 
+ 
+@@ -2354,6 +2414,23 @@ def upload_document(
+     if not check_write_permission(user, section):
+         raise PermissionDenied("Нет прав на запись в этот раздел")
+ 
++    # Спринт 5: валидация загружаемых файлов — расширение и размер.
++    filename = getattr(file, 'name', '') or ''
++    extension = filename.rsplit('.', 1)[-1].lower() if '.' in filename else ''
++    if extension not in ALLOWED_UPLOAD_EXTENSIONS:
++        raise ValueError(
++            f"Формат «{extension or 'без расширения'}» не поддерживается. "
++            "Разрешены: " + ', '.join(sorted(ALLOWED_UPLOAD_EXTENSIONS))
++        )
++    file_size = getattr(file, 'size', 0) or 0
++    if file_size <= 0:
++        raise ValueError("Файл пустой")
++    if file_size > MAX_UPLOAD_SIZE:
++        raise ValueError(
++            f"Файл больше {MAX_UPLOAD_SIZE // (1024 * 1024)} МБ — "
++            "разбейте его или загрузите через обмен файлами"
++        )
++
+     if section.project != project:
+         raise ValueError("Раздел не относится к указанному проекту")
+ 
+@@ -2844,14 +2921,44 @@ def create_issue(
+ 
+ 
+ def update_issue_answer(user: User, issue: Issue, answer_text: str) -> Issue:
+-    """Сохраняет текст ответа на замечание."""
++    """Сохраняет текст ответа на замечание.
++
++    Спринт 5: право ограничено — исполнитель (assignee), ГИП проекта,
++    администратор компании или superuser. Роли «только чтение» (viewer,
++    customer, checker) больше не могут перезаписывать официальные ответы.
++    """
+     if not check_read_permission(user, issue.document):
+-        raise PermissionDenied("Нет прав на изменение замечания")
++        raise PermissionDenied("Нет доступа к документу")
++    if not _can_edit_issue_answer(user, issue):
++        raise PermissionDenied("Нет прав на изменение ответа на замечание")
+     issue.answer_text = answer_text
+     issue.save(update_fields=['answer_text', 'updated_at'])
+     return issue
+ 
+ 
++def _can_edit_issue_answer(user: User, issue: Issue) -> bool:
++    """Матрица прав на редактирование официального ответа.
++
++    Отвечающая сторона: исполнитель (assignee) и разработчики проекта,
++    плюс ГИП проекта и администратор компании. Наблюдатель, заказчик и
++    проверяющий — только чтение.
++    """
++    if user.is_superuser:
++        return True
++    profile = getattr(user, 'userprofile', None)
++    if profile is not None and profile.role == 'admin':
++        return True
++    if _is_project_gip(user, issue.document.project):
++        return True
++    if issue.assignee_id == user.pk:
++        return True
++    if profile is not None and profile.role == 'developer':
++        return issue.document.project.memberships.filter(
++            user=user, role_in_project__in=('developer', 'gip'),
++        ).exists()
++    return False
++
++
+ def delete_issue(user: User, issue: Issue) -> None:
+     """Удаляет замечание: автор, администратор или суперпользователь."""
+     profile = getattr(user, 'userprofile', None)
+diff --git a/storage/tests/test_gui.py b/storage/tests/test_gui.py
+index c4c705b..157a78c 100644
+--- a/storage/tests/test_gui.py
++++ b/storage/tests/test_gui.py
+@@ -132,7 +132,7 @@ class DocumentViewServiceTests(GuiTestBase):
+             self.project,
+             'Мой вид',
+             {
+-                'columns': ['code', 'status'],
++                'columns': ['code', 'suitability'],
+                 'filters': {'status': 'draft'},
+                 'sort': ['-date'],
+             },
+@@ -140,7 +140,7 @@ class DocumentViewServiceTests(GuiTestBase):
+ 
+         self.assertFalse(view.is_shared)
+         self.assertEqual(view.user, self.user_developer)
+-        self.assertEqual(view.config['columns'], ['code', 'status'])
++        self.assertEqual(view.config['columns'], ['code', 'suitability'])
+         self.assertEqual(view.config['filters'], {'status': 'draft'})
+         self.assertEqual(view.config['sort'], ['-date'])
+ 
+@@ -205,7 +205,7 @@ class DocumentViewServiceTests(GuiTestBase):
+             self.user_developer,
+             self.project,
+             'Мой вид',
+-            {'columns': ['name', 'status']},
++            {'columns': ['name', 'internal_status']},
+         )
+ 
+         self.assertEqual(first.pk, second.pk)
+@@ -214,7 +214,7 @@ class DocumentViewServiceTests(GuiTestBase):
+             1,
+         )
+         second.refresh_from_db()
+-        self.assertEqual(second.config['columns'], ['name', 'status'])
++        self.assertEqual(second.config['columns'], ['name', 'internal_status'])
+ 
+     def test_config_validation(self):
+         invalid_configs = [
+@@ -324,7 +324,7 @@ class DocumentViewServiceTests(GuiTestBase):
+         rows = get_project_documents_for_view(
+             self.user_gip,
+             self.project,
+-            {'columns': ['code', 'status'], 'filters': {'status': 'approved'}},
++            {'columns': ['code', 'suitability'], 'filters': {'status': 'approved'}},
+         )
+ 
+         self.assertEqual([row['code'] for row in rows], ['АР-02'])
+@@ -542,7 +542,7 @@ class GuiViewTests(GuiTestBase):
+         self.assertContains(response, 'table-bordered')
+         self.assertContains(response, 'id="documentsTable"')
+         self.assertNotContains(response, 'col-resizer')
+-        self.assertContains(response, 'id="uploadBtn"')
++        self.assertContains(response, 'data-role="upload-input"')
+         self.assertNotContains(response, 'Перетащите файлы сюда')
+         self.assertNotContains(response, 'upload-zone')
+ 
+@@ -613,7 +613,7 @@ class GuiViewTests(GuiTestBase):
+             reverse('storage:document_view_save', args=[self.project.pk]),
+             {
+                 'name': 'Только шифры',
+-                'columns': ['code', 'status'],
++                'columns': ['code', 'suitability'],
+                 'status': 'approved',
+                 'sort': 'code',
+             },
+@@ -625,7 +625,7 @@ class GuiViewTests(GuiTestBase):
+             name='Только шифры',
+         )
+         self.assertFalse(view.is_shared)
+-        self.assertEqual(view.config['columns'], ['code', 'status'])
++        self.assertEqual(view.config['columns'], ['code', 'suitability'])
+         self.assertEqual(view.config['filters'], {'status': 'approved'})
+         self.assertEqual(view.config['sort'], ['code'])
+         self.assertRedirects(
+@@ -698,7 +698,7 @@ class GuiViewTests(GuiTestBase):
+ 
+         self.assertEqual(response.status_code, 200)
+         self.assertIsNone(response.context['selected_view'])
+-        self.assertEqual(len(response.context['visible_columns']), 8)
++        self.assertEqual(len(response.context['visible_columns']), 11)
+ 
+     def test_saved_view_applied_columns(self):
+         view = save_document_view(
+@@ -762,7 +762,7 @@ class GuiViewTests(GuiTestBase):
+         )
+ 
+         self.assertIsNone(response.context['selected_view'])
+-        self.assertEqual(len(response.context['visible_columns']), 8)
++        self.assertEqual(len(response.context['visible_columns']), 11)
+ 
+     def test_membership_role_update_view(self):
+         self.client.force_login(self.user_gip)
+diff --git a/storage/tests/test_sprint5.py b/storage/tests/test_sprint5.py
+new file mode 100644
+index 0000000..f33e106
+--- /dev/null
++++ b/storage/tests/test_sprint5.py
+@@ -0,0 +1,407 @@
++"""Спринт 5: надёжность и безопасность.
++
++Покрывает фиксы генерального аудита 4.0:
++- зоны ISO 19650 при переносе документа в другой раздел;
++- матрица прав на редактирование ответа на замечание;
++- валидация загружаемых файлов (расширение, размер);
++- синхронизация статус-триплета при копировании;
++- колоночные фильтры suitability_code/internal_status в сохранённом виде;
++- гейт замечаний по публичной share-ссылке;
++- парольная политика при создании пользователя.
++"""
++from unittest import mock
++
++from django.contrib.auth import get_user_model
++from django.core.exceptions import PermissionDenied
++from django.core.files.uploadedfile import SimpleUploadedFile
++from django.test import TestCase
++from django.urls import reverse
++
++from issues.models import Issue
++from storage.adapters.local_storage import LocalFileStorage
++from storage.domain.models import (
++    Company,
++    Document,
++    Folder,
++    Project,
++    ProjectMembership,
++    Section,
++    UserProfile,
++)
++from storage.domain.services import (
++    copy_document,
++    get_project_documents_for_view,
++    move_document_to_section,
++    save_document_view,
++    upload_document,
++)
++
++User = get_user_model()
++
++PNG_BYTES = (
++    b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01'
++    b'\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc\x00\x01'
++    b'\x00\x00\x05\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82'
++)
++
++
++class Sprint5TestBase(TestCase):
++    def setUp(self):
++        self.company = Company.objects.create(name='Компания С5')
++        self.user_admin = User.objects.create_user('admin5', password='pass')
++        self.user_gip = User.objects.create_user('gip5', password='pass')
++        self.user_developer = User.objects.create_user('dev5', password='pass')
++        self.user_viewer = User.objects.create_user('viewer5', password='pass')
++        UserProfile.objects.create(user=self.user_admin, role='admin', company=self.company)
++        UserProfile.objects.create(user=self.user_gip, role='gip', company=self.company)
++        UserProfile.objects.create(user=self.user_developer, role='developer', company=self.company)
++        UserProfile.objects.create(user=self.user_viewer, role='viewer', company=self.company)
++        self.project = Project.objects.create(
++            company=self.company,
++            code='S5',
++            name='Проект Спринта 5',
++            status='active',
++            gip=self.user_gip,
++            created_by=self.user_gip,
++        )
++        self.section_ar = Section.objects.create(
++            project=self.project, code='АР', name='АР', order=1,
++        )
++        self.section_kr = Section.objects.create(
++            project=self.project, code='КР', name='КР', order=2,
++        )
++        self.published_folder = Folder.objects.create(
++            project=self.project,
++            section=self.section_ar,
++            name='03. Опубликовано',
++            zone='PUBLISHED',
++            created_by=self.user_gip,
++        )
++        self.wip_folder = Folder.objects.create(
++            project=self.project,
++            section=self.section_kr,
++            name='01. В работе',
++            zone='WIP',
++            created_by=self.user_gip,
++        )
++
++    def make_document(self, code='S5-1', folder=None, status='draft'):
++        version = upload_document(
++            user=self.user_gip,
++            project=self.project,
++            section=self.section_ar,
++            code=code,
++            name=f'Документ {code}',
++            doc_type='drawing',
++            file=SimpleUploadedFile(f'{code}.pdf', b'pdf-data'),
++        )
++        document = version.document
++        document.status = status
++        if folder is not None:
++            document.folder = folder
++        document.save(update_fields=['status', 'folder'])
++        return document
++
++
++class ZoneGuardOnSectionMoveTests(Sprint5TestBase):
++    def test_cannot_move_published_document_to_another_section(self):
++        document = self.make_document(code='PUB-1', folder=self.published_folder, status='approved')
++
++        with self.assertRaises(PermissionDenied):
++            move_document_to_section(
++                self.user_gip, document, self.section_kr,
++            )
++
++        document.refresh_from_db()
++        self.assertEqual(document.section_id, self.section_ar.pk)
++
++    def test_wip_document_still_moves_between_sections(self):
++        document = self.make_document(code='WIP-1', folder=self.wip_folder)
++
++        moved = move_document_to_section(
++            self.user_gip, document, self.section_kr,
++        )
++
++        self.assertEqual(moved.section_id, self.section_kr.pk)
++
++
++class IssueAnswerPermissionTests(Sprint5TestBase):
++    def setUp(self):
++        super().setUp()
++        self.document = self.make_document(code='ANS-1')
++        self.issue = Issue.objects.create(
++            document=self.document,
++            author=self.user_gip,
++            description='Не соответствует ГОСТ',
++            status='NEW',
++            assignee=self.user_developer,
++        )
++        ProjectMembership.objects.create(
++            project=self.project,
++            user=self.user_developer,
++            role_in_project='developer',
++        )
++
++    def test_viewer_cannot_edit_answer(self):
++        from storage.domain.services import update_issue_answer
++
++        with self.assertRaises(PermissionDenied):
++            update_issue_answer(
++                self.user_viewer, self.issue, 'подделка от наблюдателя',
++            )
++
++    def test_assignee_can_edit_answer(self):
++        from storage.domain.services import update_issue_answer
++
++        issue = update_issue_answer(
++            self.user_developer, self.issue, 'Исправлено в v2',
++        )
++        self.assertEqual(issue.answer_text, 'Исправлено в v2')
++
++    def test_gip_can_edit_answer(self):
++        from storage.domain.services import update_issue_answer
++
++        issue = update_issue_answer(self.user_gip, self.issue, 'Принято')
++        self.assertEqual(issue.answer_text, 'Принято')
++
++
++class UploadValidationTests(Sprint5TestBase):
++    def test_executable_file_rejected(self):
++        with self.assertRaises(ValueError) as ctx:
++            upload_document(
++                user=self.user_gip,
++                project=self.project,
++                section=self.section_ar,
++                code='EXE-1',
++                name='Вирус',
++                doc_type='drawing',
++                file=SimpleUploadedFile('setup.exe', b'MZ...'),
++            )
++        self.assertIn('не поддерживается', str(ctx.exception))
++
++    def test_empty_file_rejected(self):
++        with self.assertRaises(ValueError) as ctx:
++            upload_document(
++                user=self.user_gip,
++                project=self.project,
++                section=self.section_ar,
++                code='EMPTY-1',
++                name='Пустой',
++                doc_type='drawing',
++                file=SimpleUploadedFile('empty.pdf', b''),
++            )
++        self.assertIn('пустой', str(ctx.exception))
++
++    def test_oversized_file_rejected(self):
++        big = SimpleUploadedFile('big.pdf', b'a' * 1024)
++        with mock.patch('storage.domain.services.MAX_UPLOAD_SIZE', 512):
++            with self.assertRaises(ValueError) as ctx:
++                upload_document(
++                    user=self.user_gip,
++                    project=self.project,
++                    section=self.section_ar,
++                    code='BIG-1',
++                    name='Большой',
++                    doc_type='drawing',
++                    file=big,
++                )
++        self.assertIn('больше', str(ctx.exception))
++
++    def test_pdf_upload_still_accepted(self):
++        version = upload_document(
++            user=self.user_gip,
++            project=self.project,
++            section=self.section_ar,
++            code='OK-1',
++            name='Чертёж',
++            doc_type='drawing',
++            file=SimpleUploadedFile('ok.pdf', b'%PDF-1.4 data'),
++        )
++        self.assertEqual(version.document.code, 'OK-1')
++
++
++class CopyDocumentSyncTests(Sprint5TestBase):
++    def test_copy_into_wip_folder_resets_status_triplet(self):
++        document = self.make_document(
++            code='CPY-1', folder=self.published_folder, status='approved',
++        )
++        document.suitability_code = 'A'
++        document.save(update_fields=['suitability_code'])
++
++        copied = copy_document(
++            self.user_gip,
++            document,
++            folder=self.wip_folder,
++            section=self.section_kr,
++            file_storage=LocalFileStorage(),
++        )
++
++        self.assertEqual(copied.status, 'draft')
++        self.assertEqual(copied.suitability_code, 'S0')
++        self.assertEqual(copied.internal_status, 'draft')
++
++    def test_copy_keeps_zone_when_target_is_published(self):
++        document = self.make_document(
++            code='CPY-2', folder=self.published_folder, status='approved',
++        )
++        document.suitability_code = 'A'
++        document.save(update_fields=['suitability_code'])
++
++        # Зона PUBLISHED доступна на запись только администратору — копию
++        # в каноническую папку публикует админ (см. check_zone_permission).
++        copied = copy_document(
++            self.user_admin,
++            document,
++            folder=self.published_folder,
++            section=self.section_ar,
++            file_storage=LocalFileStorage(),
++        )
++
++        self.assertEqual(copied.status, 'approved')
++        self.assertEqual(copied.suitability_code, 'A')
++
++
++class SavedViewColumnFilterTests(Sprint5TestBase):
++    def test_internal_status_filter_applies_to_saved_view(self):
++        self.make_document(code='F1', folder=self.wip_folder)
++        second = self.make_document(code='F2', folder=self.wip_folder)
++        second.internal_status = 'review'
++        second.save(update_fields=['internal_status'])
++
++        view = save_document_view(
++            self.user_gip,
++            self.project,
++            'На проверке',
++            {
++                'columns': ['code', 'internal_status'],
++                'filters': {'internal_status': 'review'},
++            },
++        )
++        rows = get_project_documents_for_view(
++            self.user_gip, self.project, view.config,
++        )
++
++        self.assertEqual([row['code'] for row in rows], ['F2'])
++
++    def test_suitability_filter_applies_to_saved_view(self):
++        self.make_document(code='S0-1', folder=self.wip_folder)
++        approved = self.make_document(
++            code='A-1', folder=self.published_folder, status='approved',
++        )
++        approved.suitability_code = 'A'
++        approved.save(update_fields=['suitability_code'])
++
++        rows = get_project_documents_for_view(
++            self.user_gip,
++            self.project,
++            {
++                'columns': ['code', 'suitability'],
++                'filters': {'suitability_code': 'A'},
++            },
++        )
++
++        self.assertEqual([row['code'] for row in rows], ['A-1'])
++
++
++class ShareLinkIssuesGateTests(Sprint5TestBase):
++    def setUp(self):
++        super().setUp()
++        self.document = self.make_document(code='SHR-1')
++        self.document.public_link_token = __import__('uuid').uuid4()
++        self.document.save(update_fields=['public_link_token'])
++        Issue.objects.create(
++            document=self.document,
++            author=self.user_gip,
++            description='Секретное замечание',
++            status='NEW',
++        )
++
++    def test_public_view_hides_issues(self):
++        response = self.client.get(
++            reverse('storage:document_detail', args=[self.document.pk]),
++            {'share': str(self.document.public_link_token)},
++        )
++
++        self.assertEqual(response.status_code, 200)
++        self.assertEqual(list(response.context['issues']), [])
++        self.assertEqual(response.context['issues_json'], [])
++        self.assertNotContains(response, 'Секретное замечание')
++
++    def test_regular_view_still_shows_issues(self):
++        self.client.force_login(self.user_gip)
++        response = self.client.get(
++            reverse('storage:document_detail', args=[self.document.pk]),
++        )
++
++        self.assertEqual(response.status_code, 200)
++        self.assertEqual(len(response.context['issues']), 1)
++        self.assertContains(response, 'Секретное замечание')
++
++
++class PasswordPolicyTests(Sprint5TestBase):
++    def test_weak_password_rejected_on_member_creation(self):
++        self.client.force_login(self.user_admin)
++        response = self.client.post(
++            reverse('storage:dashboard'),
++            data={
++                'action': 'add_member',
++                'username': 'weakuser',
++                'password': '123',
++                'role': 'developer',
++            },
++        )
++
++        self.assertFalse(
++            User.objects.filter(username='weakuser').exists(),
++            'Пароль «123» не должен проходить политику',
++        )
++        self.assertFalse(User.objects.filter(username='weakuser').exists())
++
++    def test_strong_password_accepted(self):
++        self.client.force_login(self.user_admin)
++        self.client.post(
++            reverse('storage:dashboard'),
++            data={
++                'action': 'add_member',
++                'username': 'stronguser',
++                'password': 'Tr0ub4dor&Xyzzy!',
++                'role': 'developer',
++            },
++        )
++
++        self.assertTrue(User.objects.filter(username='stronguser').exists())
++
++
++class EmptyTrashCropCleanupTests(Sprint5TestBase):
++    def test_crops_removed_on_trash_purge(self):
++        from django.core.files.base import ContentFile
++        from django.db import transaction as db_transaction
++
++        document = self.make_document(code='CRP-1')
++        issue = Issue.objects.create(
++            document=document,
++            author=self.user_gip,
++            description='Замечание с маркапом',
++            status='NEW',
++        )
++        issue.crop_image.save('crop.png', ContentFile(PNG_BYTES), save=True)
++        crop_name = issue.crop_image.name
++        document.is_deleted = True
++        document.save(update_fields=['is_deleted'])
++
++        from storage.domain.services import empty_trash
++        from storage.adapters.local_storage import LocalFileStorage
++
++        try:
++            with self.captureOnCommitCallbacks(execute=True):
++                result = empty_trash(
++                    self.user_admin, self.project, LocalFileStorage(),
++                )
++        except PermissionDenied:
++            self.fail('Администратор должен иметь право очистить корзину')
++
++        self.assertEqual(result['documents'], 1)
++        self.assertFalse(Issue.objects.filter(pk=issue.pk).exists())
++        from django.core.files.storage import default_storage
++
++        self.assertFalse(default_storage.exists(crop_name))
+diff --git a/storage/tests/test_t8_ultimate.py b/storage/tests/test_t8_ultimate.py
+index 2443974..94b87d6 100644
+--- a/storage/tests/test_t8_ultimate.py
++++ b/storage/tests/test_t8_ultimate.py
+@@ -128,11 +128,11 @@ class TableHeaderUiTests(T8UltimateTestBase):
+             reverse('storage:project_detail', args=[self.project.pk]),
+         )
+ 
+-        self.assertContains(response, 'class="filter-panel"')
+         self.assertContains(response, 'id="filtersForm"')
+         self.assertContains(response, 'name="section"')
+         self.assertContains(response, 'name="doc_type"')
+-        self.assertContains(response, 'name="status"')
++        self.assertContains(response, 'name="suitability_code"')
++        self.assertContains(response, 'name="internal_status"')
+         self.assertContains(response, 'name="q"')
+         self.assertNotContains(response, 'class="th-filter')
+         self.assertNotContains(response, 'class="col-drag"')
+@@ -207,8 +207,7 @@ class TrashProtectionTests(T8UltimateTestBase):
+         response = self.client.get(
+             reverse('storage:project_detail', args=[self.project.pk]),
+         )
+-        self.assertContains(response, 'data-file-count="2"')
+-        self.assertContains(response, 'Они также будут перемещены в корзину')
++        self.assertContains(response, 'data-delete-count="2"')
+ 
+     def test_can_purge_trash_only_for_company_admin(self):
+         self.assertTrue(can_purge_trash(self.user_admin, self.project))
+@@ -252,9 +251,12 @@ class TrashProtectionTests(T8UltimateTestBase):
+         folder, document, file_path = self._create_deleted_folder_with_file()
+ 
+         self.client.force_login(self.user_admin)
+-        response = self.client.post(
+-            reverse('storage:trash_clear', args=[self.project.pk]),
+-        )
++        # Спринт 5: физическое удаление файлов перенесено в transaction.on_commit —
++        # в тесте исполняем колбэки явно.
++        with self.captureOnCommitCallbacks(execute=True):
++            response = self.client.post(
++                reverse('storage:trash_clear', args=[self.project.pk]),
++            )
+ 
+         self.assertEqual(response.status_code, 302)
+         self.assertFalse(type(document).objects.filter(pk=document.pk).exists())
+diff --git a/storage/tests/test_t9_delegation.py b/storage/tests/test_t9_delegation.py
+index e051eb2..5081214 100644
+--- a/storage/tests/test_t9_delegation.py
++++ b/storage/tests/test_t9_delegation.py
+@@ -33,7 +33,7 @@ class T9DelegationTests(T8UltimateTestBase):
+             reverse('storage:document_delete', args=[document.pk]),
+         )
+         self.assertContains(response, 'data-folder-row')
+-        self.assertContains(response, 'data-folder-menu')
++        self.assertContains(response, 'data-tree-context="folder"')
+ 
+     def test_document_delete_endpoint_moves_to_trash(self):
+         document = self.make_document(code='CTX-DEL')
+diff --git a/storage/tests/test_t9_dnd_copy.py b/storage/tests/test_t9_dnd_copy.py
+index edb05f4..2d024ee 100644
+--- a/storage/tests/test_t9_dnd_copy.py
++++ b/storage/tests/test_t9_dnd_copy.py
+@@ -19,12 +19,12 @@ class T9DndCopyFolderTests(T8UltimateTestBase):
+         )
+ 
+         self.assertContains(response, f'data-document-id="{document.pk}"')
+-        self.assertContains(response, 'data-folder-menu')
+-        self.assertContains(response, 'Создать подпапку')
+-        self.assertContains(response, 'Переименовать')
+-        self.assertContains(response, 'Удалить')
+-        self.assertContains(response, reverse('storage:document_copy', args=[0]))
+-        self.assertContains(response, reverse('storage:folder_move', args=[0]))
++        self.assertContains(response, 'data-tree-context="folder"')
++        self.assertContains(response, 'data-create-folder-url=')
++        self.assertContains(response, 'data-rename-url=')
++        self.assertContains(response, 'data-delete-url=')
++        self.assertContains(response, 'data-delete-count="1"')
++        self.assertContains(response, 'data-move-url=')
+ 
+     def test_copy_endpoint_duplicates_document_versions_and_files(self):
+         folder = create_folder(self.user_gip, self.project, 'РД', section=self.section)
+diff --git a/storage/tests/test_t9_folder_html.py b/storage/tests/test_t9_folder_html.py
+index 9b27899..0290422 100644
+--- a/storage/tests/test_t9_folder_html.py
++++ b/storage/tests/test_t9_folder_html.py
+@@ -11,6 +11,8 @@ class T9FolderHtmlTests(T8UltimateTestBase):
+     def test_every_folder_row_has_unified_context_attributes(self):
+         root = create_folder(self.user_gip, self.project, 'РД АР', section=self.section)
+         nested = create_folder(self.user_gip, self.project, 'Вложенная', parent=root)
++        # Спринт 5 (актуализация под T68): корневые папки проекта (ИРД/РИИ/ПД/РД
++        # и пользовательские) рендерятся в дереве наравне с папками разделов.
+         project_root = create_folder(self.user_gip, self.project, 'Новая папка')
+ 
+         self.client.force_login(self.user_gip)
+@@ -25,6 +27,6 @@ class T9FolderHtmlTests(T8UltimateTestBase):
+                 r'<div[^>]*class="folder-row[^"]*"[^>]*data-folder-id="%d"' % folder.pk,
+             )
+             self.assertIn(f'data-folder-id="{folder.pk}"', html)
+-        self.assertNotIn(f'data-folder-id="{project_root.pk}"', html)
+-        self.assertEqual(html.count('data-folder-row'), 2)
+-        self.assertEqual(html.count('data-folder-menu'), 2)
++        self.assertIn(f'data-folder-id="{project_root.pk}"', html)
++        self.assertEqual(html.count('data-folder-row'), 3)
++        self.assertEqual(html.count('data-tree-context="folder"'), 3)

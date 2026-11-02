@@ -72,6 +72,15 @@ ZONE_SUITABILITY_MAP = {
     'ARCHIVE': 'A',
 }
 
+# Спринт 5: валидация загружаемых файлов — белый список расширений и лимит размера.
+# Подобран для СЭД: чертежи/CAD, документы Office, изображения, архивы, письма.
+ALLOWED_UPLOAD_EXTENSIONS = frozenset({
+    'pdf', 'dwg', 'dxf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx',
+    'png', 'jpg', 'jpeg', 'tif', 'tiff', 'zip', 'rar', '7z',
+    'rvt', 'rfa', 'ifc', 'nwd', 'nwc', 'txt', 'csv', 'msg', 'eml',
+})
+MAX_UPLOAD_SIZE = 100 * 1024 * 1024  # 100 МБ — согласовано с nginx client_max_body_size
+
 
 def _status_for_zone(folder: Folder | None) -> str | None:
     if not _is_canonical_zone_folder(folder):
@@ -490,6 +499,10 @@ def get_project_documents_queryset(
         queryset = queryset.filter(doc_type=filters['doc_type'])
     if 'status' in filters:
         queryset = queryset.filter(status=filters['status'])
+    if 'suitability_code' in filters:
+        queryset = queryset.filter(suitability_code=filters['suitability_code'])
+    if 'internal_status' in filters:
+        queryset = queryset.filter(internal_status=filters['internal_status'])
     if 'code' in filters:
         queryset = queryset.filter(code__icontains=filters['code'])
     if 'name' in filters:
@@ -1386,6 +1399,21 @@ def move_document_to_section(user: User, document: Document, section: Section) -
     if not check_write_permission(user, section):
         raise PermissionDenied("Нет прав на запись в целевой раздел")
 
+    # Спринт 5: перенос в другой раздел — это смена эффективной зоны на WIP.
+    # Запрещаем выносить документы из канонических зон, как и в move_document:
+    # иначе утверждённый документ «исчезает» из папки зоны через обходной путь.
+    current_zone = _effective_zone(document)
+    if current_zone in ('ARCHIVE', 'PUBLISHED', 'SHARED'):
+        zone_name = (
+            document.folder.get_zone_display()
+            if document.folder is not None
+            else dict(Folder.ZONE_CHOICES).get(current_zone, current_zone)
+        )
+        raise PermissionDenied(
+            f"Документ в зоне «{zone_name}» — перенос в другой раздел "
+            "запрещён, используйте workflow-кнопки"
+        )
+
     document.section = section
     document.folder = None
     document.save(update_fields=['section', 'folder', 'updated_at'])
@@ -1450,7 +1478,17 @@ def copy_document(
             code=_unique_copy_code(document, target_section),
             name=f'{document.name} (копия)'[:255],
             doc_type=document.doc_type,
-            status=document.status,
+            # Спринт 5: статус-триплет синхронизируем с целевой папкой,
+            # иначе копия утверждённого документа попадает в WIP со статусом
+            # approved и ломает маппинг статус-зона и сегмент-контрол.
+            status=(
+                ZONE_STATUS_MAP.get(folder.zone, 'draft')
+                if folder is not None else 'draft'
+            ),
+            suitability_code=(
+                ZONE_SUITABILITY_MAP.get(folder.zone, 'S0')
+                if folder is not None else 'S0'
+            ),
             created_by=user,
         )
         current_copy = None
@@ -1719,13 +1757,32 @@ def empty_trash(user: User, project: Project, file_storage) -> dict:
     versions = list(
         DocumentVersion.objects.filter(document__in=documents).only('file')
     )
-    for version in versions:
-        if version.file:
-            file_storage.delete(version.file.name)
+    # Спринт 5: маркапы замечаний удаляемых документов тоже подлежат очистке,
+    # иначе в issues/crops/ накапливается мусор, на который нет ссылок.
+    crop_paths = list(
+        Issue.objects.filter(document__in=documents)
+        .exclude(crop_image='')
+        .values_list('crop_image', flat=True)
+    )
+    stale_paths = [
+        version.file.name for version in versions if version.file
+    ] + list(crop_paths)
 
     with transaction.atomic():
         Document.objects.filter(project=project, is_deleted=True).delete()
         Folder.objects.filter(project=project, is_deleted=True).delete()
+
+    # Спринт 5: файлы удаляем только после фиксации транзакции (on_commit).
+    # Раньше физическое удаление шло до БД: падение БД оставляло записи
+    # без файлов. Теперь наоборот — при откате файлы остаются на месте.
+    def _cleanup_files() -> None:
+        for path in stale_paths:
+            try:
+                file_storage.delete(path)
+            except OSError:
+                continue
+
+    transaction.on_commit(_cleanup_files)
 
     return {'documents': document_count, 'folders': folder_count}
 
@@ -2081,7 +2138,10 @@ def _workflow_role_allowed(user: User, document: Document, action_code: str) -> 
         return check_write_permission(user, document.section)
     if profile.role in ('checker', 'normocontrol'):
         # проверяющий действует только в проектах, где состоит
-        return document.project.memberships.filter(user=user).exists()
+        # с осмысленной ролью (Спринт 5: наблюдатель не считается)
+        return document.project.memberships.filter(user=user).exclude(
+            role_in_project='viewer'
+        ).exists()
     return True
 
 
@@ -2399,6 +2459,23 @@ def upload_document(
     """
     if not check_write_permission(user, section):
         raise PermissionDenied("Нет прав на запись в этот раздел")
+
+    # Спринт 5: валидация загружаемых файлов — расширение и размер.
+    filename = getattr(file, 'name', '') or ''
+    extension = filename.rsplit('.', 1)[-1].lower() if '.' in filename else ''
+    if extension not in ALLOWED_UPLOAD_EXTENSIONS:
+        raise ValueError(
+            f"Формат «{extension or 'без расширения'}» не поддерживается. "
+            "Разрешены: " + ', '.join(sorted(ALLOWED_UPLOAD_EXTENSIONS))
+        )
+    file_size = getattr(file, 'size', 0) or 0
+    if file_size <= 0:
+        raise ValueError("Файл пустой")
+    if file_size > MAX_UPLOAD_SIZE:
+        raise ValueError(
+            f"Файл больше {MAX_UPLOAD_SIZE // (1024 * 1024)} МБ — "
+            "разбейте его или загрузите через обмен файлами"
+        )
 
     if section.project != project:
         raise ValueError("Раздел не относится к указанному проекту")
@@ -2906,12 +2983,42 @@ def create_issue(
 
 
 def update_issue_answer(user: User, issue: Issue, answer_text: str) -> Issue:
-    """Сохраняет текст ответа на замечание."""
+    """Сохраняет текст ответа на замечание.
+
+    Спринт 5: право ограничено — исполнитель (assignee), ГИП проекта,
+    администратор компании или superuser. Роли «только чтение» (viewer,
+    customer, checker) больше не могут перезаписывать официальные ответы.
+    """
     if not check_read_permission(user, issue.document):
-        raise PermissionDenied("Нет прав на изменение замечания")
+        raise PermissionDenied("Нет доступа к документу")
+    if not _can_edit_issue_answer(user, issue):
+        raise PermissionDenied("Нет прав на изменение ответа на замечание")
     issue.answer_text = answer_text
     issue.save(update_fields=['answer_text', 'updated_at'])
     return issue
+
+
+def _can_edit_issue_answer(user: User, issue: Issue) -> bool:
+    """Матрица прав на редактирование официального ответа.
+
+    Отвечающая сторона: исполнитель (assignee) и разработчики проекта,
+    плюс ГИП проекта и администратор компании. Наблюдатель, заказчик и
+    проверяющий — только чтение.
+    """
+    if user.is_superuser:
+        return True
+    profile = getattr(user, 'userprofile', None)
+    if profile is not None and profile.role == 'admin':
+        return True
+    if _is_project_gip(user, issue.document.project):
+        return True
+    if issue.assignee_id == user.pk:
+        return True
+    if profile is not None and profile.role == 'developer':
+        return issue.document.project.memberships.filter(
+            user=user, role_in_project__in=('developer', 'gip'),
+        ).exists()
+    return False
 
 
 def delete_issue(user: User, issue: Issue) -> None:

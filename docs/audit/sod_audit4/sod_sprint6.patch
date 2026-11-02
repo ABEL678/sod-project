@@ -1,0 +1,974 @@
+diff --git a/static/css/app.css b/static/css/app.css
+index 0da5dd3..d480ee2 100644
+--- a/static/css/app.css
++++ b/static/css/app.css
+@@ -9,10 +9,10 @@
+     --app-border-strong: #cbd5e1;
+     --app-ink: #0f172a;
+     --app-muted: #64748b;
+-    --app-topbar-bg: #1e293b;
++    --app-topbar-bg: var(--c-bg-header, #3A4558);
+     --app-topbar-fg: #f3f4f6;
+     --app-sidebar-bg: #f8fafc;
+-    --app-accent: #2563eb;
++    --app-accent: var(--c-accent, #3D5A98);
+     --app-accent-soft: #e0e7ff;
+ }
+ 
+@@ -81,7 +81,7 @@ body.app-body {
+ .topbar-brand .bi {
+     flex: 0 0 auto;
+     font-size: 16px;
+-    color: #93c5fd;
++    color: var(--c-accent-on-header-strong, #CBD8EF);
+ }
+ 
+ .topbar-company {
+@@ -196,7 +196,7 @@ body.app-body {
+     display: inline-flex;
+     align-items: center;
+     justify-content: center;
+-    background: #2563eb;
++    background: var(--c-accent, #3D5A98);
+     color: #fff;
+     font-size: 12px;
+     font-weight: 700;
+@@ -438,7 +438,7 @@ body.app-body {
+ }
+ 
+ .folder-row.folder-selected {
+-    background: #dbeafe;
++    background: var(--c-accent-subtle, #EDF1F7);
+     color: #1e3a8a;
+ }
+ 
+@@ -568,8 +568,8 @@ body.app-body {
+     justify-content: center;
+     gap: 6px;
+     border-radius: 6px;
+-    background-color: #3b82f6;
+-    border-color: #3b82f6;
++    background-color: var(--c-accent, #3D5A98);
++    border-color: var(--c-accent, #3D5A98);
+     box-shadow: none;
+     font-size: 13px;
+     font-weight: 600;
+@@ -577,8 +577,8 @@ body.app-body {
+ 
+ .upload-btn:hover,
+ .upload-btn:focus {
+-    background-color: #2563eb;
+-    border-color: #2563eb;
++    background-color: var(--c-accent, #3D5A98);
++    border-color: var(--c-accent, #3D5A98);
+     box-shadow: none;
+ }
+ 
+@@ -970,7 +970,7 @@ body.app-body {
+     padding: 0 8px;
+     border-bottom: 1px solid #e2e8f0;
+     background: #fff;
+-    color: #1e293b;
++    color: var(--c-bg-header, #3A4558);
+     white-space: nowrap;
+     overflow: hidden;
+     text-overflow: ellipsis;
+@@ -1187,17 +1187,17 @@ body.app-body {
+     height: 34px;
+     margin-top: 8px;
+     padding: 0 14px;
+-    border-color: #3b82f6;
++    border-color: var(--c-accent, #3D5A98);
+     border-radius: 6px;
+-    background: #3b82f6;
++    background: var(--c-accent, #3D5A98);
+     font-size: 12.5px;
+     font-weight: 600;
+     box-shadow: none;
+ }
+ 
+ .doc-empty .btn:hover {
+-    border-color: #2563eb;
+-    background: #2563eb;
++    border-color: var(--c-accent, #3D5A98);
++    background: var(--c-accent, #3D5A98);
+ }
+ 
+ .col-resizer {
+@@ -1212,7 +1212,7 @@ body.app-body {
+ 
+ .col-resizer:hover,
+ .col-resizer.is-active {
+-    background: #93c5fd;
++    background: var(--c-accent-on-header-strong, #CBD8EF);
+ }
+ 
+ .row-hidden {
+@@ -1593,7 +1593,7 @@ body.modal-open {
+ }
+ 
+ .app-breadcrumbs .breadcrumb-item a {
+-    color: #2563eb;
++    color: var(--c-accent, #3D5A98);
+     text-decoration: none;
+ }
+ 
+@@ -1663,7 +1663,7 @@ body.modal-open {
+ }
+ 
+ .th-filter.is-active .th-filter-toggle {
+-    box-shadow: inset 0 0 0 1px #93c5fd;
++    box-shadow: inset 0 0 0 1px var(--c-accent-on-header-strong, #CBD8EF);
+ }
+ 
+ .th-filter-menu {
+@@ -1731,7 +1731,7 @@ body.modal-open {
+ }
+ 
+ .doc-table thead th.is-column-drop-target {
+-    box-shadow: inset 3px 0 0 #3b82f6;
++    box-shadow: inset 3px 0 0 var(--c-accent, #3D5A98);
+ }
+ 
+ .doc-table thead th {
+@@ -1755,7 +1755,7 @@ body.modal-open {
+     display: flex;
+     align-items: center;
+     justify-content: center;
+-    border: 2px dashed #3b82f6;
++    border: 2px dashed var(--c-accent, #3D5A98);
+     border-radius: 8px;
+     background: rgba(239, 246, 255, .88);
+     pointer-events: none;
+@@ -1778,7 +1778,7 @@ body.modal-open {
+ }
+ 
+ .doc-drop-card > .bi {
+-    color: #3b82f6;
++    color: var(--c-accent, #3D5A98);
+     font-size: 26px;
+ }
+ 
+@@ -1790,7 +1790,7 @@ body.modal-open {
+     transform: translateX(-50%);
+     min-height: 46px;
+     max-width: calc(100vw - 40px);
+-    border: 1px solid #93c5fd;
++    border: 1px solid var(--c-accent-on-header-strong, #CBD8EF);
+     border-radius: 999px;
+     background: #eff6ff;
+     box-shadow: 0 12px 34px rgba(15, 23, 42, .22);
+@@ -1977,7 +1977,7 @@ body.modal-open {
+ }
+ 
+ .folder-row.folder-selected {
+-    background: #dbeafe;
++    background: var(--c-accent-subtle, #EDF1F7);
+     color: #1e3a8a;
+ }
+ 
+@@ -2093,8 +2093,8 @@ body.modal-open {
+ 
+ .folder-row.is-dnd-over,
+ .section-item.is-dnd-over {
+-    background: #dbeafe !important;
+-    outline: 2px dashed #2563eb;
++    background: var(--c-accent-subtle, #EDF1F7) !important;
++    outline: 2px dashed var(--c-accent, #3D5A98);
+     outline-offset: -2px;
+     border-radius: 5px;
+ }
+diff --git a/static/css/redesign.css b/static/css/redesign.css
+index f1d7966..b285be8 100644
+--- a/static/css/redesign.css
++++ b/static/css/redesign.css
+@@ -14,7 +14,9 @@
+ .topbar .avatar { width: 28px; height: 28px; border-radius: 50%; background: var(--c-accent-on-header); color: var(--c-bg-header); display: grid; place-items: center; font-size: 11px; font-weight: 600; box-shadow: 0 0 0 2px var(--c-border-header-control); }
+ .topbar .form-control { height: 32px; border-radius: 999px; border: 1px solid var(--c-border-header-control); background: var(--c-bg-header-hover); color: var(--c-text-on-dark); font-size: 13px; padding: 0 14px; }
+ .topbar .form-control::placeholder { color: var(--c-text-on-dark-muted); opacity: 1; }
+-.topbar .form-control:focus { background: var(--c-bg-header-hover); border-color: var(--c-accent-on-header); box-shadow: none; outline: none; color: var(--c-text-on-dark); }
++.topbar .form-control:focus { background: var(--c-bg-header-hover); border-color: var(--c-accent-on-header); outline: none; color: var(--c-text-on-dark); }
++/* Спринт 6: фокус в поиске хедера виден — оставляем общее фокус-кольцо */
++.topbar .form-control:focus-visible { box-shadow: var(--focus-ring); }
+ body { background: var(--c-bg-app); font-family: 'Golos Text', 'Inter', system-ui, sans-serif; overflow-x: hidden; }
+ .container { max-width: 1060px; margin: 0 auto; padding: 24px; }
+ 
+@@ -224,13 +226,7 @@ tr[data-href],
+     min-width: 0;
+ }
+ 
+-.topbar .chip {
+-    flex: 0 0 auto;
+-    min-width: 0;
+-    max-width: 200px;
+-    overflow: hidden;
+-    text-overflow: ellipsis;
+-}
++/* Спринт 6: чипы убраны из топбара — мёртвое правило удалено */
+ 
+ .topbar .btn {
+     flex: 0 0 auto;
+@@ -678,3 +674,62 @@ tr.doc-row-flash > td { animation: wf-row-flash 1.5s ease; }
+     background-color: var(--c-accent) !important;
+     color: var(--c-text-inverse) !important;
+ }
++
++/* ==================== Спринт 6: UX-полировка ==================== */
++
++/* Skip-link: виден только при фокусе с клавиатуры */
++.skip-link {
++    position: absolute;
++    left: -9999px;
++    top: 0;
++    z-index: 2000;
++    background: var(--c-bg-header);
++    color: var(--c-text-on-dark);
++    padding: 10px 18px;
++    border-radius: 0 0 10px 0;
++    font-size: 13px;
++    text-decoration: none;
++}
++.skip-link:focus-visible {
++    left: 0;
++    outline: 2px solid var(--c-accent-on-header);
++    outline-offset: -2px;
++}
++
++/* Статус загрузки файлов в тулбаре реестра */
++.upload-status {
++    font-size: 12.5px;
++    color: var(--c-text-secondary);
++    max-width: 340px;
++    overflow: hidden;
++    text-overflow: ellipsis;
++    white-space: nowrap;
++}
++.upload-status.is-error { color: #B42318; font-weight: 500; }
++
++/* Спиннер HTMX-запросов реестра: появляется, пока панель обновляется */
++.panel-spinner {
++    display: none;
++    color: var(--c-text-secondary);
++    font-size: 15px;
++    animation: panel-spin 0.9s linear infinite;
++}
++#documentsPanel.htmx-request .panel-spinner { display: inline-block; }
++@keyframes panel-spin { to { transform: rotate(360deg); } }
++
++/* Видимая кнопка меню папки (раньше — только правый клик) */
++.folder-kebab {
++    color: var(--c-text-secondary);
++    line-height: 1;
++    flex: 0 0 auto;
++    opacity: 0;
++    transition: opacity 120ms ease;
++}
++.folder-row:hover .folder-kebab,
++.folder-row:focus-within .folder-kebab,
++.folder-kebab:focus-visible { opacity: 1; }
++.folder-kebab:hover { color: var(--c-accent); }
++
++@media (prefers-reduced-motion: reduce) {
++    .panel-spinner { animation: none; }
++}
+diff --git a/static/css/viewer.css b/static/css/viewer.css
+index bd11d17..b91857d 100644
+--- a/static/css/viewer.css
++++ b/static/css/viewer.css
+@@ -169,7 +169,7 @@ body {
+ .panel .card:hover,
+ .panel .card.is-active {
+     background: #F6F6F4;
+-    border-color: #2F5BEA;
++    border-color: var(--c-accent, #3D5A98);
+ }
+ 
+ .mark-badge {
+@@ -437,7 +437,7 @@ body {
+ 
+ .version-back:hover {
+     background: #f8fafc;
+-    color: #0d6efd;
++    color: var(--c-accent, #3D5A98);
+ }
+ 
+ .toolbar .compare-toggle {
+@@ -684,7 +684,7 @@ body {
+ 
+ .pdf-minimap-rect {
+     position: absolute;
+-    border: 2px solid var(--c-accent, #2F5BEA);
++    border: 2px solid var(--c-accent, var(--c-accent, #3D5A98));
+     background: rgba(47, 91, 234, 0.12);
+     border-radius: 2px;
+     pointer-events: none;
+@@ -814,3 +814,25 @@ body {
+     font-size: 11px;
+     padding: 2px 8px;
+ }
++
++/* Спринт 6: тост вьювера — замена блокирующему alert() */
++.viewer-toast {
++    position: fixed;
++    left: 50%;
++    bottom: 24px;
++    transform: translateX(-50%) translateY(8px);
++    background: var(--c-text-primary, #191917);
++    color: var(--c-text-inverse, #FFFFFF);
++    font-size: 13px;
++    padding: 10px 18px;
++    border-radius: 10px;
++    opacity: 0;
++    pointer-events: none;
++    transition: opacity 160ms ease, transform 160ms ease;
++    z-index: 3000;
++    max-width: 70vw;
++}
++.viewer-toast.is-visible {
++    opacity: 1;
++    transform: translateX(-50%) translateY(0);
++}
+diff --git a/static/design-tokens/tokens.css b/static/design-tokens/tokens.css
+index 38bd5f0..7ef4015 100644
+--- a/static/design-tokens/tokens.css
++++ b/static/design-tokens/tokens.css
+@@ -36,12 +36,12 @@
+   --c-border-hairline: #E4E4E0;
+   --c-border-default: #D4D4CE;
+   --c-border-header: #374151;  /* граница графитового хедера */
+-  --c-border-header-control: #4B5563;  /* рамки ghost-кнопок на хедере */
++  --c-border-header-control: #8A93A6;  /* рамки ghost-кнопок на хедере */
+ 
+   /* --- Текст --- */
+   --c-text-primary: #191917;
+   --c-text-secondary: #6E6E68;
+-  --c-text-muted: #9C9C94;
++  --c-text-muted: #71716A;
+   --c-text-on-dark: #F2F2EF;
+   --c-text-on-dark-muted: #B4B5BA;
+   --c-text-inverse: #FFFFFF;
+diff --git a/static/design-tokens/tokens.json b/static/design-tokens/tokens.json
+index 5c24129..2aaa0f4 100644
+--- a/static/design-tokens/tokens.json
++++ b/static/design-tokens/tokens.json
+@@ -17,12 +17,12 @@
+       "hairline": "#E4E4E0",
+       "default": "#D4D4CE",
+       "header": "#374151",
+-      "header-control": "#4B5563"
++      "header-control": "#8A93A6"
+     },
+     "text": {
+       "primary": "#191917",
+       "secondary": "#6E6E68",
+-      "muted": "#9C9C94",
++      "muted": "#71716A",
+       "on-dark": "#F2F2EF",
+       "on-dark-muted": "#B4B5BA",
+       "inverse": "#FFFFFF"
+@@ -134,13 +134,41 @@
+     "sans": "\"Golos Text\", \"Inter\", -apple-system, \"Segoe UI\", Roboto, \"Helvetica Neue\", Arial, sans-serif",
+     "mono": "\"JetBrains Mono\", \"SF Mono\", Consolas, \"Liberation Mono\", monospace",
+     "scale": {
+-      "display": { "size": "22px", "line": "28px", "comment": "заголовок экрана      600" },
+-      "heading": { "size": "18px", "line": "24px", "comment": "заголовок панели      600" },
+-      "subhead": { "size": "16px", "line": "22px", "comment": "подзаголовок          600" },
+-      "body-lg": { "size": "15px", "line": "22px", "comment": "тексты замечаний      400" },
+-      "body": { "size": "14px", "line": "20px", "comment": "таблицы, реестры      400" },
+-      "second": { "size": "13px", "line": "18px", "comment": "лейблы, без CAPS      400" },
+-      "caption": { "size": "12px", "line": "16px", "comment": "метаданные, бейджи    500" }
++      "display": {
++        "size": "22px",
++        "line": "28px",
++        "comment": "заголовок экрана      600"
++      },
++      "heading": {
++        "size": "18px",
++        "line": "24px",
++        "comment": "заголовок панели      600"
++      },
++      "subhead": {
++        "size": "16px",
++        "line": "22px",
++        "comment": "подзаголовок          600"
++      },
++      "body-lg": {
++        "size": "15px",
++        "line": "22px",
++        "comment": "тексты замечаний      400"
++      },
++      "body": {
++        "size": "14px",
++        "line": "20px",
++        "comment": "таблицы, реестры      400"
++      },
++      "second": {
++        "size": "13px",
++        "line": "18px",
++        "comment": "лейблы, без CAPS      400"
++      },
++      "caption": {
++        "size": "12px",
++        "line": "16px",
++        "comment": "метаданные, бейджи    500"
++      }
+     }
+   },
+   "spacing": {
+@@ -189,4 +217,4 @@
+   "focus": {
+     "ring": "0 0 0 2px #FFFFFF, 0 0 0 4px #3D5A98"
+   }
+-}
++}
+\ No newline at end of file
+diff --git a/static/js/app.js b/static/js/app.js
+index 16789f2..9b75f9e 100644
+--- a/static/js/app.js
++++ b/static/js/app.js
+@@ -386,7 +386,11 @@
+         }
+ 
+         uploadInProgress = true;
+-        setUploadStatus('Загрузка ' + files.length + ' файл(ов)…', false);
++        setUploadStatus(
++            'Загрузка ' + files.length + ' '
++            + pluralizeRu(files.length, 'файл', 'файла', 'файлов') + '…',
++            false
++        );
+         var errors = [];
+         var lastDocumentId = null;
+ 
+@@ -440,6 +444,24 @@
+     }
+ 
+     function initUpload() {
++        // Спринт 6: видимая кнопка «Загрузить» — цель выбирается как при DnD
++        document.addEventListener('click', function (event) {
++            if (!event.target.closest('[data-role="upload-btn"]')) {
++                return;
++            }
++            event.preventDefault();
++            if (uploadInProgress) {
++                setUploadStatus('Дождитесь окончания текущей загрузки', true);
++                return;
++            }
++            pendingUploadTarget = null;
++            var input = document.getElementById('fileInput');
++            if (input) {
++                input.value = '';
++                input.click();
++            }
++        });
++
+         document.addEventListener('change', function (event) {
+             if (event.target.id !== 'fileInput') {
+                 return;
+@@ -1047,7 +1069,10 @@
+     function deleteTreeFolder(url, count) {
+         var message = 'Переместить папку в корзину?';
+         if (count) {
+-            message = 'В папке ' + count + ' файл(ов). Они также будут перемещены в корзину. Продолжить?';
++            message = 'В папке ' + count + ' '
++                + pluralizeRu(count, 'файл', 'файла', 'файлов')
++                + '. Они будут перемещены в корзину вместе с папкой — '
++                + 'папку можно восстановить. Продолжить?';
+         }
+         if (!url || !window.confirm(message)) {
+             return;
+@@ -1220,10 +1245,38 @@
+         });
+ 
+         document.addEventListener('click', function (event) {
+-            if (treeContextMenu && !treeContextMenu.contains(event.target)) {
++            if (treeContextMenu
++                    && !treeContextMenu.contains(event.target)
++                    && !event.target.closest('[data-folder-kebab]')) {
+                 closeTreeContextMenu();
+             }
+         });
++        // Спринт 6: Escape закрывает контекстное меню
++        document.addEventListener('keydown', function (event) {
++            if (event.key === 'Escape' && treeContextMenu) {
++                closeTreeContextMenu();
++            }
++        });
++        // Спринт 6: видимая кнопка меню папки — клавиатура и тач,
++        // больше не единственный правый клик
++        document.addEventListener('click', function (event) {
++            var kebab = event.target.closest('[data-folder-kebab]');
++            if (!kebab) {
++                return;
++            }
++            event.preventDefault();
++            event.stopPropagation();
++            var row = kebab.closest('[data-tree-context]');
++            if (!row) {
++                return;
++            }
++            var rect = kebab.getBoundingClientRect();
++            var synthetic = {
++                clientX: rect.left + rect.width / 2,
++                clientY: rect.bottom + 4,
++            };
++            showTreeContextMenu(synthetic, row);
++        });
+         window.addEventListener('scroll', closeTreeContextMenu, true);
+         window.addEventListener('resize', closeTreeContextMenu);
+     }
+@@ -1465,6 +1518,16 @@
+                 updateBulkBar();
+             }
+         });
++        // Спринт 6: сетевые и серверные ошибки HTMX больше не молчат
++        document.body.addEventListener('htmx:responseError', function (event) {
++            var status = event.detail && event.detail.xhr
++                ? event.detail.xhr.status : '';
++            showToast('Ошибка сервера' + (status ? ' (' + status + ')' : '')
++                + ' — попробуйте ещё раз');
++        });
++        document.body.addEventListener('htmx:sendError', function () {
++            showToast('Сеть недоступна — проверьте подключение');
++        });
+     }
+ 
+     /* ---------- Волна 3: зоны ISO 19650 (сегмент-контрол + workflow) ---------- */
+@@ -1698,6 +1761,22 @@
+         return div.innerHTML;
+     }
+ 
++    /* Спринт 6: русская плюрализация вместо «файл(ов)» */
++    function pluralizeRu(count, one, few, many) {
++        var mod100 = Math.abs(count) % 100;
++        var mod10 = mod100 % 10;
++        if (mod100 > 10 && mod100 < 20) {
++            return many;
++        }
++        if (mod10 > 1 && mod10 < 5) {
++            return few;
++        }
++        if (mod10 === 1) {
++            return one;
++        }
++        return many;
++    }
++
+     var TOAST_TIMEOUT = null;
+ 
+     function showToast(message) {
+diff --git a/static/js/pdf_viewer.js b/static/js/pdf_viewer.js
+index 244ad35..d53ef47 100644
+--- a/static/js/pdf_viewer.js
++++ b/static/js/pdf_viewer.js
+@@ -10,6 +10,29 @@
+     /* Спринт 3: кнопка-заглушка toggleOverlay удалена — режим наложения
+        это «Шторка» (T65), отдельной несуществующей функции больше нет. */
+ 
++    /* Спринт 6: тост вместо блокирующего alert() */
++    function viewerNotify(message) {
++        if (typeof window.showToast === 'function') {
++            window.showToast(message);
++            return;
++        }
++        let toast = document.getElementById('viewerToast');
++        if (!toast) {
++            toast = document.createElement('div');
++            toast.id = 'viewerToast';
++            toast.className = 'viewer-toast';
++            toast.setAttribute('role', 'status');
++            toast.setAttribute('aria-live', 'polite');
++            document.body.appendChild(toast);
++        }
++        toast.textContent = message;
++        toast.classList.add('is-visible');
++        clearTimeout(viewerNotify._timer);
++        viewerNotify._timer = setTimeout(function () {
++            toast.classList.remove('is-visible');
++        }, 3500);
++    }
++
+     const viewer = document.getElementById('pdfViewer');
+     if (!viewer) {
+         return;
+@@ -1081,7 +1104,7 @@
+                     }
+                     removeIssue(issue.id);
+                 }).catch(function (error) {
+-                    window.alert(error.message);
++                    viewerNotify(error.message);
+                 });
+             } else if (action === 'show-mark') {
+                 selectIssue(issue.id, {scrollMark: true});
+@@ -1555,7 +1578,7 @@
+                     comparison.geometryMismatch = true;
+                     comparison.loading = false;
+                     updateSliderButton();
+-                    window.alert(
++                    viewerNotify(
+                         'Шторка доступна только для листов с одинаковой геометрией. Используйте режим «Рядом».'
+                     );
+                     return null;
+@@ -1574,7 +1597,7 @@
+             }
+             comparison.loading = false;
+             updateSliderButton();
+-            window.alert('Не удалось загрузить PDF для сравнения.');
++            viewerNotify('Не удалось загрузить PDF для сравнения.');
+         });
+     }
+ 
+@@ -1666,7 +1689,7 @@
+                         }, 1500);
+                     });
+                 }).catch(function (error) {
+-                    window.alert(error.message);
++                    viewerNotify(error.message);
+                 });
+             });
+         }
+diff --git a/storage/adapters/templates/registration/login.html b/storage/adapters/templates/registration/login.html
+index ba6d803..3c8cc1a 100644
+--- a/storage/adapters/templates/registration/login.html
++++ b/storage/adapters/templates/registration/login.html
+@@ -6,7 +6,10 @@
+     <meta name="viewport" content="width=device-width, initial-scale=1">
+     <title>Вход — Stream-CAD</title>
+     <link rel="stylesheet" href="{% static 'css/bootstrap.min.css' %}">
+-    <link rel="stylesheet" href="{% static 'css/redesign.css' %}?v=20261105-s4">
++    {# Спринт 6: токены обязаны грузиться и здесь — без них var(--c-accent) в redesign.css вырождаются #}
++    <link rel="stylesheet" href="{% static 'design-tokens/tokens.css' %}?v=20261107">
++    <link rel="stylesheet" href="{% static 'fonts/fonts.css' %}">
++    <link rel="stylesheet" href="{% static 'css/redesign.css' %}?v=20261107-s6">
+ </head>
+ <body class="bg-light">
+ <main class="container" style="max-width: 420px; margin-top: 10vh;">
+diff --git a/storage/adapters/templates/storage/_documents_panel.html b/storage/adapters/templates/storage/_documents_panel.html
+index ecd6e61..0fee09e 100644
+--- a/storage/adapters/templates/storage/_documents_panel.html
++++ b/storage/adapters/templates/storage/_documents_panel.html
+@@ -98,6 +98,17 @@
+         </div>
+         <div class="toolbar-spacer"></div>
+         <div class="toolbar-actions">
++            {# Спринт 6: видимая главная кнопка загрузки — раньше загрузка была только через DnD и правый клик #}
++            <button type="button"
++                    class="btn btn-primary btn-sm"
++                    id="uploadBtn"
++                    data-role="upload-btn"
++                    title="Загрузить документ в выбранный раздел или папку">
++                <i class="bi bi-upload" aria-hidden="true"></i>
++                <span class="d-none d-xl-inline">Загрузить</span>
++            </button>
++            <span id="uploadStatus" class="upload-status d-none" role="status" aria-live="polite"></span>
++            <i id="panelSpinner" class="bi bi-arrow-repeat panel-spinner" aria-hidden="true"></i>
+             <a class="btn btn-outline-secondary btn-sm" href="{% url 'issues:issue_registry' project.pk %}"
+                title="Реестр замечаний проекта">
+                 <i class="bi bi-chat-left-text" aria-hidden="true"></i>
+diff --git a/storage/adapters/templates/storage/_folder_tree.html b/storage/adapters/templates/storage/_folder_tree.html
+index d211af0..1e9856a 100644
+--- a/storage/adapters/templates/storage/_folder_tree.html
++++ b/storage/adapters/templates/storage/_folder_tree.html
+@@ -47,6 +47,15 @@
+            href="{% url 'storage:project_detail' project.pk %}?folder={{ folder.pk }}{% if selected_view %}&amp;view={{ selected_view.pk }}{% endif %}"
+            title="{{ folder.name }}{% if folder.full_code %} — {{ folder.full_code }}{% elif folder.code %} — {{ folder.code }}{% endif %}">{% if folder.section_id or folder.parent %}{% if folder.full_code %}{{ folder.full_code }} — {{ folder.name }}{% else %}{{ folder.name }}{% endif %}{% else %}{% if folder.code %}{{ folder.code }}. {% endif %}{{ folder.name }}{% endif %}</a>
+         <span class="badge text-bg-light border folder-count" title="Документов в папке и вложенных папках">{{ folder.subtree_document_count|default:folder.document_count }}</span>
++        {# Спринт 6: видимая кнопка меню — раньше действия были только в правом клике #}
++        <button type="button"
++                class="btn btn-sm btn-link p-0 folder-kebab"
++                data-folder-kebab
++                aria-haspopup="true"
++                aria-label="Меню папки {{ folder.name }}"
++                title="Меню папки">
++            <i class="bi bi-three-dots-vertical" aria-hidden="true"></i>
++        </button>
+ 
+     </div>
+ 
+diff --git a/storage/adapters/templates/storage/_topbar.html b/storage/adapters/templates/storage/_topbar.html
+index e1eb55d..2f4712d 100644
+--- a/storage/adapters/templates/storage/_topbar.html
++++ b/storage/adapters/templates/storage/_topbar.html
+@@ -24,7 +24,8 @@
+     {% if topbar_project %}
+         <form action="{% url 'storage:search' topbar_project.pk %}" method="get" class="d-flex">
+             <input type="search" name="q" class="form-control form-control-sm"
+-                   placeholder="Поиск по шифру, названию" value="{{ request.GET.q }}">
++                   placeholder="Поиск по шифру, названию" value="{{ request.GET.q }}"
++                   aria-label="Поиск по документам проекта">
+         </form>
+     {% endif %}
+     <div class="spacer"></div>
+diff --git a/storage/adapters/templates/storage/base.html b/storage/adapters/templates/storage/base.html
+index 7527567..a931f7d 100644
+--- a/storage/adapters/templates/storage/base.html
++++ b/storage/adapters/templates/storage/base.html
+@@ -25,12 +25,16 @@ document_detail — у него своя разметка и свой набор
+     <link rel="icon" type="image/png" href="/static/icons/icon-192.png">
+     <link rel="stylesheet" href="{% static 'css/bootstrap.min.css' %}">
+     <link rel="stylesheet" href="{% static 'design-tokens/tokens.css' %}?v=20261107">
+-    <link rel="stylesheet" href="{% static 'css/redesign.css' %}?v=20261105-s4">
++    {# Спринт 6: фирменные шрифты (Golos Text/JetBrains Mono) на всех страницах #}
++    <link rel="stylesheet" href="{% static 'fonts/fonts.css' %}">
++    <link rel="stylesheet" href="{% static 'css/redesign.css' %}?v=20261107-s6">
+     <link rel="stylesheet" href="{% static 'fonts/bootstrap-icons/bootstrap-icons.min.css' %}">
+-    <link rel="stylesheet" href="{% static 'css/app.css' %}?v=20261105-s4">
++    <link rel="stylesheet" href="{% static 'css/app.css' %}?v=20261107-s6">
+     {% block extra_css %}{% endblock %}
+ </head>
+ <body class="{% block body_class %}bg-light{% endblock %}">
++{# Спринт 6: skip-link для клавиатурной навигации #}
++<a class="skip-link" href="#main-content">Перейти к содержимому</a>
+ {% block topbar %}
+     {% include 'storage/_topbar.html' %}
+ {% endblock %}
+@@ -38,7 +42,7 @@ document_detail — у него своя разметка и свой набор
+ {% include 'storage/_palette.html' %}
+ <script src="{% static 'js/vendor/bootstrap.bundle.min.js' %}"></script>
+ <script src="{% static 'js/vendor/htmx.min.js' %}" defer></script>
+-<script src="{% static 'js/palette.js' %}?v=20261105-s4" defer></script>
++<script src="{% static 'js/palette.js' %}?v=20261107-s6" defer></script>
+ <script>
+     /* Волна 3: PWA — регистрация сервис-воркера из корня (scope '/') */
+     if ('serviceWorker' in navigator) {
+diff --git a/storage/adapters/templates/storage/dashboard.html b/storage/adapters/templates/storage/dashboard.html
+index 91a6d39..f03d24d 100644
+--- a/storage/adapters/templates/storage/dashboard.html
++++ b/storage/adapters/templates/storage/dashboard.html
+@@ -7,7 +7,7 @@
+ {% endblock %}
+ 
+ {% block content %}
+-<main class="container-fluid px-3 py-3 pb-5">
++<main id="main-content" class="container-fluid px-3 py-3 pb-5">
+     <div class="d-flex justify-content-between align-items-center mb-3">
+         <div>
+             <h1 class="h4 mb-0">Панель управления</h1>
+diff --git a/storage/adapters/templates/storage/document_detail.html b/storage/adapters/templates/storage/document_detail.html
+index c15a172..a440b14 100644
+--- a/storage/adapters/templates/storage/document_detail.html
++++ b/storage/adapters/templates/storage/document_detail.html
+@@ -5,16 +5,16 @@
+ <meta charset="UTF-8">
+ <meta name="viewport" content="width=device-width, initial-scale=1">
+ <title>{{ document.code }} — {{ document.name }}</title>
+-<meta name="theme-color" content="#1F2937">
++<meta name="theme-color" content="#3A4558">
+ <link rel="manifest" href="/static/manifest.webmanifest">
+ <link rel="icon" type="image/png" href="/static/icons/icon-192.png">
+ <link rel="stylesheet" href="{% static 'fonts/fonts.css' %}">
+ <link rel="stylesheet" href="{% static 'fonts/bootstrap-icons/bootstrap-icons.min.css' %}">
+ <link rel="stylesheet" href="{% static 'css/bootstrap.min.css' %}">
+ <link rel="stylesheet" href="{% static 'design-tokens/tokens.css' %}?v=20261107">
+-<link rel="stylesheet" href="{% static 'css/redesign.css' %}?v=20261105-s4">
+-<link rel="stylesheet" href="{% static 'css/viewer.css' %}?v=20261105-s4-t65">
+-<link rel="stylesheet" href="{% static 'css/app.css' %}?v=20261105-s4">
++<link rel="stylesheet" href="{% static 'css/redesign.css' %}?v=20261107-s6">
++<link rel="stylesheet" href="{% static 'css/viewer.css' %}?v=20261107-s6">
++<link rel="stylesheet" href="{% static 'css/app.css' %}?v=20261107-s6">
+ </head>
+ <body>
+ 
+@@ -149,9 +149,9 @@
+     </button>
+   </div>
+   <div class="group">
+-    <button class="tbtn" onclick="rotatePage()" title="Повернуть" type="button">⟲</button>
+-    <button class="tbtn" onclick="togglePan()" title="Рука" type="button">✋</button>
+-    <button class="tbtn" onclick="toggleSelect()" title="Выделение" type="button">⍝</button>
++    <button class="tbtn" onclick="rotatePage()" title="Повернуть" type="button"><i class="bi bi-arrow-clockwise" aria-hidden="true"></i><span class="visually-hidden">Повернуть</span></button>
++    <button class="tbtn" onclick="togglePan()" title="Рука" type="button"><i class="bi bi-hand-index" aria-hidden="true"></i><span class="visually-hidden">Рука</span></button>
++    <button class="tbtn" onclick="toggleSelect()" title="Выделение" type="button"><i class="bi bi-cursor" aria-hidden="true"></i><span class="visually-hidden">Выделение</span></button>
+     <button class="tbtn active" id="minimapToggle" onclick="toggleMinimap()" type="button"
+             title="Мини-карта: превью листа и видимой области" aria-label="Мини-карта">
+       <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.4"/><rect x="8" y="7" width="4.5" height="4" fill="currentColor" opacity="0.55"/></svg>
+@@ -377,11 +377,11 @@
+ 
+ <script src="{% static 'js/vendor/bootstrap.bundle.min.js' %}"></script>
+ <script src="{% static 'js/pdfjs/pdf.min.js' %}"></script>
+-<script src="{% static 'js/design-tokens.js' %}?v=20261105-s4"></script>
+-<script src="{% static 'js/sync.js' %}?v=20261105-s4"></script>
+-<script src="{% static 'js/pdf_viewer.js' %}?v=20261105-s4-t65"></script>
+-<script src="{% static 'js/splitter.js' %}?v=20261105-s4"></script>
+-<script src="{% static 'js/palette.js' %}?v=20261105-s4" defer></script>
++<script src="{% static 'js/design-tokens.js' %}?v=20261107-s6"></script>
++<script src="{% static 'js/sync.js' %}?v=20261107-s6"></script>
++<script src="{% static 'js/pdf_viewer.js' %}?v=20261107-s6"></script>
++<script src="{% static 'js/splitter.js' %}?v=20261107-s6"></script>
++<script src="{% static 'js/palette.js' %}?v=20261107-s6" defer></script>
+ {% include 'storage/_palette.html' %}
+ <script>
+     if ('serviceWorker' in navigator) {
+diff --git a/storage/adapters/templates/storage/project_detail.html b/storage/adapters/templates/storage/project_detail.html
+index 45c4f0e..855b7f2 100644
+--- a/storage/adapters/templates/storage/project_detail.html
++++ b/storage/adapters/templates/storage/project_detail.html
+@@ -119,6 +119,28 @@
+                                 <span class="section-name" title="{{ section.name }}">{{ section.name }}</span>
+                                 <span class="section-count" data-section-id="{{ section.pk }}" data-role="section-count">{{ section.document_count }}</span>
+                             </a>
++
++                        </div>
++
++                        {% if section.folder_nodes %}
++                            <div class="folder-tree-list ms-2"
++                                 id="sectionFolders-{{ section.pk }}"
++                                 data-section-content="{{ section.pk }}"
++                                 data-folder-sortable
++                                 data-folder-reorder-url="{% url 'storage:folder_reorder' project.pk %}">
++                                {% for folder in section.folder_nodes %}
++                                    {% include 'storage/_folder_tree.html' with folder=folder %}
++                                {% endfor %}
++                            </div>
++                        {% endif %}
++                    </div>
++                {% empty %}
++                    {% if not project_folders %}
++                        <div class="sidebar-empty">Разделов пока нет</div>
++                    {% endif %}
++                {% endfor %}
++            </div>
++
+ <div id="dndToast" class="dnd-toast d-none" role="status" aria-live="polite"></div>
+ 
+ <div id="docRowMenu" class="dropdown-menu doc-row-menu" role="menu" aria-hidden="true">
+@@ -170,27 +192,6 @@
+     </div>
+ </div>
+ 
+-                        </div>
+-
+-                        {% if section.folder_nodes %}
+-                            <div class="folder-tree-list ms-2"
+-                                 id="sectionFolders-{{ section.pk }}"
+-                                 data-section-content="{{ section.pk }}"
+-                                 data-folder-sortable
+-                                 data-folder-reorder-url="{% url 'storage:folder_reorder' project.pk %}">
+-                                {% for folder in section.folder_nodes %}
+-                                    {% include 'storage/_folder_tree.html' with folder=folder %}
+-                                {% endfor %}
+-                            </div>
+-                        {% endif %}
+-                    </div>
+-                {% empty %}
+-                    {% if not project_folders %}
+-                        <div class="sidebar-empty">Разделов пока нет</div>
+-                    {% endif %}
+-                {% endfor %}
+-            </div>
+-
+             <input type="file" id="fileInput" multiple hidden data-role="upload-input">
+         </aside>
+ 
+@@ -209,7 +210,7 @@
+             <i class="bi bi-chevron-right" aria-hidden="true"></i>
+         </button>
+ 
+-        <main class="app-main" data-role="main">
++        <main id="main-content" class="app-main" data-role="main">
+             {% if messages %}
+                 <div class="flash-stack">
+                     {% for message in messages %}
+diff --git a/storage/adapters/templates/storage/project_list.html b/storage/adapters/templates/storage/project_list.html
+index 79cd744..2c8ff9b 100644
+--- a/storage/adapters/templates/storage/project_list.html
++++ b/storage/adapters/templates/storage/project_list.html
+@@ -7,7 +7,7 @@
+ {% endblock %}
+ 
+ {% block content %}
+-<main class="container py-3 pb-5">
++<main id="main-content" class="container py-3 pb-5">
+     <div class="d-flex justify-content-between align-items-center mb-3">
+         <div>
+             <h1 class="h3 mb-0">Проекты</h1>
+diff --git a/storage/adapters/templates/storage/search.html b/storage/adapters/templates/storage/search.html
+index db964cb..fb1e622 100644
+--- a/storage/adapters/templates/storage/search.html
++++ b/storage/adapters/templates/storage/search.html
+@@ -7,7 +7,7 @@
+ {% endblock %}
+ 
+ {% block content %}
+-<main class="container-fluid py-3 pb-5">
++<main id="main-content" class="container-fluid py-3 pb-5">
+     <a href="{% url 'storage:project_detail' project.pk %}" class="btn btn-sm btn-outline-secondary mb-3">
+         ← К проекту {{ project.code }}
+     </a>
+diff --git a/storage/tests/test_gui.py b/storage/tests/test_gui.py
+index 157a78c..f15217c 100644
+--- a/storage/tests/test_gui.py
++++ b/storage/tests/test_gui.py
+@@ -542,6 +542,8 @@ class GuiViewTests(GuiTestBase):
+         self.assertContains(response, 'table-bordered')
+         self.assertContains(response, 'id="documentsTable"')
+         self.assertNotContains(response, 'col-resizer')
++        # Спринт 6: видимая кнопка загрузки вернулась в тулбар реестра
++        self.assertContains(response, 'id="uploadBtn"')
+         self.assertContains(response, 'data-role="upload-input"')
+         self.assertNotContains(response, 'Перетащите файлы сюда')
+         self.assertNotContains(response, 'upload-zone')
+diff --git a/storage/tests/test_sprint5.py b/storage/tests/test_sprint5.py
+index f33e106..473e0a7 100644
+--- a/storage/tests/test_sprint5.py
++++ b/storage/tests/test_sprint5.py
+@@ -405,3 +405,60 @@ class EmptyTrashCropCleanupTests(Sprint5TestBase):
+         from django.core.files.storage import default_storage
+ 
+         self.assertFalse(default_storage.exists(crop_name))
++
++
++class Sprint6MarkupTests(Sprint5TestBase):
++    """Спринт 6: UX-полировка — критичные элементы разметки на месте."""
++
++    def test_project_page_has_visible_upload_button_and_status(self):
++        self.client.force_login(self.user_gip)
++        response = self.client.get(
++            reverse('storage:project_detail', args=[self.project.pk]),
++        )
++
++        self.assertContains(response, 'id="uploadBtn"')
++        self.assertContains(response, 'id="uploadStatus"')
++        self.assertContains(response, 'id="panelSpinner"')
++        self.assertContains(response, 'data-role="upload-btn"')
++
++    def test_document_modals_rendered_once_per_page(self):
++        # Спринт 6: общие блоки вынесены из цикла разделов — по одному экземпляру
++        self.client.force_login(self.user_gip)
++        response = self.client.get(
++            reverse('storage:project_detail', args=[self.project.pk]),
++        )
++        html = response.content.decode()
++
++        self.assertEqual(html.count('id="dndToast"'), 1)
++        self.assertEqual(html.count('id="docRowMenu"'), 1)
++        self.assertEqual(html.count('id="documentMoveModal"'), 1)
++
++    def test_folder_rows_have_visible_kebab_menu(self):
++        from storage.domain.services import create_folder
++
++        create_folder(self.user_gip, self.project, 'С кебабом', section=self.section_ar)
++        self.client.force_login(self.user_gip)
++        response = self.client.get(
++            reverse('storage:project_detail', args=[self.project.pk]),
++        )
++        html = response.content.decode()
++
++        self.assertIn('data-folder-kebab', html)
++        # 2 папки из фикстур (03. Опубликовано, 01. В работе) + «С кебабом»
++        self.assertEqual(html.count('data-folder-kebab'), 3)
++
++    def test_login_page_loads_design_tokens(self):
++        response = self.client.get(reverse('login'))
++
++        self.assertEqual(response.status_code, 200)
++        self.assertContains(response, 'design-tokens/tokens.css')
++
++    def test_base_page_loads_brand_fonts_and_skip_link(self):
++        self.client.force_login(self.user_gip)
++        response = self.client.get(
++            reverse('storage:project_detail', args=[self.project.pk]),
++        )
++
++        self.assertContains(response, 'fonts/fonts.css')
++        self.assertContains(response, 'skip-link')
++        self.assertContains(response, 'id="main-content"')

@@ -216,6 +216,7 @@
 
   <div class="splitter" id="drag-divider"></div>
 
+  {% if not public_view %}
   <aside class="panel" id="issues-panel">
     <div class="panel-head">
       <h2>Замечания</h2><span class="count num">{{ issues|length }}</span>
@@ -299,6 +300,7 @@
       <div class="detail-scroll" id="detailContent"></div>
     </div>
   </aside>
+  {% endif %}
 </div>
 
 {{ issues_json|json_script:"issues-data" }}

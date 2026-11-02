@@ -640,10 +640,15 @@ class IssueStatusMatrixTests(TestCase):
         self.assertIn('status_options', payload)
 
     def test_answer_update_and_delete_permissions(self):
+        # Спринт 5: редактировать официальный ответ может исполнитель,
+        # ГИП или админ — проверяющий работает только на чтение.
         issue = self._issue()
-        update_issue_answer(self.checker, issue, 'Ответ проверяющего')
+        with self.assertRaises(PermissionDenied):
+            update_issue_answer(self.checker, issue, 'Ответ проверяющего')
+
+        issue = update_issue_answer(self.developer, issue, 'Ответ исполнителя')
         issue.refresh_from_db()
-        self.assertEqual(issue.answer_text, 'Ответ проверяющего')
+        self.assertEqual(issue.answer_text, 'Ответ исполнителя')
 
         with self.assertRaises(PermissionDenied):
             delete_issue(self.checker, issue)

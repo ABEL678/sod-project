@@ -5,7 +5,6 @@ import uuid
 import zipfile
 from io import BytesIO
 from urllib.parse import urlencode
-from urllib.parse import urlencode
 
 from django.contrib import messages
 from django.contrib.auth import get_user_model
@@ -2067,39 +2066,49 @@ class DocumentDetailView(LoginRequiredMixin, DetailView):
         context['pdf_url'] = pdf_url
         context['pdf_url_current'] = pdf_url_current
         context['current_version_url'] = current_version_url
+        context['open_issues_count'] = 0
+        context['issues_registry_url'] = ''
         issues = list(get_issues_for_version(self.object))
 
-        status_labels = dict(Issue.STATUS_CHOICES)
-        for issue in issues:
-            issue.allowed_status_options = [
-                (code, status_labels[code])
-                for code in allowed_issue_statuses(self.request.user, issue)
-            ]
-            issue.allowed_status_json = json.dumps(
-                [
+        # Спринт 5: по публичной share-ссылке аноним не должен получать
+        # тексты, статусы, авторов и ответы замечаний — отдаём пустые
+        # списки и пропускаем ролевые вычисления по каждому замечанию.
+        if getattr(self, 'public_view', False):
+            context['issues'] = []
+            context['issues_json'] = []
+            context['issue_assignees'] = []
+        else:
+            status_labels = dict(Issue.STATUS_CHOICES)
+            for issue in issues:
+                issue.allowed_status_options = [
+                    (code, status_labels[code])
+                    for code in allowed_issue_statuses(self.request.user, issue)
+                ]
+                issue.allowed_status_json = json.dumps(
+                    [
+                        {'code': code, 'label': label}
+                        for code, label in issue.allowed_status_options
+                    ],
+                    ensure_ascii=False,
+                )
+            context['issues'] = issues
+            payloads = []
+            for issue in issues:
+                payload = _issue_payload(issue)
+                payload['status_options'] = [
                     {'code': code, 'label': label}
                     for code, label in issue.allowed_status_options
-                ],
-                ensure_ascii=False,
+                ]
+                payloads.append(payload)
+            context['issues_json'] = payloads
+            context['issue_assignees'] = get_issue_assignees(
+                self.request.user, self.object
             )
-        context['issues'] = issues
-        context['open_issues_count'] = _open_issues_count(self.object)
-        context['issues_registry_url'] = '{}?{}'.format(
-            reverse('issues:issue_registry', args=[self.object.project_id]),
-            urlencode({'q': self.object.code}),
-        )
-        payloads = []
-        for issue in issues:
-            payload = _issue_payload(issue)
-            payload['status_options'] = [
-                {'code': code, 'label': label}
-                for code, label in issue.allowed_status_options
-            ]
-            payloads.append(payload)
-        context['issues_json'] = payloads
-        context['issue_assignees'] = get_issue_assignees(
-            self.request.user, self.object
-        )
+            context['open_issues_count'] = _open_issues_count(self.object)
+            context['issues_registry_url'] = '{}?{}'.format(
+                reverse('issues:issue_registry', args=[self.object.project_id]),
+                urlencode({'q': self.object.code}),
+            )
         context['can_create_issue'] = check_issue_permission(
             self.request.user, self.object
         )
@@ -2210,7 +2219,13 @@ class DocumentDownloadView(LoginRequiredMixin, View):
             return HttpResponseNotFound('Файл не найден')
 
         filename = version.file.name.rsplit('/', 1)[-1]
-        return FileResponse(file_handle, as_attachment=True, filename=filename)
+        # Спринт 5: отдаём файл под осмысленным именем из шифра документа;
+        # get_valid_filename обезвреживает кавычки/переносы строк из кода.
+        extension = filename.rsplit('.', 1)[-1] if '.' in filename else 'pdf'
+        download_name = get_valid_filename(
+            f'{version.document.code}.{extension}'
+        )
+        return FileResponse(file_handle, as_attachment=True, filename=download_name)
 
 
 @login_required
@@ -2228,7 +2243,7 @@ def document_pdf_with_issues(request, document_id):
 
     response = HttpResponse(pdf_bytes, content_type='application/pdf')
     response['Content-Disposition'] = (
-        f'attachment; filename="{document.code}.pdf"'
+        f'attachment; filename="{get_valid_filename(document.code)}.pdf"'
     )
     return response
 
@@ -2602,6 +2617,17 @@ class DashboardView(LoginRequiredMixin, UserPassesTestMixin, TemplateView):
                             raise ValueError(
                                 'Для нового пользователя укажите пароль'
                             )
+                        # Спринт 5: create_user обходит AUTH_PASSWORD_VALIDATORS —
+                        # валидируем вручную, чтобы «123» не прошёл.
+                        from django.contrib.auth.password_validation import (
+                            validate_password,
+                        )
+                        from django.core.exceptions import ValidationError as _ValidationError
+
+                        try:
+                            validate_password(password)
+                        except _ValidationError as exc:
+                            raise ValueError('; '.join(exc.messages))
                         user = get_user_model().objects.create_user(
                             username=username,
                             password=password,

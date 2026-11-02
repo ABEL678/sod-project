@@ -33,7 +33,7 @@ class T9DelegationTests(T8UltimateTestBase):
             reverse('storage:document_delete', args=[document.pk]),
         )
         self.assertContains(response, 'data-folder-row')
-        self.assertContains(response, 'data-folder-menu')
+        self.assertContains(response, 'data-tree-context="folder"')
 
     def test_document_delete_endpoint_moves_to_trash(self):
         document = self.make_document(code='CTX-DEL')
