@@ -26,9 +26,9 @@
                maxlength="10"
                inputmode="numeric"
                pattern="[0-9]+"
-               required
+               {% if not parent %}required{% endif %}
                data-gost-folder-code
-               placeholder="Например, 01">
+               placeholder="{% if parent %}Можно оставить пустым{% else %}Например, 01{% endif %}">
 
         <label for="folderNameInput" class="form-label">Название папки</label>
         <input type="text"

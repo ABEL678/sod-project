@@ -846,7 +846,10 @@ def create_folder(
         folder_zone = parent.zone or 'WIP'
     code = (code or '').strip()
     if not code:
-        code = _next_folder_code(project, section, parent)
+        # Автонумерация — только для корневых папок раздела/проекта.
+        # Подпапка без кода сохраняется без номера; её шифр = шифр родителя.
+        if parent is None:
+            code = _next_folder_code(project, section, parent)
     elif _folder_code_exists(project, section, code, parent=parent):
         raise ValueError('Папка с таким кодом уже существует в этой папке')
     folder_full_code = (full_code or '').strip() or _folder_full_code(
@@ -883,9 +886,9 @@ def rename_folder(
     folder.name = name
     if code is not None:
         code = (code or '').strip()
-        if not code:
+        if not code and folder.parent is None:
             raise ValueError('Код папки обязателен')
-        if _folder_code_exists(
+        if code and _folder_code_exists(
             folder.project,
             folder.section,
             code,
