@@ -7,7 +7,8 @@
     window.togglePan = window.togglePan || function () {};
     window.toggleSelect = window.toggleSelect || function () {};
     window.copyText = window.copyText || function () {};
-    window.toggleOverlay = window.toggleOverlay || function () {};
+    /* Спринт 3: кнопка-заглушка toggleOverlay удалена — режим наложения
+       это «Шторка» (T65), отдельной несуществующей функции больше нет. */
 
     const viewer = document.getElementById('pdfViewer');
     if (!viewer) {
@@ -45,7 +46,7 @@
     // Цвета статусов приходят из дизайн-токенов (static/js/design-tokens.js,
     // генерируется из tokens.json). Фолбэк — только аварийный синий.
     const STATUS_COLORS = (window.CDE_TOKENS && window.CDE_TOKENS.statusHex) || {};
-    const STATUS_FALLBACK_COLOR = '#0d6efd';
+    const STATUS_FALLBACK_COLOR = '#4674A4';
 
     const pages = new Map();
     const pageCleanups = [];
@@ -951,13 +952,26 @@
         }
         let dragging = false;
 
-        divider.addEventListener('mousedown', function (event) {
-            if (!comparison.active || comparison.mode !== 'slider' || event.button !== 0) {
+        /* Спринт 3 (P1): Pointer Events вместо мыши — разделитель тянут
+           пальцем и стилусом на планшете стройплощадки, не только мышью.
+           setPointerCapture удерживает события за разделителем даже при
+           выходе курсора за пределы кадра; touch-action: none в CSS уже
+           запрещает прокрутку страницы во время перетаскивания. */
+        divider.addEventListener('pointerdown', function (event) {
+            if (!comparison.active || comparison.mode !== 'slider') {
+                return;
+            }
+            if (event.pointerType === 'mouse' && event.button !== 0) {
                 return;
             }
             event.preventDefault();
             event.stopPropagation();
             dragging = true;
+            try {
+                divider.setPointerCapture(event.pointerId);
+            } catch (error) {
+                /* старые браузеры без capture — останемся на window-событиях */
+            }
             document.body.style.userSelect = 'none';
             document.body.style.cursor = 'col-resize';
         });
@@ -975,25 +989,42 @@
             }
         });
 
-        window.addEventListener('mousemove', function (event) {
-            if (!dragging) {
-                return;
-            }
+        function sliderSplitFromEvent(event) {
             const rect = frame.getBoundingClientRect();
             if (!rect.width) {
                 return;
             }
             setSliderSplit(((event.clientX - rect.left) / rect.width) * 100);
-        });
+        }
 
-        window.addEventListener('mouseup', function () {
+        function endSliderDrag() {
             if (!dragging) {
                 return;
             }
             dragging = false;
             document.body.style.userSelect = '';
             document.body.style.cursor = '';
+        }
+
+        /* Захваченные события приходят на сам разделитель; window-слушатели
+           оставлены как фолбэк для браузеров без setPointerCapture. */
+        divider.addEventListener('pointermove', function (event) {
+            if (dragging && divider.hasPointerCapture
+                    && divider.hasPointerCapture(event.pointerId)) {
+                sliderSplitFromEvent(event);
+            }
         });
+        divider.addEventListener('pointerup', endSliderDrag);
+        divider.addEventListener('pointercancel', endSliderDrag);
+
+        window.addEventListener('mousemove', function (event) {
+            if (!dragging) {
+                return;
+            }
+            sliderSplitFromEvent(event);
+        });
+
+        window.addEventListener('mouseup', endSliderDrag);
     }
 
     function initContextMenu() {
@@ -1183,11 +1214,11 @@
                 label.textContent = 'Закрыть сравнение';
             }
             button.disabled = false;
-            button.title = 'Закрыть шторку';
+            button.title = 'Закрыть наложение';
             return;
         }
         if (label) {
-            label.textContent = 'Шторка';
+            label.textContent = 'Наложение';
         }
         button.disabled = isCurrentView
             || !pdfUrl
@@ -1195,13 +1226,13 @@
             || comparison.geometryMismatch
             || comparison.loading;
         if (comparison.geometryMismatch) {
-            button.title = 'Шторка доступна только для листов с одинаковой геометрией. Используйте режим «Рядом».';
+            button.title = 'Наложение доступно только для листов с одинаковой геометрией. Используйте режим «Рядом».';
         } else if (isCurrentView) {
             button.title = 'Доступно только при просмотре не-current версии';
         } else if (comparison.loading) {
             button.title = 'Проверка геометрии…';
         } else {
-            button.title = 'Сравнить версии шторкой';
+            button.title = 'Сравнение / наложение версий: тяните шторку мышью, пальцем или стрелками ←/→';
         }
     }
 
@@ -1858,6 +1889,32 @@
         }
     };
 
+    /* Спринт 3 (P3): горячие клавиши N (следующая) и P (предыдущая).
+       Ловим физические клавиши (event.code), чтобы работало в любой
+       раскладке — ЙЦУКЕН в том числе; в полях ввода не срабатываем. */
+    function shortcutGuard() {
+        const active = document.activeElement;
+        if (!active) {
+            return false;
+        }
+        const tag = (active.tagName || '').toLowerCase();
+        return tag === 'input' || tag === 'textarea' || tag === 'select'
+            || active.isContentEditable;
+    }
+    document.addEventListener('keydown', function (event) {
+        if (event.defaultPrevented || event.ctrlKey || event.metaKey
+                || event.altKey || shortcutGuard()) {
+            return;
+        }
+        if (event.code === 'KeyN') {
+            event.preventDefault();
+            window.nextPage();
+        } else if (event.code === 'KeyP') {
+            event.preventDefault();
+            window.prevPage();
+        }
+    });
+
     viewer.addEventListener('wheel', function (event) {
         if (!event.ctrlKey) {
             return;
@@ -2099,10 +2156,6 @@
         if (navigator.clipboard) {
             navigator.clipboard.writeText(window.getSelection().toString());
         }
-    };
-
-    window.toggleOverlay = function () {
-        alert('Режим наложения версий будет доступен в следующем обновлении.');
     };
 
     window.renderPage = renderPage;

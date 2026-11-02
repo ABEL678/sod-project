@@ -145,7 +145,7 @@
                                     <span class="text-muted">—</span>
                                 {% endif %}
                             </td>
-                            <td>{{ issue.created_at|date:"d.m.Y H:i" }}</td>
+                            <td class="cde-tnum">{{ issue.created_at|date:"d.m.Y, H:i" }}</td>
                         </tr>
                     {% empty %}
                         <tr>

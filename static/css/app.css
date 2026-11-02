@@ -1,4 +1,5 @@
-@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap");
+/* Спринт 3 (P1): CDN-импорт Inter удалён — шрифты самолокальные
+   (static/fonts/fonts.css, Golos Text), офлайн на площадке работает. */
 
 :root {
     --app-topbar-h: 48px;
@@ -25,7 +26,7 @@ body.app-body {
     overflow: hidden;
     background: #fff;
     color: var(--app-ink);
-    font-family: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    font-family: var(--font-sans);
     font-size: 13px;
     line-height: 1.45;
     -webkit-font-smoothing: antialiased;
@@ -1229,23 +1230,23 @@ body.app-body {
 }
 
 .doc-badge-approved {
-    background: #dcfce7;
-    color: #166534;
+    background: var(--s-done-subtle);
+    color: var(--s-done-on);
 }
 
 .doc-badge-review {
-    background: #fef3c7;
-    color: #92400e;
+    background: var(--s-review-subtle);
+    color: var(--s-review-on);
 }
 
 .doc-badge-archived {
-    background: #e2e8f0;
-    color: #475569;
+    background: var(--s-closed-subtle);
+    color: var(--s-closed-on);
 }
 
 .doc-badge-draft {
-    background: #e0e7ff;
-    color: #3730a3;
+    background: var(--s-wait-subtle);
+    color: var(--s-wait-on);
 }
 
 /* ---------- Participants ---------- */
@@ -1337,23 +1338,23 @@ body.app-body {
 }
 
 .role-gip {
-    background: #dbeafe;
-    color: #1e40af;
+    background: var(--s-wait-subtle);
+    color: var(--s-wait-on);
 }
 
 .role-developer {
-    background: #dcfce7;
-    color: #166534;
+    background: var(--s-done-subtle);
+    color: var(--s-done-on);
 }
 
 .role-viewer {
-    background: #e2e8f0;
-    color: #475569;
+    background: var(--s-closed-subtle);
+    color: var(--s-closed-on);
 }
 
 .role-contractor {
-    background: #fef3c7;
-    color: #92400e;
+    background: var(--s-review-subtle);
+    color: var(--s-review-on);
 }
 
 .role-editor {
@@ -2099,7 +2100,7 @@ body.modal-open {
 }
 
 .section-item.is-dnd-over {
-    color: #1e3a8a !important;
+    color: var(--c-accent-pressed) !important;
 }
 
 .dnd-toast {
@@ -2109,18 +2110,18 @@ body.modal-open {
     z-index: 1090;
     max-width: 360px;
     padding: 10px 14px;
-    border: 1px solid #86efac;
+    border: 1px solid var(--s-done-solid);
     border-radius: 8px;
-    background: #f0fdf4;
-    color: #166534;
+    background: var(--s-done-subtle);
+    color: var(--s-done-on);
     font-size: 13px;
     box-shadow: 0 10px 24px rgba(15, 23, 42, .18);
 }
 
 .dnd-toast.is-error {
-    border-color: #fca5a5;
-    background: #fef2f2;
-    color: #b91c1c;
+    border-color: var(--s-attention-solid);
+    background: var(--s-attention-subtle);
+    color: var(--s-attention-on);
 }
 
 /* ---------- T9-FIX-DND-BUG: folder drag and copy hint ---------- */
@@ -2254,13 +2255,13 @@ body.modal-open {
     box-shadow: 0 1px 4px rgba(0, 0, 0, .45);
 }
 
-.pdf-pin--open { background: #dc3545; }
-.pdf-pin--work { background: #f0ad4e; }
-.pdf-pin--closed { background: #198754; }
-.pdf-pin--cancelled { background: #6c757d; }
+.pdf-pin--open { background: var(--s-attention-solid); }
+.pdf-pin--work { background: var(--s-review-solid); }
+.pdf-pin--closed { background: var(--s-done-solid); }
+.pdf-pin--cancelled { background: var(--s-closed-solid); }
 
 .pdf-pin.is-active {
-    outline: 3px solid #0d6efd;
+    outline: 3px solid var(--c-accent);
     outline-offset: 2px;
     transform: translate(-50%, -50%) scale(1.25);
 }
@@ -2271,8 +2272,8 @@ body.modal-open {
 }
 
 .issue-card.is-active {
-    border-color: #0d6efd;
-    box-shadow: 0 0 0 .2rem rgba(13, 110, 253, .2);
+    border-color: var(--c-accent);
+    box-shadow: 0 0 0 .2rem rgba(61, 90, 152, .25);
 }
 
 /* ---------- T12-PDF-FINAL: markup, toolbar, details, context menu ---------- */
@@ -2299,7 +2300,7 @@ body.modal-open {
 
 .pdf-markup {
     position: absolute;
-    border: 2px solid #0d6efd;
+    border: 2px solid var(--c-accent);
     border-radius: 2px;
     pointer-events: auto;
     cursor: pointer;
@@ -2311,7 +2312,7 @@ body.modal-open {
 }
 
 .pdf-markup.is-active {
-    box-shadow: 0 0 0 2px #0d6efd, 0 0 12px rgba(13, 110, 253, .7);
+    box-shadow: 0 0 0 2px var(--c-accent), 0 0 12px rgba(61, 90, 152, .55);
 }
 
 .textLayer {
@@ -2413,8 +2414,8 @@ body.modal-open {
 /* ---------- T2: table <-> PDF sync ---------- */
 
 .table-active {
-    background-color: #fff3cd !important;
-    border-left: 4px solid #ffc107;
+    background-color: var(--s-review-subtle) !important;
+    border-left: 4px solid var(--s-review-solid);
 }
 
 .pdf-markup {
@@ -2422,8 +2423,8 @@ body.modal-open {
 }
 
 .pdf-markup.border-danger {
-    box-shadow: 0 0 0 3px rgba(220, 53, 69, 0.5);
-    outline: 3px solid rgba(220, 53, 69, 0.5);
+    box-shadow: 0 0 0 3px rgba(180, 78, 72, 0.5);
+    outline: 3px solid rgba(180, 78, 72, 0.5);
     outline-offset: 2px;
 }
 
@@ -2437,11 +2438,11 @@ body.modal-open {
 /* ---------- Issue cards list ---------- */
 
 .issue-row:hover {
-    background-color: #f8f9fa;
-    border-left: 4px solid #0d6efd;
+    background-color: var(--c-bg-row-hover);
+    border-left: 4px solid var(--c-accent);
 }
 
 .issue-row.table-active {
-    background-color: #fff3cd !important;
-    border-left: 4px solid #ffc107 !important;
+    background-color: var(--s-review-subtle) !important;
+    border-left: 4px solid var(--s-review-solid) !important;
 }

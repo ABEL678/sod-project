@@ -151,7 +151,7 @@
                                 <span class="fw-bold">
                                     {% if issue.assignee %}{{ issue.assignee.get_full_name|default:issue.assignee.username }}{% else %}Разработчик{% endif %}
                                 </span>
-                                <span>{{ issue.updated_at|date:"d.m.Y H:i" }}</span>
+                                <span class="cde-tnum">{{ issue.updated_at|date:"d.m.Y, H:i" }}</span>
                             </div>
                             <div style="font-size: 0.85rem;">{{ answer_text_display }}</div>
                         </div>
@@ -160,7 +160,7 @@
                         <div class="border rounded p-2 mb-1 bg-light">
                             <div class="d-flex justify-content-between small text-muted mb-1">
                                 <span class="fw-bold">{{ comment.author.get_full_name|default:comment.author.username }}</span>
-                                <span>{{ comment.created_at|date:"d.m.Y H:i" }}</span>
+                                <span class="cde-tnum">{{ comment.created_at|date:"d.m.Y, H:i" }}</span>
                             </div>
                             <div style="font-size: 0.85rem;">{{ comment.text_display }}</div>
                         </div>

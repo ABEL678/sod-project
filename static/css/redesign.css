@@ -1,13 +1,20 @@
 /* Цвета — только через дизайн-токены (tokens.css, источник: tokens.json) */
-.topbar { position: relative; z-index: 1045; height: 52px; background: var(--c-bg-surface); border-bottom: 1px solid var(--c-border-hairline); display: flex; align-items: center; padding: 0 16px; gap: 12px; }
+/* Спринт 4: топбар — графит #1F2937. Кнопки — ghost-стиль со светлой рамкой,
+   лого-марка и аватар — светлые, крошки — светло-серые (текст on-dark). */
+.topbar { position: relative; z-index: 1045; height: 52px; background: var(--c-bg-header); border-bottom: 1px solid var(--c-border-header); display: flex; align-items: center; padding: 0 16px; gap: 12px; }
 .topbar .brand { font-weight: 600; font-size: 15px; display: flex; align-items: center; gap: 8px; }
-.topbar .brand-mark { width: 24px; height: 24px; border-radius: 7px; background: var(--c-accent); color: var(--c-text-inverse); display: grid; place-items: center; font-size: 11px; }
-.topbar .crumb { color: var(--c-text-secondary); font-size: 13.5px; display: flex; gap: 6px; }
-.topbar .crumb .doc { color: var(--c-text-primary); font-weight: 500; }
+.topbar .brand-mark { width: 26px; height: 26px; border-radius: 7px; background: var(--c-text-inverse); color: var(--c-bg-header); display: grid; place-items: center; font-size: 11px; font-weight: 700; letter-spacing: .02em; }
+.topbar .crumb { color: var(--c-text-on-dark-muted); font-size: 13.5px; display: flex; gap: 6px; }
+.topbar .crumb .doc { color: var(--c-text-on-dark); font-weight: 500; }
 .topbar .spacer { flex: 1; }
-.topbar .btn { height: 32px; padding: 0 12px; border-radius: 8px; border: 1px solid var(--c-border-hairline); background: var(--c-bg-surface); font-size: 13px; font-weight: 500; display: inline-flex; align-items: center; gap: 6px; text-decoration: none; color: var(--c-text-primary); }
-.topbar .btn.primary { background: var(--c-accent); border-color: var(--c-accent); color: var(--c-text-inverse); }
-.topbar .avatar { width: 28px; height: 28px; border-radius: 50%; background: var(--c-text-primary); color: var(--c-text-inverse); display: grid; place-items: center; font-size: 11px; font-weight: 500; }
+.topbar .btn { height: 32px; padding: 0 12px; border-radius: 8px; border: 1px solid var(--c-border-header-control); background: transparent; font-size: 13px; font-weight: 500; display: inline-flex; align-items: center; gap: 6px; text-decoration: none; color: var(--c-text-on-dark); transition: background-color .15s ease, border-color .15s ease, color .15s ease; }
+.topbar .btn:hover, .topbar .btn:focus-visible { background: var(--c-bg-header-hover); border-color: var(--c-text-on-dark-muted); color: var(--c-text-on-dark); }
+.topbar .btn.primary { background: var(--c-accent-on-header); border-color: var(--c-accent-on-header); color: var(--c-bg-header); font-weight: 600; }
+.topbar .btn.primary:hover, .topbar .btn.primary:focus-visible { background: var(--c-accent-on-header-strong); border-color: var(--c-accent-on-header-strong); color: var(--c-bg-header); }
+.topbar .avatar { width: 28px; height: 28px; border-radius: 50%; background: var(--c-accent-on-header); color: var(--c-bg-header); display: grid; place-items: center; font-size: 11px; font-weight: 600; box-shadow: 0 0 0 2px var(--c-border-header-control); }
+.topbar .form-control { height: 32px; border-radius: 999px; border: 1px solid var(--c-border-header-control); background: var(--c-bg-header-hover); color: var(--c-text-on-dark); font-size: 13px; padding: 0 14px; }
+.topbar .form-control::placeholder { color: var(--c-text-on-dark-muted); opacity: 1; }
+.topbar .form-control:focus { background: var(--c-bg-header-hover); border-color: var(--c-accent-on-header); box-shadow: none; outline: none; color: var(--c-text-on-dark); }
 body { background: var(--c-bg-app); font-family: 'Golos Text', 'Inter', system-ui, sans-serif; overflow-x: hidden; }
 .container { max-width: 1060px; margin: 0 auto; padding: 24px; }
 
@@ -41,7 +48,7 @@ body { background: var(--c-bg-app); font-family: 'Golos Text', 'Inter', system-u
     max-width: 46%;
     overflow: hidden;
     text-align: center;
-    opacity: 0.25;
+    opacity: 0.12; /* Спринт 3: 0.25 → 0.12, чтобы не спорить с контентом */
     pointer-events: none;
     user-select: none;
     white-space: nowrap;
@@ -56,17 +63,18 @@ body { background: var(--c-bg-app); font-family: 'Golos Text', 'Inter', system-u
     font-size: 18px;
     font-weight: 600;
     letter-spacing: 1px;
-    color: var(--c-text-primary);
+    color: var(--c-text-on-dark);
 }
 
 .brand-slogan {
     display: block;
     font-size: 10px;
-    color: var(--c-text-secondary);
+    color: var(--c-text-on-dark-muted);
     margin-top: 1px;
 }
 
-/* T85: header/breadcrumbs/table polish */
+/* T85: header/breadcrumbs/table polish.
+   Спринт 4: --c-bg-header теперь графит #1F2937 (см. tokens.json). */
 .topbar {
     background: var(--c-bg-header) !important;
     border-bottom: 1px solid var(--c-border-header);
@@ -78,25 +86,25 @@ body { background: var(--c-bg-app); font-family: 'Golos Text', 'Inter', system-u
 
 .company-link {
     text-decoration: none;
-    color: var(--c-text-primary);
+    color: var(--c-text-on-dark);
     font-weight: 600;
     transition: color 0.2s;
     border-bottom: 1px solid transparent;
 }
 
 .company-link:hover {
-    color: var(--c-accent);
-    border-bottom-color: var(--c-accent);
+    color: var(--c-accent-on-header-strong);
+    border-bottom-color: var(--c-accent-on-header-strong);
 }
 
 .crumb a {
     text-decoration: none;
-    color: var(--c-text-secondary);
+    color: var(--c-text-on-dark-muted);
     transition: color 0.2s;
 }
 
 .crumb a:hover {
-    color: var(--c-accent);
+    color: var(--c-accent-on-header-strong);
     text-decoration: underline;
 }
 
@@ -585,4 +593,76 @@ tr.doc-row-flash > td { animation: wf-row-flash 1.5s ease; }
 .toolbar-search input {
     width: 260px;
     padding-left: 26px;
+}
+
+/* ==========================================================================
+   Спринт 4: перекраска Bootstrap-контролов в акцент токенов.
+   Раньше .btn-primary, ссылки и фокус-кольца были бутстраповским #0d6efd —
+   «кислота» жила именно тут. Теперь всё берёт var(--c-accent) = #3D5A98.
+   RGB-константы ниже — числовые двойники #3D5A98 / #2F4A7E для rgba()Bootstrap.
+   При смене акцента в tokens.json обновить их вручную.
+   ========================================================================== */
+:root {
+    --bs-primary: var(--c-accent);
+    --bs-primary-rgb: 61, 90, 152;
+    --bs-link-color: var(--c-accent-on-subtle);
+    --bs-link-color-rgb: 47, 74, 126;
+    --bs-link-hover-color: var(--c-accent);
+}
+
+.btn-primary {
+    --bs-btn-bg: var(--c-accent);
+    --bs-btn-border-color: var(--c-accent);
+    --bs-btn-hover-bg: var(--c-accent-hover);
+    --bs-btn-hover-border-color: var(--c-accent-hover);
+    --bs-btn-active-bg: var(--c-accent-pressed);
+    --bs-btn-active-border-color: var(--c-accent-pressed);
+    --bs-btn-disabled-bg: var(--c-accent);
+    --bs-btn-disabled-border-color: var(--c-accent);
+    --bs-btn-focus-shadow-rgb: 61, 90, 152;
+}
+
+.btn-outline-primary {
+    --bs-btn-color: var(--c-accent);
+    --bs-btn-border-color: var(--c-accent);
+    --bs-btn-hover-bg: var(--c-accent);
+    --bs-btn-hover-border-color: var(--c-accent);
+    --bs-btn-active-bg: var(--c-accent-pressed);
+    --bs-btn-active-border-color: var(--c-accent-pressed);
+    --bs-btn-disabled-color: var(--c-accent);
+    --bs-btn-disabled-border-color: var(--c-accent);
+    --bs-btn-focus-shadow-rgb: 61, 90, 152;
+}
+
+.form-control:focus,
+.form-select:focus {
+    border-color: var(--c-accent);
+    box-shadow: 0 0 0 .2rem var(--c-accent-subtle);
+}
+
+.form-check-input:checked {
+    background-color: var(--c-accent);
+    border-color: var(--c-accent);
+}
+
+.form-check-input:focus {
+    border-color: var(--c-accent);
+    box-shadow: 0 0 0 .2rem var(--c-accent-subtle);
+}
+
+.nav-pills .nav-link.active,
+.nav-pills .show > .nav-link,
+.dropdown-item.active,
+.dropdown-item:active {
+    background-color: var(--c-accent);
+}
+
+.page-item.active .page-link {
+    background-color: var(--c-accent);
+    border-color: var(--c-accent);
+}
+
+.text-bg-primary {
+    background-color: var(--c-accent) !important;
+    color: var(--c-text-inverse) !important;
 }

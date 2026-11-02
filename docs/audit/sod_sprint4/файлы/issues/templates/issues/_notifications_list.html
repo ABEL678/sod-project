@@ -1,0 +1,41 @@
+{# Волна 3: содержимое колокольчика уведомлений (htmx-фрагмент) #}
+<div class="notif-head">
+    <span><i class="bi bi-bell me-1" aria-hidden="true"></i>Уведомления</span>
+    <form method="post"
+          action="{% url 'issues:notifications_read_all' %}"
+          hx-post="{% url 'issues:notifications_read_all' %}"
+          hx-target="closest .notif-menu"
+          hx-swap="innerHTML"
+          class="mb-0">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-link btn-sm p-0 text-decoration-none"
+                title="Отметить всё прочитанным">Прочитать всё</button>
+    </form>
+</div>
+{% for n in notifications %}
+    <a class="notif-item {% if not n.is_read %}is-unread{% endif %}"
+       href="{{ n.url|default:'#' }}">
+        <div class="d-flex gap-2 align-items-start">
+            <i class="bi {% if n.verb == 'assigned' %}bi-person-check
+                        {% elif n.verb == 'commented' %}bi-chat-dots
+                        {% elif n.verb == 'status_changed' %}bi-arrow-repeat
+                        {% elif n.verb == 'doc_submitted' %}bi-arrow-right-circle
+                        {% elif n.verb == 'doc_published' %}bi-shield-check
+                        {% elif n.verb == 'doc_returned' %}bi-arrow-return-left
+                        {% else %}bi-lock{% endif %} mt-1" aria-hidden="true"></i>
+            <div class="flex-grow-1">
+                <div>{{ n.message|default:n.get_verb_display }}</div>
+                <div class="notif-time">
+                    {{ n.created_at|date:"d.m.Y, H:i" }}
+                    {% if n.actor %}· {{ n.actor.get_full_name|default:n.actor.username }}{% endif %}
+                </div>
+            </div>
+            {% if not n.is_read %}<span class="badge rounded-pill text-bg-primary mt-1">new</span>{% endif %}
+        </div>
+    </a>
+{% empty %}
+    <div class="notif-empty">
+        <i class="bi bi-check2-circle me-1" aria-hidden="true"></i>
+        Уведомлений пока нет
+    </div>
+{% endfor %}

@@ -1,33 +1,37 @@
 #!/usr/bin/env python3
 """Генератор дизайн-токенов СОД (Stream-CAD).
 
-Единый источник правды — static/design-tokens/tokens.json.
-Скрипт порождает три артефакта, которые коммитятся в репозиторий:
+Единый источник правды — static/design-tokens/tokens.json + корневой urls.py.
+Скрипт порождает четыре артефакта, которые коммитятся в репозиторий:
 
   1. static/design-tokens/tokens.css          — CSS-переменные + семантические классы
   2. static/js/design-tokens.js               — window.CDE_TOKENS (цвета статусов для JS)
   3. storage/domain/design_colors.py          — константы для Python (вкл. PyMuPDF RGB)
+  4. static/js/sw-bypass-list.js              — bypass-префиксы сервис-воркера (Спринт 3)
 
 Использование:
     python scripts/build_design_tokens.py           # перегенерировать файлы
     python scripts/build_design_tokens.py --check   # проверка дрейфа (exit 1, если
-                                                     # артефакты не совпадают с tokens.json)
+                                                     # артефакты не совпадают с источниками)
 
-Правило: НИКТО не редактирует сгенерированные файлы руками — только tokens.json
-и этот шаблонизатор. CI (.github/workflows/design-tokens.yml) ловит дрейф.
+Правило: НИКТО не редактирует сгенерированные файлы руками — только tokens.json,
+urls.py и этот шаблонизатор. CI (.github/workflows/design-tokens.yml) ловит дрейф.
 """
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TOKENS_JSON = REPO_ROOT / 'static' / 'design-tokens' / 'tokens.json'
+SW_BYPASS_JS = REPO_ROOT / 'static' / 'js' / 'sw-bypass-list.js'
 OUTPUTS = (
     REPO_ROOT / 'static' / 'design-tokens' / 'tokens.css',
     REPO_ROOT / 'static' / 'js' / 'design-tokens.js',
     REPO_ROOT / 'storage' / 'domain' / 'design_colors.py',
+    SW_BYPASS_JS,
 )
 
 GENERATED_NOTE_CSS = (
@@ -45,6 +49,11 @@ GENERATED_NOTE_PY = (
     '\n'
     'Правки вносить в tokens.json, затем: python scripts/build_design_tokens.py\n'
     '"""'
+)
+GENERATED_NOTE_SW = (
+    '/* АВТОГЕНЕРАТ из urls.py (Спринт 3, P2) — НЕ РЕДАКТИРОВАТЬ ВРУЧНУЮ.\n'
+    '   Новый маршрут добавили в urls.py — перегенерируйте:\n'
+    '   python scripts/build_design_tokens.py (CI ловит дрейф). */'
 )
 
 
@@ -89,8 +98,8 @@ def render_css(tokens: dict) -> str:
     add('   Источник истины: tokens.json · Версия {version}'.format(version=tokens['version']))
     add('   ----------------------------------------------------------------------------')
     add('   Подключение:  <link rel="stylesheet" href="tokens.css">')
-    add('   Шрифты (опционально, есть системные фолбэки):')
-    add('     <link href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">')
+    add('   Шрифты — самолокальные (Спринт 3, P1): static/fonts/fonts.css,')
+    add('   CDN отключён ради офлайна на площадке.')
     add('')
     add('   ГЛАВНЫЕ ПРАВИЛА СИСТЕМЫ')
     add('   1. Один смысл — один цвет. Статусные цвета одинаковы в панели замечаний,')
@@ -110,13 +119,15 @@ def render_css(tokens: dict) -> str:
     add(_var('c-bg-surface-hover', surface['surface-hover']))
     add(_var('c-bg-surface-sunken', surface['surface-sunken']))
     add(_var('c-bg-canvas', surface['canvas'], 'тёмный canvas вьювера'))
-    add(_var('c-bg-header', surface['header'], 'фирменный mint-хедер'))
+    add(_var('c-bg-header', surface['header'], 'графитовый хедер'))
+    add(_var('c-bg-header-hover', surface.get('header-hover', 'rgba(255, 255, 255, 0.08)'), 'ховер ghost-кнопок на тёмном'))
     add(_var('c-bg-row-hover', surface['row-hover'], 'ховер кликабельной строки'))
     add('')
     add('  /* --- Границы --- */')
     add(_var('c-border-hairline', border['hairline']))
     add(_var('c-border-default', border['default']))
-    add(_var('c-border-header', border['header'], 'граница mint-хедера'))
+    add(_var('c-border-header', border['header'], 'граница графитового хедера'))
+    add(_var('c-border-header-control', border.get('header-control', '#4B5563'), 'рамки ghost-кнопок на хедере'))
     add('')
     add('  /* --- Текст --- */')
     add(_var('c-text-primary', text['primary']))
@@ -132,6 +143,8 @@ def render_css(tokens: dict) -> str:
     add(_var('c-accent-pressed', accent['pressed']))
     add(_var('c-accent-subtle', accent['subtle']))
     add(_var('c-accent-on-subtle', accent['on-subtle']))
+    add(_var('c-accent-on-header', accent.get('on-header', '#9FB6DF'), 'акцент-ссылки на графитовом хедере'))
+    add(_var('c-accent-on-header-strong', accent.get('on-header-strong', '#CBD8EF'), 'ховер акцента на хедере'))
     add('')
     add('  /* --- Статусы: solid / subtle / on --- */')
     for name, values in statuses.items():
@@ -406,16 +419,79 @@ def render_py(tokens: dict) -> str:
         '}',
         '',
         '# Цвета Excel-экспорта (не входят в CSS/JS).',
+        '# Спринт 3: без «#» — openpyxl требует aRGB-строку, иначе export падает.',
         'EXCEL_HEADER_FILL = {value!r}'.format(
-            value=excel.get('header_fill', '#EFEFEC')
+            value=excel.get('header_fill', '#EFEFEC').lstrip('#')
         ),
         'EXCEL_OVERDUE_TEXT = {value!r}'.format(
-            value=excel.get('overdue_text', '#B02A37')
+            value=excel.get('overdue_text', '#B02A37').lstrip('#')
         ),
         'EXCEL_LINK = {value!r}'.format(
-            value=excel.get('link', '#0563C1')
+            value=excel.get('link', '#0563C1').lstrip('#')
         ),
     ]) + '\n'
+
+
+# ---------------------------------------------------------------------------
+# sw-bypass-list.js (Спринт 3, P2)
+# ---------------------------------------------------------------------------
+
+def render_sw_bypass() -> str:
+    """Собирает префиксы динамических маршрутов из корневого URLConf.
+
+    Раньше список «что не кэшировать» был зашит руками в sw.js и дрейфовал
+    с urls.py при каждом новом маршруте. Теперь service worker подключает
+    этот файл через importScripts: любой маршрут, объявленный в urls.py,
+    автоматически попадает в «network-only». Медиа добавляются явно
+    (MEDIA_URL может не попасть в urlconf), сам /sw.js исключается.
+    """
+    import os
+    import sys
+
+    if str(REPO_ROOT) not in sys.path:
+        sys.path.insert(0, str(REPO_ROOT))
+    os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'sod_core.settings')
+    import django
+
+    django.setup()
+    from django.urls import get_resolver
+
+    prefixes: set[str] = set()
+
+    def _head(pattern_obj) -> str:
+        """Первый сегмент маршрута (Django 6: текст маршрута — str(pattern)).
+
+        Регулярные маршруты (re_path) и параметризованные корни ('<int:pk>/')
+        не являются литеральными префиксами — пропускаем их.
+        """
+        text = str(pattern_obj) if pattern_obj is not None else ''
+        head = text.split('/', 1)[0]
+        if not re.fullmatch(r'[A-Za-z0-9_-]+', head):
+            return ''
+        return head
+
+    def walk(patterns) -> None:
+        for pattern in patterns:
+            head = _head(getattr(pattern, 'pattern', None))
+            if head and head != 'sw.js':
+                prefixes.add('/{head}/'.format(head=head))
+            if hasattr(pattern, 'url_patterns'):
+                walk(pattern.url_patterns)
+
+    walk(get_resolver().url_patterns)
+    prefixes.add('/media/')
+
+    lines = [
+        GENERATED_NOTE_SW,
+        '/* Префиксы, которые сервис-воркер НЕ кэширует (network-only). */',
+        '(function () {',
+        "    'use strict';",
+        '    self.SOD_SW_BYPASS = [',
+    ]
+    for prefix in sorted(prefixes):
+        lines.append("        '{prefix}',".format(prefix=prefix))
+    lines += ['    ];', '})();']
+    return '\n'.join(lines) + '\n'
 
 
 # ---------------------------------------------------------------------------
@@ -427,6 +503,7 @@ def build_all(tokens: dict) -> dict[Path, str]:
         OUTPUTS[0]: render_css(tokens),
         OUTPUTS[1]: render_js(tokens),
         OUTPUTS[2]: render_py(tokens),
+        OUTPUTS[3]: render_sw_bypass(),
     }
 
 
@@ -448,7 +525,8 @@ def main() -> int:
                 print('  - {item}'.format(item=item))
             print('Перегенерируйте: python scripts/build_design_tokens.py и закоммитьте.')
             return 1
-        print('OK: tokens.css, design-tokens.js, design_colors.py синхронны с tokens.json.')
+        print('OK: tokens.css, design-tokens.js, design_colors.py, '
+              'sw-bypass-list.js синхронны с источниками.')
         return 0
 
     for path, content in rendered.items():

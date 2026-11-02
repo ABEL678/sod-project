@@ -1,19 +1,57 @@
-/* Stream-CAD service worker (Волна 3, PWA для площадки).
+/* Stream-CAD service worker (Волна 3, PWA для площадки; Спринт 3 — зачистка).
    Стратегии:
    - навигация (HTML): network-first, при офлайне — из кэша;
    - статика: stale-while-revalidate (мгновенно из кэша, тихо обновляем).
-   Не кэшируем API/POST, палитру, уведомления и всё с query-параметрами. */
+   Не кэшируем API/POST и всё с query-параметрами; префиксы динамических
+   маршрутов приходят из сгенерированного sw-bypass-list.js (см. urls.py). */
 'use strict';
 
-const CACHE_NAME = 'sod-shell-v4';
+/* Спринт 3 (P2): версия кэша собирается на сервере из хэша пре-кэшируемых
+   файлов (storage.adapters.views.ServiceWorkerView). Ручной бамп v1→v4
+   больше не нужен: поменяли статику — изменился sw.js — браузер сам
+   переустановит воркер и соберёт свежий кэш. */
+const CACHE_NAME = 'sod-shell-__CACHE_VERSION__';
+
+/* Спринт 3 (P2): bypass-список генерируется из urls.py
+   (scripts/build_design_tokens.py → sw-bypass-list.js). Прошитый ниже
+   набор — только фолбэк на случай сбоя importScripts; в него включены
+   префиксы, критичные для прав доступа. */
+try {
+    importScripts('/static/js/sw-bypass-list.js');
+} catch (error) { /* используем фолбэк ниже */ }
+const BYPASS_PREFIXES = self.SOD_SW_BYPASS || [
+    '/palette/',
+    '/issues/',
+    '/projects/',
+    '/documents/',
+    '/download/',
+    '/media/',
+    '/folders/',
+    '/offline/',
+    '/my-issues/',
+    '/notifications/',
+    '/admin/',
+];
 
 const PRECACHE_URLS = [
     '/static/css/bootstrap.min.css',
     '/static/design-tokens/tokens.css',
     '/static/css/redesign.css',
     '/static/css/app.css',
+    '/static/fonts/fonts.css',
+    '/static/fonts/files/golos-text-cyrillic.woff2',
+    '/static/fonts/files/golos-text-cyrillic-ext.woff2',
+    '/static/fonts/files/golos-text-latin.woff2',
+    '/static/fonts/files/golos-text-latin-ext.woff2',
+    '/static/fonts/files/jetbrains-mono-cyrillic.woff2',
+    '/static/fonts/files/jetbrains-mono-cyrillic-ext.woff2',
+    '/static/fonts/files/jetbrains-mono-latin.woff2',
+    '/static/fonts/files/jetbrains-mono-latin-ext.woff2',
+    '/static/fonts/bootstrap-icons/bootstrap-icons.min.css',
+    '/static/fonts/bootstrap-icons/fonts/bootstrap-icons.woff2',
     '/static/js/vendor/bootstrap.bundle.min.js',
     '/static/js/design-tokens.js',
+    '/static/js/sw-bypass-list.js',
     '/static/js/app.js',
     '/static/icons/icon-192.png',
     '/static/icons/icon-512.png',
@@ -61,16 +99,13 @@ self.addEventListener('fetch', function (event) {
     if (url.origin !== self.location.origin) {
         return;
     }
-    /* Динамические данные всегда из сети (кэш — только фолбэк) */
+    /* Динамические данные всегда из сети (кэш — только фолбэк).
+       Спринт 3: префиксы — из urls.py через sw-bypass-list.js, а не из
+       рукописного списка, дрейфовавшего с маршрутами. */
     const dynamic = (
-        url.pathname.startsWith('/palette/')
-        || url.pathname.startsWith('/issues/')
-        || url.pathname.startsWith('/projects/')
-        || url.pathname.startsWith('/documents/')
-        || url.pathname.startsWith('/download/')
-        || url.pathname.startsWith('/media/')
-        || url.pathname.startsWith('/folders/')
-        || url.pathname.startsWith('/offline/')
+        BYPASS_PREFIXES.some(function (prefix) {
+            return url.pathname.startsWith(prefix);
+        })
         || url.search.length > 0
     );
 

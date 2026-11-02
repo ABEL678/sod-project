@@ -4,16 +4,16 @@
    ========================================================================== */
 /*
    CDE «Среда общих данных» — дизайн-токены (CSS Custom Properties)
-   Источник истины: tokens.json · Версия 20261102
+   Источник истины: tokens.json · Версия 20261102.2
    ----------------------------------------------------------------------------
    Подключение:  <link rel="stylesheet" href="tokens.css">
-   Шрифты (опционально, есть системные фолбэки):
-     <link href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+   Шрифты — самолокальные (Спринт 3, P1): static/fonts/fonts.css,
+   CDN отключён ради офлайна на площадке.
 
    ГЛАВНЫЕ ПРАВИЛА СИСТЕМЫ
    1. Один смысл — один цвет. Статусные цвета одинаковы в панели замечаний,
       в бейджах таблиц и в маркерах на листе документа.
-   2. Акцентный цвет (#2F5BEA) — единственный. Не красить им статусы.
+   2. Акцентный цвет (#3D5A98) — единственный. Не красить им статусы.
    3. Статус никогда не кодируется только цветом: всегда иконка + текст.
    4. Цвет + контекст применения:
         solid   — маркеры, иконки, точки
@@ -28,13 +28,15 @@
   --c-bg-surface-hover: #FAFAF8;
   --c-bg-surface-sunken: #EFEFEC;
   --c-bg-canvas: #26272B;  /* тёмный canvas вьювера */
-  --c-bg-header: #DCFCE7;  /* фирменный mint-хедер */
-  --c-bg-row-hover: #F0FDF4;  /* ховер кликабельной строки */
+  --c-bg-header: #1F2937;  /* графитовый хедер */
+  --c-bg-header-hover: rgba(255, 255, 255, 0.08);  /* ховер ghost-кнопок на тёмном */
+  --c-bg-row-hover: #EDF2F9;  /* ховер кликабельной строки */
 
   /* --- Границы --- */
   --c-border-hairline: #E4E4E0;
   --c-border-default: #D4D4CE;
-  --c-border-header: #86EFAC;  /* граница mint-хедера */
+  --c-border-header: #374151;  /* граница графитового хедера */
+  --c-border-header-control: #4B5563;  /* рамки ghost-кнопок на хедере */
 
   /* --- Текст --- */
   --c-text-primary: #191917;
@@ -45,20 +47,22 @@
   --c-text-inverse: #FFFFFF;
 
   /* --- Акцент (единственный) --- */
-  --c-accent: #2F5BEA;
-  --c-accent-hover: #2447C4;
-  --c-accent-pressed: #1D3BA8;
-  --c-accent-subtle: #ECF0FE;
-  --c-accent-on-subtle: #1E41B8;
+  --c-accent: #3D5A98;
+  --c-accent-hover: #33508A;
+  --c-accent-pressed: #2A4478;
+  --c-accent-subtle: #EDF1F7;
+  --c-accent-on-subtle: #2F4A7E;
+  --c-accent-on-header: #9FB6DF;  /* акцент-ссылки на графитовом хедере */
+  --c-accent-on-header-strong: #CBD8EF;  /* ховер акцента на хедере */
 
   /* --- Статусы: solid / subtle / on --- */
-  --s-wait-solid: #0d6efd;  --s-wait-subtle: #E7F0FF;  --s-wait-on: #0B5ED7; /* Открыто (NEW), черновик */
-  --s-progress-solid: #0dcaf0;  --s-progress-subtle: #E0F8FC;  --s-progress-on: #087990; /* В работе (IN_PROGRESS) */
-  --s-review-solid: #ffc107;  --s-review-subtle: #FFF8E1;  --s-review-on: #7A5C03; /* К обсуждению (DISCUSSION), на проверке */
-  --s-attention-solid: #dc3545;  --s-attention-subtle: #FDEBED;  --s-attention-on: #B02A37; /* Не принято (REJECTED), просрочено */
-  --s-done-solid: #198754;  --s-done-subtle: #E6F4EE;  --s-done-on: #146C43; /* Выполнено (DONE), утверждено */
-  --s-closed-solid: #6c757d;  --s-closed-subtle: #F0F1F2;  --s-closed-on: #565E64; /* Закрыто (CLOSED), архив */
-  --s-canceled-solid: #212529;  --s-canceled-subtle: #E9EAEA;  --s-canceled-on: #000000; /* Аннулировано (CANCELLED) */
+  --s-wait-solid: #4674A4;  --s-wait-subtle: #EBF2F9;  --s-wait-on: #2D5C88; /* Открыто (NEW), черновик */
+  --s-progress-solid: #2E7D8C;  --s-progress-subtle: #E6F3F5;  --s-progress-on: #1F5F6B; /* В работе (IN_PROGRESS) */
+  --s-review-solid: #9A650F;  --s-review-subtle: #F9F1DF;  --s-review-on: #7A5410; /* К обсуждению (DISCUSSION), на проверке */
+  --s-attention-solid: #B44E48;  --s-attention-subtle: #F9EBEA;  --s-attention-on: #96332E; /* Не принято (REJECTED), просрочено */
+  --s-done-solid: #3F7D56;  --s-done-subtle: #E9F3EC;  --s-done-on: #2C5F40; /* Выполнено (DONE), утверждено */
+  --s-closed-solid: #5D6770;  --s-closed-subtle: #F0F1F2;  --s-closed-on: #4A545C; /* Закрыто (CLOSED), архив */
+  --s-canceled-solid: #3F3F3C;  --s-canceled-subtle: #ECECEA;  --s-canceled-on: #262624; /* Аннулировано (CANCELLED) */
 
   /* --- Типографика --- */
   --font-sans: "Golos Text", "Inter", -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
@@ -99,7 +103,7 @@
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
 
   /* --- Фокус (не отключать!) --- */
-  --focus-ring: 0 0 0 2px #FFFFFF, 0 0 0 4px #2F5BEA;
+  --focus-ring: 0 0 0 2px #FFFFFF, 0 0 0 4px #3D5A98;
 }
 
 /* ---------------------------------------------------------------------------
@@ -159,10 +163,10 @@
     --c-text-primary: #F2F2EF;
     --c-text-secondary: #A6A7AC;
     --c-text-muted: #6E6F76;
-    --c-accent: #6B8BFF;
-    --c-accent-hover: #8AA2FF;
-    --c-accent-subtle: #26304F;
-    --c-accent-on-subtle: #B9C8FF;
+    --c-accent: #5474AC;
+    --c-accent-hover: #6C89BC;
+    --c-accent-subtle: #2A3547;
+    --c-accent-on-subtle: #B7C7E6;
     --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.40);
     --shadow-2: 0 2px 8px rgba(0, 0, 0, 0.45);
     --shadow-3: 0 8px 24px rgba(0, 0, 0, 0.55);

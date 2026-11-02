@@ -104,15 +104,15 @@ module.exports = {
  *   --color-ink: #191917;
  *   --color-ink-secondary: #6E6E68;
  *   --color-ink-muted: #9C9C94;
- *   --color-accent: #2F5BEA;
- *   --color-accent-subtle: #ECF0FE;
- *   --color-status-attention: #dc3545;  --color-status-attention-subtle: #FDEBED;
- *   --color-status-wait: #0d6efd;       --color-status-wait-subtle: #E7F0FF;
- *   --color-status-progress: #0dcaf0;   --color-status-progress-subtle: #E0F8FC;
- *   --color-status-review: #ffc107;     --color-status-review-subtle: #FFF8E1;
- *   --color-status-done: #198754;       --color-status-done-subtle: #E6F4EE;
- *   --color-status-closed: #6c757d;     --color-status-closed-subtle: #F0F1F2;
- *   --color-status-canceled: #212529;   --color-status-canceled-subtle: #E9EAEA;
+ *   --color-accent: #3D5A98;
+ *   --color-accent-subtle: #EDF1F7;
+ *   --color-status-attention: #B44E48;  --color-status-attention-subtle: #F9EBEA;
+ *   --color-status-wait: #4674A4;       --color-status-wait-subtle: #EBF2F9;
+ *   --color-status-progress: #2E7D8C;   --color-status-progress-subtle: #E6F3F5;
+ *   --color-status-review: #9A650F;     --color-status-review-subtle: #F9F1DF;
+ *   --color-status-done: #3F7D56;       --color-status-done-subtle: #E9F3EC;
+ *   --color-status-closed: #5D6770;     --color-status-closed-subtle: #F0F1F2;
+ *   --color-status-canceled: #3F3F3C;   --color-status-canceled-subtle: #ECECEA;
  *   --font-sans: "Golos Text", "Inter", -apple-system, sans-serif;
  *   --font-mono: "JetBrains Mono", Consolas, monospace;
  * }

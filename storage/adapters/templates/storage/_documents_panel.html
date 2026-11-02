@@ -109,27 +109,37 @@
                     </span>
                 {% endif %}
             </a>
-            <form method="post" action="{% url 'storage:simulate_mail_import' project.pk %}" class="mb-0">
-                {% csrf_token %}
-                <button type="submit" class="btn btn-outline-secondary btn-sm" title="Импортировать из почты">
-                    <i class="bi bi-envelope-arrow-down" aria-hidden="true"></i>
-                    <span class="d-none d-xl-inline">Импорт</span>
+            {# Спринт 3: импорт/экспорт/настройки свернуты в меню «⋯» — меньше кнопок в тулбаре #}
+            <div class="dropdown">
+                <button type="button"
+                        class="btn btn-outline-secondary btn-sm"
+                        id="documentPanelMore"
+                        data-bs-toggle="dropdown"
+                        data-bs-reference="parent"
+                        aria-expanded="false"
+                        title="Ещё: импорт, экспорт, вид"
+                        aria-label="Ещё действия">
+                    <i class="bi bi-three-dots" aria-hidden="true"></i>
                 </button>
-            </form>
-            <a class="btn btn-outline-secondary btn-sm" href="{% export_url 'xlsx' %}" title="Экспорт таблицы в Excel">
-                <i class="bi bi-file-earmark-excel" aria-hidden="true"></i>
-                <span class="d-none d-xl-inline">Экспорт</span>
-            </a>
-            <button type="button"
-                    class="btn btn-outline-secondary btn-sm"
-                    id="openSettings"
-                    data-bs-toggle="modal"
-                    data-bs-target="#viewSettingsModal"
-                    title="Настройки вида"
-                    aria-label="Настройки вида">
-                <i class="bi bi-gear" aria-hidden="true"></i>
-                <span class="d-none d-xxl-inline">Настройки</span>
-            </button>
+                <div class="dropdown-menu dropdown-menu-end" aria-labelledby="documentPanelMore">
+                    <form method="post" action="{% url 'storage:simulate_mail_import' project.pk %}" class="mb-0">
+                        {% csrf_token %}
+                        <button type="submit" class="dropdown-item">
+                            <i class="bi bi-envelope-arrow-down me-2" aria-hidden="true"></i>Импорт из почты
+                        </button>
+                    </form>
+                    <a class="dropdown-item" href="{% export_url 'xlsx' %}">
+                        <i class="bi bi-file-earmark-excel me-2" aria-hidden="true"></i>Экспорт в Excel
+                    </a>
+                    <button type="button"
+                            class="dropdown-item"
+                            id="openSettings"
+                            data-bs-toggle="modal"
+                            data-bs-target="#viewSettingsModal">
+                        <i class="bi bi-gear me-2" aria-hidden="true"></i>Настройки вида
+                    </button>
+                </div>
+            </div>
         </div>
     </div>
 

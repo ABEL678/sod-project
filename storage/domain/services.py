@@ -1551,13 +1551,56 @@ def check_read_permission(user: User, document: Document) -> bool:
 
 
 def get_readable_documents(user: User, project: Project | None = None):
-    """Документы, прошедшие реальную проверку чтения (с учётом членства)."""
+    """Документы, прошедшие реальную проверку чтения (с учётом членства).
+
+    Спринт 3 (P2): раньше каждый документ прогонялся через
+    check_read_permission — по запросу к базе на каждый чек (N+1 на
+    реестре, Excel-экспорте и палитре). Правила те же, но переведены
+    на ролевые SQL-фильтры: одна компания уже отсечена
+    get_accessible_documents, дальше — не более одного запроса на роль:
+
+    - admin / checker / normocontrol / customer / viewer — читают всё
+      в своей компании (get_accessible_documents уже ограничил);
+    - gip — свой проект или членство role_in_project='gip';
+    - developer — членство role_in_project in (gip, developer);
+    - contractor — get_accessible_documents уже ограничил разделами
+      allowed_sections, что и есть правило чтения contractor'а.
+
+    Расхождение с check_read_permission покрывает тест сервиса
+    (issues/tests::RightsServiceTests) — при изменении правил проверять
+    обе функции синхронно.
+    """
     qs = get_accessible_documents(user)
     if project is not None:
         qs = qs.filter(project=project)
     qs = qs.select_related('project', 'section')
-    pks = [doc.pk for doc in qs if check_read_permission(user, doc)]
-    return Document.objects.filter(pk__in=pks)
+
+    if user.is_superuser:
+        return qs
+
+    profile = getattr(user, 'userprofile', None)
+    if profile is None:
+        return Document.objects.none()
+
+    role = profile.role
+    if role == 'admin':
+        return qs
+    if role in ('checker', 'normocontrol', 'customer', 'viewer'):
+        return qs
+    if role == 'gip':
+        return qs.filter(
+            Q(project__gip_id=user.id)
+            | Q(project__memberships__user=user,
+                project__memberships__role_in_project='gip')
+        ).distinct()
+    if role == 'developer':
+        return qs.filter(
+            project__memberships__user=user,
+            project__memberships__role_in_project__in=('gip', 'developer'),
+        ).distinct()
+    if role == 'contractor':
+        return qs
+    return Document.objects.none()
 
 
 # ============================================================================

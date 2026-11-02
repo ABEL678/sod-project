@@ -183,7 +183,13 @@
                                 {% if filters.q or filters.status or filters.flag or filters.assignee %}
                                     Ничего не найдено — измените фильтры.
                                 {% else %}
-                                    По проекту пока нет замечаний.
+                                    <div>По проекту пока нет замечаний.</div>
+                                    {# Спринт 3: пустое состояние с CTA вместо тупика #}
+                                    <div class="small mt-2">
+                                        Замечание создаётся кликом по листу в PDF-вьювере:
+                                        откройте документ и выделите область —
+                                        <a href="{% url 'storage:project_detail' project.pk %}">документы проекта</a>.
+                                    </div>
                                 {% endif %}
                             </td>
                         </tr>

@@ -17,15 +17,26 @@
 
     <div id="recent-documents" class="mt-3 px-3">
         <h5>Последние документы</h5>
-        <ul class="list-unstyled">
-            {% for doc in recent_documents %}
-                <li>
-                    <a href="{% url 'storage:document_detail' doc.pk %}">
-                        {{ doc.code }} — {{ doc.name }}
+        {% if recent_documents %}
+        <ul class="list-unstyled d-flex flex-column gap-2 mb-0">
+            {% for item in recent_documents %}
+                <li class="d-flex align-items-center flex-wrap gap-2">
+                    <a href="{% url 'storage:document_detail' item.doc.pk %}">
+                        {{ item.doc.code }} — {{ item.doc.name }}
                     </a>
+                    <span class="cde-badge cde-badge--accent">{{ item.doc.get_doc_type_display }}</span>
+                    {% if item.doc.current_version %}
+                        <span class="cde-chip">v{{ item.doc.current_version.version_number }}</span>
+                    {% endif %}
+                    <span class="small text-muted cde-tnum">
+                        {% if item.opened_at %}открывался {{ item.opened_at|date:"d.m.Y, H:i" }}{% else %}без времени открытия{% endif %}
+                    </span>
                 </li>
             {% endfor %}
         </ul>
+        {% else %}
+        <p class="text-muted small mb-0">Пока ничего не открывали — начните с разделов ниже.</p>
+        {% endif %}
     </div>
 
     <div class="app-layout" id="appLayout">

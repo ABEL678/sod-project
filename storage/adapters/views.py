@@ -1,4 +1,6 @@
+import hashlib
 import json
+import re
 import uuid
 import zipfile
 from io import BytesIO
@@ -22,8 +24,10 @@ from django.http import (
 from django import forms
 from django.contrib.staticfiles import finders
 from django.shortcuts import get_object_or_404, redirect
+from django.template.loader import get_template
 from django.urls import reverse, reverse_lazy
 from django.utils import timezone
+from django.utils.dateparse import parse_datetime
 from django.utils.safestring import mark_safe
 from django.utils.text import get_valid_filename
 from django.views import View
@@ -119,6 +123,7 @@ from storage.domain.project_templates import PROJECT_TEMPLATES
 
 
 RECENT_DOCUMENTS_SESSION_KEY = 'recent_documents'
+RECENT_DOCUMENTS_TS_KEY = 'recent_documents_ts'
 RECENT_DOCUMENTS_LIMIT = 10
 
 DOCUMENT_VIEW_COLUMN_LABELS = {
@@ -326,17 +331,45 @@ def _document_breadcrumbs(document):
 
 
 def _remember_document(request, document_id):
-    """Сохраняет в сессии только ID недавно открытых документов."""
+    """Сохраняет в сессии ID и время недавних документов.
+
+    Спринт 3: рядом с основным списком (совместимый формат — только ID)
+    хранится словарь времён открытия RECENT_DOCUMENTS_TS_KEY — чипы
+    «Последних документов» показывают, когда документ открывали.
+    """
     recent = [
         pk
         for pk in request.session.get(RECENT_DOCUMENTS_SESSION_KEY, [])
         if isinstance(pk, int) and pk != document_id
     ]
-    request.session[RECENT_DOCUMENTS_SESSION_KEY] = [document_id, *recent][:RECENT_DOCUMENTS_LIMIT]
+    kept = [document_id, *recent][:RECENT_DOCUMENTS_LIMIT]
+    request.session[RECENT_DOCUMENTS_SESSION_KEY] = kept
+
+    stamps = request.session.get(RECENT_DOCUMENTS_TS_KEY, {})
+    if not isinstance(stamps, dict):
+        stamps = {}
+    # ключи приходят строками (сессия хранится в JSON) — нормализуем к int
+    kept_set = set(kept)
+    normalized = {}
+    for key, ts in stamps.items():
+        try:
+            pk = int(key)
+        except (TypeError, ValueError):
+            continue
+        if pk in kept_set:
+            normalized[pk] = ts
+    normalized[document_id] = timezone.now().isoformat()
+    request.session[RECENT_DOCUMENTS_TS_KEY] = normalized
 
 
 def _recent_documents(request, user, project):
-    """Возвращает недавние документы, отфильтрованные по текущим правам."""
+    """Недавние документы, отфильтрованные по текущим правам.
+
+    Спринт 3: возвращает список словарей
+    ``{'doc': Document, 'opened_at': datetime | None}`` — шаблон рисует
+    чипы с типом, версией и временем открытия. Для старых сессий без
+    времён ``opened_at`` равен None (чип просто не показывает время).
+    """
     ids = [
         pk
         for pk in request.session.get(RECENT_DOCUMENTS_SESSION_KEY, [])
@@ -344,6 +377,10 @@ def _recent_documents(request, user, project):
     ]
     if not ids:
         return []
+
+    stamps = request.session.get(RECENT_DOCUMENTS_TS_KEY, {})
+    if not isinstance(stamps, dict):
+        stamps = {}
 
     documents = {
         document.pk: document
@@ -356,7 +393,20 @@ def _recent_documents(request, user, project):
             'current_version__uploaded_by',
         )
     }
-    return [documents[pk] for pk in ids if pk in documents][:RECENT_DOCUMENTS_LIMIT]
+    result = []
+    for pk in ids:
+        doc = documents.get(pk)
+        if doc is None:
+            continue
+        opened_at = None
+        # ключ в сессии — строка (JSON), в свежезаписанном dict — int
+        raw = stamps.get(pk) or stamps.get(str(pk))
+        if raw:
+            opened_at = parse_datetime(str(raw))
+        result.append({'doc': doc, 'opened_at': opened_at})
+        if len(result) >= RECENT_DOCUMENTS_LIMIT:
+            break
+    return result
 
 
 class ProjectListView(LoginRequiredMixin, ListView):
@@ -1247,18 +1297,68 @@ class ServiceWorkerView(View):
 
     Scope сервис-воркера определяется расположением файла, поэтому
     маршрут обязан жить на ``/sw.js``, а не в ``/static/js/``.
+
+    Спринт 3 (P2): в отдаёмый файл подставляется версия кэша, собранная
+    из хэша содержимого пре-кэшируемых файлов. Поменялась статика —
+    изменился текст sw.js — браузер сам переустановит воркер и соберёт
+    свежий кэш; ручной бамп CACHE_NAME не нужен.
     """
+
+    #: маркер в static/js/sw.js, заменяемый на версию кэша
+    VERSION_MARKER = '__CACHE_VERSION__'
 
     def get(self, request):
         sw_path = finders.find('js/sw.js')
         if sw_path is None:
             raise Http404('sw.js не найден в static')
-        response = FileResponse(
-            open(sw_path, 'rb'),
-            content_type='application/javascript',
-        )
+        with open(sw_path, encoding='utf-8') as handle:
+            source = handle.read()
+        if self.VERSION_MARKER in source:
+            source = source.replace(
+                self.VERSION_MARKER, self._cache_version(sw_path, source),
+            )
+        response = HttpResponse(source, content_type='application/javascript')
         response['Service-Worker-Allowed'] = '/'
         return response
+
+    @classmethod
+    def _cache_version(cls, sw_path, sw_source):
+        """MD5-хэш пре-кэша: содержимое файлов из PRECACHE_URLS + шаблон /offline/.
+
+        Считается один раз на процесс (статика меняется только при выкатке);
+        файлы, не найденные через staticfiles, пропускаются — install
+        всё равно делает allSettled.
+        """
+        cached = getattr(cls, '_cache_version_value', None)
+        if cached:
+            return cached
+
+        digest = hashlib.md5()
+        url_list = re.search(
+            r'const PRECACHE_URLS = \[(.*?)\]', sw_source, re.S,
+        )
+        urls = re.findall(r"'([^']+)'", url_list.group(1)) if url_list else []
+        for url in urls:
+            if not url.startswith('/static/'):
+                continue
+            static_path = finders.find(url.removeprefix('/static/'))
+            if not static_path:
+                continue
+            digest.update(url.encode('utf-8'))
+            try:
+                with open(static_path, 'rb') as handle:
+                    digest.update(handle.read())
+            except OSError:
+                continue
+        try:
+            template = get_template('storage/offline.html')
+            digest.update(template.template.source.encode('utf-8'))
+        except Exception:
+            pass
+
+        version = digest.hexdigest()[:10]
+        cls._cache_version_value = version
+        return version
 
 
 class OfflineView(TemplateView):

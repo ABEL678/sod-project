@@ -6,16 +6,16 @@
     'use strict';
 
     window.CDE_TOKENS = {
-        version: '20261102',
+        version: '20261102.2',
         /* HEX-цвет маркера по коду статуса (для canvas и рамок) */
         statusHex: {
-            CANCELLED: '#212529',
-            CLOSED: '#6c757d',
-            DISCUSSION: '#ffc107',
-            DONE: '#198754',
-            IN_PROGRESS: '#0dcaf0',
-            NEW: '#0d6efd',
-            REJECTED: '#dc3545',
+            CANCELLED: '#3F3F3C',
+            CLOSED: '#5D6770',
+            DISCUSSION: '#9A650F',
+            DONE: '#3F7D56',
+            IN_PROGRESS: '#2E7D8C',
+            NEW: '#4674A4',
+            REJECTED: '#B44E48',
         },
         /* CSS-класс бейджа по коду статуса */
         statusClass: {
