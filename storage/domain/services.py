@@ -604,6 +604,7 @@ def _create_common_subfolders(
             section=section,
             parent=parent,
             code=item['code'],
+            force=True,
         )
 
 
@@ -627,6 +628,7 @@ def _populate_project_template(
                 section_data['name'],
                 section_order,
                 user=actor,
+                force=True,
             )
             mark_folder = create_folder(
                 actor,
@@ -635,6 +637,7 @@ def _populate_project_template(
                 section=section,
                 parent=root,
                 code=section_data['code'],
+                force=True,
             )
             _create_common_subfolders(actor, project, mark_folder, section)
             for child in section_data.get('children', ()):
@@ -645,6 +648,7 @@ def _populate_project_template(
                     section=section,
                     parent=mark_folder,
                     code=child['code'],
+                    force=True,
                 )
                 _create_common_subfolders(
                     actor,
@@ -664,6 +668,7 @@ def _populate_project_template(
                 item['name'],
                 section_order,
                 user=actor,
+                force=True,
             )
             create_folder(
                 actor,
@@ -672,6 +677,7 @@ def _populate_project_template(
                 section=section,
                 parent=root,
                 code=item['code'],
+                force=True,
             )
 
 
@@ -757,6 +763,8 @@ def create_project(
     actor = created_by or gip
     if actor is None:
         raise ValueError("Не указан создатель проекта")
+    if not can_create_project(actor):
+        raise PermissionDenied("Нет прав на создание проекта")
 
     _validate_gip_role(gip)
 
@@ -903,9 +911,10 @@ def update_project(
         update_fields.append('status')
 
     if gip is not _UNSET:
-        if gip is not None and not _check_company_access(gip, project.company_id):
-            raise PermissionDenied("ГИП должен принадлежать компании проекта")
-        if gip is not None:
+        gip_changed = (gip.pk if gip is not None else None) != project.gip_id
+        if gip is not None and gip_changed:
+            if not _check_company_access(gip, project.company_id):
+                raise PermissionDenied("ГИП должен принадлежать компании проекта")
             _validate_gip_role(gip)
         project.gip = gip
         update_fields.append('gip')
@@ -945,9 +954,10 @@ def create_section(
     order: int,
     user: User | None = None,
     full_code: str = '',
+    force: bool = False,
 ) -> Section:
     """Создаёт раздел проекта."""
-    if user is not None:
+    if user is not None and not force:
         _ensure_content_manager(user, project)
     code = (code or '').strip()
     name = (name or '').strip()
@@ -1073,9 +1083,11 @@ def create_folder(
     parent: Folder | None = None,
     code: str = '',
     full_code: str = '',
+    force: bool = False,
 ) -> Folder:
     """Создаёт папку проекта или вложенную папку."""
-    _ensure_content_manager(user, project)
+    if not force:
+        _ensure_content_manager(user, project)
     name = (name or '').strip()
     if not name:
         raise ValueError("Название папки обязательно")
@@ -2968,6 +2980,12 @@ def create_project_from_template(
     base_code: str = '',
 ) -> Project:
     """Создаёт проект и, при необходимости, разделы/папки из шаблона."""
+    actor = created_by or gip
+    if actor is None:
+        raise ValueError("Не указан создатель проекта")
+    if not can_create_project(actor):
+        raise PermissionDenied("Нет прав на создание проекта")
+
     project = create_project(
         company=company,
         code=code,
@@ -2977,8 +2995,13 @@ def create_project_from_template(
         created_by=created_by,
         base_code=base_code,
     )
+    if gip is not None:
+        ProjectMembership.objects.get_or_create(
+            project=project,
+            user=gip,
+            defaults={'role_in_project': 'gip'},
+        )
     template = PROJECT_TEMPLATES.get(template_key)
-    actor = created_by or gip
 
     # Легаси-шаблон: сохраняем прежнюю структуру разделов/папок.
     if template_key == 'residential' and template is not None:
@@ -2990,6 +3013,7 @@ def create_project_from_template(
                 section_data['name'],
                 index,
                 user=actor,
+                force=True,
             )
             sections[section.code] = section
 
@@ -3003,6 +3027,7 @@ def create_project_from_template(
                 folder_data['name'],
                 section=section,
                 code=folder_data.get('code', ''),
+                force=True,
             )
 
         return project

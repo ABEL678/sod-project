@@ -456,12 +456,17 @@ class ProjectListView(LoginRequiredMixin, ListView):
             project.can_delete = can_delete_project(user, project)
         context['projects'] = projects
         if context['can_create_project']:
-            context['gip_candidates'] = (
-                get_user_model()
-                .objects.filter(
-                    Q(userprofile__role__in=('gip', 'admin')) | Q(is_superuser=True)
+            company = get_user_company(user)
+            candidates = get_user_model().objects.filter(
+                Q(userprofile__role__in=('gip', 'admin')) | Q(is_superuser=True)
+            )
+            if company is not None:
+                candidates = candidates.filter(
+                    Q(userprofile__company=company) | Q(is_superuser=True)
                 )
-                .order_by('last_name', 'username')
+            context['gip_candidates'] = candidates.distinct().order_by(
+                'last_name',
+                'username',
             )
         return context
 
