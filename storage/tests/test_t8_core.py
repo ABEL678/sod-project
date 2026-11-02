@@ -347,12 +347,12 @@ class T8CoreViewTests(T8CoreTestBase):
             reverse('storage:project_detail', args=[self.project.pk])
         )
         self.assertContains(response, f'data-folder-id="{folder.pk}"')
-        self.assertContains(response, 'folder-menu-btn')
+        self.assertContains(response, 'data-tree-context="folder"')
         self.assertContains(response, 'selectAllDocuments')
         self.assertContains(response, 'doc-share-btn')
         self.assertContains(response, 'id="bulkForm"')
         self.assertContains(response, 'data-role="bulk-bar"')
-        self.assertContains(response, 'Создать папку')
+        self.assertContains(response, 'folderCreateModal')
 
     def test_folder_create_and_section_create_views(self):
         self.client.force_login(self.user_gip)
