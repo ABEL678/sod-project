@@ -21,6 +21,11 @@ urlpatterns = [
     path('projects/<int:project_id>/edit/', views.ProjectEditView.as_view(), name='project_edit'),
     path('projects/<int:project_id>/archive/', views.ProjectArchiveView.as_view(), name='project_archive'),
     path('projects/<int:project_id>/delete/', views.ProjectDeleteView.as_view(), name='project_delete'),
+    path(
+        'projects/<int:project_id>/reset-structure/',
+        views.ProjectResetStructureView.as_view(),
+        name='project_reset_structure',
+    ),
     path('projects/<int:pk>/', views.ProjectDetailView.as_view(), name='project_detail'),
     path('projects/<int:project_id>/sections/create/', views.SectionCreateView.as_view(), name='section_create'),
     path('sections/<int:section_id>/rename/', views.SectionRenameView.as_view(), name='section_rename'),

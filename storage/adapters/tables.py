@@ -188,6 +188,11 @@ class DocumentTable(tables.Table):
             share_url,
         )
 
+    def render_section(self, record):
+        if record.section is None or record.section.code == 'COMMON':
+            return '—'
+        return record.section.code
+
     def render_doc_type(self, record):
         return record.get_doc_type_display()
 

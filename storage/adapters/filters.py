@@ -14,7 +14,7 @@ class DocumentFilter(django_filters.FilterSet):
 
     section = django_filters.ModelChoiceFilter(
         field_name='section',
-        queryset=Section.objects.all(),
+        queryset=Section.objects.exclude(code='COMMON'),
         label='Раздел',
         empty_label='Все разделы',
         widget=forms.Select(attrs={

@@ -1904,9 +1904,12 @@
             preview.value = [base, mark].filter(Boolean).join('-');
         } else {
             var code = codeInput ? codeInput.value.trim() : '';
-            preview.value = parentPrefix
-                ? [parentPrefix, code].filter(Boolean).join('-')
-                : [base, section, code].filter(Boolean).join('-');
+            var absolute = base && code.indexOf(base + '-') === 0;
+            preview.value = absolute
+                ? code
+                : (parentPrefix
+                    ? [parentPrefix, code].filter(Boolean).join('-')
+                    : [base, section, code].filter(Boolean).join('-'));
         }
     }
 
@@ -1926,7 +1929,9 @@
         }
         var codeInput = event.target.closest('[data-gost-folder-code]');
         if (codeInput) {
-            codeInput.value = codeInput.value.replace(/\D/g, '').slice(0, 10);
+            codeInput.value = codeInput.value
+                .replace(/[^A-Za-zА-Яа-яЁё0-9._-]/g, '')
+                .slice(0, 50);
             updateGostForm(codeInput.closest('form'));
         }
     });

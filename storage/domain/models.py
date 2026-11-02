@@ -41,6 +41,12 @@ class Project(models.Model):
         ('archived', 'Архив'),
     ]
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, verbose_name="Статус")
+    template_key = models.CharField(
+        max_length=20,
+        blank=True,
+        default='',
+        verbose_name="Ключ шаблона структуры",
+    )
     is_deleted = models.BooleanField(default=False, verbose_name="Удален")
     deleted_at = models.DateTimeField(null=True, blank=True, verbose_name="Дата удаления")
     created_at = models.DateTimeField(auto_now_add=True, verbose_name="Дата создания")

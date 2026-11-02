@@ -23,12 +23,10 @@
                class="form-control mb-3"
                id="folderCodeInput"
                name="code"
-               maxlength="10"
-               inputmode="numeric"
-               pattern="[0-9]+"
+               maxlength="50"
                {% if not parent %}required{% endif %}
                data-gost-folder-code
-               placeholder="{% if parent %}Можно оставить пустым{% else %}Например, 01{% endif %}">
+               placeholder="{% if parent %}Можно оставить пустым{% else %}Например, 20138-ПЗ2{% endif %}">
 
         <label for="folderNameInput" class="form-label">Название папки</label>
         <input type="text"

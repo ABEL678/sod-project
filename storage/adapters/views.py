@@ -10,7 +10,7 @@ from django.contrib import messages
 from django.contrib.auth import get_user_model
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
-from django.core.exceptions import PermissionDenied
+from django.core.exceptions import PermissionDenied, ValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db.models import Count, Max, Q
 from django.http import (
@@ -115,6 +115,7 @@ from storage.domain.services import (
     move_folder,
     normalize_document_view_config,
     rename_folder,
+    reset_project_structure,
     restore_document,
     restore_folder,
     save_document_view,
@@ -625,7 +626,7 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
         if section_field is not None:
             section_field.queryset = Section.objects.filter(
                 project=self._get_project()
-            )
+            ).exclude(code='COMMON')
         return filterset
 
     def get_filterset_kwargs(self, filterset_class):
@@ -933,7 +934,13 @@ class ProjectCreateView(LoginRequiredMixin, View):
             messages.error(request, str(exc))
             return redirect('storage:project_list')
 
-        messages.success(request, f'Проект «{project.name}» создан.')
+        if getattr(project, '_restored_from_trash', False):
+            messages.success(
+                request,
+                f'Проект «{project.name}» восстановлен из корзины и обновлён.',
+            )
+        else:
+            messages.success(request, f'Проект «{project.name}» создан.')
         return redirect('storage:project_detail', pk=project.pk)
 
 
@@ -1002,6 +1009,30 @@ class ProjectDeleteView(LoginRequiredMixin, View):
             messages.error(request, str(exc))
         else:
             messages.success(request, f'Проект «{project.name}» удалён.')
+        return redirect('storage:project_list')
+
+
+class ProjectResetStructureView(LoginRequiredMixin, View):
+    """Пересоздаёт папки проекта по сохранённому шаблону."""
+
+    def post(self, request, project_id):
+        project = get_object_or_404(
+            get_accessible_projects(request.user),
+            pk=project_id,
+        )
+        try:
+            stats = reset_project_structure(request.user, project)
+        except ValidationError as exc:
+            messages.error(request, ' '.join(exc.messages))
+        except (PermissionDenied, ValueError) as exc:
+            messages.error(request, str(exc))
+        else:
+            messages.success(
+                request,
+                'Структура пересоздана: '
+                f"папок — {stats['created_folders']}, "
+                f"разделов — {stats['created_sections']}.",
+            )
         return redirect('storage:project_list')
 
 

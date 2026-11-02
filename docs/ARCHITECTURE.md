@@ -85,6 +85,7 @@ sod_project/
 | customer | CharField(255), blank | Заказчик |
 | gip | FK → User, null=True | ГИП проекта |
 | status | CharField(20), choices | active, archived |
+| template_key | CharField(20), blank | Ключ шаблона структуры (PD_87 / RD_GOST / FULL) |
 | is_deleted | BooleanField | Мягкое удаление проекта (доступно админу/суперюзеру) |
 | deleted_at | DateTimeField, null=True | Дата мягкого удаления |
 | created_at | DateTimeField | |

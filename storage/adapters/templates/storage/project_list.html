@@ -75,6 +75,19 @@
                                             <i class="bi bi-pencil me-1" aria-hidden="true"></i>Редактировать
                                         </button>
                                     </li>
+                                    {% if project.can_edit %}
+                                        <li>
+                                            <form method="post"
+                                                  action="{% url 'storage:project_reset_structure' project.pk %}"
+                                                  onsubmit="return confirm('Все текущие папки будут удалены, структура будет создана заново. Убедитесь, что в проекте нет файлов.');">
+                                                {% csrf_token %}
+                                                <button type="submit" class="dropdown-item">
+                                                    <i class="bi bi-arrow-repeat me-1" aria-hidden="true"></i>
+                                                    Пересоздать структуру
+                                                </button>
+                                            </form>
+                                        </li>
+                                    {% endif %}
                                     <li>
                                         <form method="post" action="{% url 'storage:project_archive' project.pk %}">
                                             {% csrf_token %}

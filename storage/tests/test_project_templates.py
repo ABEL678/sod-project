@@ -2,7 +2,10 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 
 from storage.domain.models import Company
-from storage.domain.services import create_project_from_template
+from storage.domain.services import (
+    CANONICAL_ZONE_NAMES,
+    create_project_from_template,
+)
 
 
 User = get_user_model()
@@ -60,14 +63,21 @@ class ProjectTemplateTests(TestCase):
         )
 
         self.assertEqual(project.sections.count(), 0)
-        superfolders = project.folders.exclude(code='')
-        self.assertEqual(superfolders.count(), 4)
-        self.assertEqual(
-            set(superfolders.values_list('code', flat=True)),
-            {'01', '02', '03', '04'},
-        )
+        superfolders = project.folders.filter(
+            parent=None,
+            section=None,
+        ).exclude(name__in=CANONICAL_ZONE_NAMES)
+        self.assertEqual(superfolders.count(), 3)
         self.assertEqual(
             set(superfolders.values_list('name', flat=True)),
-            {'ИРД', 'РИИ', 'ПД', 'РД'},
+            {
+                'Исходные данные (ИРД)',
+                'ПД (Проектная документация)',
+                'РД (Рабочая документация)',
+            },
         )
-        self.assertEqual(project.folders.count(), 8)
+        self.assertEqual(
+            set(superfolders.values_list('code', flat=True)),
+            {''},
+        )
+        self.assertEqual(project.folders.count(), 7)

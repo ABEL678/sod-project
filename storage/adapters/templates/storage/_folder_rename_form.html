@@ -10,13 +10,11 @@
                class="form-control mb-3"
                id="folderCodeInput"
                name="code"
-               maxlength="10"
-               inputmode="numeric"
-               pattern="[0-9]+"
+               maxlength="50"
                value="{{ folder.code }}"
                {% if not folder.parent %}required{% endif %}
                data-gost-folder-code
-               placeholder="{% if folder.parent %}Можно оставить пустым{% else %}Например, 01{% endif %}">
+               placeholder="{% if folder.parent %}Можно оставить пустым{% else %}Например, 20138-ПЗ2{% endif %}">
 
         <label for="folderRenameInput" class="form-label">Название папки</label>
         <input type="text"

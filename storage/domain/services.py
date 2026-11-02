@@ -5,7 +5,7 @@ import uuid
 
 import fitz
 
-from django.core.exceptions import PermissionDenied
+from django.core.exceptions import PermissionDenied, ValidationError
 from django.core.files.base import ContentFile
 from django.db.models import Count, Max, Prefetch, Q, QuerySet
 from django.db import transaction
@@ -32,10 +32,11 @@ from issues.notify import (
 )
 from storage.domain.design_colors import ISSUE_STATUS_RGB as PDF_ISSUE_COLORS
 from storage.domain.project_templates import (
-    COMMON_SUBFOLDERS,
+    IRD_FOLDERS,
+    PD_SECTIONS,
     PROJECT_TEMPLATES,
+    RD_SECTIONS,
     ROOT_SUPERFOLDERS,
-    ROOT_SUPERFOLDERS_BY_KEY,
 )
 
 
@@ -455,7 +456,9 @@ def get_document_view(user: User, project: Project, view_id) -> DocumentView | N
 
 def get_sections_with_counts(user: User, project: Project):
     """Разделы проекта с количеством документов в каждом."""
-    return get_accessible_sections(user, project).annotate(
+    return get_accessible_sections(user, project).exclude(
+        code='COMMON'
+    ).annotate(
         document_count=Count(
             'documents',
             filter=Q(documents__is_deleted=False),
@@ -581,38 +584,21 @@ def _validate_gip_role(user: User | None) -> None:
         raise ValueError("Назначаемый ГИП должен иметь роль ГИП или администратора")
 
 
-def _create_default_zones(project: Project, created_by: User) -> None:
-    """Создаёт 4 корневые папки-зоны для проекта."""
-    zone_configs = [
-        ('WIP', '01. В работе'),
-        ('SHARED', '02. На согласовании'),
-        ('PUBLISHED', '03. Опубликовано'),
-        ('ARCHIVE', '04. Архив'),
-    ]
-    for idx, (zone, name) in enumerate(zone_configs, 1):
-        Folder.objects.create(
-            project=project,
-            section=None,
-            parent=None,
-            name=name,
-            order=idx,
-            zone=zone,
-            created_by=created_by,
-        )
-
-
 def _ensure_root_superfolders(project: Project, actor: User) -> dict[str, Folder]:
-    """Создаёт 4 корневые суперпапки проекта (ИРД, РИИ, ПД, РД)."""
+    """Создаёт базовые корневые папки: ИРД, ПД, РД."""
     superfolders = {}
     for index, data in enumerate(ROOT_SUPERFOLDERS, start=1):
         folder, _ = Folder.objects.get_or_create(
             project=project,
             parent=None,
             section=None,
-            code=data['code'],
+            name=data['name'],
             defaults={
-                'name': data['name'],
-                'full_code': generate_gost_code(project.base_code, data['code']),
+                'code': data['code'],
+                'full_code': generate_gost_code(
+                    project.base_code,
+                    data['code'],
+                ),
                 'order': index,
                 'zone': 'WIP',
                 'created_by': actor,
@@ -622,20 +608,142 @@ def _ensure_root_superfolders(project: Project, actor: User) -> dict[str, Folder
     return superfolders
 
 
-def _create_common_subfolders(
-    actor: User,
+def _code_prefix(project: Project) -> str:
+    base_code = (project.base_code or '').strip()
+    return f'{base_code}-' if base_code else ''
+
+
+def _get_or_create_common_section(project: Project) -> Section:
+    """Единый скрытый раздел для документов ПД/РД/ИРД."""
+    section, _ = Section.objects.get_or_create(
+        project=project,
+        code='COMMON',
+        defaults={
+            'name': 'Общие документы',
+            'order': 0,
+        },
+    )
+    return section
+
+
+def _create_ird_structure(
     project: Project,
-    parent: Folder,
-    section: Section,
+    actor: User,
+    superfolders: dict[str, Folder],
 ) -> None:
-    for item in COMMON_SUBFOLDERS:
-        create_folder(
+    """Создаёт группу изысканий и прочие исходные данные."""
+    root = superfolders['IRD']
+    common = _get_or_create_common_section(project)
+
+    for item in IRD_FOLDERS:
+        group = create_folder(
             actor,
             project,
             name=item['name'],
-            section=section,
-            parent=parent,
-            code=item['code'],
+            section=common,
+            parent=root,
+            code='',
+            force=True,
+        )
+        for child in item.get('children', ()):
+            create_folder(
+                actor,
+                project,
+                name=child['name'],
+                section=common,
+                parent=group,
+                code='',
+                force=True,
+            )
+
+
+def _create_pd_structure(
+    project: Project,
+    actor: User,
+    superfolders: dict[str, Folder],
+) -> None:
+    """Создаёт разделы ПД и папки «Часть 1» по ПП №87."""
+    root = superfolders['PD']
+    prefix = _code_prefix(project)
+    common = _get_or_create_common_section(project)
+
+    for section_data in PD_SECTIONS:
+        section_folder = create_folder(
+            actor,
+            project,
+            name=section_data['name'],
+            section=common,
+            parent=root,
+            code='',
+            force=True,
+        )
+
+        subsections = section_data.get('subsections', ())
+        if subsections:
+            for subsection in subsections:
+                sub_folder = create_folder(
+                    actor,
+                    project,
+                    name=subsection['name'],
+                    section=common,
+                    parent=section_folder,
+                    code='',
+                    force=True,
+                )
+                part_code = (
+                    f'{prefix}ИОС1.'
+                    f"{subsection['number'].split('.')[-1]}"
+                )
+                create_folder(
+                    actor,
+                    project,
+                    name=subsection['part'],
+                    section=common,
+                    parent=sub_folder,
+                    code=part_code,
+                    force=True,
+                )
+        else:
+            part_code = f"{prefix}{section_data['mark']}1"
+            create_folder(
+                actor,
+                project,
+                name=section_data['part'],
+                section=common,
+                parent=section_folder,
+                code=part_code,
+                force=True,
+            )
+
+
+def _create_rd_structure(
+    project: Project,
+    actor: User,
+    superfolders: dict[str, Folder],
+) -> None:
+    """Создаёт марки РД и папки «Комплект 1» по ГОСТ Р 21.101-2020."""
+    root = superfolders['RD']
+    prefix = _code_prefix(project)
+    common = _get_or_create_common_section(project)
+
+    for section_data in RD_SECTIONS:
+        mark = section_data['mark']
+        mark_folder = create_folder(
+            actor,
+            project,
+            name=section_data['name'],
+            section=common,
+            parent=root,
+            code='',
+            force=True,
+        )
+        create_folder(
+            actor,
+            project,
+            name=section_data['name'],
+            section=common,
+            parent=mark_folder,
+            code=f'{prefix}{mark}1',
             force=True,
         )
 
@@ -645,72 +753,65 @@ def _populate_project_template(
     template: dict,
     actor: User,
 ) -> None:
-    """Наполняет суперпапки разделами и папками выбранного шаблона."""
+    """Создаёт только базовый верхний каркас выбранного шаблона."""
     superfolders = _ensure_root_superfolders(project, actor)
-    section_order = 0
+    _create_ird_structure(project, actor, superfolders)
+    if template.get('pd'):
+        _create_pd_structure(project, actor, superfolders)
+    if template.get('rd'):
+        _create_rd_structure(project, actor, superfolders)
 
-    for root_key, section_defs in template.get('sections', {}).items():
-        root_data = ROOT_SUPERFOLDERS_BY_KEY[root_key]
-        root = superfolders[root_key]
-        for section_data in section_defs:
-            section_order += 1
-            section = create_section(
-                project,
-                f"{root_data['prefix']}-{section_data['code']}",
-                section_data['name'],
-                section_order,
-                user=actor,
-                force=True,
-            )
-            mark_folder = create_folder(
-                actor,
-                project,
-                name=section_data['name'],
-                section=section,
-                parent=root,
-                code=section_data['code'],
-                force=True,
-            )
-            _create_common_subfolders(actor, project, mark_folder, section)
-            for child in section_data.get('children', ()):
-                child_folder = create_folder(
-                    actor,
-                    project,
-                    name=child['name'],
-                    section=section,
-                    parent=mark_folder,
-                    code=child['code'],
-                    force=True,
-                )
-                _create_common_subfolders(
-                    actor,
-                    project,
-                    child_folder,
-                    section,
-                )
 
-    for root_key, folder_defs in template.get('base_folders', {}).items():
-        root_data = ROOT_SUPERFOLDERS_BY_KEY[root_key]
-        root = superfolders[root_key]
-        for item in folder_defs:
-            section_order += 1
-            section = create_section(
-                project,
-                f"{root_data['prefix']}-{item['code']}",
-                item['name'],
-                section_order,
-                user=actor,
-                force=True,
-            )
-            create_folder(
-                actor,
-                project,
-                name=item['name'],
-                section=section,
-                parent=root,
-                code=item['code'],
-                force=True,
-            )
+@transaction.atomic
+def reset_project_structure(actor: User, project: Project) -> dict:
+    """Удаляет папки проекта и заново разворачивает базовый шаблон."""
+    if not can_edit_project(actor, project):
+        raise PermissionDenied("Нет прав на пересоздание структуры проекта")
+    if project.is_deleted:
+        raise ValueError("Проект находится в корзине")
+
+    if Document.objects.filter(project=project, is_deleted=False).exists():
+        raise ValidationError(
+            "Нельзя пересоздать структуру, пока в проекте есть загруженные "
+            "документы. Удалите их сначала."
+        )
+
+    template_key = project.template_key or 'FULL'
+    template = PROJECT_TEMPLATES.get(template_key)
+    if template is None or template_key == 'residential':
+        # Легаси-проекты без сохранённого ключа получают полный каркас.
+        template_key = 'FULL'
+        template = PROJECT_TEMPLATES['FULL']
+
+    roots = Folder.objects.filter(
+        project=project,
+        parent=None,
+        section=None,
+    ).exclude(name__in=CANONICAL_ZONE_NAMES)
+    removed_folders = roots.delete()[0]
+    # Удаляем и старые технические Section: активных документов уже нет.
+    removed_sections = Section.objects.filter(project=project).delete()[0]
+
+    _ensure_project_zones(project, actor)
+    before_folders = Folder.objects.filter(project=project).count()
+    before_sections = Section.objects.filter(project=project).count()
+
+    _populate_project_template(project, template, actor)
+    if project.template_key != template_key:
+        project.template_key = template_key
+        project.save(update_fields=['template_key'])
+
+    return {
+        'removed_folders': removed_folders,
+        'removed_sections': removed_sections,
+        'created_folders': (
+            Folder.objects.filter(project=project).count() - before_folders
+        ),
+        'created_sections': (
+            Section.objects.filter(project=project).count() - before_sections
+        ),
+        'template_key': template_key,
+    }
 
 
 def _ensure_project_zones(project: Project, user: User | None = None) -> bool:
@@ -804,28 +905,63 @@ def create_project(
     name = (name or '').strip()
     if not code or not name:
         raise ValueError("Шифр и название проекта обязательны")
-    if Project.objects.filter(code=code).exists():
-        raise ValueError("Проект с таким шифром уже существует")
 
     if not _check_company_access(actor, company.pk):
         raise PermissionDenied("Нет прав на создание проекта в этой компании")
-
     if gip is not None and not _check_company_access(gip, company.pk):
         raise PermissionDenied("ГИП должен принадлежать компании проекта")
 
-    project = Project.objects.create(
-        company=company,
-        code=code,
-        base_code=(base_code or '').strip(),
-        name=name,
-        customer=customer,
-        gip=gip,
-        status='active',
-        created_by=actor,
-    )
+    existing = Project.objects.filter(code=code).first()
+    restored = False
+    if existing is not None:
+        if not existing.is_deleted:
+            raise ValueError("Проект с таким шифром уже существует")
+        if existing.company_id != company.pk:
+            raise ValueError(
+                "Проект с таким шифром находится в корзине другой компании"
+            )
+        # Мягко удалённый проект восстанавливаем и перезаписываем карточку.
+        project = existing
+        old_base_code = project.base_code
+        project.company = company
+        project.base_code = (base_code or '').strip()
+        project.name = name
+        project.customer = customer
+        project.gip = gip
+        project.created_by = actor
+        project.status = 'active'
+        project.is_deleted = False
+        project.deleted_at = None
+        project.save(
+            update_fields=[
+                'company',
+                'base_code',
+                'name',
+                'customer',
+                'gip',
+                'created_by',
+                'status',
+                'is_deleted',
+                'deleted_at',
+            ]
+        )
+        if old_base_code != project.base_code:
+            _refresh_project_full_codes(project, old_base_code)
+        restored = True
+    else:
+        project = Project.objects.create(
+            company=company,
+            code=code,
+            base_code=(base_code or '').strip(),
+            name=name,
+            customer=customer,
+            gip=gip,
+            status='active',
+            created_by=actor,
+        )
 
-    _create_default_zones(project, actor)
-
+    _ensure_project_zones(project, actor)
+    project._restored_from_trash = restored
     return project
 
 
@@ -862,20 +998,30 @@ def can_delete_project(user: User, project: Project) -> bool:
 _UNSET = object()
 
 
-def _refresh_project_full_codes(project: Project) -> None:
+def _refresh_project_full_codes(
+    project: Project,
+    old_base_code: str | None = None,
+) -> None:
     """Пересчитывает ГОСТ-шифры разделов и папок после смены base_code."""
     for section in project.sections.all():
         section.full_code = generate_gost_code(project.base_code, section.code)
         section.save(update_fields=['full_code'])
 
     def refresh(folder: Folder) -> None:
-        folder.full_code = _folder_full_code(
-            project,
-            folder.section,
-            folder.parent,
-            folder.code,
-        )
-        folder.save(update_fields=['full_code'])
+        old_code = (folder.code or '').strip()
+        if old_base_code and old_code.startswith(f'{old_base_code}-'):
+            # Абсолютный пользовательский шифр: меняем только префикс базы.
+            folder.code = f'{project.base_code}{old_code[len(old_base_code):]}'
+            folder.full_code = folder.code
+            folder.save(update_fields=['code', 'full_code'])
+        else:
+            folder.full_code = _folder_full_code(
+                project,
+                folder.section,
+                folder.parent,
+                folder.code,
+            )
+            folder.save(update_fields=['full_code'])
         for child in Folder.objects.filter(parent=folder, is_deleted=False):
             refresh(child)
 
@@ -1041,6 +1187,13 @@ def _folder_full_code(
     Для подпапки: ``parent.full_code-code``.
     """
     code = (code or '').strip()
+    if (
+        code
+        and project.base_code
+        and code.startswith(f'{project.base_code}-')
+    ):
+        # Пользователь ввёл полный шифр (например, 20138-ПЗ1) — сохраняем его.
+        return code
     if parent is not None and parent.full_code:
         return f'{parent.full_code}-{code}' if code else parent.full_code
     # Fallback для старых папок без full_code: собираем цепочку кодов.
@@ -1085,6 +1238,12 @@ def _folder_code_exists(
     if exclude is not None:
         qs = qs.exclude(pk=exclude.pk)
     return qs.exists()
+
+
+def _is_absolute_folder_code(project: Project, code: str) -> bool:
+    base_code = (project.base_code or '').strip()
+    code = (code or '').strip()
+    return bool(base_code and code.startswith(f'{base_code}-'))
 
 
 def _next_folder_code(
@@ -1149,6 +1308,7 @@ def create_folder(
     if parent is not None:
         folder_zone = parent.zone or 'WIP'
     code = (code or '').strip()
+    absolute_code = _is_absolute_folder_code(project, code)
     if not code:
         # Автонумерация — только для корневых папок раздела/проекта.
         # Подпапка без кода сохраняется без номера; её шифр = шифр родителя.
@@ -1156,11 +1316,13 @@ def create_folder(
             code = _next_folder_code(project, section, parent)
     elif _folder_code_exists(project, section, code, parent=parent):
         raise ValueError('Папка с таким кодом уже существует в этой папке')
-    folder_full_code = (full_code or '').strip() or _folder_full_code(
-        project,
-        section,
-        parent,
-        code,
+    folder_full_code = (full_code or '').strip() or (
+        code if absolute_code else _folder_full_code(
+            project,
+            section,
+            parent,
+            code,
+        )
     )
     return Folder.objects.create(
         project=project,
@@ -3164,12 +3326,20 @@ def create_project_from_template(
         created_by=created_by,
         base_code=base_code,
     )
+    stored_template_key = template_key or ''
+    if project.template_key != stored_template_key:
+        project.template_key = stored_template_key
+        project.save(update_fields=['template_key'])
     if gip is not None:
         ProjectMembership.objects.get_or_create(
             project=project,
             user=gip,
             defaults={'role_in_project': 'gip'},
         )
+    if getattr(project, '_restored_from_trash', False):
+        # Старый проект восстановлен вместе с существующей структурой;
+        # повторно шаблон не разворачиваем, чтобы не создавать дубликаты.
+        return project
     template = PROJECT_TEMPLATES.get(template_key)
 
     # Легаси-шаблон: сохраняем прежнюю структуру разделов/папок.

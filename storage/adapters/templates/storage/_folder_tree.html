@@ -45,7 +45,7 @@
         {% endif %}
         <a class="folder-name flex-grow-1 text-truncate"
            href="{% url 'storage:project_detail' project.pk %}?folder={{ folder.pk }}{% if selected_view %}&amp;view={{ selected_view.pk }}{% endif %}"
-           title="{{ folder.name }}{% if folder.full_code %} — {{ folder.full_code }}{% elif folder.code %} — {{ folder.code }}{% endif %}">{% if folder.section_id or folder.parent %}{% if folder.full_code %}{{ folder.full_code }} — {{ folder.name }}{% else %}{{ folder.name }}{% endif %}{% else %}{% if folder.code %}{{ folder.code }}. {% endif %}{{ folder.name }}{% endif %}</a>
+           title="{{ folder.name }}{% if folder.full_code %} — {{ folder.full_code }}{% elif folder.code %} — {{ folder.code }}{% endif %}">{% if folder.section_id or folder.parent %}{% if folder.code and folder.full_code %}{{ folder.full_code }} {{ folder.name }}{% else %}{{ folder.name }}{% endif %}{% else %}{% if folder.code %}{{ folder.code }}. {% endif %}{{ folder.name }}{% endif %}</a>
         <span class="badge text-bg-light border folder-count" title="Документов в папке и вложенных папках">{{ folder.subtree_document_count|default:folder.document_count }}</span>
         {# Спринт 6: видимая кнопка меню — раньше действия были только в правом клике #}
         <button type="button"
