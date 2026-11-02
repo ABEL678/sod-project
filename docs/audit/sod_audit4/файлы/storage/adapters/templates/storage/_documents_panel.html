@@ -1,0 +1,179 @@
+{% load django_tables2 %}
+<div id="documentsPanel"
+     data-project-id="{{ project.pk }}"
+     data-view-id="{% if selected_view %}{{ selected_view.pk }}{% else %}none{% endif %}"
+     data-upload-url="{% url 'storage:document_upload_ajax' project.pk %}"
+     data-move-url-template="{% url 'storage:document_move' 0 %}"
+     data-copy-url-template="{% url 'storage:document_copy' 0 %}"
+     data-folder-move-url-template="{% url 'storage:folder_move' 0 %}"
+     data-target-name="{{ upload_target_name }}">
+
+    {% include 'storage/_breadcrumbs.html' %}
+
+    {% comment %}
+    Волна 3: сегмент-контрол зон ISO 19650. Клик по чипу подставляет
+    скрытый input zone в форму фильтров и перезагружает панель через htmx
+    (те же фильтры + зона). Счётчики — по всем доступным документам проекта.
+    {% endcomment %}
+    <nav class="zone-segment" aria-label="Зоны ISO 19650" id="zoneSegment">
+        <button type="button"
+                class="zone-chip {% if not active_zone %}is-active{% endif %}"
+                data-zone="" data-role="zone-chip">
+            <i class="bi bi-collection" aria-hidden="true"></i>
+            Все зоны
+            <span class="zone-count cde-tnum" data-zone-count="">{{ zone_counts.total }}</span>
+        </button>
+        {% for zone in zone_segments %}
+            <button type="button"
+                    class="zone-chip zone-chip--{{ zone.code|lower }} {% if active_zone == zone.code %}is-active{% endif %}"
+                    data-zone="{{ zone.code }}" data-role="zone-chip"
+                    title="{{ zone.label }}">
+                <i class="bi {{ zone.icon }}" aria-hidden="true"></i>
+                {{ zone.label }}
+                <span class="zone-count cde-tnum" data-zone-count="{{ zone.code }}">
+                    {% if zone.code == 'WIP' %}{{ zone_counts.WIP }}
+                    {% elif zone.code == 'SHARED' %}{{ zone_counts.SHARED }}
+                    {% elif zone.code == 'PUBLISHED' %}{{ zone_counts.PUBLISHED }}
+                    {% else %}{{ zone_counts.ARCHIVE }}{% endif %}
+                </span>
+            </button>
+        {% endfor %}
+    </nav>
+
+    {% comment %}
+    Спринт 2: фильтры применяются сразу — по change у селектов и с
+    задержкой 350 мс при наборе в поиске. Кнопка «Найти» больше не нужна
+    (скрытый submit оставлен для доступности/Enter).
+    {% endcomment %}
+    <form id="filtersForm"
+          class="d-none"
+          method="get"
+          action="{% url 'storage:project_detail' project.pk %}"
+          hx-get="{% url 'storage:project_detail' project.pk %}"
+          hx-target="#documentsPanel"
+          hx-select="#documentsPanel"
+          hx-swap="outerHTML"
+          hx-push-url="true"
+          hx-trigger="submit"
+          hx-indicator="#documentsPanel">
+        <input type="hidden" name="tab" value="documents">
+        <input type="hidden" name="zone" value="{{ active_zone|default:'' }}" data-role="zone-input">
+        {% if selected_view %}
+            <input type="hidden" name="view" value="{{ selected_view.pk }}">
+        {% endif %}
+        {% if selected_folder %}
+            <input type="hidden" name="folder" value="{{ selected_folder.pk }}">
+        {% endif %}
+        <input type="hidden" name="sort" value="{{ active_sort|default:'' }}">
+        {{ filter.form.section }}
+        {{ filter.form.doc_type }}
+        {{ filter.form.suitability_code }}
+        {{ filter.form.internal_status }}
+        {{ filter.form.code }}
+        {{ filter.form.name }}
+        {{ filter.form.q }}
+    </form>
+
+    <div class="toolbar" data-role="toolbar">
+        <div class="toolbar-left">
+            <span class="toolbar-count text-muted small text-nowrap">
+                {% if table.paginator %}{{ table.paginator.count }}{% else %}{{ documents|length }}{% endif %} док.
+            </span>
+            <div class="toolbar-search">
+                <i class="bi bi-search" aria-hidden="true"></i>
+                <input type="search"
+                       id="globalSearch"
+                       class="form-control form-control-sm"
+                       placeholder="Поиск: шифр, название, автор"
+                       aria-label="Поиск по документам"
+                       value="{{ active_search }}">
+            </div>
+            <span class="drag-hint text-muted small">
+                <i class="bi bi-grip-vertical" aria-hidden="true"></i>
+                Перетащите строку в папку · Ctrl — копировать
+            </span>
+            {% if active_search %}
+                <span class="badge text-bg-light border">Поиск: {{ active_search }}</span>
+            {% endif %}
+        </div>
+        <div class="toolbar-spacer"></div>
+        <div class="toolbar-actions">
+            {# Спринт 6: видимая главная кнопка загрузки — раньше загрузка была только через DnD и правый клик #}
+            <button type="button"
+                    class="btn btn-primary btn-sm"
+                    id="uploadBtn"
+                    data-role="upload-btn"
+                    title="Загрузить документ в выбранный раздел или папку">
+                <i class="bi bi-upload" aria-hidden="true"></i>
+                <span class="d-none d-xl-inline">Загрузить</span>
+            </button>
+            <span id="uploadStatus" class="upload-status d-none" role="status" aria-live="polite"></span>
+            <i id="panelSpinner" class="bi bi-arrow-repeat panel-spinner" aria-hidden="true"></i>
+            <a class="btn btn-outline-secondary btn-sm" href="{% url 'issues:issue_registry' project.pk %}"
+               title="Реестр замечаний проекта">
+                <i class="bi bi-chat-left-text" aria-hidden="true"></i>
+                <span class="d-none d-xl-inline">Замечания</span>
+                {% if issue_counts %}
+                    <span class="cde-badge {% if issue_counts.overdue %}cde-deadline cde-deadline--overdue{% elif issue_counts.open %}cde-badge--attention{% else %}cde-badge--done{% endif %} cde-tnum ms-1"
+                          title="Открытых: {{ issue_counts.open }} · просрочено: {{ issue_counts.overdue }}">
+                        {{ issue_counts.open }}
+                    </span>
+                {% endif %}
+            </a>
+            {# Спринт 3: импорт/экспорт/настройки свернуты в меню «⋯» — меньше кнопок в тулбаре #}
+            <div class="dropdown">
+                <button type="button"
+                        class="btn btn-outline-secondary btn-sm"
+                        id="documentPanelMore"
+                        data-bs-toggle="dropdown"
+                        data-bs-reference="parent"
+                        aria-expanded="false"
+                        title="Ещё: импорт, экспорт, вид"
+                        aria-label="Ещё действия">
+                    <i class="bi bi-three-dots" aria-hidden="true"></i>
+                </button>
+                <div class="dropdown-menu dropdown-menu-end" aria-labelledby="documentPanelMore">
+                    <form method="post" action="{% url 'storage:simulate_mail_import' project.pk %}" class="mb-0">
+                        {% csrf_token %}
+                        <button type="submit" class="dropdown-item">
+                            <i class="bi bi-envelope-arrow-down me-2" aria-hidden="true"></i>Импорт из почты
+                        </button>
+                    </form>
+                    <a class="dropdown-item" href="{% export_url 'xlsx' %}">
+                        <i class="bi bi-file-earmark-excel me-2" aria-hidden="true"></i>Экспорт в Excel
+                    </a>
+                    <button type="button"
+                            class="dropdown-item"
+                            id="openSettings"
+                            data-bs-toggle="modal"
+                            data-bs-target="#viewSettingsModal">
+                        <i class="bi bi-gear me-2" aria-hidden="true"></i>Настройки вида
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="bulk-bar bulk-bar-floating d-none" id="bulkBar" data-role="bulk-bar">
+        <span class="fw-semibold">Выбрано <span id="bulkCount">0</span> файлов</span>
+        <button type="submit" name="action" value="download" form="bulkForm" class="btn btn-sm btn-outline-secondary">
+            <i class="bi bi-file-earmark-zip me-1" aria-hidden="true"></i>Скачать выбранные (ZIP)
+        </button>
+        <button type="submit" name="action" value="delete" form="bulkForm" class="btn btn-sm btn-outline-danger">
+            <i class="bi bi-trash3 me-1" aria-hidden="true"></i>В корзину
+        </button>
+    </div>
+
+    <div class="doc-table-wrap{% if not table.paginated_rows %} is-empty{% endif %}" id="documentsTableWrap">
+        <form id="bulkForm" method="post" action="{% url 'storage:document_bulk_action' project.pk %}">
+            {% csrf_token %}
+            {% render_table table %}
+        </form>
+        <div class="doc-drop-overlay" id="docDropOverlay" hidden>
+            <div class="doc-drop-card">
+                <i class="bi bi-cloud-arrow-up" aria-hidden="true"></i>
+                <span>Отпустите файл, чтобы загрузить в <strong id="dropTargetName">{{ upload_target_name }}</strong></span>
+            </div>
+        </div>
+    </div>
+</div>

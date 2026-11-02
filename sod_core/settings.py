@@ -36,17 +36,39 @@ def env_list(name: str, default=()) -> list[str]:
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/6.1/howto/deployment/checklist/
 
-# SECURITY WARNING: keep the secret key used in production secret!
-# В production обязательно задайте DJANGO_SECRET_KEY. Значение по умолчанию
-# предназначено только для локального запуска без настроенного окружения.
-SECRET_KEY = os.environ.get(
-    'DJANGO_SECRET_KEY',
-    'django-insecure-dev-only-change-me-in-production',
-)
+# Спринт 5: fail-closed конфигурация безопасности.
+# - Локальный запуск без .env (ни DJANGO_DEBUG, ни DJANGO_SECRET_KEY) —
+#   автоматически поднимается dev-режим с предупреждением в консоль.
+# - Явный DJANGO_DEBUG=False без DJANGO_SECRET_KEY — жёсткая ошибка старта:
+#   прод-конфигурация с публичным dev-ключом недопустима (подделка сессий/CSRF).
+_raw_debug = os.environ.get('DJANGO_DEBUG')
+DEBUG = env_bool('DJANGO_DEBUG', False)
 
-# SECURITY WARNING: don't run with debug turned on in production!
-# По умолчанию DEBUG выключен; для локальной разработки задайте DJANGO_DEBUG=True.
-DEBUG = env_bool('DJANGO_DEBUG', True)  # Временно для локальной разработки!
+_DEV_SECRET_KEY = 'django-insecure-dev-only-change-me-in-production'
+SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY', '')
+
+if not SECRET_KEY:
+    if not DEBUG and _raw_debug is not None:
+        from django.core.exceptions import ImproperlyConfigured
+
+        raise ImproperlyConfigured(
+            'DJANGO_DEBUG=False требует явный DJANGO_SECRET_KEY. '
+            'Задайте его в окружении или .env — публичный dev-ключ '
+            'в продакшене запрещён.'
+        )
+
+    # DEBUG=True без ключа или локальный запуск без .env:
+    # используем безопасный dev-ключ с предупреждением.
+    DEBUG = True
+    SECRET_KEY = _DEV_SECRET_KEY
+    import warnings as _warnings
+
+    _warnings.warn(
+        'СОД запущен в dev-режиме (DEBUG=True, публичный SECRET_KEY). '
+        'Для продакшена задайте DJANGO_DEBUG=False и DJANGO_SECRET_KEY.',
+        RuntimeWarning,
+        stacklevel=1,
+    )
 
 ALLOWED_HOSTS = env_list('DJANGO_ALLOWED_HOSTS', ('localhost', '127.0.0.1'))
 

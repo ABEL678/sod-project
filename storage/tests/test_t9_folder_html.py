@@ -11,6 +11,8 @@ class T9FolderHtmlTests(T8UltimateTestBase):
     def test_every_folder_row_has_unified_context_attributes(self):
         root = create_folder(self.user_gip, self.project, 'РД АР', section=self.section)
         nested = create_folder(self.user_gip, self.project, 'Вложенная', parent=root)
+        # Спринт 5 (актуализация под T68): корневые папки проекта (ИРД/РИИ/ПД/РД
+        # и пользовательские) рендерятся в дереве наравне с папками разделов.
         project_root = create_folder(self.user_gip, self.project, 'Новая папка')
 
         self.client.force_login(self.user_gip)
@@ -25,6 +27,6 @@ class T9FolderHtmlTests(T8UltimateTestBase):
                 r'<div[^>]*class="folder-row[^"]*"[^>]*data-folder-id="%d"' % folder.pk,
             )
             self.assertIn(f'data-folder-id="{folder.pk}"', html)
-        self.assertNotIn(f'data-folder-id="{project_root.pk}"', html)
-        self.assertEqual(html.count('data-folder-row'), 2)
-        self.assertEqual(html.count('data-folder-menu'), 2)
+        self.assertIn(f'data-folder-id="{project_root.pk}"', html)
+        self.assertEqual(html.count('data-folder-row'), 3)
+        self.assertEqual(html.count('data-tree-context="folder"'), 3)

@@ -14,7 +14,9 @@
 .topbar .avatar { width: 28px; height: 28px; border-radius: 50%; background: var(--c-accent-on-header); color: var(--c-bg-header); display: grid; place-items: center; font-size: 11px; font-weight: 600; box-shadow: 0 0 0 2px var(--c-border-header-control); }
 .topbar .form-control { height: 32px; border-radius: 999px; border: 1px solid var(--c-border-header-control); background: var(--c-bg-header-hover); color: var(--c-text-on-dark); font-size: 13px; padding: 0 14px; }
 .topbar .form-control::placeholder { color: var(--c-text-on-dark-muted); opacity: 1; }
-.topbar .form-control:focus { background: var(--c-bg-header-hover); border-color: var(--c-accent-on-header); box-shadow: none; outline: none; color: var(--c-text-on-dark); }
+.topbar .form-control:focus { background: var(--c-bg-header-hover); border-color: var(--c-accent-on-header); outline: none; color: var(--c-text-on-dark); }
+/* Спринт 6: фокус в поиске хедера виден — оставляем общее фокус-кольцо */
+.topbar .form-control:focus-visible { box-shadow: var(--focus-ring); }
 body { background: var(--c-bg-app); font-family: 'Golos Text', 'Inter', system-ui, sans-serif; overflow-x: hidden; }
 .container { max-width: 1060px; margin: 0 auto; padding: 24px; }
 
@@ -225,13 +227,7 @@ tr[data-href],
     min-width: 0;
 }
 
-.topbar .chip {
-    flex: 0 0 auto;
-    min-width: 0;
-    max-width: 200px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
+/* Спринт 6: чипы убраны из топбара — мёртвое правило удалено */
 
 .topbar .btn {
     flex: 0 0 auto;
@@ -659,4 +655,63 @@ tr.doc-row-flash > td { animation: wf-row-flash 1.5s ease; }
 .text-bg-primary {
     background-color: var(--c-accent) !important;
     color: var(--c-text-inverse) !important;
+}
+
+/* ==================== Спринт 6: UX-полировка ==================== */
+
+/* Skip-link: виден только при фокусе с клавиатуры */
+.skip-link {
+    position: absolute;
+    left: -9999px;
+    top: 0;
+    z-index: 2000;
+    background: var(--c-bg-header);
+    color: var(--c-text-on-dark);
+    padding: 10px 18px;
+    border-radius: 0 0 10px 0;
+    font-size: 13px;
+    text-decoration: none;
+}
+.skip-link:focus-visible {
+    left: 0;
+    outline: 2px solid var(--c-accent-on-header);
+    outline-offset: -2px;
+}
+
+/* Статус загрузки файлов в тулбаре реестра */
+.upload-status {
+    font-size: 12.5px;
+    color: var(--c-text-secondary);
+    max-width: 340px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.upload-status.is-error { color: #B42318; font-weight: 500; }
+
+/* Спиннер HTMX-запросов реестра: появляется, пока панель обновляется */
+.panel-spinner {
+    display: none;
+    color: var(--c-text-secondary);
+    font-size: 15px;
+    animation: panel-spin 0.9s linear infinite;
+}
+#documentsPanel.htmx-request .panel-spinner { display: inline-block; }
+@keyframes panel-spin { to { transform: rotate(360deg); } }
+
+/* Видимая кнопка меню папки (раньше — только правый клик) */
+.folder-kebab {
+    color: var(--c-text-secondary);
+    line-height: 1;
+    flex: 0 0 auto;
+    opacity: 0;
+    transition: opacity 120ms ease;
+}
+.folder-row:hover .folder-kebab,
+.folder-row:focus-within .folder-kebab,
+.folder-kebab:focus-visible { opacity: 1; }
+.folder-kebab:hover { color: var(--c-accent); }
+
+@media (prefers-reduced-motion: reduce) {
+    .panel-spinner { animation: none; }
 }

@@ -5,16 +5,16 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{ document.code }} — {{ document.name }}</title>
-<meta name="theme-color" content="#1F2937">
+<meta name="theme-color" content="#3A4558">
 <link rel="manifest" href="/static/manifest.webmanifest">
 <link rel="icon" type="image/png" href="/static/icons/icon-192.png">
 <link rel="stylesheet" href="{% static 'fonts/fonts.css' %}">
 <link rel="stylesheet" href="{% static 'fonts/bootstrap-icons/bootstrap-icons.min.css' %}">
 <link rel="stylesheet" href="{% static 'css/bootstrap.min.css' %}">
 <link rel="stylesheet" href="{% static 'design-tokens/tokens.css' %}?v=20261107">
-<link rel="stylesheet" href="{% static 'css/redesign.css' %}?v=20261105-s4-t72">
-<link rel="stylesheet" href="{% static 'css/viewer.css' %}?v=20261105-s4-t65">
-<link rel="stylesheet" href="{% static 'css/app.css' %}?v=20261105-s4">
+<link rel="stylesheet" href="{% static 'css/redesign.css' %}?v=20261107-s6">
+<link rel="stylesheet" href="{% static 'css/viewer.css' %}?v=20261107-s6">
+<link rel="stylesheet" href="{% static 'css/app.css' %}?v=20261107-s6">
 </head>
 <body>
 
@@ -149,9 +149,9 @@
     </button>
   </div>
   <div class="group">
-    <button class="tbtn" onclick="rotatePage()" title="Повернуть" type="button">⟲</button>
-    <button class="tbtn" onclick="togglePan()" title="Рука" type="button">✋</button>
-    <button class="tbtn" onclick="toggleSelect()" title="Выделение" type="button">⍝</button>
+    <button class="tbtn" onclick="rotatePage()" title="Повернуть" type="button"><i class="bi bi-arrow-clockwise" aria-hidden="true"></i><span class="visually-hidden">Повернуть</span></button>
+    <button class="tbtn" onclick="togglePan()" title="Рука" type="button"><i class="bi bi-hand-index" aria-hidden="true"></i><span class="visually-hidden">Рука</span></button>
+    <button class="tbtn" onclick="toggleSelect()" title="Выделение" type="button"><i class="bi bi-cursor" aria-hidden="true"></i><span class="visually-hidden">Выделение</span></button>
     <button class="tbtn active" id="minimapToggle" onclick="toggleMinimap()" type="button"
             title="Мини-карта: превью листа и видимой области" aria-label="Мини-карта">
       <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.4"/><rect x="8" y="7" width="4.5" height="4" fill="currentColor" opacity="0.55"/></svg>
@@ -216,6 +216,7 @@
 
   <div class="splitter" id="drag-divider"></div>
 
+  {% if not public_view %}
   <aside class="panel" id="issues-panel">
     <div class="panel-head">
       <h2>Замечания</h2><span class="count num">{{ issues|length }}</span>
@@ -299,6 +300,7 @@
       <div class="detail-scroll" id="detailContent"></div>
     </div>
   </aside>
+  {% endif %}
 </div>
 
 {{ issues_json|json_script:"issues-data" }}
@@ -383,11 +385,11 @@
 
 <script src="{% static 'js/vendor/bootstrap.bundle.min.js' %}"></script>
 <script src="{% static 'js/pdfjs/pdf.min.js' %}"></script>
-<script src="{% static 'js/design-tokens.js' %}?v=20261105-s4"></script>
-<script src="{% static 'js/sync.js' %}?v=20261105-s4-t70"></script>
-<script src="{% static 'js/pdf_viewer.js' %}?v=20261105-s4-t65"></script>
-<script src="{% static 'js/splitter.js' %}?v=20261105-s4"></script>
-<script src="{% static 'js/palette.js' %}?v=20261105-s4" defer></script>
+<script src="{% static 'js/design-tokens.js' %}?v=20261107-s6"></script>
+<script src="{% static 'js/sync.js' %}?v=20261107-s6"></script>
+<script src="{% static 'js/pdf_viewer.js' %}?v=20261107-s6"></script>
+<script src="{% static 'js/splitter.js' %}?v=20261107-s6"></script>
+<script src="{% static 'js/palette.js' %}?v=20261107-s6" defer></script>
 {% include 'storage/_palette.html' %}
 <script>
     if ('serviceWorker' in navigator) {

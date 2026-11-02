@@ -132,7 +132,7 @@ class DocumentViewServiceTests(GuiTestBase):
             self.project,
             'Мой вид',
             {
-                'columns': ['code', 'status'],
+                'columns': ['code', 'suitability'],
                 'filters': {'status': 'draft'},
                 'sort': ['-date'],
             },
@@ -140,7 +140,7 @@ class DocumentViewServiceTests(GuiTestBase):
 
         self.assertFalse(view.is_shared)
         self.assertEqual(view.user, self.user_developer)
-        self.assertEqual(view.config['columns'], ['code', 'status'])
+        self.assertEqual(view.config['columns'], ['code', 'suitability'])
         self.assertEqual(view.config['filters'], {'status': 'draft'})
         self.assertEqual(view.config['sort'], ['-date'])
 
@@ -205,7 +205,7 @@ class DocumentViewServiceTests(GuiTestBase):
             self.user_developer,
             self.project,
             'Мой вид',
-            {'columns': ['name', 'status']},
+            {'columns': ['name', 'internal_status']},
         )
 
         self.assertEqual(first.pk, second.pk)
@@ -214,7 +214,7 @@ class DocumentViewServiceTests(GuiTestBase):
             1,
         )
         second.refresh_from_db()
-        self.assertEqual(second.config['columns'], ['name', 'status'])
+        self.assertEqual(second.config['columns'], ['name', 'internal_status'])
 
     def test_config_validation(self):
         invalid_configs = [
@@ -324,7 +324,7 @@ class DocumentViewServiceTests(GuiTestBase):
         rows = get_project_documents_for_view(
             self.user_gip,
             self.project,
-            {'columns': ['code', 'status'], 'filters': {'status': 'approved'}},
+            {'columns': ['code', 'suitability'], 'filters': {'status': 'approved'}},
         )
 
         self.assertEqual([row['code'] for row in rows], ['АР-02'])
@@ -542,7 +542,9 @@ class GuiViewTests(GuiTestBase):
         self.assertContains(response, 'table-bordered')
         self.assertContains(response, 'id="documentsTable"')
         self.assertNotContains(response, 'col-resizer')
+        # Спринт 6: видимая кнопка загрузки вернулась в тулбар реестра
         self.assertContains(response, 'id="uploadBtn"')
+        self.assertContains(response, 'data-role="upload-input"')
         self.assertNotContains(response, 'Перетащите файлы сюда')
         self.assertNotContains(response, 'upload-zone')
 
@@ -613,7 +615,7 @@ class GuiViewTests(GuiTestBase):
             reverse('storage:document_view_save', args=[self.project.pk]),
             {
                 'name': 'Только шифры',
-                'columns': ['code', 'status'],
+                'columns': ['code', 'suitability'],
                 'status': 'approved',
                 'sort': 'code',
             },
@@ -625,7 +627,7 @@ class GuiViewTests(GuiTestBase):
             name='Только шифры',
         )
         self.assertFalse(view.is_shared)
-        self.assertEqual(view.config['columns'], ['code', 'status'])
+        self.assertEqual(view.config['columns'], ['code', 'suitability'])
         self.assertEqual(view.config['filters'], {'status': 'approved'})
         self.assertEqual(view.config['sort'], ['code'])
         self.assertRedirects(
@@ -698,7 +700,7 @@ class GuiViewTests(GuiTestBase):
 
         self.assertEqual(response.status_code, 200)
         self.assertIsNone(response.context['selected_view'])
-        self.assertEqual(len(response.context['visible_columns']), 8)
+        self.assertEqual(len(response.context['visible_columns']), 11)
 
     def test_saved_view_applied_columns(self):
         view = save_document_view(
@@ -762,7 +764,7 @@ class GuiViewTests(GuiTestBase):
         )
 
         self.assertIsNone(response.context['selected_view'])
-        self.assertEqual(len(response.context['visible_columns']), 8)
+        self.assertEqual(len(response.context['visible_columns']), 11)
 
     def test_membership_role_update_view(self):
         self.client.force_login(self.user_gip)

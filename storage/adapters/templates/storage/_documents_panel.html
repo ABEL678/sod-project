@@ -89,6 +89,18 @@
         </div>
         <div class="toolbar-spacer"></div>
         <div class="toolbar-actions">
+            {# Спринт 6: видимая главная кнопка загрузки — раньше загрузка была только через DnD и правый клик #}
+            <button type="button"
+                    class="btn btn-primary btn-sm"
+                    id="uploadBtn"
+                    data-role="upload-btn"
+                    title="Загрузить документ в выбранный раздел или папку">
+                <i class="bi bi-upload" aria-hidden="true"></i>
+                <span class="d-none d-xl-inline">Загрузить</span>
+            </button>
+            <span id="uploadStatus" class="upload-status d-none" role="status" aria-live="polite"></span>
+            <i id="panelSpinner" class="bi bi-arrow-repeat panel-spinner" aria-hidden="true"></i>
+            {# T72: кнопка «Замечания» в тулбаре убрана — оставлена колонка в таблице #}
             {# Спринт 3: импорт/экспорт/настройки свернуты в меню «⋯» — меньше кнопок в тулбаре #}
             <div class="dropdown">
                 <button type="button"

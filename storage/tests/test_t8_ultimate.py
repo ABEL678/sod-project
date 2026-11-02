@@ -128,11 +128,11 @@ class TableHeaderUiTests(T8UltimateTestBase):
             reverse('storage:project_detail', args=[self.project.pk]),
         )
 
-        self.assertContains(response, 'class="filter-panel"')
         self.assertContains(response, 'id="filtersForm"')
         self.assertContains(response, 'name="section"')
         self.assertContains(response, 'name="doc_type"')
-        self.assertContains(response, 'name="status"')
+        self.assertContains(response, 'name="suitability_code"')
+        self.assertContains(response, 'name="internal_status"')
         self.assertContains(response, 'name="q"')
         self.assertNotContains(response, 'class="th-filter')
         self.assertNotContains(response, 'class="col-drag"')
@@ -207,8 +207,7 @@ class TrashProtectionTests(T8UltimateTestBase):
         response = self.client.get(
             reverse('storage:project_detail', args=[self.project.pk]),
         )
-        self.assertContains(response, 'data-file-count="2"')
-        self.assertContains(response, 'Они также будут перемещены в корзину')
+        self.assertContains(response, 'data-delete-count="2"')
 
     def test_can_purge_trash_only_for_company_admin(self):
         self.assertTrue(can_purge_trash(self.user_admin, self.project))
@@ -252,9 +251,12 @@ class TrashProtectionTests(T8UltimateTestBase):
         folder, document, file_path = self._create_deleted_folder_with_file()
 
         self.client.force_login(self.user_admin)
-        response = self.client.post(
-            reverse('storage:trash_clear', args=[self.project.pk]),
-        )
+        # Спринт 5: физическое удаление файлов перенесено в transaction.on_commit —
+        # в тесте исполняем колбэки явно.
+        with self.captureOnCommitCallbacks(execute=True):
+            response = self.client.post(
+                reverse('storage:trash_clear', args=[self.project.pk]),
+            )
 
         self.assertEqual(response.status_code, 302)
         self.assertFalse(type(document).objects.filter(pk=document.pk).exists())

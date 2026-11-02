@@ -386,7 +386,11 @@
         }
 
         uploadInProgress = true;
-        setUploadStatus('Загрузка ' + files.length + ' файл(ов)…', false);
+        setUploadStatus(
+            'Загрузка ' + files.length + ' '
+            + pluralizeRu(files.length, 'файл', 'файла', 'файлов') + '…',
+            false
+        );
         var errors = [];
         var lastDocumentId = null;
 
@@ -440,6 +444,24 @@
     }
 
     function initUpload() {
+        // Спринт 6: видимая кнопка «Загрузить» — цель выбирается как при DnD
+        document.addEventListener('click', function (event) {
+            if (!event.target.closest('[data-role="upload-btn"]')) {
+                return;
+            }
+            event.preventDefault();
+            if (uploadInProgress) {
+                setUploadStatus('Дождитесь окончания текущей загрузки', true);
+                return;
+            }
+            pendingUploadTarget = null;
+            var input = document.getElementById('fileInput');
+            if (input) {
+                input.value = '';
+                input.click();
+            }
+        });
+
         document.addEventListener('change', function (event) {
             if (event.target.id !== 'fileInput') {
                 return;
@@ -1047,7 +1069,10 @@
     function deleteTreeFolder(url, count) {
         var message = 'Переместить папку в корзину?';
         if (count) {
-            message = 'В папке ' + count + ' файл(ов). Они также будут перемещены в корзину. Продолжить?';
+            message = 'В папке ' + count + ' '
+                + pluralizeRu(count, 'файл', 'файла', 'файлов')
+                + '. Они будут перемещены в корзину вместе с папкой — '
+                + 'папку можно восстановить. Продолжить?';
         }
         if (!url || !window.confirm(message)) {
             return;
@@ -1220,9 +1245,37 @@
         });
 
         document.addEventListener('click', function (event) {
-            if (treeContextMenu && !treeContextMenu.contains(event.target)) {
+            if (treeContextMenu
+                    && !treeContextMenu.contains(event.target)
+                    && !event.target.closest('[data-folder-kebab]')) {
                 closeTreeContextMenu();
             }
+        });
+        // Спринт 6: Escape закрывает контекстное меню
+        document.addEventListener('keydown', function (event) {
+            if (event.key === 'Escape' && treeContextMenu) {
+                closeTreeContextMenu();
+            }
+        });
+        // Спринт 6: видимая кнопка меню папки — клавиатура и тач,
+        // больше не единственный правый клик
+        document.addEventListener('click', function (event) {
+            var kebab = event.target.closest('[data-folder-kebab]');
+            if (!kebab) {
+                return;
+            }
+            event.preventDefault();
+            event.stopPropagation();
+            var row = kebab.closest('[data-tree-context]');
+            if (!row) {
+                return;
+            }
+            var rect = kebab.getBoundingClientRect();
+            var synthetic = {
+                clientX: rect.left + rect.width / 2,
+                clientY: rect.bottom + 4,
+            };
+            showTreeContextMenu(synthetic, row);
         });
         window.addEventListener('scroll', closeTreeContextMenu, true);
         window.addEventListener('resize', closeTreeContextMenu);
@@ -1465,6 +1518,16 @@
                 updateBulkBar();
             }
         });
+        // Спринт 6: сетевые и серверные ошибки HTMX больше не молчат
+        document.body.addEventListener('htmx:responseError', function (event) {
+            var status = event.detail && event.detail.xhr
+                ? event.detail.xhr.status : '';
+            showToast('Ошибка сервера' + (status ? ' (' + status + ')' : '')
+                + ' — попробуйте ещё раз');
+        });
+        document.body.addEventListener('htmx:sendError', function () {
+            showToast('Сеть недоступна — проверьте подключение');
+        });
     }
 
     /* ---------- Волна 3: зоны ISO 19650 (сегмент-контрол + workflow) ---------- */
@@ -1696,6 +1759,22 @@
         var div = document.createElement('div');
         div.textContent = text == null ? '' : String(text);
         return div.innerHTML;
+    }
+
+    /* Спринт 6: русская плюрализация вместо «файл(ов)» */
+    function pluralizeRu(count, one, few, many) {
+        var mod100 = Math.abs(count) % 100;
+        var mod10 = mod100 % 10;
+        if (mod100 > 10 && mod100 < 20) {
+            return many;
+        }
+        if (mod10 > 1 && mod10 < 5) {
+            return few;
+        }
+        if (mod10 === 1) {
+            return one;
+        }
+        return many;
     }
 
     var TOAST_TIMEOUT = null;

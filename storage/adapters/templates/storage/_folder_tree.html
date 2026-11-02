@@ -47,6 +47,15 @@
            href="{% url 'storage:project_detail' project.pk %}?folder={{ folder.pk }}{% if selected_view %}&amp;view={{ selected_view.pk }}{% endif %}"
            title="{{ folder.name }}{% if folder.full_code %} — {{ folder.full_code }}{% elif folder.code %} — {{ folder.code }}{% endif %}">{% if folder.section_id or folder.parent %}{% if folder.full_code %}{{ folder.full_code }} — {{ folder.name }}{% else %}{{ folder.name }}{% endif %}{% else %}{% if folder.code %}{{ folder.code }}. {% endif %}{{ folder.name }}{% endif %}</a>
         <span class="badge text-bg-light border folder-count" title="Документов в папке и вложенных папках">{{ folder.subtree_document_count|default:folder.document_count }}</span>
+        {# Спринт 6: видимая кнопка меню — раньше действия были только в правом клике #}
+        <button type="button"
+                class="btn btn-sm btn-link p-0 folder-kebab"
+                data-folder-kebab
+                aria-haspopup="true"
+                aria-label="Меню папки {{ folder.name }}"
+                title="Меню папки">
+            <i class="bi bi-three-dots-vertical" aria-hidden="true"></i>
+        </button>
 
     </div>
 

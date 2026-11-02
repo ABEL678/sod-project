@@ -25,12 +25,16 @@ document_detail — у него своя разметка и свой набор
     <link rel="icon" type="image/png" href="/static/icons/icon-192.png">
     <link rel="stylesheet" href="{% static 'css/bootstrap.min.css' %}">
     <link rel="stylesheet" href="{% static 'design-tokens/tokens.css' %}?v=20261107">
-    <link rel="stylesheet" href="{% static 'css/redesign.css' %}?v=20261105-s4-t72">
+    {# Спринт 6: фирменные шрифты (Golos Text/JetBrains Mono) на всех страницах #}
+    <link rel="stylesheet" href="{% static 'fonts/fonts.css' %}">
+    <link rel="stylesheet" href="{% static 'css/redesign.css' %}?v=20261107-s6">
     <link rel="stylesheet" href="{% static 'fonts/bootstrap-icons/bootstrap-icons.min.css' %}">
-    <link rel="stylesheet" href="{% static 'css/app.css' %}?v=20261105-s4">
+    <link rel="stylesheet" href="{% static 'css/app.css' %}?v=20261107-s6">
     {% block extra_css %}{% endblock %}
 </head>
 <body class="{% block body_class %}bg-light{% endblock %}">
+{# Спринт 6: skip-link для клавиатурной навигации #}
+<a class="skip-link" href="#main-content">Перейти к содержимому</a>
 {% block topbar %}
     {% include 'storage/_topbar.html' %}
 {% endblock %}
@@ -38,7 +42,7 @@ document_detail — у него своя разметка и свой набор
 {% include 'storage/_palette.html' %}
 <script src="{% static 'js/vendor/bootstrap.bundle.min.js' %}"></script>
 <script src="{% static 'js/vendor/htmx.min.js' %}" defer></script>
-<script src="{% static 'js/palette.js' %}?v=20261105-s4" defer></script>
+<script src="{% static 'js/palette.js' %}?v=20261107-s6" defer></script>
 <script>
     /* Волна 3: PWA — регистрация сервис-воркера из корня (scope '/') */
     if ('serviceWorker' in navigator) {

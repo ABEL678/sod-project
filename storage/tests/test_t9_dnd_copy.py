@@ -19,12 +19,12 @@ class T9DndCopyFolderTests(T8UltimateTestBase):
         )
 
         self.assertContains(response, f'data-document-id="{document.pk}"')
-        self.assertContains(response, 'data-folder-menu')
-        self.assertContains(response, 'Создать подпапку')
-        self.assertContains(response, 'Переименовать')
-        self.assertContains(response, 'Удалить')
-        self.assertContains(response, reverse('storage:document_copy', args=[0]))
-        self.assertContains(response, reverse('storage:folder_move', args=[0]))
+        self.assertContains(response, 'data-tree-context="folder"')
+        self.assertContains(response, 'data-create-folder-url=')
+        self.assertContains(response, 'data-rename-url=')
+        self.assertContains(response, 'data-delete-url=')
+        self.assertContains(response, 'data-delete-count="1"')
+        self.assertContains(response, 'data-move-url=')
 
     def test_copy_endpoint_duplicates_document_versions_and_files(self):
         folder = create_folder(self.user_gip, self.project, 'РД', section=self.section)

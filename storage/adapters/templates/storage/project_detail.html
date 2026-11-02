@@ -95,6 +95,28 @@
                                 <span class="section-name" title="{{ section.name }}">{{ section.name }}</span>
                                 <span class="section-count" data-section-id="{{ section.pk }}" data-role="section-count">{{ section.document_count }}</span>
                             </a>
+
+                        </div>
+
+                        {% if section.folder_nodes %}
+                            <div class="folder-tree-list ms-2"
+                                 id="sectionFolders-{{ section.pk }}"
+                                 data-section-content="{{ section.pk }}"
+                                 data-folder-sortable
+                                 data-folder-reorder-url="{% url 'storage:folder_reorder' project.pk %}">
+                                {% for folder in section.folder_nodes %}
+                                    {% include 'storage/_folder_tree.html' with folder=folder %}
+                                {% endfor %}
+                            </div>
+                        {% endif %}
+                    </div>
+                {% empty %}
+                    {% if not project_folders %}
+                        <div class="sidebar-empty">Разделов пока нет</div>
+                    {% endif %}
+                {% endfor %}
+            </div>
+
 <div id="dndToast" class="dnd-toast d-none" role="status" aria-live="polite"></div>
 
 <div id="docRowMenu" class="dropdown-menu doc-row-menu" role="menu" aria-hidden="true">
@@ -146,27 +168,6 @@
     </div>
 </div>
 
-                        </div>
-
-                        {% if section.folder_nodes %}
-                            <div class="folder-tree-list ms-2"
-                                 id="sectionFolders-{{ section.pk }}"
-                                 data-section-content="{{ section.pk }}"
-                                 data-folder-sortable
-                                 data-folder-reorder-url="{% url 'storage:folder_reorder' project.pk %}">
-                                {% for folder in section.folder_nodes %}
-                                    {% include 'storage/_folder_tree.html' with folder=folder %}
-                                {% endfor %}
-                            </div>
-                        {% endif %}
-                    </div>
-                {% empty %}
-                    {% if not project_folders %}
-                        <div class="sidebar-empty">Разделов пока нет</div>
-                    {% endif %}
-                {% endfor %}
-            </div>
-
             <input type="file" id="fileInput" multiple hidden data-role="upload-input">
         </aside>
 
@@ -185,7 +186,7 @@
             <i class="bi bi-chevron-right" aria-hidden="true"></i>
         </button>
 
-        <main class="app-main" data-role="main">
+        <main id="main-content" class="app-main" data-role="main">
             {% if messages %}
                 <div class="flash-stack">
                     {% for message in messages %}
