@@ -75,7 +75,16 @@
                 {% endif %}
 
                 {% for section in sections %}
-                    <div class="section-node list-group-item" data-section-node="{{ section.pk }}">
+                    <div class="section-node list-group-item"
+                         data-section-node="{{ section.pk }}"
+                         data-tree-context="section"
+                         data-section-id="{{ section.pk }}"
+                         data-section-name="{{ section.name }}"
+                         data-section-code="{{ section.code }}"
+                         data-can-manage="{{ can_manage_structure|yesno:'1,0' }}"
+                         data-create-folder-url="{% url 'storage:folder_create_form' project.pk %}?section={{ section.pk }}"
+                         data-rename-url="{% url 'storage:section_rename' section.pk %}"
+                         data-upload-section-id="{{ section.pk }}">
                         <div class="section-row">
                             <button type="button"
                                     class="btn btn-sm btn-link p-0 section-toggle"
@@ -99,44 +108,6 @@
                                 <span class="section-name" title="{{ section.name }}">{{ section.name }}</span>
                                 <span class="section-count" data-section-id="{{ section.pk }}" data-role="section-count">{{ section.document_count }}</span>
                             </a>
-                            {% if can_manage_structure %}
-                                <div class="dropdown">
-                                    <button type="button"
-                                            class="btn btn-sm btn-link section-menu-btn"
-                                            data-bs-toggle="dropdown"
-                                            aria-expanded="false"
-                                            title="Действия с разделом"
-                                            aria-label="Действия с разделом">
-                                        <i class="bi bi-three-dots-vertical" aria-hidden="true"></i>
-                                    </button>
-                                    <ul class="dropdown-menu dropdown-menu-end">
-                                        <li>
-                                            <button type="button" class="dropdown-item"
-                                                    data-section-rename
-                                                    data-section-id="{{ section.pk }}"
-                                                    data-section-name="{{ section.name }}"
-                                                    data-section-code="{{ section.code }}"
-                                                    data-section-url="{% url 'storage:section_rename' section.pk %}">
-                                                <i class="bi bi-pencil me-2" aria-hidden="true"></i>Переименовать
-                                            </button>
-                                        </li>
-                                        <li>
-                                            <button type="button" class="dropdown-item text-danger"
-                                                    disabled title="Удаление раздела пока недоступно">
-                                                <i class="bi bi-trash me-2" aria-hidden="true"></i>Удалить
-                                            </button>
-                                        </li>
-                                    </ul>
-                                </div>
-                            {% else %}
-                                <button type="button"
-                                        class="btn btn-sm btn-link section-menu-btn"
-                                        disabled
-                                        title="Нет прав"
-                                        aria-label="Нет прав на изменение структуры">
-                                    <i class="bi bi-three-dots-vertical" aria-hidden="true"></i>
-                                </button>
-                            {% endif %}
 <div id="dndToast" class="dnd-toast d-none" role="status" aria-live="polite"></div>
 
 <div id="docRowMenu" class="dropdown-menu doc-row-menu" role="menu" aria-hidden="true">
@@ -188,19 +159,6 @@
     </div>
 </div>
 
-{% if can_manage_structure %}
-                                <button type="button"
-                                        class="btn btn-sm btn-link section-add-folder"
-                                        title="Создать папку в разделе"
-                                        aria-label="Создать папку в разделе"
-                                        hx-get="{% url 'storage:folder_create_form' project.pk %}?section={{ section.pk }}"
-                                        hx-target="#folderCreateModalBody"
-                                        hx-swap="innerHTML"
-                                        data-bs-toggle="modal"
-                                        data-bs-target="#folderCreateModal">
-                                    <i class="bi bi-folder-plus" aria-hidden="true"></i>
-                                </button>
-                            {% endif %}
                         </div>
 
                         {% if section.folder_nodes %}
@@ -220,18 +178,7 @@
                 {% endfor %}
             </div>
 
-            <div class="sidebar-footer">
-                <div class="upload-target" id="uploadTarget">Загрузка в {{ upload_target_name }}</div>
-                <input type="file" id="fileInput" multiple hidden>
-                <label for="fileInput"
-                       class="btn btn-primary btn-sm w-100"
-                       id="uploadBtn"
-                       data-role="upload-button">
-                    <i class="bi bi-plus-lg" aria-hidden="true"></i>
-                    Загрузить
-                </label>
-                <div id="uploadStatus" class="upload-status d-none">Загрузка…</div>
-            </div>
+            <input type="file" id="fileInput" multiple hidden data-role="upload-input">
         </aside>
 
         <div class="sidebar-resizer"

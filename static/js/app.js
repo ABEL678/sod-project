@@ -335,6 +335,9 @@
     function setUploadStatus(text, isError) {
         var status = document.getElementById('uploadStatus');
         if (!status) {
+            if (isError && text) {
+                showDndToast(text, true);
+            }
             return;
         }
         status.textContent = text || '';
@@ -364,13 +367,15 @@
     }
 
     var uploadInProgress = false;
+    var pendingUploadTarget = null;
 
     async function handleFiles(files) {
         if (uploadInProgress) {
             return;
         }
         var root = panel();
-        var target = currentUploadTarget();
+        var target = pendingUploadTarget || currentUploadTarget();
+        pendingUploadTarget = null;
         if (!root || !target) {
             setUploadStatus('Сначала выберите раздел', true);
             return;
@@ -436,8 +441,13 @@
 
     function initUpload() {
         document.addEventListener('change', function (event) {
-            if (event.target.id === 'fileInput' && event.target.files.length) {
+            if (event.target.id !== 'fileInput') {
+                return;
+            }
+            if (event.target.files.length) {
                 handleFiles(event.target.files);
+            } else {
+                pendingUploadTarget = null;
             }
         });
 
@@ -934,6 +944,239 @@
                 showDndToast(error.message, true);
             });
         }
+    }
+
+    var treeContextMenu = null;
+
+    function closeTreeContextMenu() {
+        if (treeContextMenu) {
+            treeContextMenu.remove();
+            treeContextMenu = null;
+        }
+    }
+
+    function treeMenuItem(label, options) {
+        options = options || {};
+        var button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'dropdown-item' + (options.danger ? ' text-danger' : '');
+        button.textContent = label;
+        if (options.title) {
+            button.title = options.title;
+        }
+        if (options.disabled) {
+            button.disabled = true;
+        }
+        Object.keys(options.attrs || {}).forEach(function (key) {
+            button.setAttribute(key, options.attrs[key]);
+        });
+        if (options.onClick && !options.disabled) {
+            button.addEventListener('click', options.onClick);
+        }
+        return button;
+    }
+
+    function openTreeFolderForm(url, bodyId, modalId) {
+        if (!url) {
+            return;
+        }
+        fetch(url, {headers: {'X-Requested-With': 'XMLHttpRequest'}})
+            .then(function (response) { return response.text(); })
+            .then(function (html) {
+                var body = document.getElementById(bodyId);
+                var modal = document.getElementById(modalId);
+                if (!body || !modal) {
+                    return;
+                }
+                body.innerHTML = html;
+                initGostFields();
+                if (window.bootstrap) {
+                    window.bootstrap.Modal.getOrCreateInstance(modal).show();
+                }
+            })
+            .catch(function () {
+                showDndToast('Не удалось открыть форму', true);
+            });
+    }
+
+    function deleteTreeFolder(url, count) {
+        var message = 'Переместить папку в корзину?';
+        if (count) {
+            message = 'В папке ' + count + ' файл(ов). Они также будут перемещены в корзину. Продолжить?';
+        }
+        if (!url || !window.confirm(message)) {
+            return;
+        }
+        var form = document.createElement('form');
+        form.method = 'post';
+        form.action = url;
+        var token = document.createElement('input');
+        token.type = 'hidden';
+        token.name = 'csrfmiddlewaretoken';
+        token.value = csrfToken();
+        form.appendChild(token);
+        document.body.appendChild(form);
+        form.submit();
+    }
+
+    function startTreeUpload(target) {
+        pendingUploadTarget = {
+            sectionId: target.getAttribute('data-upload-section') || '',
+            folderId: target.getAttribute('data-upload-folder') || '',
+            name: target.getAttribute('data-upload-name') || 'выбранную папку'
+        };
+        var input = document.getElementById('fileInput');
+        if (input) {
+            input.value = '';
+            input.click();
+        }
+    }
+
+    function showTreeContextMenu(event, target) {
+        closeTreeContextMenu();
+        var menu = document.createElement('div');
+        menu.className = 'dropdown-menu show tree-context-menu';
+        var context = target.getAttribute('data-tree-context');
+        var manage = target.getAttribute('data-can-manage') === '1';
+        var isSection = context === 'section';
+
+        if (manage) {
+            menu.appendChild(treeMenuItem(
+                isSection ? 'Создать папку' : 'Создать подпапку',
+                {
+                    onClick: function () {
+                        openTreeFolderForm(
+                            target.getAttribute('data-create-folder-url'),
+                            '#folderCreateModalBody',
+                            'folderCreateModal'
+                        );
+                    }
+                }
+            ));
+            menu.appendChild(treeMenuItem(
+                isSection ? 'Переименовать раздел' : 'Переименовать',
+                isSection ? {
+                    attrs: {
+                        'data-section-rename': '',
+                        'data-section-id': target.getAttribute('data-section-id') || '',
+                        'data-section-name': target.getAttribute('data-section-name') || '',
+                        'data-section-code': target.getAttribute('data-section-code') || '',
+                        'data-section-url': target.getAttribute('data-rename-url') || ''
+                    }
+                } : {
+                    onClick: function () {
+                        openTreeFolderForm(
+                            target.getAttribute('data-rename-url'),
+                            '#folderRenameModalBody',
+                            'folderRenameModal'
+                        );
+                    }
+                }
+            ));
+            if (!isSection) {
+                menu.appendChild(treeMenuItem('Переместить', {
+                    attrs: {
+                        'data-folder-move': '',
+                        'data-folder-id': target.getAttribute('data-folder-id') || '',
+                        'data-folder-move-url': target.getAttribute('data-move-url') || ''
+                    }
+                }));
+            }
+            menu.appendChild(treeMenuItem('Удалить', {
+                danger: true,
+                disabled: isSection,
+                title: isSection ? 'Удаление раздела пока недоступно' : '',
+                onClick: isSection ? null : function () {
+                    deleteTreeFolder(
+                        target.getAttribute('data-delete-url'),
+                        target.getAttribute('data-delete-count') || ''
+                    );
+                }
+            }));
+        }
+
+        var upload = document.createElement('button');
+        upload.type = 'button';
+        upload.className = 'dropdown-item';
+        upload.textContent = 'Загрузить документ сюда';
+        upload.setAttribute('data-upload-section', isSection
+            ? (target.getAttribute('data-section-id') || target.getAttribute('data-upload-section-id') || '')
+            : (target.getAttribute('data-section-id') || ''));
+        upload.setAttribute('data-upload-folder', isSection ? '' : (target.getAttribute('data-folder-id') || ''));
+        upload.setAttribute('data-upload-name', isSection
+            ? ('раздел ' + (target.getAttribute('data-section-code') || ''))
+            : ('папку ' + (target.getAttribute('data-folder-name') || '')));
+        upload.addEventListener('click', function () {
+            startTreeUpload(upload);
+            closeTreeContextMenu();
+        });
+        menu.appendChild(upload);
+
+        menu.addEventListener('click', function (event) {
+            if (event.target.closest('.dropdown-item')) {
+                window.setTimeout(closeTreeContextMenu, 0);
+            }
+        });
+
+        if (event.clientX || event.clientY) {
+            menu.style.left = Math.min(event.clientX, window.innerWidth - 240) + 'px';
+            menu.style.top = Math.min(event.clientY, window.innerHeight - 220) + 'px';
+        }
+        document.body.appendChild(menu);
+        treeContextMenu = menu;
+    }
+
+    function initTreeContextMenu() {
+        document.addEventListener('contextmenu', function (event) {
+            var target = event.target.closest('[data-tree-context]');
+            if (!target) {
+                return;
+            }
+            event.preventDefault();
+            showTreeContextMenu(event, target);
+        });
+
+        document.querySelectorAll('[data-tree-context]').forEach(function (target) {
+            var timer = null;
+            var startX = 0;
+            var startY = 0;
+            target.addEventListener('touchstart', function (event) {
+                if (event.touches.length !== 1) {
+                    return;
+                }
+                startX = event.touches[0].clientX;
+                startY = event.touches[0].clientY;
+                timer = window.setTimeout(function () {
+                    var synthetic = {clientX: startX, clientY: startY};
+                    showTreeContextMenu(synthetic, target);
+                    timer = null;
+                }, 600);
+            }, {passive: true});
+            target.addEventListener('touchmove', function (event) {
+                if (!timer) {
+                    return;
+                }
+                var touch = event.touches[0];
+                if (Math.abs(touch.clientX - startX) > 8 || Math.abs(touch.clientY - startY) > 8) {
+                    window.clearTimeout(timer);
+                    timer = null;
+                }
+            }, {passive: true});
+            target.addEventListener('touchend', function () {
+                if (timer) {
+                    window.clearTimeout(timer);
+                    timer = null;
+                }
+            });
+        });
+
+        document.addEventListener('click', function (event) {
+            if (treeContextMenu && !treeContextMenu.contains(event.target)) {
+                closeTreeContextMenu();
+            }
+        });
+        window.addEventListener('scroll', closeTreeContextMenu, true);
+        window.addEventListener('resize', closeTreeContextMenu);
     }
 
     function initContextMenus() {
@@ -1520,6 +1763,7 @@
         initUpload();
         initDocumentDragAndDrop();
         initContextMenus();
+        initTreeContextMenu();
         initDocumentsPanel();
         initZoneWorkflow();
         initFolderMove();

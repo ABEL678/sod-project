@@ -304,7 +304,12 @@ tr[data-href],
 .zone-chip--archive.is-active .zone-count { background: var(--s-closed-solid); color: #fff; }
 
 /* Workflow-кнопки в колонке «Действия» */
-.wf-actions { display: inline-flex; gap: 4px; }
+.wf-actions {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    align-items: center;
+}
 
 .wf-btn {
     display: inline-grid;
@@ -315,8 +320,17 @@ tr[data-href],
     border-radius: 6px;
     background: var(--c-bg-surface);
     color: var(--c-text-secondary);
+    text-decoration: none;
     cursor: pointer;
-    transition: all .15s ease;
+}
+
+.wf-btn-text {
+    display: inline-flex;
+    width: auto;
+    height: auto;
+    padding: 2px 8px;
+    font-size: 11px;
+    white-space: nowrap;
 }
 
 .wf-btn:hover {
@@ -327,7 +341,12 @@ tr[data-href],
 
 .wf-btn.is-busy { opacity: .5; pointer-events: none; }
 
-.doc-actions-col { width: 1%; white-space: nowrap; }
+.doc-actions-col {
+    width: 220px;
+    min-width: 220px;
+    white-space: normal;
+    vertical-align: top;
+}
 
 @keyframes wf-row-flash {
     0% { background-color: var(--c-accent-subtle); }
@@ -514,4 +533,11 @@ tr.doc-row-flash > td { animation: wf-row-flash 1.5s ease; }
 .section-row .section-item {
     flex: 1 1 auto;
     min-width: 0;
+}
+
+.tree-context-menu {
+    position: fixed;
+    z-index: 1080;
+    min-width: 220px;
+    max-width: 280px;
 }

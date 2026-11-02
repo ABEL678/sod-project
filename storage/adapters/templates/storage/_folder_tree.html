@@ -4,6 +4,15 @@
          data-folder-id="{{ folder.pk }}"
          data-folder-row
          data-zone="{{ folder.zone }}"
+         data-tree-context="folder"
+         data-section-id="{{ folder.section_id|default:'' }}"
+         data-folder-name="{{ folder.name }}"
+         data-can-manage="{{ can_manage_structure|yesno:'1,0' }}"
+         data-create-folder-url="{% url 'storage:folder_create_form' project.pk %}?section={{ folder.section_id|default:'' }}&amp;parent={{ folder.pk }}"
+         data-rename-url="{% url 'storage:folder_rename_form' folder.pk %}"
+         data-move-url="{% url 'storage:folder_move' folder.pk %}"
+         data-delete-url="{% url 'storage:folder_delete' folder.pk %}"
+         data-delete-count="{{ folder.subtree_document_count|default:folder.document_count }}"
          data-drop-folder="{{ folder.pk }}"
          data-drop-name="{{ folder.name }}"
          draggable="true"
@@ -39,86 +48,6 @@
            title="{{ folder.full_code|default:folder.name }}">{% if folder.code %}{{ folder.code }}. {% endif %}{{ folder.name }}</a>
         <span class="badge text-bg-light border folder-count" title="Документов в папке и вложенных папках">{{ folder.subtree_document_count|default:folder.document_count }}</span>
 
-        {% if can_manage_structure %}
-            <button type="button"
-                    class="btn btn-sm btn-link p-0 folder-add-child"
-                    title="Создать вложенную папку"
-                    aria-label="Создать вложенную папку"
-                    hx-get="{% url 'storage:folder_create_form' project.pk %}?section={{ folder.section_id|default:'' }}&amp;parent={{ folder.pk }}"
-                    hx-target="#folderCreateModalBody"
-                    hx-swap="innerHTML"
-                    data-bs-toggle="modal"
-                    data-bs-target="#folderCreateModal">
-                <i class="bi bi-folder-plus" aria-hidden="true"></i>
-            </button>
-
-            <div class="dropdown">
-                <button class="btn btn-sm btn-link p-0 folder-menu-btn"
-                        type="button"
-                        data-folder-menu
-                        data-bs-toggle="dropdown"
-                        aria-expanded="false"
-                        title="Действия с папкой"
-                        aria-label="Действия с папкой">
-                    <i class="bi bi-three-dots" aria-hidden="true"></i>
-                </button>
-                <ul class="dropdown-menu dropdown-menu-end folder-menu">
-                    <li>
-                        <button type="button" class="dropdown-item"
-                                hx-get="{% url 'storage:folder_create_form' project.pk %}?section={{ folder.section_id|default:'' }}&amp;parent={{ folder.pk }}"
-                                hx-target="#folderCreateModalBody"
-                                hx-swap="innerHTML"
-                                data-bs-toggle="modal"
-                                data-bs-target="#folderCreateModal">
-                            <i class="bi bi-folder-plus me-2" aria-hidden="true"></i>Создать подпапку
-                        </button>
-                    </li>
-                    <li>
-                        <button type="button" class="dropdown-item"
-                                data-folder-move
-                                data-folder-id="{{ folder.pk }}"
-                                data-folder-move-url="{% url 'storage:folder_move' folder.pk %}">
-                            <i class="bi bi-folder-symlink me-2" aria-hidden="true"></i>Переместить в…
-                        </button>
-                    </li>
-                    <li>
-                        <button type="button" class="dropdown-item"
-                                hx-get="{% url 'storage:folder_rename_form' folder.pk %}"
-                                hx-target="#folderRenameModalBody"
-                                hx-swap="innerHTML"
-                                data-bs-toggle="modal"
-                                data-bs-target="#folderRenameModal">
-                            <i class="bi bi-pencil me-2" aria-hidden="true"></i>Переименовать
-                        </button>
-                    </li>
-                    <li>
-                        <a class="dropdown-item" href="{% url 'storage:folder_download' folder.pk %}">
-                            <i class="bi bi-file-earmark-zip me-2" aria-hidden="true"></i>Скачать папку (ZIP)
-                        </a>
-                    </li>
-                    <li><hr class="dropdown-divider"></li>
-                    <li>
-                        <form method="post" action="{% url 'storage:folder_delete' folder.pk %}"
-                              data-folder-delete-form
-                              data-file-count="{{ folder.subtree_document_count|default:folder.document_count }}"
-                              {% if folder.subtree_document_count %}onsubmit="return confirm('В папке {{ folder.subtree_document_count }} файлов. Они также будут перемещены в корзину. Продолжить?');"{% endif %}>
-                            {% csrf_token %}
-                            <button type="submit" class="dropdown-item text-danger">
-                                <i class="bi bi-trash me-2" aria-hidden="true"></i>Удалить
-                            </button>
-                        </form>
-                    </li>
-                </ul>
-            </div>
-        {% else %}
-            <button type="button"
-                    class="btn btn-sm btn-link p-0"
-                    disabled
-                    title="Нет прав"
-                    aria-label="Нет прав на изменение структуры">
-                <i class="bi bi-three-dots" aria-hidden="true"></i>
-            </button>
-        {% endif %}
     </div>
 
     {% if folder.children_tree %}
