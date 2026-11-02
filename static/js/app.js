@@ -1084,16 +1084,15 @@
         var context = target.getAttribute('data-tree-context');
         var manage = target.getAttribute('data-can-manage') === '1';
         var isSection = context === 'section';
-        var canCreateAttr = target.getAttribute('data-can-create-subfolder');
-        var canCreate = canCreateAttr === null ? manage : canCreateAttr === '1';
+        var createUrl = target.getAttribute('data-create-folder-url');
 
-        if (canCreate) {
+        if (manage && createUrl) {
             menu.appendChild(treeMenuItem(
                 isSection ? 'Создать папку' : 'Создать подпапку',
                 {
                     onClick: function () {
                         openTreeFolderForm(
-                            target.getAttribute('data-create-folder-url'),
+                            createUrl,
                             'folderCreateModalBody',
                             'folderCreateModal'
                         );

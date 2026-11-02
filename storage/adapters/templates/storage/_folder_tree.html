@@ -8,7 +8,6 @@
          data-section-id="{{ folder.section_id|default:'' }}"
          data-folder-name="{{ folder.name }}"
          data-can-manage="{{ can_manage_structure|yesno:'1,0' }}"
-         data-can-create-subfolder="{% if folder.parent is None and folder.section is None and folder.name in CANONICAL_ZONE_NAMES %}0{% else %}{{ can_manage_structure|yesno:'1,0' }}{% endif %}"
          data-create-folder-url="{% url 'storage:folder_create_form' project.pk %}?section={{ folder.section_id|default:'' }}&amp;parent={{ folder.pk }}"
          data-rename-url="{% url 'storage:folder_rename_form' folder.pk %}"
          data-move-url="{% url 'storage:folder_move' folder.pk %}"
@@ -46,7 +45,7 @@
         {% endif %}
         <a class="folder-name flex-grow-1 text-truncate"
            href="{% url 'storage:project_detail' project.pk %}?folder={{ folder.pk }}{% if selected_view %}&amp;view={{ selected_view.pk }}{% endif %}"
-           title="{{ folder.full_code|default:folder.name }}">{% if folder.code %}{{ folder.code }}. {% endif %}{{ folder.name }}</a>
+           title="{% if folder.parent %}{{ folder.full_code|default:folder.name }} — {{ folder.name }}{% else %}{{ folder.full_code|default:folder.name }}{% endif %}">{% if folder.parent %}{{ folder.full_code|default:folder.name }}{% else %}{% if folder.code %}{{ folder.code }}. {% endif %}{{ folder.name }}{% endif %}</a>
         <span class="badge text-bg-light border folder-count" title="Документов в папке и вложенных папках">{{ folder.subtree_document_count|default:folder.document_count }}</span>
 
     </div>
