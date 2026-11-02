@@ -1,13 +1,17 @@
 {% if breadcrumbs %}
+    {% if not hide_root or breadcrumbs|length > 1 %}
     <nav class="app-breadcrumbs" aria-label="Хлебные крошки">
         <ol class="breadcrumb mb-0">
             {% for crumb in breadcrumbs %}
-                {% if crumb.active %}
-                    <li class="breadcrumb-item active" aria-current="page">{{ crumb.label }}</li>
-                {% else %}
-                    <li class="breadcrumb-item"><a href="{{ crumb.url }}">{{ crumb.label }}</a></li>
+                {% if not hide_root or not forloop.first %}
+                    {% if crumb.active %}
+                        <li class="breadcrumb-item active" aria-current="page">{{ crumb.label }}</li>
+                    {% else %}
+                        <li class="breadcrumb-item"><a href="{{ crumb.url }}">{{ crumb.label }}</a></li>
+                    {% endif %}
                 {% endif %}
             {% endfor %}
         </ol>
     </nav>
+    {% endif %}
 {% endif %}

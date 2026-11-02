@@ -688,8 +688,10 @@ body.app-body {
     flex: 0 0 auto;
     min-height: var(--app-toolbar-h);
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: 8px;
+    row-gap: 4px;
     padding: 4px 10px;
     border-bottom: 1px solid var(--app-border);
     background: #fff;
@@ -700,7 +702,9 @@ body.app-body {
     flex: 1 1 auto;
     min-width: 0;
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
+    row-gap: 4px;
 }
 
 .toolbar-center {
@@ -766,7 +770,9 @@ body.app-body {
 .toolbar-actions {
     flex: 0 0 auto;
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
+    justify-content: flex-end;
     gap: 6px;
 }
 

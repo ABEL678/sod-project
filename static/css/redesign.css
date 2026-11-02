@@ -588,25 +588,6 @@ tr.doc-row-flash > td { animation: wf-row-flash 1.5s ease; }
     z-index: 1080;
 }
 
-.toolbar-search {
-    position: relative;
-    display: inline-flex;
-    align-items: center;
-}
-
-.toolbar-search > i {
-    position: absolute;
-    left: 8px;
-    color: var(--c-text-secondary);
-    font-size: 12px;
-    pointer-events: none;
-}
-
-.toolbar-search input {
-    width: 260px;
-    padding-left: 26px;
-}
-
 /* ==========================================================================
    Спринт 4: перекраска Bootstrap-контролов в акцент токенов.
    Раньше .btn-primary, ссылки и фокус-кольца были бутстраповским #0d6efd —

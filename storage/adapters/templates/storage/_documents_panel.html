@@ -8,7 +8,7 @@
      data-folder-move-url-template="{% url 'storage:folder_move' 0 %}"
      data-target-name="{{ upload_target_name }}">
 
-    {% include 'storage/_breadcrumbs.html' %}
+    {% include 'storage/_breadcrumbs.html' with hide_root=1 %}
 
     {% comment %}
     Волна 3: сегмент-контрол зон ISO 19650. Клик по чипу подставляет
@@ -79,15 +79,6 @@
             <span class="toolbar-count text-muted small text-nowrap">
                 {% if table.paginator %}{{ table.paginator.count }}{% else %}{{ documents|length }}{% endif %} док.
             </span>
-            <div class="toolbar-search">
-                <i class="bi bi-search" aria-hidden="true"></i>
-                <input type="search"
-                       id="globalSearch"
-                       class="form-control form-control-sm"
-                       placeholder="Поиск: шифр, название, автор"
-                       aria-label="Поиск по документам"
-                       value="{{ active_search }}">
-            </div>
             <span class="drag-hint text-muted small">
                 <i class="bi bi-grip-vertical" aria-hidden="true"></i>
                 Перетащите строку в папку · Ctrl — копировать
@@ -98,17 +89,6 @@
         </div>
         <div class="toolbar-spacer"></div>
         <div class="toolbar-actions">
-            <a class="btn btn-outline-secondary btn-sm" href="{% url 'issues:issue_registry' project.pk %}"
-               title="Реестр замечаний проекта">
-                <i class="bi bi-chat-left-text" aria-hidden="true"></i>
-                <span class="d-none d-xl-inline">Замечания</span>
-                {% if issue_counts %}
-                    <span class="cde-badge {% if issue_counts.overdue %}cde-deadline cde-deadline--overdue{% elif issue_counts.open %}cde-badge--attention{% else %}cde-badge--done{% endif %} cde-tnum ms-1"
-                          title="Открытых: {{ issue_counts.open }} · просрочено: {{ issue_counts.overdue }}">
-                        {{ issue_counts.open }}
-                    </span>
-                {% endif %}
-            </a>
             {# Спринт 3: импорт/экспорт/настройки свернуты в меню «⋯» — меньше кнопок в тулбаре #}
             <div class="dropdown">
                 <button type="button"
