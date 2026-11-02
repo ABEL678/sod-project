@@ -2053,15 +2053,18 @@ def _workflow_role_allowed(user: User, document: Document, action_code: str) -> 
     return True
 
 
+OPEN_ISSUE_STATUSES = ('NEW', 'IN_PROGRESS', 'REJECTED')
+
+
 def _open_issues_count(document: Document) -> int:
     return Issue.objects.filter(
         document=document,
-        status__in=('NEW', 'IN_PROGRESS'),
+        status__in=OPEN_ISSUE_STATUSES,
     ).count()
 
 
 def _has_open_issues(document: Document) -> bool:
-    """Открытые замечания (NEW/IN_PROGRESS) блокируют передачу в Shared."""
+    """Открытые замечания (NEW/IN_PROGRESS/REJECTED) блокируют публикацию."""
     return _open_issues_count(document) > 0
 
 
@@ -2122,7 +2125,7 @@ def update_internal_status(
 
     if new_status == 'ready_to_share' and _has_open_issues(document):
         raise ValueError(
-            "Нельзя перевести в «Готов к передаче» при открытых замечаниях"
+            "Нельзя утвердить документ с открытыми замечаниями"
         )
 
     document.internal_status = new_status
@@ -2194,6 +2197,8 @@ def document_workflow_actions(user: User, document: Document) -> list[dict]:
             document.internal_status != 'ready_to_share'
             or _has_open_issues(document)
         ):
+            continue
+        if code in ('publish', 'approve') and _has_open_issues(document):
             continue
         if _workflow_role_allowed(user, document, code):
             actions.append({
@@ -2271,6 +2276,16 @@ def transition_document_zone(
                 "Нельзя подать на согласование документ с открытыми замечаниями"
             )
 
+    target_suitability = ZONE_SUITABILITY_MAP.get(action['to'])
+    if (
+        target_suitability in ('S4', 'A')
+        and action_code != 'archive'
+        and _has_open_issues(document)
+    ):
+        raise ValueError(
+            "Нельзя утвердить документ с открытыми замечаниями"
+        )
+
     target_folder = document.folder
     if target_folder is None or _is_canonical_zone_folder(target_folder):
         target_folder = _get_or_create_zone_folder(
@@ -2281,7 +2296,6 @@ def transition_document_zone(
     if target_status is not None and target_status != document.status:
         document.status = target_status
 
-    target_suitability = ZONE_SUITABILITY_MAP.get(action['to'])
     if target_suitability is not None:
         document.suitability_code = target_suitability
     if action_code == 'return_wip':

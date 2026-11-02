@@ -1,3 +1,6 @@
+from urllib.parse import urlencode
+
+from django.db.models import Count, Q
 from django.urls import reverse
 from django.utils.html import format_html
 from django.utils.safestring import mark_safe
@@ -6,8 +9,8 @@ from django_tables2.utils import AttributeDict
 
 from storage.domain.models import Document, Folder
 from storage.domain.services import (
+    OPEN_ISSUE_STATUSES,
     _effective_zone,
-    _open_issues_count,
     document_actions,
 )
 
@@ -221,13 +224,44 @@ class DocumentTable(tables.Table):
         )
 
     def render_issues(self, record):
-        count = _open_issues_count(record)
-        if count:
+        counts = record.issues.aggregate(
+            total=Count('pk'),
+            open=Count('pk', filter=Q(status__in=OPEN_ISSUE_STATUSES)),
+            closed=Count('pk', filter=Q(status__in=('CLOSED', 'CANCELLED'))),
+        )
+        total = counts['total']
+        if total == 0:
+            return '—'
+        open_count = counts['open']
+        registry_url = '{}?{}'.format(
+            reverse('issues:issue_registry', args=[record.project_id]),
+            urlencode({'q': record.code}),
+        )
+        if open_count:
             return format_html(
-                '<span class="badge bg-danger" title="Открытые замечания">{}</span>',
-                count,
+                '<a class="badge bg-danger text-decoration-none" '
+                'href="{}" title="Открытых: {} из {}">{}</a>',
+                registry_url,
+                open_count,
+                total,
+                open_count,
             )
-        return '0'
+        if counts['closed'] == total:
+            return format_html(
+                '<a class="badge bg-success text-decoration-none" '
+                'href="{}" title="Всего замечаний: {}">{}</a>',
+                registry_url,
+                total,
+                total,
+            )
+        return format_html(
+            '<a class="badge bg-secondary text-decoration-none" '
+            'href="{}" title="Замечания не открыты, но не закрыты ({} из {})">{}</a>',
+            registry_url,
+            total - counts['closed'],
+            total,
+            total,
+        )
 
     def render_current_version(self, record):
         if record.current_version is None:
