@@ -214,8 +214,9 @@ tr[data-href],
 }
 
 .topbar form.d-flex {
-    flex: 0 1 240px;
-    min-width: 120px;
+    flex: 0 0 280px;
+    max-width: 280px;
+    min-width: 0;
     margin: 0 0 0 8px;
 }
 
