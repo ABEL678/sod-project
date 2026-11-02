@@ -234,15 +234,21 @@ class DocumentTable(tables.Table):
         )
 
     def render_issues(self, record):
-        counts = record.issues.aggregate(
-            total=Count('pk'),
-            open=Count('pk', filter=Q(status__in=OPEN_ISSUE_STATUSES)),
-            closed=Count('pk', filter=Q(status__in=('CLOSED', 'CANCELLED'))),
-        )
-        total = counts['total']
+        open_count = getattr(record, 'open_issues_count', None)
+        total = getattr(record, 'issues_total', None)
+        closed = getattr(record, 'issues_closed', None)
+        if open_count is None or total is None or closed is None:
+            counts = record.issues.aggregate(
+                total=Count('pk'),
+                open=Count('pk', filter=Q(status__in=OPEN_ISSUE_STATUSES)),
+                closed=Count('pk', filter=Q(status__in=('CLOSED', 'CANCELLED'))),
+            )
+            open_count = counts['open']
+            total = counts['total']
+            closed = counts['closed']
+
         if total == 0:
             return '—'
-        open_count = counts['open']
         registry_url = '{}?{}'.format(
             reverse('issues:issue_registry', args=[record.project_id]),
             urlencode({'q': record.code}),
@@ -256,7 +262,7 @@ class DocumentTable(tables.Table):
                 total,
                 open_count,
             )
-        if counts['closed'] == total:
+        if closed == total:
             return format_html(
                 '<a class="badge bg-success text-decoration-none" '
                 'href="{}" title="Всего замечаний: {}">{}</a>',
@@ -268,7 +274,7 @@ class DocumentTable(tables.Table):
             '<a class="badge bg-secondary text-decoration-none" '
             'href="{}" title="Замечания не открыты, но не закрыты ({} из {})">{}</a>',
             registry_url,
-            total - counts['closed'],
+            total - closed,
             total,
             total,
         )

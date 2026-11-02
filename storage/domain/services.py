@@ -525,6 +525,20 @@ def get_project_documents_queryset(
     if not ordering:
         ordering = ['section__order', 'code']
 
+    queryset = queryset.annotate(
+        open_issues_count=Count(
+            'issues',
+            filter=Q(issues__status__in=OPEN_ISSUE_STATUSES),
+            distinct=True,
+        ),
+        issues_total=Count('issues', distinct=True),
+        issues_closed=Count(
+            'issues',
+            filter=Q(issues__status__in=('CLOSED', 'CANCELLED')),
+            distinct=True,
+        ),
+    )
+
     return queryset.select_related(
         'section',
         'folder',
@@ -2418,6 +2432,9 @@ OPEN_ISSUE_STATUSES = ('NEW', 'IN_PROGRESS', 'REJECTED')
 
 
 def _open_issues_count(document: Document) -> int:
+    annotated = getattr(document, 'open_issues_count', None)
+    if annotated is not None:
+        return annotated
     return Issue.objects.filter(
         document=document,
         status__in=OPEN_ISSUE_STATUSES,
@@ -2426,6 +2443,9 @@ def _open_issues_count(document: Document) -> int:
 
 def _has_open_issues(document: Document) -> bool:
     """Открытые замечания (NEW/IN_PROGRESS/REJECTED) блокируют публикацию."""
+    annotated = getattr(document, 'open_issues_count', None)
+    if annotated is not None:
+        return annotated > 0
     return _open_issues_count(document) > 0
 
 
