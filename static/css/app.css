@@ -118,43 +118,6 @@ body.app-body {
     white-space: nowrap;
 }
 
-.topbar-search {
-    flex: 1 1 360px;
-    max-width: 480px;
-    margin: 0 auto;
-    position: relative;
-}
-
-.topbar-search .bi {
-    position: absolute;
-    left: 10px;
-    top: 7px;
-    font-size: 13px;
-    color: #94a3b8;
-    pointer-events: none;
-}
-
-.topbar-search input {
-    height: 30px;
-    padding: 0 10px 0 30px;
-    border: 1px solid rgba(255, 255, 255, .16);
-    border-radius: 5px;
-    background: rgba(255, 255, 255, .08);
-    color: #f8fafc;
-    font-size: 12.5px;
-}
-
-.topbar-search input::placeholder {
-    color: #94a3b8;
-}
-
-.topbar-search input:focus {
-    outline: none;
-    border-color: var(--c-accent);
-    background: rgba(255, 255, 255, .12);
-    box-shadow: 0 0 0 2px color-mix(in srgb, var(--c-accent) 22%, transparent);
-}
-
 .topbar-actions {
     display: flex;
     align-items: center;
@@ -774,6 +737,18 @@ body.app-body {
     align-items: center;
     justify-content: flex-end;
     gap: 6px;
+}
+
+.toolbar-search-form {
+    flex: 0 1 300px;
+    min-width: 180px;
+    max-width: 300px;
+    margin: 0 6px 0 0;
+}
+
+.toolbar-search-form input {
+    width: 100%;
+    min-width: 0;
 }
 
 .toolbar-actions form {
@@ -1542,10 +1517,6 @@ body.modal-open {
 
     .topbar-project {
         display: none;
-    }
-
-    .topbar-search {
-        max-width: none;
     }
 
     .toolbar-select {

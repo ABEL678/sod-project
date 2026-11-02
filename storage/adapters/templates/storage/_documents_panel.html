@@ -89,6 +89,13 @@
         </div>
         <div class="toolbar-spacer"></div>
         <div class="toolbar-actions">
+            {# Глобальный поиск перенесён из шапки в тулбар проекта #}
+            <form action="{% url 'storage:search' project.pk %}" method="get"
+                  class="toolbar-search-form d-flex">
+                <input type="search" name="q" class="form-control form-control-sm"
+                       placeholder="Поиск по шифру, названию" value="{{ request.GET.q }}"
+                       aria-label="Поиск по документам проекта">
+            </form>
             {# Спринт 6: видимая главная кнопка загрузки — раньше загрузка была только через DnD и правый клик #}
             <button type="button"
                     class="btn btn-primary btn-sm"
