@@ -169,7 +169,7 @@ body {
 .panel .card:hover,
 .panel .card.is-active {
     background: #F6F6F4;
-    border-color: #2F5BEA;
+    border-color: var(--c-accent, #3D5A98);
 }
 
 .mark-badge {
@@ -325,8 +325,8 @@ body {
 }
 
 .status-tab.active {
-    background: #E8EFFD;
-    color: #1D4ED8;
+    background: var(--c-accent-subtle);
+    color: var(--c-accent);
     font-weight: 500;
 }
 
@@ -427,7 +427,7 @@ body {
     align-items: center;
     height: 26px;
     padding: 0 8px;
-    border: 1px solid #d5dde8;
+    border: 1px solid var(--c-border-default);
     border-radius: 6px;
     color: #334155;
     font-size: 11.5px;
@@ -437,7 +437,7 @@ body {
 
 .version-back:hover {
     background: #f8fafc;
-    color: #0d6efd;
+    color: var(--c-accent, #3D5A98);
 }
 
 .toolbar .compare-toggle {
@@ -684,8 +684,8 @@ body {
 
 .pdf-minimap-rect {
     position: absolute;
-    border: 2px solid var(--c-accent, #2F5BEA);
-    background: rgba(47, 91, 234, 0.12);
+    border: 2px solid var(--c-accent, var(--c-accent, #3D5A98));
+    background: color-mix(in srgb, var(--c-accent) 12%, transparent);
     border-radius: 2px;
     pointer-events: none;
     box-sizing: border-box;
@@ -813,4 +813,26 @@ body {
 .viewer-workflow-actions .btn {
     font-size: 11px;
     padding: 2px 8px;
+}
+
+/* Спринт 6: тост вьювера — замена блокирующему alert() */
+.viewer-toast {
+    position: fixed;
+    left: 50%;
+    bottom: 24px;
+    transform: translateX(-50%) translateY(8px);
+    background: var(--c-text-primary, #191917);
+    color: var(--c-text-inverse, #FFFFFF);
+    font-size: 13px;
+    padding: 10px 18px;
+    border-radius: 10px;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 160ms ease, transform 160ms ease;
+    z-index: 3000;
+    max-width: 70vw;
+}
+.viewer-toast.is-visible {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
 }

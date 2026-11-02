@@ -542,6 +542,8 @@ class GuiViewTests(GuiTestBase):
         self.assertContains(response, 'table-bordered')
         self.assertContains(response, 'id="documentsTable"')
         self.assertNotContains(response, 'col-resizer')
+        # Спринт 6: видимая кнопка загрузки вернулась в тулбар реестра
+        self.assertContains(response, 'id="uploadBtn"')
         self.assertContains(response, 'data-role="upload-input"')
         self.assertNotContains(response, 'Перетащите файлы сюда')
         self.assertNotContains(response, 'upload-zone')

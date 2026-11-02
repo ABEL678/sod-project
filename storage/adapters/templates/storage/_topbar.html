@@ -24,7 +24,8 @@
     {% if topbar_project %}
         <form action="{% url 'storage:search' topbar_project.pk %}" method="get" class="d-flex">
             <input type="search" name="q" class="form-control form-control-sm"
-                   placeholder="Поиск по шифру, названию" value="{{ request.GET.q }}">
+                   placeholder="Поиск по шифру, названию" value="{{ request.GET.q }}"
+                   aria-label="Поиск по документам проекта">
         </form>
     {% endif %}
     <div class="spacer"></div>

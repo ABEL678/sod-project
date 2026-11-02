@@ -10,6 +10,29 @@
     /* Спринт 3: кнопка-заглушка toggleOverlay удалена — режим наложения
        это «Шторка» (T65), отдельной несуществующей функции больше нет. */
 
+    /* Спринт 6: тост вместо блокирующего alert() */
+    function viewerNotify(message) {
+        if (typeof window.showToast === 'function') {
+            window.showToast(message);
+            return;
+        }
+        let toast = document.getElementById('viewerToast');
+        if (!toast) {
+            toast = document.createElement('div');
+            toast.id = 'viewerToast';
+            toast.className = 'viewer-toast';
+            toast.setAttribute('role', 'status');
+            toast.setAttribute('aria-live', 'polite');
+            document.body.appendChild(toast);
+        }
+        toast.textContent = message;
+        toast.classList.add('is-visible');
+        clearTimeout(viewerNotify._timer);
+        viewerNotify._timer = setTimeout(function () {
+            toast.classList.remove('is-visible');
+        }, 3500);
+    }
+
     const viewer = document.getElementById('pdfViewer');
     if (!viewer) {
         return;
@@ -1081,7 +1104,7 @@
                     }
                     removeIssue(issue.id);
                 }).catch(function (error) {
-                    window.alert(error.message);
+                    viewerNotify(error.message);
                 });
             } else if (action === 'show-mark') {
                 selectIssue(issue.id, {scrollMark: true});
@@ -1555,7 +1578,7 @@
                     comparison.geometryMismatch = true;
                     comparison.loading = false;
                     updateSliderButton();
-                    window.alert(
+                    viewerNotify(
                         'Шторка доступна только для листов с одинаковой геометрией. Используйте режим «Рядом».'
                     );
                     return null;
@@ -1574,7 +1597,7 @@
             }
             comparison.loading = false;
             updateSliderButton();
-            window.alert('Не удалось загрузить PDF для сравнения.');
+            viewerNotify('Не удалось загрузить PDF для сравнения.');
         });
     }
 
@@ -1666,7 +1689,7 @@
                         }, 1500);
                     });
                 }).catch(function (error) {
-                    window.alert(error.message);
+                    viewerNotify(error.message);
                 });
             });
         }

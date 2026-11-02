@@ -36,12 +36,12 @@
   --c-border-hairline: #E4E4E0;
   --c-border-default: #D4D4CE;
   --c-border-header: #374151;  /* граница графитового хедера */
-  --c-border-header-control: #4B5563;  /* рамки ghost-кнопок на хедере */
+  --c-border-header-control: #8A93A6;  /* рамки ghost-кнопок на хедере */
 
   /* --- Текст --- */
   --c-text-primary: #191917;
   --c-text-secondary: #6E6E68;
-  --c-text-muted: #9C9C94;
+  --c-text-muted: #71716A;
   --c-text-on-dark: #F2F2EF;
   --c-text-on-dark-muted: #B4B5BA;
   --c-text-inverse: #FFFFFF;

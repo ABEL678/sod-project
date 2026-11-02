@@ -405,3 +405,60 @@ class EmptyTrashCropCleanupTests(Sprint5TestBase):
         from django.core.files.storage import default_storage
 
         self.assertFalse(default_storage.exists(crop_name))
+
+
+class Sprint6MarkupTests(Sprint5TestBase):
+    """Спринт 6: UX-полировка — критичные элементы разметки на месте."""
+
+    def test_project_page_has_visible_upload_button_and_status(self):
+        self.client.force_login(self.user_gip)
+        response = self.client.get(
+            reverse('storage:project_detail', args=[self.project.pk]),
+        )
+
+        self.assertContains(response, 'id="uploadBtn"')
+        self.assertContains(response, 'id="uploadStatus"')
+        self.assertContains(response, 'id="panelSpinner"')
+        self.assertContains(response, 'data-role="upload-btn"')
+
+    def test_document_modals_rendered_once_per_page(self):
+        # Спринт 6: общие блоки вынесены из цикла разделов — по одному экземпляру
+        self.client.force_login(self.user_gip)
+        response = self.client.get(
+            reverse('storage:project_detail', args=[self.project.pk]),
+        )
+        html = response.content.decode()
+
+        self.assertEqual(html.count('id="dndToast"'), 1)
+        self.assertEqual(html.count('id="docRowMenu"'), 1)
+        self.assertEqual(html.count('id="documentMoveModal"'), 1)
+
+    def test_folder_rows_have_visible_kebab_menu(self):
+        from storage.domain.services import create_folder
+
+        create_folder(self.user_gip, self.project, 'С кебабом', section=self.section_ar)
+        self.client.force_login(self.user_gip)
+        response = self.client.get(
+            reverse('storage:project_detail', args=[self.project.pk]),
+        )
+        html = response.content.decode()
+
+        self.assertIn('data-folder-kebab', html)
+        # 2 папки из фикстур (03. Опубликовано, 01. В работе) + «С кебабом»
+        self.assertEqual(html.count('data-folder-kebab'), 3)
+
+    def test_login_page_loads_design_tokens(self):
+        response = self.client.get(reverse('login'))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'design-tokens/tokens.css')
+
+    def test_base_page_loads_brand_fonts_and_skip_link(self):
+        self.client.force_login(self.user_gip)
+        response = self.client.get(
+            reverse('storage:project_detail', args=[self.project.pk]),
+        )
+
+        self.assertContains(response, 'fonts/fonts.css')
+        self.assertContains(response, 'skip-link')
+        self.assertContains(response, 'id="main-content"')

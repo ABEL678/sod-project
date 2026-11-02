@@ -9,11 +9,11 @@
     --app-border-strong: #cbd5e1;
     --app-ink: #0f172a;
     --app-muted: #64748b;
-    --app-topbar-bg: #1e293b;
+    --app-topbar-bg: var(--c-bg-header, #3A4558);
     --app-topbar-fg: #f3f4f6;
     --app-sidebar-bg: #f8fafc;
-    --app-accent: #2563eb;
-    --app-accent-soft: #e0e7ff;
+    --app-accent: var(--c-accent, #3D5A98);
+    --app-accent-soft: var(--c-accent-subtle);
 }
 
 html,
@@ -81,7 +81,7 @@ body.app-body {
 .topbar-brand .bi {
     flex: 0 0 auto;
     font-size: 16px;
-    color: #93c5fd;
+    color: var(--c-accent-on-header-strong, #CBD8EF);
 }
 
 .topbar-company {
@@ -150,9 +150,9 @@ body.app-body {
 
 .topbar-search input:focus {
     outline: none;
-    border-color: #60a5fa;
+    border-color: var(--c-accent);
     background: rgba(255, 255, 255, .12);
-    box-shadow: 0 0 0 2px rgba(96, 165, 250, .22);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--c-accent) 22%, transparent);
 }
 
 .topbar-actions {
@@ -196,7 +196,7 @@ body.app-body {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    background: #2563eb;
+    background: var(--c-accent, #3D5A98);
     color: #fff;
     font-size: 12px;
     font-weight: 700;
@@ -282,12 +282,12 @@ body.app-body {
 }
 
 .section-item:hover {
-    background: #eef2f7;
+    background: var(--c-bg-row-hover);
 }
 
 .section-item.active {
     background: var(--app-accent-soft);
-    color: #1e3a8a;
+    color: var(--c-accent-on-subtle);
 }
 
 .section-item .bi-folder {
@@ -316,7 +316,7 @@ body.app-body {
 }
 
 .section-item.active .section-name {
-    color: #3730a3;
+    color: var(--c-accent-on-subtle);
 }
 
 .section-count {
@@ -340,7 +340,7 @@ body.app-body {
 .section-item.dragover {
     outline: 2px dashed var(--app-accent);
     outline-offset: -2px;
-    background: #eff6ff;
+    background: var(--c-accent-subtle);
 }
 
 .sidebar-header-actions {
@@ -434,18 +434,18 @@ body.app-body {
 }
 
 .folder-row:hover {
-    background: #eef2f7;
+    background: var(--c-bg-row-hover);
 }
 
 .folder-row.folder-selected {
-    background: #dbeafe;
-    color: #1e3a8a;
+    background: var(--c-accent-subtle, #EDF1F7);
+    color: var(--c-accent-on-subtle);
 }
 
 .folder-row.dragover {
     outline: 2px dashed var(--app-accent);
     outline-offset: -2px;
-    background: #eff6ff;
+    background: var(--c-accent-subtle);
 }
 
 .app-main.drag-over {
@@ -461,8 +461,8 @@ body.app-body {
     align-items: center;
     justify-content: center;
     border: 2px dashed var(--app-accent);
-    background: rgba(59, 130, 246, .08);
-    color: #1d4ed8;
+    background: color-mix(in srgb, var(--c-accent) 8%, transparent);
+    color: var(--c-accent);
     font-size: 15px;
     font-weight: 600;
     pointer-events: none;
@@ -568,8 +568,8 @@ body.app-body {
     justify-content: center;
     gap: 6px;
     border-radius: 6px;
-    background-color: #3b82f6;
-    border-color: #3b82f6;
+    background-color: var(--c-accent, #3D5A98);
+    border-color: var(--c-accent, #3D5A98);
     box-shadow: none;
     font-size: 13px;
     font-weight: 600;
@@ -577,8 +577,8 @@ body.app-body {
 
 .upload-btn:hover,
 .upload-btn:focus {
-    background-color: #2563eb;
-    border-color: #2563eb;
+    background-color: var(--c-accent, #3D5A98);
+    border-color: var(--c-accent, #3D5A98);
     box-shadow: none;
 }
 
@@ -673,7 +673,7 @@ body.app-body {
 
 .app-tab.active {
     border-bottom-color: var(--app-accent);
-    color: #1d4ed8;
+    color: var(--c-accent);
     font-weight: 600;
 }
 
@@ -762,9 +762,9 @@ body.app-body {
 
 .filter-group .btn:focus,
 .filter-group .form-select:focus {
-    border-color: #bfdbfe;
+    border-color: color-mix(in srgb, var(--c-accent) 28%, #FFFFFF);
     background-color: #fff;
-    box-shadow: 0 0 0 2px rgba(37, 99, 235, .12);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--c-accent) 12%, transparent);
 }
 
 .toolbar-actions {
@@ -817,7 +817,7 @@ body.app-body {
     height: 30px;
     min-height: 30px;
     padding: 3px 8px;
-    border-color: #d5dde8;
+    border-color: var(--c-border-default);
     border-radius: 4px;
     background-color: #fff;
     color: #334155;
@@ -891,9 +891,9 @@ body.app-body {
 }
 
 .toolbar .quick-filter input:focus {
-    border-color: #bfdbfe;
+    border-color: color-mix(in srgb, var(--c-accent) 28%, #FFFFFF);
     background-color: #fff;
-    box-shadow: 0 0 0 2px rgba(37, 99, 235, .12);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--c-accent) 12%, transparent);
 }
 
 .dropdown-menu {
@@ -921,7 +921,7 @@ body.app-body {
 .view-menu .dropdown-item.active,
 .view-menu .dropdown-item:active {
     background: var(--app-accent-soft);
-    color: #1e3a8a;
+    color: var(--c-accent-on-subtle);
 }
 
 .view-menu .badge {
@@ -976,14 +976,14 @@ body.app-body {
     padding: 0 8px;
     border-bottom: 1px solid #e2e8f0;
     background: #fff;
-    color: #1e293b;
+    color: var(--c-bg-header, #3A4558);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
 }
 
 .doc-table tbody tr:hover td {
-    background: #f4f8ff;
+    background: var(--c-bg-row-hover);
 }
 
 .doc-table .doc-col-sticky {
@@ -1000,7 +1000,7 @@ body.app-body {
 }
 
 .doc-table tbody tr:hover td.doc-col-sticky {
-    background: #f4f8ff;
+    background: var(--c-bg-row-hover);
 }
 
 .doc-table .doc-code {
@@ -1054,7 +1054,7 @@ body.app-body {
 
 .doc-share-btn:hover,
 .doc-share-btn.is-copied {
-    background: #e0e7ff;
+    background: var(--c-accent-subtle);
     color: var(--app-accent);
     opacity: 1;
 }
@@ -1066,9 +1066,9 @@ body.app-body {
     gap: 8px;
     min-height: 42px;
     padding: 5px 10px;
-    border-bottom: 1px solid #bfdbfe;
-    background: #eff6ff;
-    color: #1e3a8a;
+    border-bottom: 1px solid color-mix(in srgb, var(--c-accent) 28%, #FFFFFF);
+    background: var(--c-accent-subtle);
+    color: var(--c-accent-on-subtle);
     font-size: 12.5px;
 }
 
@@ -1124,7 +1124,7 @@ body.app-body {
 }
 
 .doc-table a {
-    color: #1d4ed8;
+    color: var(--c-accent);
     text-decoration: none;
 }
 
@@ -1193,17 +1193,17 @@ body.app-body {
     height: 34px;
     margin-top: 8px;
     padding: 0 14px;
-    border-color: #3b82f6;
+    border-color: var(--c-accent, #3D5A98);
     border-radius: 6px;
-    background: #3b82f6;
+    background: var(--c-accent, #3D5A98);
     font-size: 12.5px;
     font-weight: 600;
     box-shadow: none;
 }
 
 .doc-empty .btn:hover {
-    border-color: #2563eb;
-    background: #2563eb;
+    border-color: var(--c-accent, #3D5A98);
+    background: var(--c-accent, #3D5A98);
 }
 
 .col-resizer {
@@ -1218,7 +1218,7 @@ body.app-body {
 
 .col-resizer:hover,
 .col-resizer.is-active {
-    background: #93c5fd;
+    background: var(--c-accent-on-header-strong, #CBD8EF);
 }
 
 .row-hidden {
@@ -1574,7 +1574,7 @@ body.modal-open {
 
 .sidebar-resizer:hover,
 .sidebar-resizer.is-active {
-    background: rgba(59, 130, 246, .35);
+    background: color-mix(in srgb, var(--c-accent) 35%, transparent);
 }
 
 .app-shell.sidebar-collapsed .sidebar-resizer {
@@ -1599,7 +1599,7 @@ body.modal-open {
 }
 
 .app-breadcrumbs .breadcrumb-item a {
-    color: #2563eb;
+    color: var(--c-accent, #3D5A98);
     text-decoration: none;
 }
 
@@ -1664,12 +1664,12 @@ body.modal-open {
 .th-filter-toggle:hover,
 .th-filter[open] .th-filter-toggle,
 .th-filter.is-active .th-filter-toggle {
-    background: #e0e7ff;
-    color: #1d4ed8;
+    background: var(--c-accent-subtle);
+    color: var(--c-accent);
 }
 
 .th-filter.is-active .th-filter-toggle {
-    box-shadow: inset 0 0 0 1px #93c5fd;
+    box-shadow: inset 0 0 0 1px var(--c-accent-on-header-strong, #CBD8EF);
 }
 
 .th-filter-menu {
@@ -1737,7 +1737,7 @@ body.modal-open {
 }
 
 .doc-table thead th.is-column-drop-target {
-    box-shadow: inset 3px 0 0 #3b82f6;
+    box-shadow: inset 3px 0 0 var(--c-accent, #3D5A98);
 }
 
 .doc-table thead th {
@@ -1761,9 +1761,9 @@ body.modal-open {
     display: flex;
     align-items: center;
     justify-content: center;
-    border: 2px dashed #3b82f6;
+    border: 2px dashed var(--c-accent, #3D5A98);
     border-radius: 8px;
-    background: rgba(239, 246, 255, .88);
+    background: color-mix(in srgb, var(--c-accent-subtle) 88%, transparent);
     pointer-events: none;
 }
 
@@ -1778,13 +1778,13 @@ body.modal-open {
     padding: 16px 22px;
     border-radius: 10px;
     background: #fff;
-    color: #1e3a8a;
+    color: var(--c-accent-on-subtle);
     font-size: 14px;
-    box-shadow: 0 10px 30px rgba(37, 99, 235, .18);
+    box-shadow: 0 10px 30px color-mix(in srgb, var(--c-accent) 18%, transparent);
 }
 
 .doc-drop-card > .bi {
-    color: #3b82f6;
+    color: var(--c-accent, #3D5A98);
     font-size: 26px;
 }
 
@@ -1796,9 +1796,9 @@ body.modal-open {
     transform: translateX(-50%);
     min-height: 46px;
     max-width: calc(100vw - 40px);
-    border: 1px solid #93c5fd;
+    border: 1px solid var(--c-accent-on-header-strong, #CBD8EF);
     border-radius: 999px;
-    background: #eff6ff;
+    background: var(--c-accent-subtle);
     box-shadow: 0 12px 34px rgba(15, 23, 42, .22);
 }
 
@@ -1979,12 +1979,12 @@ body.modal-open {
 }
 
 .folder-row.list-group-item:hover {
-    background: #eef2f7;
+    background: var(--c-bg-row-hover);
 }
 
 .folder-row.folder-selected {
-    background: #dbeafe;
-    color: #1e3a8a;
+    background: var(--c-accent-subtle, #EDF1F7);
+    color: var(--c-accent-on-subtle);
 }
 
 .folder-toggle {
@@ -2018,7 +2018,7 @@ body.modal-open {
 }
 
 .folder-name:hover {
-    color: #1d4ed8;
+    color: var(--c-accent);
     text-decoration: underline;
 }
 
@@ -2099,8 +2099,8 @@ body.modal-open {
 
 .folder-row.is-dnd-over,
 .section-item.is-dnd-over {
-    background: #dbeafe !important;
-    outline: 2px dashed #2563eb;
+    background: var(--c-accent-subtle, #EDF1F7) !important;
+    outline: 2px dashed var(--c-accent, #3D5A98);
     outline-offset: -2px;
     border-radius: 5px;
 }
@@ -2182,7 +2182,7 @@ body.modal-open {
 }
 
 .doc-row-menu .dropdown-item:hover {
-    background: #eff6ff;
+    background: var(--c-accent-subtle);
 }
 
 /* ---------- T10-LIFECYCLE: zone visualization ---------- */
@@ -2197,7 +2197,7 @@ body.modal-open {
 
 /* Фон только для канонических зон (root папки с zone) */
 .folder-row-zone[data-zone="WIP"] {
-    background: linear-gradient(90deg, rgba(59,130,246,.06) 0%, transparent 50%);
+    background: linear-gradient(90deg, color-mix(in srgb, var(--c-accent) 6%, transparent) 0%, transparent 50%);
 }
 
 .folder-row-zone[data-zone="SHARED"] {
@@ -2279,7 +2279,7 @@ body.modal-open {
 
 .issue-card.is-active {
     border-color: var(--c-accent);
-    box-shadow: 0 0 0 .2rem rgba(61, 90, 152, .25);
+    box-shadow: 0 0 0 .2rem color-mix(in srgb, var(--c-accent) 25%, transparent);
 }
 
 /* ---------- T12-PDF-FINAL: markup, toolbar, details, context menu ---------- */
@@ -2318,7 +2318,7 @@ body.modal-open {
 }
 
 .pdf-markup.is-active {
-    box-shadow: 0 0 0 2px var(--c-accent), 0 0 12px rgba(61, 90, 152, .55);
+    box-shadow: 0 0 0 2px var(--c-accent), 0 0 12px color-mix(in srgb, var(--c-accent) 55%, transparent);
 }
 
 .textLayer {
@@ -2345,7 +2345,7 @@ body.modal-open {
 }
 
 .pdf-viewer.text-mode .textLayer ::selection {
-    background: rgba(13, 110, 253, .35);
+    background: color-mix(in srgb, var(--c-accent) 35%, transparent);
 }
 
 .issues-panel-body {
@@ -2389,7 +2389,7 @@ body.modal-open {
 }
 
 .issue-context-menu .context-item:hover {
-    background: #eef2ff;
+    background: var(--c-accent-subtle);
 }
 
 .issue-context-menu .context-label {
