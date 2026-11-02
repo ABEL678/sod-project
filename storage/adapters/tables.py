@@ -7,6 +7,7 @@ from django_tables2.utils import AttributeDict
 from storage.domain.models import Document, Folder
 from storage.domain.services import (
     _effective_zone,
+    _open_issues_count,
     document_actions,
 )
 
@@ -57,9 +58,8 @@ class DocumentTable(tables.Table):
     code = tables.Column(verbose_name='Шифр', attrs=_column_attrs('code'))
     name = tables.Column(verbose_name='Название', attrs=_column_attrs('name'))
     doc_type = tables.Column(verbose_name='Тип', attrs=_column_attrs('doc_type'))
-    status = tables.Column(verbose_name='Статус', attrs=_column_attrs('status'))
     suitability_code = tables.Column(
-        verbose_name='Внешний статус',
+        verbose_name='Статус для передачи',
         attrs=_column_attrs('suitability'),
         order_by=('suitability_code',),
     )
@@ -67,15 +67,15 @@ class DocumentTable(tables.Table):
         verbose_name='Внутренний статус',
         attrs=_column_attrs('internal-status'),
         order_by=('internal_status',),
-    )
-    zone = tables.Column(
-        verbose_name='Зона',
-        attrs=_column_attrs('zone'),
-        order_by=('status',),
-        # Волна 3, бонус-фикс: accessor 'zone' у Document отсутствует -> None
-        # попадал в empty_values и render_zone не вызывался (в колонке всегда
-        # был прочерк). Разрешаем пустые значения — '—' рисует сам render_zone.
         empty_values=(),
+    )
+    issues = tables.Column(
+        verbose_name='Замечания',
+        accessor='pk',
+        orderable=False,
+        exclude_from_export=True,
+        empty_values=(),
+        attrs=_column_attrs('issues'),
     )
     current_version = tables.Column(
         verbose_name='Версия',
@@ -109,10 +109,9 @@ class DocumentTable(tables.Table):
             'code',
             'name',
             'doc_type',
-            'status',
             'suitability_code',
             'internal_status',
-            'zone',
+            'issues',
             'current_version',
             'updated_at',
             'created_by',
@@ -140,6 +139,10 @@ class DocumentTable(tables.Table):
                 'storage:document_delete', args=[record.pk]
             ),
             'data-document-code': lambda record: record.code,
+            'data-zone': lambda record: _effective_zone(record),
+            'data-zone-name': lambda record: dict(Folder.ZONE_CHOICES).get(
+                _effective_zone(record), ''
+            ),
             'draggable': 'true',
             'data-search': lambda record: ' '.join([
                 record.code.lower(),
@@ -171,13 +174,6 @@ class DocumentTable(tables.Table):
     def render_doc_type(self, record):
         return record.get_doc_type_display()
 
-    def render_status(self, record):
-        return format_html(
-            '<span class="doc-badge {}">{}</span>',
-            STATUS_BADGE_CLASSES.get(record.status, 'doc-badge-draft'),
-            record.get_status_display(),
-        )
-
     def render_suitability_code(self, record):
         return format_html(
             '<span class="doc-suitability" title="{}">{}</span>',
@@ -194,28 +190,14 @@ class DocumentTable(tables.Table):
             record.get_internal_status_display(),
         )
 
-    def render_zone(self, record):
-        zone_code = _effective_zone(record)
-        if not zone_code:
-            return '—'
-        zone_icons = {
-            'WIP': 'bi-pencil-square',
-            'SHARED': 'bi-people',
-            'PUBLISHED': 'bi-shield-check',
-            'ARCHIVE': 'bi-lock',
-        }
-        icon = zone_icons.get(zone_code, 'bi-folder')
-        zone_name = dict(Folder.ZONE_CHOICES).get(zone_code, zone_code)
-        zone_class = {
-            'WIP': 'text-primary',
-            'SHARED': 'text-warning',
-            'PUBLISHED': 'text-success',
-            'ARCHIVE': 'text-secondary',
-        }.get(zone_code, '')
-        return format_html(
-            '<i class="bi {} {} me-1" title="{}" aria-hidden="true"></i>{}',
-            icon, zone_class, zone_name, zone_name,
-        )
+    def render_issues(self, record):
+        count = _open_issues_count(record)
+        if count:
+            return format_html(
+                '<span class="badge bg-danger" title="Открытые замечания">{}</span>',
+                count,
+            )
+        return '0'
 
     def render_current_version(self, record):
         if record.current_version is None:
@@ -244,15 +226,13 @@ class DocumentTable(tables.Table):
             else:
                 url = reverse('storage:document_workflow', args=[record.pk])
             buttons.append(format_html(
-                '<button type="button" class="wf-btn" data-workflow-action="{code}" '
+                '<button type="button" class="wf-btn wf-btn-text btn btn-sm '
+                'btn-outline-secondary me-1 mb-1" data-workflow-action="{code}" '
                 'data-workflow-url="{url}" title="{title}" '
-                'aria-label="{title}">'
-                '<i class="bi {icon}" aria-hidden="true"></i>'
-                '</button>',
+                'aria-label="{title}">{title}</button>',
                 code=action['code'],
                 url=url,
                 title=action['label'],
-                icon=action['icon'],
             ))
         return mark_safe(
             '<span class="wf-actions" data-role="workflow-actions">{}</span>'.format(

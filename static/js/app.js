@@ -603,6 +603,20 @@
                 if (!documentId) {
                     return;
                 }
+                var zone = row.dataset.zone || '';
+                if (zone && zone !== 'WIP') {
+                    var zoneLabels = {
+                        SHARED: 'на согласовании',
+                        PUBLISHED: 'опубликован',
+                        ARCHIVE: 'в архиве'
+                    };
+                    window.alert(
+                        'Документ ' + (zoneLabels[zone] || 'вне зоны WIP') +
+                        ', перемещение запрещено'
+                    );
+                    event.preventDefault();
+                    return;
+                }
                 event.stopPropagation();
                 dragDocumentId = documentId;
                 dragFolderId = null;
@@ -1114,6 +1128,7 @@
                     return;
                 }
                 updateDocumentRow(result.data);
+                updateDocumentCard(result.data);
                 updateZoneCounts(result.data.zone_code);
             })
             .catch(function () {
@@ -1125,12 +1140,56 @@
             });
     }
 
+    function renderWorkflowButtons(cell, actions, documentId) {
+        if (!cell) {
+            return;
+        }
+        if (!actions || !actions.length) {
+            cell.innerHTML = '<span class="text-muted">—</span>';
+            return;
+        }
+        var buttons = actions.map(function (item) {
+            var url = item.url || urlForWorkflow(documentId);
+            return '<button type="button" ' +
+                'class="wf-btn wf-btn-text btn btn-sm btn-outline-secondary me-1 mb-1" ' +
+                'data-workflow-action="' + escapeHtml(item.code) + '" ' +
+                'data-workflow-url="' + escapeHtml(url) + '" ' +
+                'title="' + escapeHtml(item.label) + '" ' +
+                'aria-label="' + escapeHtml(item.label) + '">' +
+                escapeHtml(item.label) + '</button>';
+        });
+        cell.innerHTML = '<span class="wf-actions" data-role="workflow-actions">' +
+            buttons.join('') + '</span>';
+    }
+
+    function updateDocumentCard(data) {
+        var card = document.querySelector('[data-viewer-actions]');
+        if (!card) {
+            return;
+        }
+        var suitability = document.querySelector('[data-viewer-chip="suitability"]');
+        if (suitability) {
+            suitability.textContent = data.suitability_display || '';
+            suitability.title = data.suitability_display || '';
+        }
+        var internal = document.querySelector('[data-viewer-chip="internal"]');
+        if (internal) {
+            internal.textContent = data.internal_display || '';
+            internal.title = data.internal_display || '';
+        }
+        renderWorkflowButtons(card, data.actions, data.document_id);
+    }
+
     function updateDocumentRow(data) {
         var row = document.querySelector(
             'tr[data-document-id="' + data.document_id + '"]'
         );
         if (!row) {
             return;
+        }
+        if (data.zone_code) {
+            row.dataset.zone = data.zone_code;
+            row.dataset.zoneName = data.zone_name || '';
         }
         var zoneCell = row.querySelector('[data-column="zone"]');
         if (zoneCell) {
@@ -1176,22 +1235,18 @@
                 : '—';
         }
 
+        var issuesCell = row.querySelector('[data-column="issues"]');
+        if (issuesCell) {
+            var openIssues = Number(data.open_issues || 0);
+            issuesCell.innerHTML = openIssues
+                ? '<span class="badge bg-danger" title="Открытые замечания">' +
+                  openIssues + '</span>'
+                : '0';
+        }
+
         var actionsCell = row.querySelector('[data-column="actions"]');
         if (actionsCell && data.actions) {
-            if (!data.actions.length) {
-                actionsCell.innerHTML = '<span class="text-muted">—</span>';
-            } else {
-                var buttons = data.actions.map(function (item) {
-                    return '<button type="button" class="wf-btn" ' +
-                        'data-workflow-action="' + item.code + '" ' +
-                        'data-workflow-url="' + (item.url || urlForWorkflow(data.document_id)) + '" ' +
-                        'title="' + escapeHtml(item.label) + '" ' +
-                        'aria-label="' + escapeHtml(item.label) + '">' +
-                        '<i class="bi ' + item.icon + '" aria-hidden="true"></i></button>';
-                });
-                actionsCell.innerHTML = '<span class="wf-actions" data-role="workflow-actions">' +
-                    buttons.join('') + '</span>';
-            }
+            renderWorkflowButtons(actionsCell, data.actions, data.document_id);
         }
 
         row.classList.remove('doc-row-flash');

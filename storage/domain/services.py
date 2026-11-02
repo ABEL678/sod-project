@@ -35,8 +35,8 @@ from storage.domain.project_templates import PROJECT_TEMPLATES
 
 
 DOCUMENT_VIEW_COLUMNS = (
-    'code', 'name', 'doc_type', 'status', 'suitability', 'internal_status',
-    'zone', 'version', 'date', 'author',
+    'code', 'name', 'doc_type', 'suitability', 'internal_status',
+    'issues', 'version', 'date', 'author',
 )
 DOCUMENT_VIEW_FILTERS = ('section', 'doc_type', 'status', 'code', 'name')
 DOCUMENT_VIEW_SORT_FIELDS = ('code', 'name', 'date', 'version')
@@ -1545,7 +1545,7 @@ ZONE_WORKFLOW_ACTIONS = {
         'roles': ('admin', 'gip', 'checker', 'normocontrol'),
     },
     'publish': {
-        'label': 'Опубликовать',
+        'label': 'Утвердить',
         'icon': 'bi-shield-check',
         'from': 'SHARED',
         'to': 'PUBLISHED',
@@ -1556,7 +1556,7 @@ ZONE_WORKFLOW_ACTIONS = {
         'icon': 'bi-lock',
         'from': 'PUBLISHED',
         'to': 'ARCHIVE',
-        'roles': ('admin', 'gip'),
+        'roles': ('admin',),
     },
 }
 
@@ -1614,7 +1614,10 @@ def _workflow_role_allowed(user: User, document: Document, action_code: str) -> 
     if profile.role == 'gip':
         return _is_project_gip(user, document.project)
     if profile.role in ('developer', 'contractor'):
-        # подать может автор работы в своём разделе
+        # подать может только автор работы в своём разделе
+        if action_code in ('submit_review',):
+            if document.created_by_id != user.id:
+                return False
         return check_write_permission(user, document.section)
     if profile.role in ('checker', 'normocontrol'):
         # проверяющий действует только в проектах, где состоит
@@ -1622,12 +1625,16 @@ def _workflow_role_allowed(user: User, document: Document, action_code: str) -> 
     return True
 
 
-def _has_open_issues(document: Document) -> bool:
-    """Открытые замечания (NEW/IN_PROGRESS) блокируют передачу в Shared."""
+def _open_issues_count(document: Document) -> int:
     return Issue.objects.filter(
         document=document,
         status__in=('NEW', 'IN_PROGRESS'),
-    ).exists()
+    ).count()
+
+
+def _has_open_issues(document: Document) -> bool:
+    """Открытые замечания (NEW/IN_PROGRESS) блокируют передачу в Shared."""
+    return _open_issues_count(document) > 0
 
 
 INTERNAL_ACTION_SPECS = {
@@ -1705,7 +1712,12 @@ def update_internal_status(
         )
 
     document.internal_status = new_status
-    document.save(update_fields=['internal_status', 'updated_at'])
+    update_fields = ['internal_status', 'updated_at']
+    # Синхронизация старого поля status с внутренним WIP-статусом
+    if document.status != 'draft':
+        document.status = 'draft'
+        update_fields.append('status')
+    document.save(update_fields=update_fields)
     return document
 
 

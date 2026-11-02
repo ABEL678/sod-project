@@ -92,6 +92,7 @@ from storage.domain.services import (
     document_actions,
     document_workflow_actions,
     _effective_zone,
+    _open_issues_count,
     transition_document_zone,
     update_internal_status,
     ZONE_WORKFLOW_ACTIONS,
@@ -124,10 +125,9 @@ DOCUMENT_VIEW_COLUMN_LABELS = {
     'code': 'Шифр',
     'name': 'Название',
     'doc_type': 'Тип',
-    'status': 'Статус',
-    'suitability': 'Внешний статус',
+    'suitability': 'Статус для передачи',
     'internal_status': 'Внутренний статус',
-    'zone': 'Зона',
+    'issues': 'Замечания',
     'version': 'Версия',
     'date': 'Дата',
     'author': 'Автор',
@@ -138,10 +138,9 @@ DEFAULT_COLUMN_WIDTHS = {
     'code': 120,
     'name': 315,
     'doc_type': 100,
-    'status': 100,
-    'suitability': 70,
+    'suitability': 180,
     'internal_status': 170,
-    'zone': 120,
+    'issues': 90,
     'version': 70,
     'date': 130,
     'author': 120,
@@ -152,17 +151,16 @@ DOCUMENT_TABLE_COLUMN_MAP = {
     'code': 'code',
     'name': 'name',
     'doc_type': 'doc_type',
-    'status': 'status',
     'suitability_code': 'suitability',
     'internal_status': 'internal_status',
-    'zone': 'zone',
+    'issues': 'issues',
     'current_version': 'version',
     'updated_at': 'date',
     'created_by': 'author',
 }
 
 ALWAYS_VISIBLE_TABLE_COLUMNS = {
-    'selection', 'actions', 'suitability_code', 'internal_status',
+    'selection', 'actions', 'suitability_code', 'internal_status', 'issues',
 }
 
 # Иконки зон ISO 19650 для сегмент-контрола (синхронно с tables.py)
@@ -1121,6 +1119,7 @@ class DocumentWorkflowView(LoginRequiredMixin, View):
             'suitability_display': document.get_suitability_code_display(),
             'internal_status': document.internal_status,
             'internal_display': document.get_internal_status_display(),
+            'open_issues': _open_issues_count(document),
             'message': '{} — {}'.format(document.code, zone_name),
             'actions': _workflow_actions_payload(request.user, document),
         })
@@ -1166,6 +1165,7 @@ class DocumentInternalStatusView(LoginRequiredMixin, View):
             'suitability_display': document.get_suitability_code_display(),
             'internal_status': document.internal_status,
             'internal_display': document.get_internal_status_display(),
+            'open_issues': _open_issues_count(document),
             'message': '{} — {}'.format(document.code, zone_name),
             'actions': _workflow_actions_payload(request.user, document),
         })
@@ -1848,6 +1848,9 @@ class DocumentDetailView(LoginRequiredMixin, DetailView):
             self.request.user, self.object
         )
         context['can_create_issue'] = check_issue_permission(
+            self.request.user, self.object
+        )
+        context['workflow_actions'] = _workflow_actions_payload(
             self.request.user, self.object
         )
         return context
