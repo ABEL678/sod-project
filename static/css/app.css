@@ -751,6 +751,22 @@ body.app-body {
     min-width: 0;
 }
 
+.tree-move-select {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.tree-move-select option {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
 .toolbar-actions form {
     margin: 0;
 }

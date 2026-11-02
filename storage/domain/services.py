@@ -37,6 +37,7 @@ from storage.domain.project_templates import (
     PROJECT_TEMPLATES,
     RD_SECTIONS,
     ROOT_SUPERFOLDERS,
+    ROOT_SUPERFOLDER_NAMES,
 )
 
 
@@ -1240,6 +1241,33 @@ def _folder_code_exists(
     return qs.exists()
 
 
+def get_folder_mark_id(folder: Folder | None) -> str | None:
+    """Стабильный идентификатор марки/раздела папки.
+
+    Для старой структуры марка определяется по Section (АР, КР и т.п.).
+    Для новой структуры все папки сидят в COMMON, поэтому марка — это
+    верхнеуровневая папка внутри суперпапки ПД/РД/ИРД.
+    """
+    if folder is None:
+        return None
+
+    section = folder.section
+    if section is not None and section.code != 'COMMON':
+        return f'section:{section.code or section.pk}'
+
+    current = folder
+    while current is not None:
+        parent = current.parent
+        if (
+            parent is not None
+            and parent.parent_id is None
+            and parent.name in ROOT_SUPERFOLDER_NAMES
+        ):
+            return f'folder:{current.pk}'
+        current = parent
+    return None
+
+
 def _is_absolute_folder_code(project: Project, code: str) -> bool:
     base_code = (project.base_code or '').strip()
     code = (code or '').strip()
@@ -1454,7 +1482,12 @@ def get_flat_folders(user: User, project: Project):
     )
 
 
-def move_document(user: User, document: Document, folder: Folder | None) -> Document:
+def move_document(
+    user: User,
+    document: Document,
+    folder: Folder | None,
+    allow_section_change: bool = False,
+) -> Document:
     """Перемещает документ в папку проекта."""
     if not check_write_permission(user, document.section):
         raise PermissionDenied("Нет прав на перемещение документа")
@@ -1501,16 +1534,54 @@ def move_document(user: User, document: Document, folder: Folder | None) -> Docu
             raise ValueError("Папка относится к другому проекту")
         if folder.is_deleted:
             raise ValueError("Нельзя переместить документ в удалённую папку")
-        if folder.section_id is not None and folder.section_id != document.section_id:
-            raise ValueError("Папка относится к другому разделу")
+        if folder.section_id is None:
+            if not _is_canonical_zone_folder(folder):
+                raise ValueError("Папка относится к другому разделу")
+            section_change = False
+        else:
+            section_change = folder.section_id != document.section_id
 
+        current_mark_id = get_folder_mark_id(document.folder)
+        target_mark_id = get_folder_mark_id(folder)
+        mark_change = bool(
+            current_mark_id
+            and target_mark_id
+            and current_mark_id != target_mark_id
+        )
+
+        if (section_change or mark_change) and not allow_section_change:
+            raise ValueError(
+                "Смена раздела через обычное перемещение запрещена"
+            )
+
+        if section_change and not check_write_permission(user, folder.section):
+            profile = getattr(user, 'userprofile', None)
+            if profile is not None and profile.role in (
+                'developer',
+                'contractor',
+            ):
+                raise PermissionDenied(
+                    "У вас нет прав на перемещение в этот раздел"
+                )
+            raise PermissionDenied(
+                "Недостаточно прав для перемещения между разделами"
+            )
+
+        target_section = folder.section or document.section
         # Проверка прав на запись в целевую зону
-        if not check_zone_permission(user, folder, document.section):
+        if not check_zone_permission(user, folder, target_section):
             zone_name = folder.get_zone_display()
             raise PermissionDenied(f"Нет прав на запись в зону «{zone_name}»")
 
     document.folder = folder
     update_fields = ['folder', 'updated_at']
+    if (
+        folder is not None
+        and folder.section_id is not None
+        and folder.section_id != document.section_id
+    ):
+        document.section = folder.section
+        update_fields.append('section')
 
     # Автоматическое изменение статуса и кода пригодности
     # только для канонических зон.
@@ -1700,6 +1771,7 @@ def move_folder(
     parent: Folder | None = None,
     section: Section | None = None,
     to_project_root: bool = False,
+    allow_section_change: bool = False,
 ) -> Folder:
     """Перемещает папку в другую папку, раздел или в корень проекта."""
     _ensure_content_manager(user, folder.project)
@@ -1729,6 +1801,39 @@ def move_folder(
     else:
         new_section = folder.section
 
+    # Обычный DnD папок не должен менять раздел/марку: иначе папка
+    # с документами может уехать в чужую марку.
+    section_changed = (
+        (new_section.pk if new_section is not None else None)
+        != folder.section_id
+    )
+    if parent is not None:
+        target_mark_id = get_folder_mark_id(parent)
+    elif section is not None and section.code != 'COMMON':
+        target_mark_id = f'section:{section.code or section.pk}'
+    else:
+        target_mark_id = None
+    current_mark_id = get_folder_mark_id(folder)
+    mark_changed = bool(
+        current_mark_id
+        and target_mark_id
+        and current_mark_id != target_mark_id
+    )
+    if (section_changed or mark_changed) and not allow_section_change:
+        raise ValueError(
+            'Для смены марки используйте кнопку "Сменить раздел"'
+        )
+
+    subtree_ids = _folder_subtree_ids(folder)
+    subtree_documents = Document.objects.filter(
+        folder_id__in=subtree_ids,
+        is_deleted=False,
+    )
+    if section_changed and new_section is None and subtree_documents.exists():
+        raise ValueError(
+            "Нельзя переместить папку с документами в корень без раздела"
+        )
+
     if _folder_code_exists(
         folder.project,
         new_section,
@@ -1741,6 +1846,8 @@ def move_folder(
     folder.parent = parent
     folder.save(update_fields=['parent'])
     _refresh_folder_subtree(folder, new_section)
+    if section_changed and new_section is not None:
+        subtree_documents.update(section=new_section)
     return folder
 
 

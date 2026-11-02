@@ -891,6 +891,8 @@
         delete menu.dataset.shareUrl;
         delete menu.dataset.deleteUrl;
         delete menu.dataset.documentCode;
+        delete menu.dataset.sectionId;
+        delete menu.dataset.markId;
     }
 
     function openDocumentMenu(row, x, y) {
@@ -903,6 +905,8 @@
         menu.dataset.shareUrl = row.dataset.shareUrl || '';
         menu.dataset.deleteUrl = row.dataset.deleteUrl || '';
         menu.dataset.documentCode = row.dataset.documentCode || '';
+        menu.dataset.sectionId = row.dataset.sectionId || '';
+        menu.dataset.markId = row.dataset.markId || '';
         menu.classList.add('show');
         menu.setAttribute('aria-hidden', 'false');
 
@@ -934,6 +938,45 @@
                 textarea.remove();
             }
         });
+    }
+
+    function prepareDocumentMoveModal(documentId, sectionId, markId, allowSectionChange) {
+        var modalElement = document.getElementById('documentMoveModal');
+        if (!modalElement || !window.bootstrap) {
+            return null;
+        }
+        var moveId = document.getElementById('documentMoveId');
+        var moveFolder = document.getElementById('documentMoveFolder');
+        var allowInput = document.getElementById('documentMoveAllowSection');
+        var title = document.getElementById('documentMoveTitle');
+        var hint = document.getElementById('documentMoveHint');
+        if (moveId) {
+            moveId.value = documentId || '';
+        }
+        if (moveFolder) {
+            moveFolder.value = '';
+            Array.prototype.forEach.call(moveFolder.options, function (option) {
+                if (!option.value) {
+                    return;
+                }
+                var allowed = option.dataset.allowed === '1';
+                var sameSection = (option.dataset.sectionId || '') === (sectionId || '');
+                var sameMark = !markId || !option.dataset.markId || option.dataset.markId === markId;
+                option.disabled = !allowed || (
+                    !allowSectionChange && (!sameSection || !sameMark)
+                );
+            });
+        }
+        if (allowInput) {
+            allowInput.value = allowSectionChange ? '1' : '0';
+        }
+        if (title) {
+            title.textContent = allowSectionChange ? 'Сменить раздел' : 'Переместить документ';
+        }
+        if (hint) {
+            hint.classList.toggle('d-none', !allowSectionChange);
+        }
+        return modalElement;
     }
 
     function runDocumentMenuAction(action, menu) {
@@ -973,19 +1016,27 @@
             return;
         }
         if (action === 'move') {
-            var modalElement = document.getElementById('documentMoveModal');
-            var moveId = document.getElementById('documentMoveId');
-            var moveFolder = document.getElementById('documentMoveFolder');
-            if (!modalElement || !window.bootstrap) {
-                return;
+            var modalElement = prepareDocumentMoveModal(
+                documentId,
+                menu.dataset.sectionId || '',
+                menu.dataset.markId || '',
+                false
+            );
+            if (modalElement) {
+                window.bootstrap.Modal.getOrCreateInstance(modalElement).show();
             }
-            if (moveId) {
-                moveId.value = documentId;
+            return;
+        }
+        if (action === 'change-section') {
+            var changeModal = prepareDocumentMoveModal(
+                documentId,
+                menu.dataset.sectionId || '',
+                menu.dataset.markId || '',
+                true
+            );
+            if (changeModal) {
+                window.bootstrap.Modal.getOrCreateInstance(changeModal).show();
             }
-            if (moveFolder) {
-                moveFolder.value = '';
-            }
-            window.bootstrap.Modal.getOrCreateInstance(modalElement).show();
             return;
         }
         if (action === 'delete') {
@@ -1151,6 +1202,13 @@
                 menu.appendChild(treeMenuItem('Переместить', {
                     attrs: {
                         'data-folder-move': '',
+                        'data-folder-id': target.getAttribute('data-folder-id') || '',
+                        'data-folder-move-url': target.getAttribute('data-move-url') || ''
+                    }
+                }));
+                menu.appendChild(treeMenuItem('Сменить раздел/марку', {
+                    attrs: {
+                        'data-folder-change-section': '',
                         'data-folder-id': target.getAttribute('data-folder-id') || '',
                         'data-folder-move-url': target.getAttribute('data-move-url') || ''
                     }
@@ -1349,13 +1407,30 @@
                 var root = panel();
                 var documentId = document.getElementById('documentMoveId');
                 var targetFolder = document.getElementById('documentMoveFolder');
+                var allowInput = document.getElementById('documentMoveAllowSection');
                 var modalElement = document.getElementById('documentMoveModal');
                 if (!root || !documentId || !documentId.value) {
                     return;
                 }
+                var allowSectionChange = allowInput && allowInput.value === '1';
+                if (allowSectionChange) {
+                    if (!targetFolder || !targetFolder.value) {
+                        showDndToast('Выберите раздел и папку для переноса', true);
+                        return;
+                    }
+                    if (!window.confirm(
+                        'Вы уверены, что хотите перенести документ в другой раздел? '
+                        + 'Это изменит его марку.'
+                    )) {
+                        return;
+                    }
+                }
                 var body = new FormData();
                 if (targetFolder && targetFolder.value) {
                     body.append('folder_id', targetFolder.value);
+                }
+                if (allowInput) {
+                    body.append('allow_section_change', allowInput.value);
                 }
                 if (modalElement && window.bootstrap) {
                     window.bootstrap.Modal.getOrCreateInstance(modalElement).hide();
@@ -1805,19 +1880,81 @@
             return;
         }
         var moveUrl = '';
+        var currentFolderId = '';
+        var allFolderOptions = Array.prototype.slice.call(target.options)
+            .filter(function (option) { return Boolean(option.value); })
+            .map(function (option) { return option.cloneNode(true); });
+
+        function rebuildFolderMoveOptions(folderId, allowSectionChange) {
+            var currentOption = allFolderOptions.filter(function (option) {
+                return (option.dataset.folderId || '') === folderId;
+            })[0] || null;
+            var currentMarkId = currentOption
+                ? (currentOption.dataset.markId || '')
+                : '';
+
+            target.innerHTML = '';
+            var placeholder = document.createElement('option');
+            placeholder.value = '';
+            placeholder.textContent = 'Выберите папку…';
+            target.appendChild(placeholder);
+
+            allFolderOptions.forEach(function (source) {
+                var optionId = source.dataset.folderId || '';
+                var optionMarkId = source.dataset.markId || '';
+                var ancestors = (source.dataset.ancestorIds || '')
+                    .split(',')
+                    .filter(Boolean);
+                var excluded = optionId === folderId ||
+                    ancestors.indexOf(folderId) !== -1;
+                var otherMark = !allowSectionChange
+                    && currentMarkId
+                    && optionMarkId !== currentMarkId;
+                if (excluded || otherMark) {
+                    return;
+                }
+                target.appendChild(source.cloneNode(true));
+            });
+            target.value = '';
+        }
+
+        function openFolderMoveModal(trigger, allowSectionChange) {
+            moveUrl = trigger.getAttribute('data-folder-move-url') || '';
+            currentFolderId = trigger.getAttribute('data-folder-id') || '';
+            folderIdInput.value = currentFolderId;
+            var allowInput = document.getElementById('folderMoveAllowSection');
+            var title = document.getElementById('folderMoveTitle');
+            var hint = document.getElementById('folderMoveHint');
+            if (allowInput) {
+                allowInput.value = allowSectionChange ? '1' : '0';
+            }
+            if (title) {
+                title.textContent = allowSectionChange
+                    ? 'Сменить раздел/марку'
+                    : 'Переместить папку';
+            }
+            if (hint) {
+                hint.classList.toggle('d-none', !allowSectionChange);
+            }
+            rebuildFolderMoveOptions(currentFolderId, allowSectionChange);
+            if (window.bootstrap) {
+                window.bootstrap.Modal.getOrCreateInstance(modalElement).show();
+            }
+        }
 
         document.addEventListener('click', function (event) {
+            var changeTrigger = event.target.closest('[data-folder-change-section]');
+            if (changeTrigger) {
+                event.preventDefault();
+                openFolderMoveModal(changeTrigger, true);
+                return;
+            }
             var trigger = event.target.closest('[data-folder-move]');
             if (!trigger) {
                 return;
             }
             event.preventDefault();
-            moveUrl = trigger.getAttribute('data-folder-move-url') || '';
-            folderIdInput.value = trigger.getAttribute('data-folder-id') || '';
-            target.value = '';
-            if (window.bootstrap) {
-                window.bootstrap.Modal.getOrCreateInstance(modalElement).show();
-            }
+            openFolderMoveModal(trigger, false);
         });
 
         form.addEventListener('submit', function (event) {
@@ -1825,11 +1962,22 @@
             if (!moveUrl || !folderIdInput.value || !target.value) {
                 return;
             }
+            var allowInput = document.getElementById('folderMoveAllowSection');
+            var allowSectionChange = allowInput && allowInput.value === '1';
+            if (allowSectionChange && !window.confirm(
+                'Вы уверены, что хотите перенести папку в другой раздел? '
+                + 'Это изменит её марку.'
+            )) {
+                return;
+            }
             var body = new FormData();
             if (target.value.indexOf('section:') === 0) {
                 body.append('section_id', target.value.slice('section:'.length));
             } else {
                 body.append('parent_id', target.value.slice('folder:'.length));
+            }
+            if (allowInput) {
+                body.append('allow_section_change', allowInput.value);
             }
             fetch(moveUrl, {
                 method: 'POST',

@@ -132,6 +132,9 @@
     <button type="button" class="dropdown-item" role="menuitem" data-doc-action="move">
         <i class="bi bi-folder-symlink me-2" aria-hidden="true"></i>Переместить в…
     </button>
+    <button type="button" class="dropdown-item" role="menuitem" data-doc-action="change-section">
+        <i class="bi bi-arrow-left-right me-2" aria-hidden="true"></i>Сменить раздел
+    </button>
     <div class="dropdown-divider"></div>
     <button type="button" class="dropdown-item text-danger" role="menuitem" data-doc-action="delete">
         <i class="bi bi-trash3 me-2" aria-hidden="true"></i>Удалить в корзину
@@ -144,16 +147,25 @@
             <form id="documentMoveForm">
                 {% csrf_token %}
                 <input type="hidden" name="document_id" id="documentMoveId">
+                <input type="hidden" name="allow_section_change" id="documentMoveAllowSection" value="0">
                 <div class="modal-header">
                     <h5 class="modal-title" id="documentMoveTitle">Переместить документ</h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрыть"></button>
                 </div>
                 <div class="modal-body">
+                    <p class="small text-muted d-none" id="documentMoveHint">
+                        Выберите раздел/марку и папку. Перенос изменит марку документа.
+                    </p>
                     <label for="documentMoveFolder" class="form-label">Целевая папка</label>
-                    <select class="form-select" id="documentMoveFolder" name="folder_id">
+                    <select class="form-select tree-move-select" id="documentMoveFolder" name="folder_id">
                         <option value="">Корень текущего раздела</option>
-                        {% for folder in all_folders %}
-                            <option value="{{ folder.pk }}">{% if folder.section and folder.section.code != 'COMMON' %}{{ folder.section.code }}{% else %}Проект{% endif %} / {{ folder.name }}</option>
+                        {% for folder in document_move_folders %}
+                            <option value="{{ folder.pk }}"
+                                    data-section-id="{{ folder.section_id|default:'' }}"
+                                    data-mark-id="{{ folder.mark_id|default:'' }}"
+                                    data-allowed="{% if folder.can_move_to %}1{% else %}0{% endif %}"
+                                    title="{{ folder.tree_label }}"
+                                    {% if not folder.can_move_to %}disabled{% endif %}>{{ folder.tree_label|truncatechars:80 }}</option>
                         {% endfor %}
                     </select>
                 </div>
@@ -468,23 +480,24 @@
                 <form id="folderMoveForm">
                     {% csrf_token %}
                     <input type="hidden" id="folderMoveId" name="folder_id">
+                    <input type="hidden" id="folderMoveAllowSection" name="allow_section_change" value="0">
                     <div class="modal-header">
                         <h5 class="modal-title" id="folderMoveTitle">Переместить папку</h5>
                         <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрыть"></button>
                     </div>
                     <div class="modal-body">
+                        <p class="small text-muted d-none" id="folderMoveHint">
+                            Выберите раздел/марку и папку. Перенос изменит марку папки и её документов.
+                        </p>
                         <label for="folderMoveTarget" class="form-label">Новое расположение</label>
-                        <select class="form-select" id="folderMoveTarget" name="target" required>
-                            <option value="">Выберите раздел или папку…</option>
-                            {% for section in sections %}
-                                <optgroup label="{{ section.code }} — {{ section.name }}">
-                                    <option value="section:{{ section.pk }}">Корень раздела {{ section.code }}</option>
-                                    {% for folder in all_folders %}
-                                        {% if folder.section_id == section.pk %}
-                                            <option value="folder:{{ folder.pk }}">{% if folder.code %}{{ folder.code }}. {% endif %}{{ folder.name }}</option>
-                                        {% endif %}
-                                    {% endfor %}
-                                </optgroup>
+                        <select class="form-select tree-move-select" id="folderMoveTarget" name="target" required>
+                            <option value="">Выберите папку…</option>
+                            {% for folder in folder_move_folders %}
+                                <option value="folder:{{ folder.pk }}"
+                                        data-folder-id="{{ folder.pk }}"
+                                        data-mark-id="{{ folder.mark_id|default:'' }}"
+                                        data-ancestor-ids="{{ folder.ancestor_ids }}"
+                                        title="{{ folder.tree_label }}">{{ folder.tree_label|truncatechars:80 }}</option>
                             {% endfor %}
                         </select>
                     </div>
@@ -563,5 +576,5 @@
 
 {% block extra_js %}
 <script src="{% static 'js/vendor/Sortable.min.js' %}"></script>
-<script src="{% static 'js/app.js' %}"></script>
+<script src="{% static 'js/app.js' %}?v=20261107-s6-folder-menu2"></script>
 {% endblock %}

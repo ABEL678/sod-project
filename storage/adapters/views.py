@@ -65,6 +65,8 @@ from storage.domain.services import (
     check_issue_permission,
     can_purge_trash,
     check_read_permission,
+    check_write_permission,
+    check_zone_permission,
     copy_document,
     create_folder,
     create_project,
@@ -88,6 +90,7 @@ from storage.domain.services import (
     get_document_view,
     get_flat_folders,
     get_folder_documents,
+    get_folder_mark_id,
     get_folder_tree,
     get_issue_assignees,
     get_issues_for_version,
@@ -710,6 +713,52 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
                 and folder.name in CANONICAL_ZONE_NAMES
             )
         ]
+        document_move_folders = list(
+            Folder.objects.filter(
+                project=project,
+                is_deleted=False,
+            )
+            .exclude(
+                parent__isnull=True,
+                section__isnull=True,
+                name__in=CANONICAL_ZONE_NAMES,
+            )
+            .select_related('section')
+            .order_by('order', 'name')
+        )
+        for folder in document_move_folders:
+            folder.mark_id = get_folder_mark_id(folder)
+            folder.can_move_to = bool(
+                folder.section_id
+                and check_write_permission(user, folder.section)
+                and check_zone_permission(user, folder, folder.section)
+            )
+
+        move_folder_by_id = {
+            folder.pk: folder for folder in document_move_folders
+        }
+        for folder in document_move_folders:
+            names = []
+            current = folder
+            while current is not None:
+                label = (
+                    f'{current.code} {current.name}'.strip()
+                    if current.code
+                    else current.name
+                )
+                names.append(label)
+                current = move_folder_by_id.get(current.parent_id)
+            folder.tree_label = ' / '.join(reversed(names))
+
+            ancestors = []
+            parent_id = folder.parent_id
+            while parent_id:
+                ancestors.append(str(parent_id))
+                parent = move_folder_by_id.get(parent_id)
+                parent_id = parent.parent_id if parent is not None else None
+            folder.ancestor_ids = ','.join(ancestors)
+
+        folder_move_folders = document_move_folders
         folders_by_section = {}
         for folder in folder_roots:
             folders_by_section.setdefault(folder.section_id, []).append(folder)
@@ -784,6 +833,8 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
             'folder_tree': folder_roots,
             'project_folders': project_folders,
             'all_folders': all_folders,
+            'document_move_folders': document_move_folders,
+            'folder_move_folders': folder_move_folders,
             'recent_documents': _recent_documents(
                 self.request,
                 user,
@@ -1256,6 +1307,9 @@ class DocumentMoveView(LoginRequiredMixin, View):
         )
         folder_id = (request.POST.get('folder_id') or '').strip()
         section_id = (request.POST.get('section_id') or '').strip()
+        allow_section_change = request.POST.get('allow_section_change') in (
+            '1', 'true', 'on',
+        )
 
         try:
             if folder_id:
@@ -1266,15 +1320,29 @@ class DocumentMoveView(LoginRequiredMixin, View):
                 ).first()
                 if folder is None:
                     raise ValueError('Папка не найдена.')
-                move_document(request.user, document, folder)
+                move_document(
+                    request.user,
+                    document,
+                    folder,
+                    allow_section_change=allow_section_change,
+                )
             elif section_id:
+                if not allow_section_change:
+                    raise ValueError(
+                        "Смена раздела через обычное перемещение запрещена"
+                    )
                 section = get_object_or_404(
                     get_accessible_sections(request.user, document.project),
                     pk=section_id,
                 )
                 move_document_to_section(request.user, document, section)
             else:
-                move_document(request.user, document, None)
+                move_document(
+                    request.user,
+                    document,
+                    None,
+                    allow_section_change=allow_section_change,
+                )
         except PermissionDenied as exc:
             return JsonResponse(
                 {'status': 'error', 'error': str(exc)},
@@ -1640,6 +1708,9 @@ class FolderMoveView(LoginRequiredMixin, View):
         )
         parent_id = (request.POST.get('parent_id') or '').strip()
         section_id = (request.POST.get('section_id') or '').strip()
+        allow_section_change = request.POST.get('allow_section_change') in (
+            '1', 'true', 'on',
+        )
         parent = None
         section = None
 
@@ -1666,6 +1737,7 @@ class FolderMoveView(LoginRequiredMixin, View):
                 parent=parent,
                 section=section,
                 to_project_root=not parent_id and not section_id,
+                allow_section_change=allow_section_change,
             )
         except PermissionDenied as exc:
             return JsonResponse(

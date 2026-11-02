@@ -12,6 +12,7 @@ from storage.domain.services import (
     OPEN_ISSUE_STATUSES,
     _effective_zone,
     document_actions,
+    get_folder_mark_id,
 )
 
 
@@ -156,6 +157,10 @@ class DocumentTable(tables.Table):
                 'storage:document_delete', args=[record.pk]
             ),
             'data-document-code': lambda record: record.code,
+            'data-section-id': lambda record: str(record.section_id or ''),
+            'data-mark-id': lambda record: str(
+                get_folder_mark_id(record.folder) or ''
+            ),
             'data-zone': lambda record: _effective_zone(record),
             'data-zone-name': lambda record: dict(Folder.ZONE_CHOICES).get(
                 _effective_zone(record), ''
