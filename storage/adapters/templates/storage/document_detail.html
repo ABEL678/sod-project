@@ -159,13 +159,13 @@
   </div>
 </div>
 
-{% if open_issues_count %}
-<div class="alert alert-danger d-flex flex-wrap align-items-center gap-2 mx-3 mt-3 mb-0" role="alert">
+<div id="publicationBlockedBanner"
+     class="alert alert-danger d-flex flex-wrap align-items-center gap-2 mx-3 mt-3 mb-0{% if not open_issues_count %} d-none{% endif %}"
+     role="alert">
   <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
-  <span>Публикация заблокирована: {{ open_issues_count }} открытых замечаний.</span>
+  <span>Публикация заблокирована: <span data-open-issues-count>{{ open_issues_count }}</span> открытых замечаний.</span>
   <a class="alert-link ms-auto" href="{{ issues_registry_url }}">Перейти к замечаниям</a>
 </div>
-{% endif %}
 
 <div class="workspace" id="main-splitter">
   <section class="stage" id="pdf-panel">
@@ -384,7 +384,7 @@
 <script src="{% static 'js/vendor/bootstrap.bundle.min.js' %}"></script>
 <script src="{% static 'js/pdfjs/pdf.min.js' %}"></script>
 <script src="{% static 'js/design-tokens.js' %}?v=20261105-s4"></script>
-<script src="{% static 'js/sync.js' %}?v=20261105-s4"></script>
+<script src="{% static 'js/sync.js' %}?v=20261105-s4-t70"></script>
 <script src="{% static 'js/pdf_viewer.js' %}?v=20261105-s4-t65"></script>
 <script src="{% static 'js/splitter.js' %}?v=20261105-s4"></script>
 <script src="{% static 'js/palette.js' %}?v=20261105-s4" defer></script>

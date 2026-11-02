@@ -107,6 +107,25 @@ function setMarkVars(element, status) {
     element.style.setProperty('--mk-text', 'var(--status-' + key + '-on)');
 }
 
+function refreshPublicationBanner() {
+    const banner = document.getElementById('publicationBlockedBanner');
+    if (!banner) {
+        return;
+    }
+    const openStatuses = ['NEW', 'IN_PROGRESS', 'REJECTED'];
+    let openCount = 0;
+    document.querySelectorAll('.issue-row').forEach(function (row) {
+        if (openStatuses.indexOf(row.dataset.status) !== -1) {
+            openCount += 1;
+        }
+    });
+    const counter = banner.querySelector('[data-open-issues-count]');
+    if (counter) {
+        counter.textContent = String(openCount);
+    }
+    banner.classList.toggle('d-none', openCount === 0);
+}
+
 function refreshIssueAfterStatusChange(issueId, newStatus, label) {
     // 1. Строка в списке: датасет, бейджи, маркер-шильдик.
     const row = document.getElementById('issue-row-' + issueId);
@@ -161,7 +180,10 @@ function refreshIssueAfterStatusChange(issueId, newStatus, label) {
         detail: {id: issueId, status: newStatus},
     }));
 
-    // 6. Обновить карточку: у новой статуса другая матрица допустимых переходов.
+    // 6. Плашка блокировки публикации: пересчитать открытые замечания.
+    refreshPublicationBanner();
+
+    // 7. Обновить карточку: у новой статуса другая матрица допустимых переходов.
     const detail = document.getElementById('detail');
     if (
         detail

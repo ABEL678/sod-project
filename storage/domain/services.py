@@ -85,6 +85,25 @@ def _suitability_for_zone(folder: Folder | None) -> str | None:
     return ZONE_SUITABILITY_MAP.get(folder.zone)
 
 
+def _approval_target_changes(
+    document: Document,
+    target_status: str | None,
+    target_suitability: str | None,
+    target_zone: str | None,
+) -> bool:
+    """True, если операция фактически переводит документ в approved/A."""
+    status_changed = (
+        target_status in ('approved', 'S4')
+        and target_status != document.status
+    )
+    suitability_changed = (
+        target_suitability in ('A', 'S4')
+        and target_suitability != document.suitability_code
+        and target_zone == 'PUBLISHED'
+    )
+    return status_changed or suitability_changed
+
+
 def _is_canonical_zone_folder(folder: Folder | None) -> bool:
     """Проверяет, является ли папка канонической зоной проекта.
 
@@ -1321,11 +1340,24 @@ def move_document(user: User, document: Document, folder: Folder | None) -> Docu
     # Автоматическое изменение статуса и кода пригодности
     # только для канонических зон.
     target_status = _status_for_zone(folder)
+    target_suitability = _suitability_for_zone(folder)
+    if (
+        _approval_target_changes(
+            document,
+            target_status,
+            target_suitability,
+            target_zone,
+        )
+        and _has_open_issues(document)
+    ):
+        raise ValueError(
+            "Нельзя переместить документ с открытыми замечаниями "
+            "в опубликованную зону"
+        )
     if target_status is not None and target_status != document.status:
         document.status = target_status
         update_fields.append('status')
 
-    target_suitability = _suitability_for_zone(folder)
     if (
         target_suitability is not None
         and target_suitability != document.suitability_code
@@ -2445,10 +2477,26 @@ def upload_document(
                 doc.folder = folder
                 update_fields.append('folder')
                 target_status = _status_for_zone(folder)
+                target_suitability = _suitability_for_zone(folder)
+                if (
+                    (
+                        _approval_target_changes(
+                            doc,
+                            target_status,
+                            target_suitability,
+                            folder.zone,
+                        )
+                        or folder.zone == 'PUBLISHED'
+                    )
+                    and _has_open_issues(doc)
+                ):
+                    raise ValueError(
+                        "Нельзя обновить документ с открытыми замечаниями "
+                        "в опубликованной зоне"
+                    )
                 if target_status is not None and target_status != doc.status:
                     doc.status = target_status
                     update_fields.append('status')
-                target_suitability = _suitability_for_zone(folder)
                 if (
                     target_suitability is not None
                     and target_suitability != doc.suitability_code

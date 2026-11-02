@@ -2084,11 +2084,10 @@ class DocumentDetailView(LoginRequiredMixin, DetailView):
             )
         context['issues'] = issues
         context['open_issues_count'] = _open_issues_count(self.object)
-        if context['open_issues_count']:
-            context['issues_registry_url'] = '{}?{}'.format(
-                reverse('issues:issue_registry', args=[self.object.project_id]),
-                urlencode({'q': self.object.code}),
-            )
+        context['issues_registry_url'] = '{}?{}'.format(
+            reverse('issues:issue_registry', args=[self.object.project_id]),
+            urlencode({'q': self.object.code}),
+        )
         payloads = []
         for issue in issues:
             payload = _issue_payload(issue)
