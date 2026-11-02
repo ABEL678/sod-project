@@ -236,8 +236,13 @@ class Folder(models.Model):
             ),
             models.UniqueConstraint(
                 fields=['project', 'section', 'code'],
-                condition=models.Q(code__gt=''),
+                condition=models.Q(code__gt='', parent__isnull=True),
                 name='uniq_folder_code_per_section',
+            ),
+            models.UniqueConstraint(
+                fields=['project', 'parent', 'code'],
+                condition=models.Q(code__gt='', parent__isnull=False),
+                name='uniq_folder_code_per_parent',
             ),
         ]
 

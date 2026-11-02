@@ -62,6 +62,12 @@ class DocumentTable(tables.Table):
         order_by=('section__code',),
         attrs=_column_attrs('section'),
     )
+    folder = tables.Column(
+        verbose_name='Папка',
+        order_by=('folder__code',),
+        attrs=_column_attrs('folder'),
+        empty_values=(None,),
+    )
     name = tables.Column(verbose_name='Название', attrs=_column_attrs('name'))
     doc_type = tables.Column(verbose_name='Тип', attrs=_column_attrs('doc_type'))
     suitability_code = tables.Column(
@@ -114,6 +120,7 @@ class DocumentTable(tables.Table):
             'selection',
             'code',
             'section',
+            'folder',
             'name',
             'doc_type',
             'suitability_code',
@@ -180,6 +187,22 @@ class DocumentTable(tables.Table):
 
     def render_doc_type(self, record):
         return record.get_doc_type_display()
+
+    def render_folder(self, record):
+        folder = record.folder
+        if folder is None:
+            return '—'
+        code = (folder.code or '').strip()
+        if folder.parent_id and folder.parent is not None:
+            parent_code = (folder.parent.code or '').strip()
+            if parent_code:
+                code = f'{parent_code}.{code}' if code else parent_code
+        label = f'{code}. {folder.name}' if code else folder.name
+        return format_html(
+            '<span class="doc-folder" title="{}">{}</span>',
+            folder.full_code or label,
+            label,
+        )
 
     def render_suitability_code(self, record):
         return format_html(

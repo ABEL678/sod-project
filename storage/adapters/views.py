@@ -129,6 +129,7 @@ RECENT_DOCUMENTS_LIMIT = 10
 DOCUMENT_VIEW_COLUMN_LABELS = {
     'code': 'Шифр',
     'section': 'Раздел',
+    'folder': 'Папка',
     'name': 'Название',
     'doc_type': 'Тип',
     'suitability': 'Статус для передачи',
@@ -143,6 +144,7 @@ DEFAULT_COLUMN_WIDTHS = {
     'selection': 36,
     'code': 120,
     'section': 100,
+    'folder': 150,
     'name': 315,
     'doc_type': 100,
     'suitability': 180,
@@ -157,6 +159,7 @@ DOCUMENT_TABLE_COLUMN_MAP = {
     'selection': 'selection',
     'code': 'code',
     'section': 'section',
+    'folder': 'folder',
     'name': 'name',
     'doc_type': 'doc_type',
     'suitability_code': 'suitability',

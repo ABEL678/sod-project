@@ -35,8 +35,8 @@ from storage.domain.project_templates import PROJECT_TEMPLATES
 
 
 DOCUMENT_VIEW_COLUMNS = (
-    'code', 'section', 'name', 'doc_type', 'suitability', 'internal_status',
-    'issues', 'version', 'date', 'author',
+    'code', 'section', 'folder', 'name', 'doc_type', 'suitability',
+    'internal_status', 'issues', 'version', 'date', 'author',
 )
 DOCUMENT_VIEW_FILTERS = (
     'section', 'doc_type', 'status', 'suitability_code', 'internal_status',
@@ -486,6 +486,8 @@ def get_project_documents_queryset(
 
     return queryset.select_related(
         'section',
+        'folder',
+        'folder__parent',
         'current_version',
         'current_version__uploaded_by',
         'created_by',
@@ -612,12 +614,15 @@ def _ensure_project_zones(project: Project, user: User | None = None) -> bool:
 def generate_gost_code(
     base_code: str,
     section_code: str,
-    folder_code: str | None = None,
+    *folder_codes: str | None,
 ) -> str:
-    """Собирает ГОСТ-шифр из непустых частей через дефис."""
+    """Собирает ГОСТ-шифр из непустых частей через дефис.
+
+    Папки передаются в порядке вложенности: ``parent_code, child_code``.
+    """
     parts = [
         (value or '').strip()
-        for value in (base_code, section_code, folder_code)
+        for value in (base_code, section_code, *folder_codes)
         if (value or '').strip()
     ]
     return '-'.join(parts)
@@ -716,6 +721,37 @@ def _ensure_content_manager(user: User, project: Project) -> None:
         raise PermissionDenied("Нет прав на управление структурой проекта")
 
 
+def _folder_code_chain(folder: Folder | None) -> list[str]:
+    """Коды папки и всех её родителей в порядке от корня к потомку."""
+    codes = []
+    current = folder
+    while current is not None:
+        code = (current.code or '').strip()
+        if code:
+            codes.append(code)
+        current = current.parent
+    codes.reverse()
+    return codes
+
+
+def _folder_full_code(
+    project: Project,
+    section: Section | None,
+    parent: Folder | None,
+    code: str,
+) -> str:
+    """Полный ГОСТ-шифр папки: база-раздел-родители-код."""
+    codes = _folder_code_chain(parent)
+    code = (code or '').strip()
+    if code:
+        codes.append(code)
+    return generate_gost_code(
+        project.base_code,
+        section.code if section is not None else '',
+        *codes,
+    )
+
+
 def _folder_subtree_ids(folder: Folder) -> set[int]:
     ids = {folder.pk}
     frontier = [folder.pk]
@@ -732,6 +768,7 @@ def _folder_code_exists(
     project: Project,
     section: Section | None,
     code: str,
+    parent: Folder | None = None,
     exclude: Folder | None = None,
 ) -> bool:
     if not code:
@@ -739,6 +776,7 @@ def _folder_code_exists(
     qs = Folder.objects.filter(
         project=project,
         section=section,
+        parent=parent,
         code=code,
         is_deleted=False,
     )
@@ -747,11 +785,16 @@ def _folder_code_exists(
     return qs.exists()
 
 
-def _next_folder_code(project: Project, section: Section | None) -> str:
+def _next_folder_code(
+    project: Project,
+    section: Section | None,
+    parent: Folder | None = None,
+) -> str:
     codes = set(
         Folder.objects.filter(
             project=project,
             section=section,
+            parent=parent,
             code__gt='',
             is_deleted=False,
         ).values_list('code', flat=True)
@@ -785,6 +828,11 @@ def create_folder(
             raise ValueError("Родительская папка относится к другому проекту")
         if parent.is_deleted:
             raise ValueError("Нельзя создать папку внутри удалённой папки")
+        if _is_canonical_zone_folder(parent) or parent.zone != 'WIP':
+            raise ValueError(
+                "Нельзя создавать папки внутри виртуальных зон — "
+                "используйте разделы проекта"
+            )
         if parent.section_id is not None:
             if section is not None and section.pk != parent.section_id:
                 raise ValueError("Раздел папки не совпадает с разделом родителя")
@@ -798,12 +846,13 @@ def create_folder(
         folder_zone = parent.zone or 'WIP'
     code = (code or '').strip()
     if not code:
-        code = _next_folder_code(project, section)
-    elif _folder_code_exists(project, section, code):
-        raise ValueError('Папка с таким кодом уже существует в этом разделе')
-    folder_full_code = (full_code or '').strip() or generate_gost_code(
-        project.base_code,
-        section.code if section is not None else '',
+        code = _next_folder_code(project, section, parent)
+    elif _folder_code_exists(project, section, code, parent=parent):
+        raise ValueError('Папка с таким кодом уже существует в этой папке')
+    folder_full_code = (full_code or '').strip() or _folder_full_code(
+        project,
+        section,
+        parent,
         code,
     )
     return Folder.objects.create(
@@ -837,17 +886,19 @@ def rename_folder(
         if not code:
             raise ValueError('Код папки обязателен')
         if _folder_code_exists(
-            folder.project, folder.section, code, exclude=folder
+            folder.project,
+            folder.section,
+            code,
+            parent=folder.parent,
+            exclude=folder,
         ):
-            raise ValueError('Папка с таким кодом уже существует в этом разделе')
+            raise ValueError('Папка с таким кодом уже существует в этой папке')
         folder.code = code
-        folder.full_code = generate_gost_code(
-            folder.project.base_code,
-            folder.section.code if folder.section is not None else '',
-            folder.code,
-        )
-        update_fields.extend(['code', 'full_code'])
+        update_fields.append('code')
     folder.save(update_fields=update_fields)
+    if code is not None:
+        # Меняется собственный шифр и шифры всех вложенных папок.
+        _refresh_folder_subtree(folder, folder.section)
     return folder
 
 
@@ -962,6 +1013,18 @@ def move_document(user: User, document: Document, folder: Folder | None) -> Docu
         raise PermissionDenied(
             f"Документ в зоне «{zone_name}» — смена зоны через "
             "перемещение запрещена"
+        )
+
+    # Папки внутри зон не должны становиться обходным путём смены зоны.
+    if (
+        folder is not None
+        and not _is_canonical_zone_folder(folder)
+        and folder.zone != 'WIP'
+        and folder.zone != current_zone
+    ):
+        raise PermissionDenied(
+            "Нельзя перемещать документы между зонами через папки — "
+            "используйте workflow-кнопки"
         )
 
     if folder is not None:
@@ -1113,9 +1176,10 @@ def copy_document(
 
 def _refresh_folder_subtree(folder: Folder, section: Section | None) -> None:
     folder.section = section
-    folder.full_code = generate_gost_code(
-        folder.project.base_code,
-        section.code if section is not None else '',
+    folder.full_code = _folder_full_code(
+        folder.project,
+        section,
+        folder.parent,
         folder.code,
     )
     folder.save(update_fields=['section', 'full_code'])
@@ -1144,6 +1208,10 @@ def move_folder(
             raise ValueError("Нельзя переместить папку в саму себя")
         if parent.pk in _folder_subtree_ids(folder):
             raise ValueError("Нельзя переместить папку в собственный потомок")
+        if _is_canonical_zone_folder(parent) or parent.zone != 'WIP':
+            raise ValueError(
+                "Нельзя перемещать папки внутрь виртуальных зон"
+            )
         new_section = parent.section
     elif section is not None:
         if section.project_id != folder.project_id:
@@ -1155,9 +1223,13 @@ def move_folder(
         new_section = folder.section
 
     if _folder_code_exists(
-        folder.project, new_section, folder.code, exclude=folder
+        folder.project,
+        new_section,
+        folder.code,
+        parent=parent,
+        exclude=folder,
     ):
-        raise ValueError('Папка с таким кодом уже существует в этом разделе')
+        raise ValueError('Папка с таким кодом уже существует в этой папке')
 
     folder.parent = parent
     folder.save(update_fields=['parent'])

@@ -1082,8 +1082,10 @@
         var context = target.getAttribute('data-tree-context');
         var manage = target.getAttribute('data-can-manage') === '1';
         var isSection = context === 'section';
+        var canCreateAttr = target.getAttribute('data-can-create-subfolder');
+        var canCreate = canCreateAttr === null ? manage : canCreateAttr === '1';
 
-        if (manage) {
+        if (canCreate) {
             menu.appendChild(treeMenuItem(
                 isSection ? 'Создать папку' : 'Создать подпапку',
                 {
@@ -1096,6 +1098,9 @@
                     }
                 }
             ));
+        }
+
+        if (manage) {
             menu.appendChild(treeMenuItem(
                 isSection ? 'Переименовать раздел' : 'Переименовать',
                 isSection ? {
@@ -1811,6 +1816,7 @@
         var kind = form.getAttribute('data-gost-kind') || '';
         var base = form.getAttribute('data-gost-base') || '';
         var section = form.getAttribute('data-gost-section') || '';
+        var parentPrefix = form.getAttribute('data-gost-parent') || '';
         var markInput = form.querySelector('[data-gost-mark]');
         var codeInput = form.querySelector('[data-gost-folder-code]');
         if (kind === 'section') {
@@ -1818,7 +1824,9 @@
             preview.value = [base, mark].filter(Boolean).join('-');
         } else {
             var code = codeInput ? codeInput.value.trim() : '';
-            preview.value = [base, section, code].filter(Boolean).join('-');
+            preview.value = parentPrefix
+                ? [parentPrefix, code].filter(Boolean).join('-')
+                : [base, section, code].filter(Boolean).join('-');
         }
     }
 

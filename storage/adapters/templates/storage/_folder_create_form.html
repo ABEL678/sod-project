@@ -1,7 +1,8 @@
 <form method="post" action="{% url 'storage:folder_create' project.pk %}"
       data-gost-kind="folder"
       data-gost-base="{{ project.base_code }}"
-      data-gost-section="{{ section.code|default:'' }}">
+      data-gost-section="{{ section.code|default:'' }}"
+      data-gost-parent="{{ parent.full_code|default:'' }}">
     {% csrf_token %}
     <div class="modal-body">
         <input type="hidden" name="section" value="{{ section.pk|default:'' }}">

@@ -1,7 +1,8 @@
 <form method="post" action="{% url 'storage:folder_rename' folder.pk %}"
       data-gost-kind="folder"
       data-gost-base="{{ folder.project.base_code }}"
-      data-gost-section="{{ folder.section.code|default:'' }}">
+      data-gost-section="{{ folder.section.code|default:'' }}"
+      data-gost-parent="{{ folder.parent.full_code|default:'' }}">
     {% csrf_token %}
     <div class="modal-body">
         <label for="folderCodeInput" class="form-label">Шифр папки</label>
