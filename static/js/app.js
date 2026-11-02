@@ -564,14 +564,51 @@
     }
 
     function refreshDocumentsPanel() {
-        if (window.htmx && panel()) {
-            window.htmx.ajax('GET', window.location.href, {
-                target: '#documentsPanel',
-                swap: 'outerHTML'
-            });
+        var current = document.getElementById('documentsPanel');
+        if (!current) {
+            window.location.reload();
             return;
         }
-        window.location.reload();
+        fetch(window.location.href, {
+            credentials: 'same-origin',
+            headers: {'Accept': 'text/html'}
+        }).then(function (response) {
+            return response.text();
+        }).then(function (html) {
+            var parsed = new DOMParser().parseFromString(html, 'text/html');
+            var freshPanel = parsed.getElementById('documentsPanel');
+            if (!freshPanel) {
+                window.location.reload();
+                return;
+            }
+            current.replaceWith(freshPanel);
+            initDocumentsPanel();
+            refreshTreeCounts(parsed);
+        }).catch(function () {
+            window.location.reload();
+        });
+    }
+
+    function refreshTreeCounts(sourceDocument) {
+        sourceDocument.querySelectorAll('.folder-node[data-folder-id]').forEach(function (node) {
+            var folderId = node.getAttribute('data-folder-id');
+            var sourceCount = node.querySelector('.folder-count');
+            var currentCount = document.querySelector(
+                '.folder-node[data-folder-id="' + folderId + '"] .folder-count'
+            );
+            if (sourceCount && currentCount) {
+                currentCount.textContent = sourceCount.textContent;
+            }
+        });
+        sourceDocument.querySelectorAll('.section-count[data-section-id]').forEach(function (node) {
+            var sectionId = node.getAttribute('data-section-id');
+            var currentCount = document.querySelector(
+                '.section-count[data-section-id="' + sectionId + '"]'
+            );
+            if (currentCount) {
+                currentCount.textContent = node.textContent;
+            }
+        });
     }
 
     function apiUrl(template, entityId) {
@@ -581,7 +618,8 @@
         );
     }
 
-    function postMoveRequest(url, body, successMessage) {
+    function postMoveRequest(url, body, successMessage, options) {
+        options = options || {};
         fetch(url, {
             method: 'POST',
             headers: {'X-CSRFToken': csrfToken()},
@@ -595,7 +633,11 @@
             });
         }).then(function (data) {
             showDndToast(successMessage(data), false);
-            refreshDocumentsPanel();
+            if (options.reloadTree) {
+                window.location.reload();
+            } else {
+                refreshDocumentsPanel();
+            }
         }).catch(function (error) {
             showDndToast(error.message, true);
         });
@@ -749,7 +791,8 @@
                     folderBody,
                     function () {
                         return 'Папка перемещена в ' + targetName;
-                    }
+                    },
+                    {reloadTree: true}
                 );
                 return;
             }
