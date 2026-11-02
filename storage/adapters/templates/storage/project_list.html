@@ -87,9 +87,9 @@
                                 <label class="form-label small" for="projectTemplate">Шаблон структуры</label>
                                 <select class="form-select form-select-sm" id="projectTemplate" name="template_key">
                                     <option value="">Без шаблона</option>
-                                    {% for key, template in project_templates.items %}
-                                        <option value="{{ key }}">{{ template.name }}</option>
-                                    {% endfor %}
+                                    <option value="PD_87">Только ПД</option>
+                                    <option value="RD_GOST">Только РД</option>
+                                    <option value="FULL">ПД + РД (полный)</option>
                                 </select>
                             </div>
                             <div class="col-12">

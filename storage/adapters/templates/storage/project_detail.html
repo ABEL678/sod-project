@@ -85,7 +85,7 @@
                     </div>
                 {% endif %}
 
-                {% for section in sections %}
+                {% for section in section_nodes %}
                     <div class="section-node list-group-item"
                          data-section-node="{{ section.pk }}"
                          data-tree-context="section"
@@ -185,7 +185,9 @@
                         {% endif %}
                     </div>
                 {% empty %}
-                    <div class="sidebar-empty">Разделов пока нет</div>
+                    {% if not project_folders %}
+                        <div class="sidebar-empty">Разделов пока нет</div>
+                    {% endif %}
                 {% endfor %}
             </div>
 

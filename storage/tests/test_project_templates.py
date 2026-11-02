@@ -60,5 +60,14 @@ class ProjectTemplateTests(TestCase):
         )
 
         self.assertEqual(project.sections.count(), 0)
-        self.assertEqual(project.folders.exclude(code='').count(), 0)
-        self.assertEqual(project.folders.count(), 4)
+        superfolders = project.folders.exclude(code='')
+        self.assertEqual(superfolders.count(), 4)
+        self.assertEqual(
+            set(superfolders.values_list('code', flat=True)),
+            {'01', '02', '03', '04'},
+        )
+        self.assertEqual(
+            set(superfolders.values_list('name', flat=True)),
+            {'ИРД', 'РИИ', 'ПД', 'РД'},
+        )
+        self.assertEqual(project.folders.count(), 8)

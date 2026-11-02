@@ -31,7 +31,12 @@ from issues.notify import (
     notify_issue_status_changed,
 )
 from storage.domain.design_colors import ISSUE_STATUS_RGB as PDF_ISSUE_COLORS
-from storage.domain.project_templates import PROJECT_TEMPLATES
+from storage.domain.project_templates import (
+    COMMON_SUBFOLDERS,
+    PROJECT_TEMPLATES,
+    ROOT_SUPERFOLDERS,
+    ROOT_SUPERFOLDERS_BY_KEY,
+)
 
 
 DOCUMENT_VIEW_COLUMNS = (
@@ -564,6 +569,112 @@ def _create_default_zones(project: Project, created_by: User) -> None:
         )
 
 
+def _ensure_root_superfolders(project: Project, actor: User) -> dict[str, Folder]:
+    """Создаёт 4 корневые суперпапки проекта (ИРД, РИИ, ПД, РД)."""
+    superfolders = {}
+    for index, data in enumerate(ROOT_SUPERFOLDERS, start=1):
+        folder, _ = Folder.objects.get_or_create(
+            project=project,
+            parent=None,
+            section=None,
+            code=data['code'],
+            defaults={
+                'name': data['name'],
+                'full_code': generate_gost_code(project.base_code, data['code']),
+                'order': index,
+                'zone': 'WIP',
+                'created_by': actor,
+            },
+        )
+        superfolders[data['key']] = folder
+    return superfolders
+
+
+def _create_common_subfolders(
+    actor: User,
+    project: Project,
+    parent: Folder,
+    section: Section,
+) -> None:
+    for item in COMMON_SUBFOLDERS:
+        create_folder(
+            actor,
+            project,
+            name=item['name'],
+            section=section,
+            parent=parent,
+            code=item['code'],
+        )
+
+
+def _populate_project_template(
+    project: Project,
+    template: dict,
+    actor: User,
+) -> None:
+    """Наполняет суперпапки разделами и папками выбранного шаблона."""
+    superfolders = _ensure_root_superfolders(project, actor)
+    section_order = 0
+
+    for root_key, section_defs in template.get('sections', {}).items():
+        root_data = ROOT_SUPERFOLDERS_BY_KEY[root_key]
+        root = superfolders[root_key]
+        for section_data in section_defs:
+            section_order += 1
+            section = create_section(
+                project,
+                f"{root_data['prefix']}-{section_data['code']}",
+                section_data['name'],
+                section_order,
+                user=actor,
+            )
+            mark_folder = create_folder(
+                actor,
+                project,
+                name=section_data['name'],
+                section=section,
+                parent=root,
+                code=section_data['code'],
+            )
+            _create_common_subfolders(actor, project, mark_folder, section)
+            for child in section_data.get('children', ()):
+                child_folder = create_folder(
+                    actor,
+                    project,
+                    name=child['name'],
+                    section=section,
+                    parent=mark_folder,
+                    code=child['code'],
+                )
+                _create_common_subfolders(
+                    actor,
+                    project,
+                    child_folder,
+                    section,
+                )
+
+    for root_key, folder_defs in template.get('base_folders', {}).items():
+        root_data = ROOT_SUPERFOLDERS_BY_KEY[root_key]
+        root = superfolders[root_key]
+        for item in folder_defs:
+            section_order += 1
+            section = create_section(
+                project,
+                f"{root_data['prefix']}-{item['code']}",
+                item['name'],
+                section_order,
+                user=actor,
+            )
+            create_folder(
+                actor,
+                project,
+                name=item['name'],
+                section=section,
+                parent=root,
+                code=item['code'],
+            )
+
+
 def _ensure_project_zones(project: Project, user: User | None = None) -> bool:
     """Создаёт зоны для проекта, если не все 4 канонические зоны существуют.
 
@@ -576,6 +687,7 @@ def _ensure_project_zones(project: Project, user: User | None = None) -> bool:
         Folder.objects.filter(
             project=project,
             zone__in=dict(Folder.ZONE_CHOICES),
+            code='',
             parent__isnull=True,
             section__isnull=True,
         ).values_list('zone', flat=True)
@@ -2725,33 +2837,41 @@ def create_project_from_template(
         base_code=base_code,
     )
     template = PROJECT_TEMPLATES.get(template_key)
-    if template is None:
+    actor = created_by or gip
+
+    # Легаси-шаблон: сохраняем прежнюю структуру разделов/папок.
+    if template_key == 'residential' and template is not None:
+        sections = {}
+        for index, section_data in enumerate(template.get('sections', []), start=1):
+            section = create_section(
+                project,
+                section_data['code'],
+                section_data['name'],
+                index,
+                user=actor,
+            )
+            sections[section.code] = section
+
+        for folder_data in template.get('folders', []):
+            section = sections.get(folder_data.get('section_code'))
+            if section is None:
+                continue
+            create_folder(
+                actor,
+                project,
+                folder_data['name'],
+                section=section,
+                code=folder_data.get('code', ''),
+            )
+
         return project
 
-    actor = created_by or gip
-    sections = {}
-    for index, section_data in enumerate(template.get('sections', []), start=1):
-        section = create_section(
-            project,
-            section_data['code'],
-            section_data['name'],
-            index,
-            user=actor,
-        )
-        sections[section.code] = section
+    # Любой новый проект получает 4 корневые суперпапки.
+    if template is None:
+        _ensure_root_superfolders(project, actor)
+        return project
 
-    for folder_data in template.get('folders', []):
-        section = sections.get(folder_data.get('section_code'))
-        if section is None:
-            continue
-        create_folder(
-            actor,
-            project,
-            folder_data['name'],
-            section=section,
-            code=folder_data.get('code', ''),
-        )
-
+    _populate_project_template(project, template, actor)
     return project
 
 

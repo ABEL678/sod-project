@@ -119,7 +119,7 @@ from storage.domain.services import (
 )
 
 from issues.models import Issue
-from storage.domain.project_templates import PROJECT_TEMPLATES
+from storage.domain.project_templates import ROOT_SUPERFOLDER_NAMES
 
 
 RECENT_DOCUMENTS_SESSION_KEY = 'recent_documents'
@@ -272,6 +272,22 @@ def _folder_chain(folder):
     return list(reversed(chain))
 
 
+def _folder_has_superfolder_ancestor(folder):
+    """Папка находится внутри одной из 4 корневых суперпапок T68."""
+    current = folder
+    seen = set()
+    while current is not None and current.pk not in seen:
+        if (
+            current.parent_id is None
+            and current.section_id is None
+            and current.name in ROOT_SUPERFOLDER_NAMES
+        ):
+            return True
+        seen.add(current.pk)
+        current = current.parent
+    return False
+
+
 def _project_breadcrumbs(project, section=None, folder=None):
     """Хлебные крошки страницы проекта: Проект > Раздел > Папка."""
     project_url = reverse('storage:project_detail', args=[project.pk])
@@ -282,7 +298,7 @@ def _project_breadcrumbs(project, section=None, folder=None):
     }]
 
     if folder is not None:
-        if folder.section_id:
+        if folder.section_id and not _folder_has_superfolder_ancestor(folder):
             crumbs.append({
                 'label': f'{folder.section.code} — {folder.section.name}',
                 'url': f'{project_url}?section={folder.section_id}',
@@ -314,11 +330,12 @@ def _document_breadcrumbs(document):
         'active': False,
     }]
     section = document.section
-    crumbs.append({
-        'label': f'{section.code} — {section.name}',
-        'url': f'{project_url}?section={section.pk}',
-        'active': False,
-    })
+    if not _folder_has_superfolder_ancestor(document.folder):
+        crumbs.append({
+            'label': f'{section.code} — {section.name}',
+            'url': f'{project_url}?section={section.pk}',
+            'active': False,
+        })
     for node in _folder_chain(document.folder):
         crumbs.append({
             'label': node.name,
@@ -425,7 +442,6 @@ class ProjectListView(LoginRequiredMixin, ListView):
         context = super().get_context_data(**kwargs)
         user = self.request.user
         context['can_create_project'] = can_create_project(user)
-        context['project_templates'] = PROJECT_TEMPLATES
         if context['can_create_project']:
             context['gip_candidates'] = (
                 get_user_model()
@@ -655,25 +671,56 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
             active_tab = requested_tab
 
         sections = list(get_sections_with_counts(user, project))
-        folder_roots = [
+        all_roots = list(get_folder_tree(user, project))
+        project_folders = [
             folder
-            for folder in get_folder_tree(user, project)
-            if not (folder.parent_id is None and folder.section_id is None)
+            for folder in all_roots
+            if folder.section_id is None
+            and folder.name not in CANONICAL_ZONE_NAMES
+        ]
+        folder_roots = [
+            folder for folder in all_roots if folder.section_id is not None
         ]
         all_folders = [
             folder
             for folder in get_flat_folders(user, project)
-            if not (folder.parent_id is None and folder.section_id is None)
+            if not (
+                folder.parent_id is None
+                and folder.section_id is None
+                and folder.name in CANONICAL_ZONE_NAMES
+            )
         ]
         folders_by_section = {}
-        project_folders = []
         for folder in folder_roots:
-            if folder.section_id:
-                folders_by_section.setdefault(folder.section_id, []).append(folder)
-            else:
-                project_folders.append(folder)
+            folders_by_section.setdefault(folder.section_id, []).append(folder)
         for section in sections:
             section.folder_nodes = folders_by_section.get(section.pk, [])
+
+        # Секции, представленные папками внутри суперпапок ИРД/РИИ/ПД/РД,
+        # не дублируем отдельными узлами дерева. Ручные секции остаются видны.
+        superfolder_ids = {
+            folder.pk
+            for folder in project_folders
+            if folder.name in ROOT_SUPERFOLDER_NAMES
+        }
+        parent_by_id = {folder.pk: folder.parent_id for folder in all_folders}
+        represented_section_ids = set()
+        for folder in all_folders:
+            if not folder.section_id:
+                continue
+            current_id = folder.pk
+            seen = set()
+            while current_id and current_id not in seen:
+                if current_id in superfolder_ids:
+                    represented_section_ids.add(folder.section_id)
+                    break
+                seen.add(current_id)
+                current_id = parent_by_id.get(current_id)
+        section_nodes = [
+            section
+            for section in sections
+            if section.pk not in represented_section_ids
+        ]
 
         selected_folder = self._get_selected_folder()
         selected_section = self._get_selected_section()
@@ -713,6 +760,7 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
         context.update({
             'project': project,
             'sections': sections,
+            'section_nodes': section_nodes,
             'folder_tree': folder_roots,
             'project_folders': project_folders,
             'all_folders': all_folders,
