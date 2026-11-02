@@ -85,6 +85,8 @@ sod_project/
 | customer | CharField(255), blank | Заказчик |
 | gip | FK → User, null=True | ГИП проекта |
 | status | CharField(20), choices | active, archived |
+| is_deleted | BooleanField | Мягкое удаление проекта (доступно админу/суперюзеру) |
+| deleted_at | DateTimeField, null=True | Дата мягкого удаления |
 | created_at | DateTimeField | |
 | created_by | FK → User | |
 | base_code | CharField(50), blank | Базовое обозначение проекта по ГОСТ 21.101 (например, «2345-12») |

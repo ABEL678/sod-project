@@ -41,6 +41,8 @@ class Project(models.Model):
         ('archived', 'Архив'),
     ]
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, verbose_name="Статус")
+    is_deleted = models.BooleanField(default=False, verbose_name="Удален")
+    deleted_at = models.DateTimeField(null=True, blank=True, verbose_name="Дата удаления")
     created_at = models.DateTimeField(auto_now_add=True, verbose_name="Дата создания")
     created_by = models.ForeignKey(User, on_delete=models.PROTECT, related_name='created_projects', verbose_name="Создатель")
 

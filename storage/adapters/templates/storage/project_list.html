@@ -9,7 +9,12 @@
 {% block content %}
 <main class="container py-3 pb-5">
     <div class="d-flex justify-content-between align-items-center mb-3">
-        <h1 class="h3 mb-0">Проекты</h1>
+        <div>
+            <h1 class="h3 mb-0">Проекты</h1>
+            <div class="small text-muted mt-1">
+                Создавать и управлять проектами могут только Администраторы и ГИП
+            </div>
+        </div>
         {% if can_create_project %}
             <button type="button"
                     class="btn btn-primary btn-sm"
@@ -34,23 +39,71 @@
                         <th>Название</th>
                         <th>Заказчик</th>
                         <th>Статус</th>
+                        <th class="text-end">Действия</th>
                     </tr>
                 </thead>
                 <tbody>
                 {% for project in projects %}
-                    <tr data-href="{% url 'storage:project_detail' project.pk %}" class="project-row" title="Открыть проект {{ project.name }}">
+                    <tr data-href="{% url 'storage:project_detail' project.pk %}"
+                        class="project-row{% if project.status == 'archived' %} table-secondary text-muted{% endif %}"
+                        title="Открыть проект {{ project.name }}">
                         <td class="fw-semibold"><span class="cde-chip">{{ project.code }}</span></td>
                         <td><a href="{% url 'storage:project_detail' project.pk %}">{{ project.name }}</a></td>
                         <td>{{ project.customer|default:"—" }}</td>
                         <td>
-                            <span class="cde-badge {% if project.status == 'active' %}cde-badge--active{% else %}cde-badge--archived{% endif %}">
-                                {{ project.get_status_display }}
-                            </span>
+                            {% if project.status == 'archived' %}
+                                <span class="cde-badge cde-badge--archived">В архиве</span>
+                            {% else %}
+                                <span class="cde-badge cde-badge--active">{{ project.get_status_display }}</span>
+                            {% endif %}
+                        </td>
+                        <td class="text-end">
+                            <div class="dropdown">
+                                <button type="button"
+                                        class="btn btn-sm btn-link text-muted p-0"
+                                        data-bs-toggle="dropdown"
+                                        aria-expanded="false"
+                                        title="Управление проектом">
+                                    <i class="bi bi-three-dots" aria-hidden="true"></i>
+                                    <span class="visually-hidden">Управление проектом {{ project.code }}</span>
+                                </button>
+                                <ul class="dropdown-menu dropdown-menu-end">
+                                    <li>
+                                        <button type="button"
+                                                class="dropdown-item{% if not project.can_edit %} disabled{% endif %}"
+                                                {% if project.can_edit %}data-bs-toggle="modal" data-bs-target="#editProjectModal{{ project.pk }}"{% else %}disabled title="Нет прав"{% endif %}>
+                                            <i class="bi bi-pencil me-1" aria-hidden="true"></i>Редактировать
+                                        </button>
+                                    </li>
+                                    <li>
+                                        <form method="post" action="{% url 'storage:project_archive' project.pk %}">
+                                            {% csrf_token %}
+                                            <button type="submit"
+                                                    class="dropdown-item{% if not project.can_archive or project.status == 'archived' %} disabled{% endif %}"
+                                                    {% if not project.can_archive %}disabled title="Нет прав"{% elif project.status == 'archived' %}disabled title="Уже в архиве"{% endif %}>
+                                                <i class="bi bi-archive me-1" aria-hidden="true"></i>Архивировать
+                                            </button>
+                                        </form>
+                                    </li>
+                                    <li><hr class="dropdown-divider"></li>
+                                    <li>
+                                        <form method="post" action="{% url 'storage:project_delete' project.pk %}"
+                                              onsubmit="return confirm('Удалить проект «{{ project.name|escapejs }}»?');">
+                                            {% csrf_token %}
+                                            <button type="submit"
+                                                    class="dropdown-item text-danger{% if not project.can_delete %} disabled{% endif %}"
+                                                    {% if not project.can_delete %}disabled title="Нет прав"{% endif %}>
+                                                <i class="bi bi-trash me-1" aria-hidden="true"></i>Удалить
+                                            </button>
+                                        </form>
+                                    </li>
+                                </ul>
+                            </div>
                         </td>
                     </tr>
                 {% empty %}
                     <tr>
-                        <td colspan="4" class="text-center text-muted py-4">Проектов пока нет</td>
+                        <td colspan="5" class="text-center text-muted py-4">Проектов пока нет</td>
                     </tr>
                 {% endfor %}
                 </tbody>
@@ -58,6 +111,70 @@
         </div>
     </div>
 </main>
+
+{% for project in projects %}
+    {% if project.can_edit %}
+        <div class="modal fade settings-modal" id="editProjectModal{{ project.pk }}" tabindex="-1" aria-hidden="true">
+            <div class="modal-dialog modal-dialog-centered">
+                <div class="modal-content">
+                    <form method="post" action="{% url 'storage:project_edit' project.pk %}">
+                        {% csrf_token %}
+                        <div class="modal-header">
+                            <h5 class="modal-title">Редактировать проект</h5>
+                            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрыть"></button>
+                        </div>
+                        <div class="modal-body">
+                            <div class="row g-2">
+                                <div class="col-5">
+                                    <label class="form-label small" for="projectCode{{ project.pk }}">Шифр</label>
+                                    <input class="form-control form-control-sm" id="projectCode{{ project.pk }}" name="code" value="{{ project.code }}" required maxlength="50" title="Уникальный шифр проекта">
+                                </div>
+                                <div class="col-7">
+                                    <label class="form-label small" for="projectName{{ project.pk }}">Название</label>
+                                    <input class="form-control form-control-sm" id="projectName{{ project.pk }}" name="name" value="{{ project.name }}" required maxlength="255">
+                                </div>
+                                <div class="col-5">
+                                    <label class="form-label small" for="projectBaseCode{{ project.pk }}">Базовый шифр</label>
+                                    <input class="form-control form-control-sm" id="projectBaseCode{{ project.pk }}" name="base_code" value="{{ project.base_code }}" maxlength="50" title="Используется для генерации ГОСТ-шифров разделов и папок">
+                                    <div class="form-text">Используется для генерации ГОСТ-шифров разделов и папок</div>
+                                </div>
+                                <div class="col-7">
+                                    <label class="form-label small" for="projectCustomer{{ project.pk }}">Заказчик</label>
+                                    <input class="form-control form-control-sm" id="projectCustomer{{ project.pk }}" name="customer" value="{{ project.customer }}" maxlength="255">
+                                </div>
+                                <div class="col-12">
+                                    <label class="form-label small" for="projectGip{{ project.pk }}">ГИП</label>
+                                    <select class="form-select form-select-sm" id="projectGip{{ project.pk }}" name="gip">
+                                        <option value="">Не назначен</option>
+                                        {% for candidate in gip_candidates %}
+                                            <option value="{{ candidate.pk }}"{% if candidate.pk == project.gip_id %} selected{% endif %}>{{ candidate.get_full_name|default:candidate.username }}</option>
+                                        {% endfor %}
+                                    </select>
+                                </div>
+                                <div class="col-12">
+                                    <label class="form-label small" for="projectStatus{{ project.pk }}">Статус</label>
+                                    <select class="form-select form-select-sm" id="projectStatus{{ project.pk }}" name="status"
+                                            {% if not project.can_archive %}disabled title="Нет прав"{% endif %}>
+                                        {% for value, label in project_status_choices %}
+                                            <option value="{{ value }}"{% if project.status == value %} selected{% endif %}>{{ label }}</option>
+                                        {% endfor %}
+                                    </select>
+                                    {% if not project.can_archive %}
+                                        <div class="form-text">Менять статус проекта может только администратор.</div>
+                                    {% endif %}
+                                </div>
+                            </div>
+                        </div>
+                        <div class="modal-footer">
+                            <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-dismiss="modal">Отмена</button>
+                            <button type="submit" class="btn btn-primary btn-sm">Сохранить</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    {% endif %}
+{% endfor %}
 
 {% if can_create_project %}
     <div class="modal fade settings-modal" id="createProjectModal" tabindex="-1" aria-hidden="true" data-role="project-create-modal">

@@ -146,8 +146,8 @@ def _check_company_access(user: User, company_id: int) -> bool:
 
 
 def get_accessible_projects(user: User):
-    """Проекты компании пользователя (superuser видит все)."""
-    queryset = Project.objects.all()
+    """Проекты компании пользователя (superuser видит все, кроме удалённых)."""
+    queryset = Project.objects.filter(is_deleted=False)
     if user.is_superuser:
         return queryset
     company = get_user_company(user)
@@ -795,6 +795,147 @@ def can_create_project(user: User) -> bool:
         return True
     profile = getattr(user, 'userprofile', None)
     return profile is not None and profile.role in ('admin', 'gip')
+
+
+def can_edit_project(user: User, project: Project) -> bool:
+    """Редактирование: суперюзер, админ компании или ГИП своего проекта."""
+    return can_manage_project_participants(user, project)
+
+
+def can_archive_project(user: User, project: Project) -> bool:
+    """Архивирование: только суперюзер или админ компании."""
+    if user.is_superuser:
+        return True
+    profile = getattr(user, 'userprofile', None)
+    return (
+        profile is not None
+        and profile.role == 'admin'
+        and _check_company_access(user, project.company_id)
+    )
+
+
+def can_delete_project(user: User, project: Project) -> bool:
+    """Мягкое удаление: только суперюзер или админ компании."""
+    return can_archive_project(user, project)
+
+
+_UNSET = object()
+
+
+def _refresh_project_full_codes(project: Project) -> None:
+    """Пересчитывает ГОСТ-шифры разделов и папок после смены base_code."""
+    for section in project.sections.all():
+        section.full_code = generate_gost_code(project.base_code, section.code)
+        section.save(update_fields=['full_code'])
+
+    def refresh(folder: Folder) -> None:
+        folder.full_code = _folder_full_code(
+            project,
+            folder.section,
+            folder.parent,
+            folder.code,
+        )
+        folder.save(update_fields=['full_code'])
+        for child in Folder.objects.filter(parent=folder, is_deleted=False):
+            refresh(child)
+
+    for root in Folder.objects.filter(
+        project=project,
+        parent__isnull=True,
+        is_deleted=False,
+    ):
+        if _is_canonical_zone_folder(root):
+            continue
+        refresh(root)
+
+
+def update_project(
+    user: User,
+    project: Project,
+    *,
+    code: str | None = None,
+    name: str | None = None,
+    customer: str | None = None,
+    base_code: str | None = None,
+    status: str | None = None,
+    gip: User | None | object = _UNSET,
+) -> Project:
+    """Обновляет карточку проекта с проверкой прав."""
+    if not can_edit_project(user, project):
+        raise PermissionDenied("Нет прав на редактирование проекта")
+
+    update_fields = []
+
+    if code is not None:
+        code = code.strip()
+        if not code:
+            raise ValueError("Шифр проекта обязателен")
+        if Project.objects.filter(code=code).exclude(pk=project.pk).exists():
+            raise ValueError("Проект с таким шифром уже существует")
+        project.code = code
+        update_fields.append('code')
+
+    if name is not None:
+        name = name.strip()
+        if not name:
+            raise ValueError("Название проекта обязательно")
+        project.name = name
+        update_fields.append('name')
+
+    if customer is not None:
+        project.customer = customer.strip()
+        update_fields.append('customer')
+
+    base_changed = False
+    if base_code is not None:
+        base_code = base_code.strip()
+        if base_code != project.base_code:
+            project.base_code = base_code
+            update_fields.append('base_code')
+            base_changed = True
+
+    if status is not None and status != project.status:
+        if not can_archive_project(user, project):
+            raise PermissionDenied("Менять статус проекта может только администратор")
+        if status not in dict(Project.STATUS_CHOICES):
+            raise ValueError("Неверный статус проекта")
+        project.status = status
+        update_fields.append('status')
+
+    if gip is not _UNSET:
+        if gip is not None and not _check_company_access(gip, project.company_id):
+            raise PermissionDenied("ГИП должен принадлежать компании проекта")
+        if gip is not None:
+            _validate_gip_role(gip)
+        project.gip = gip
+        update_fields.append('gip')
+
+    if update_fields:
+        project.save(update_fields=update_fields)
+    if base_changed:
+        _refresh_project_full_codes(project)
+    return project
+
+
+def archive_project(user: User, project: Project) -> Project:
+    """Переводит проект в архив."""
+    if not can_archive_project(user, project):
+        raise PermissionDenied("Нет прав на архивирование проекта")
+    if project.status != 'archived':
+        project.status = 'archived'
+        project.save(update_fields=['status'])
+    return project
+
+
+def delete_project(user: User, project: Project) -> Project:
+    """Мягко удаляет проект (is_deleted)."""
+    if not can_delete_project(user, project):
+        raise PermissionDenied("Нет прав на удаление проекта")
+    project.is_deleted = True
+    project.deleted_at = timezone.now()
+    project.status = 'archived'
+    project.save(update_fields=['is_deleted', 'deleted_at', 'status'])
+    return project
 
 
 def create_section(

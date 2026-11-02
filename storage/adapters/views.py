@@ -55,7 +55,11 @@ from storage.domain.services import (
     CANONICAL_ZONE_NAMES,
     add_company_member,
     allowed_issue_statuses,
+    archive_project,
+    can_archive_project,
     can_create_project,
+    can_delete_project,
+    can_edit_project,
     can_manage_project_participants,
     check_issue_permission,
     can_purge_trash,
@@ -68,6 +72,7 @@ from storage.domain.services import (
     delete_document,
     delete_documents,
     delete_folder,
+    delete_project,
     empty_trash,
     export_pdf_with_issues,
     generate_share_link,
@@ -114,6 +119,7 @@ from storage.domain.services import (
     save_document_view,
     search_documents,
     update_company_info,
+    update_project,
     update_project_member_role,
     upload_document,
 )
@@ -442,6 +448,13 @@ class ProjectListView(LoginRequiredMixin, ListView):
         context = super().get_context_data(**kwargs)
         user = self.request.user
         context['can_create_project'] = can_create_project(user)
+        context['project_status_choices'] = Project.STATUS_CHOICES
+        projects = list(context['projects'])
+        for project in projects:
+            project.can_edit = can_edit_project(user, project)
+            project.can_archive = can_archive_project(user, project)
+            project.can_delete = can_delete_project(user, project)
+        context['projects'] = projects
         if context['can_create_project']:
             context['gip_candidates'] = (
                 get_user_model()
@@ -916,6 +929,74 @@ class ProjectCreateView(LoginRequiredMixin, View):
 
         messages.success(request, f'Проект «{project.name}» создан.')
         return redirect('storage:project_detail', pk=project.pk)
+
+
+class ProjectEditView(LoginRequiredMixin, View):
+    """Редактирование карточки проекта (админ, ГИП своего проекта, суперюзер)."""
+
+    def post(self, request, project_id):
+        project = get_object_or_404(
+            get_accessible_projects(request.user),
+            pk=project_id,
+        )
+        gip = None
+        gip_id = (request.POST.get('gip') or '').strip()
+        if gip_id:
+            gip = get_user_model().objects.filter(pk=gip_id).first()
+            if gip is None:
+                messages.error(request, 'ГИП не найден.')
+                return redirect('storage:project_list')
+
+        try:
+            update_project(
+                request.user,
+                project,
+                code=request.POST.get('code', ''),
+                name=request.POST.get('name', ''),
+                customer=request.POST.get('customer', ''),
+                base_code=request.POST.get('base_code', ''),
+                status=request.POST.get('status') or project.status,
+                gip=gip,
+            )
+        except (PermissionDenied, ValueError) as exc:
+            messages.error(request, str(exc))
+        else:
+            messages.success(request, f'Проект «{project.name}» обновлён.')
+        return redirect('storage:project_list')
+
+
+class ProjectArchiveView(LoginRequiredMixin, View):
+    """Архивирование проекта (только админ/суперюзер)."""
+
+    def post(self, request, project_id):
+        project = get_object_or_404(
+            get_accessible_projects(request.user),
+            pk=project_id,
+        )
+        try:
+            archive_project(request.user, project)
+        except PermissionDenied as exc:
+            messages.error(request, str(exc))
+        else:
+            messages.success(request, f'Проект «{project.name}» перемещён в архив.')
+        return redirect('storage:project_list')
+
+
+class ProjectDeleteView(LoginRequiredMixin, View):
+    """Мягкое удаление проекта (только админ/суперюзер)."""
+
+    def post(self, request, project_id):
+        project = get_object_or_404(
+            get_accessible_projects(request.user),
+            pk=project_id,
+        )
+        try:
+            delete_project(request.user, project)
+        except PermissionDenied as exc:
+            messages.error(request, str(exc))
+        else:
+            messages.success(request, f'Проект «{project.name}» удалён.')
+        return redirect('storage:project_list')
 
 
 class SectionCreateView(LoginRequiredMixin, View):
