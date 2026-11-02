@@ -1023,6 +1023,8 @@
         if (!url) {
             return;
         }
+        bodyId = (bodyId || '').replace(/^#/, '');
+        modalId = (modalId || '').replace(/^#/, '');
         fetch(url, {headers: {'X-Requested-With': 'XMLHttpRequest'}})
             .then(function (response) { return response.text(); })
             .then(function (html) {
@@ -1092,7 +1094,7 @@
                     onClick: function () {
                         openTreeFolderForm(
                             target.getAttribute('data-create-folder-url'),
-                            '#folderCreateModalBody',
+                            'folderCreateModalBody',
                             'folderCreateModal'
                         );
                     }
@@ -1115,7 +1117,7 @@
                     onClick: function () {
                         openTreeFolderForm(
                             target.getAttribute('data-rename-url'),
-                            '#folderRenameModalBody',
+                            'folderRenameModalBody',
                             'folderRenameModal'
                         );
                     }
