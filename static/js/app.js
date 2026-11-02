@@ -1840,7 +1840,7 @@
         if (markInput) {
             markInput.value = markInput.value
                 .toUpperCase()
-                .replace(/[^А-ЯЁ]/g, '')
+                .replace(/[^А-ЯЁ0-9]/g, '')
                 .slice(0, 3);
             updateGostForm(markInput.closest('form'));
             return;

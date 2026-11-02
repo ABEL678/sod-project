@@ -740,9 +740,16 @@ def _folder_full_code(
     parent: Folder | None,
     code: str,
 ) -> str:
-    """Полный ГОСТ-шифр папки: база-раздел-родители-код."""
-    codes = _folder_code_chain(parent)
+    """Полный ГОСТ-шифр папки.
+
+    Для корневой папки раздела: ``base_code-section.code-code``.
+    Для подпапки: ``parent.full_code-code``.
+    """
     code = (code or '').strip()
+    if parent is not None and parent.full_code:
+        return f'{parent.full_code}-{code}' if code else parent.full_code
+    # Fallback для старых папок без full_code: собираем цепочку кодов.
+    codes = _folder_code_chain(parent)
     if code:
         codes.append(code)
     return generate_gost_code(

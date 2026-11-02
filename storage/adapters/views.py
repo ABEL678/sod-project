@@ -11,7 +11,7 @@ from django.contrib.auth.decorators import login_required
 from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
 from django.core.exceptions import PermissionDenied
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.db.models import Count, Q
+from django.db.models import Count, Max, Q
 from django.http import (
     FileResponse,
     Http404,
@@ -877,11 +877,17 @@ class SectionCreateView(LoginRequiredMixin, View):
             pk=project_id,
         )
         try:
+            order = request.POST.get('order')
+            if not order:
+                max_order = Section.objects.filter(project=project).aggregate(
+                    Max('order')
+                )['order__max'] or 0
+                order = max_order + 1
             create_section(
                 project=project,
                 code=request.POST.get('code', ''),
                 name=request.POST.get('name', ''),
-                order=request.POST.get('order') or 0,
+                order=order,
                 user=request.user,
             )
         except (PermissionDenied, ValueError) as exc:
