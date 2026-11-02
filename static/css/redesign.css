@@ -1,5 +1,5 @@
 /* Цвета — только через дизайн-токены (tokens.css, источник: tokens.json) */
-/* Спринт 4: топбар — графит #2B3545. Кнопки — ghost-стиль со светлой рамкой,
+/* Спринт 4: топбар — графит #3A4558. Кнопки — ghost-стиль со светлой рамкой,
    лого-марка и аватар — светлые, крошки — светло-серые (текст on-dark). */
 .topbar { position: relative; z-index: 1045; height: 52px; background: var(--c-bg-header); border-bottom: 1px solid var(--c-border-header); display: flex; align-items: center; padding: 0 16px; gap: 12px; }
 .topbar .brand { font-weight: 600; font-size: 15px; display: flex; align-items: center; gap: 8px; }
@@ -48,7 +48,7 @@ body { background: var(--c-bg-app); font-family: 'Golos Text', 'Inter', system-u
     max-width: 42%;
     overflow: hidden;
     text-align: center;
-    opacity: 0.22; /* заметный, но не спорящий с контентом водяной знак */
+    opacity: 0.35; /* заметный, но не спорящий с контентом водяной знак */
     pointer-events: none;
     user-select: none;
     white-space: nowrap;
@@ -74,7 +74,7 @@ body { background: var(--c-bg-app); font-family: 'Golos Text', 'Inter', system-u
 }
 
 /* T85: header/breadcrumbs/table polish.
-   Спринт 4: --c-bg-header теперь графит #2B3545 (см. tokens.json). */
+   Спринт 4: --c-bg-header теперь графит #3A4558 (см. tokens.json). */
 .topbar {
     background: var(--c-bg-header) !important;
     border-bottom: 1px solid var(--c-border-header);
