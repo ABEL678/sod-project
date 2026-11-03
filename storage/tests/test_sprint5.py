@@ -11,8 +11,11 @@
 """
 from unittest import mock
 
+from datetime import timedelta
+
 from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied
+from django.utils import timezone
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 from django.urls import reverse
@@ -308,7 +311,11 @@ class ShareLinkIssuesGateTests(Sprint5TestBase):
         super().setUp()
         self.document = self.make_document(code='SHR-1')
         self.document.public_link_token = __import__('uuid').uuid4()
-        self.document.save(update_fields=['public_link_token'])
+        self.document.public_link_expires_at = timezone.now() + timedelta(days=1)
+        self.document.save(update_fields=[
+            'public_link_token',
+            'public_link_expires_at',
+        ])
         Issue.objects.create(
             document=self.document,
             author=self.user_gip,

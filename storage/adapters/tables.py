@@ -153,6 +153,10 @@ class DocumentTable(tables.Table):
             'data-share-url': lambda record: reverse(
                 'storage:document_share_link', args=[record.pk]
             ),
+            'data-share-active': lambda record: '1' if record.has_active_share_link else '0',
+            'data-revoke-url': lambda record: reverse(
+                'storage:document_share_revoke', args=[record.pk]
+            ),
             'data-delete-url': lambda record: reverse(
                 'storage:document_delete', args=[record.pk]
             ),

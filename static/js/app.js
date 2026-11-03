@@ -6,6 +6,7 @@
     var SIDEBAR_MIN_WIDTH = 200;
     var SIDEBAR_MAX_WIDTH = 500;
     var COLUMN_ORDER_PREFIX = 'sod:columns:';
+    var shareButtonHandlerBound = false;
 
     function readStorage(key, fallback) {
         try {
@@ -893,6 +894,8 @@
         delete menu.dataset.documentCode;
         delete menu.dataset.sectionId;
         delete menu.dataset.markId;
+        delete menu.dataset.shareActive;
+        delete menu.dataset.revokeUrl;
     }
 
     function openDocumentMenu(row, x, y) {
@@ -907,6 +910,12 @@
         menu.dataset.documentCode = row.dataset.documentCode || '';
         menu.dataset.sectionId = row.dataset.sectionId || '';
         menu.dataset.markId = row.dataset.markId || '';
+        menu.dataset.shareActive = row.dataset.shareActive || '0';
+        menu.dataset.revokeUrl = row.dataset.revokeUrl || '';
+        var revokeItem = document.getElementById('docRevokeShareItem');
+        if (revokeItem) {
+            revokeItem.hidden = menu.dataset.shareActive !== '1';
+        }
         menu.classList.add('show');
         menu.setAttribute('aria-hidden', 'false');
 
@@ -937,6 +946,34 @@
             } finally {
                 textarea.remove();
             }
+        });
+    }
+
+    function showShareLinkCopied(data) {
+        var expiresAt = data && data.expires_at ? new Date(data.expires_at) : null;
+        var message = 'Ссылка скопирована. Действует 1 год';
+        if (expiresAt && !Number.isNaN(expiresAt.getTime())) {
+            message = 'Ссылка скопирована. Действует до '
+                + expiresAt.toLocaleDateString('ru-RU');
+        }
+        showDndToast(message, false);
+    }
+
+    function requestShareLink(url) {
+        return fetch(url, {
+            method: 'POST',
+            headers: {
+                'X-CSRFToken': csrfToken(),
+                'X-Requested-With': 'XMLHttpRequest'
+            },
+            credentials: 'same-origin'
+        }).then(function (response) {
+            return response.json().then(function (data) {
+                if (!response.ok) {
+                    throw new Error(data.error || 'Не удалось создать ссылку');
+                }
+                return data;
+            });
         });
     }
 
@@ -983,8 +1020,11 @@
         var documentId = menu.dataset.documentId;
         var documentUrl = menu.dataset.documentUrl;
         var shareUrl = menu.dataset.shareUrl;
+        var revokeUrl = menu.dataset.revokeUrl;
         var deleteUrl = menu.dataset.deleteUrl;
         var code = menu.dataset.documentCode || 'документ';
+        var sectionId = menu.dataset.sectionId || '';
+        var markId = menu.dataset.markId || '';
         closeDocumentMenu();
 
         if (action === 'open') {
@@ -996,19 +1036,47 @@
             return;
         }
         if (action === 'share') {
-            fetch(shareUrl, {headers: {'X-Requested-With': 'XMLHttpRequest'}})
+            requestShareLink(shareUrl)
+                .then(function (data) {
+                    return copyText(data.url).then(function () {
+                        var row = document.querySelector(
+                            'tr[data-document-id="' + documentId + '"]'
+                        );
+                        if (row) {
+                            row.dataset.shareActive = '1';
+                        }
+                        showShareLinkCopied(data);
+                    });
+                })
+                .catch(function (error) {
+                    showDndToast(error.message, true);
+                });
+            return;
+        }
+        if (action === 'revoke-share') {
+            if (!revokeUrl || !window.confirm(
+                'Отозвать публичную ссылку? Она сразу перестанет работать.'
+            )) {
+                return;
+            }
+            fetch(revokeUrl, {
+                method: 'POST',
+                headers: {'X-CSRFToken': csrfToken()},
+                credentials: 'same-origin'
+            })
                 .then(function (response) {
                     return response.json().then(function (data) {
                         if (!response.ok) {
-                            throw new Error(data.error || 'Не удалось создать ссылку');
+                            throw new Error(data.error || 'Не удалось отозвать ссылку');
                         }
                         return data;
                     });
                 })
-                .then(function (data) {
-                    return copyText(data.url).then(function () {
-                        showDndToast('Ссылка скопирована', false);
-                    });
+                .then(function () {
+                    showDndToast('Ссылка отозвана', false);
+                    window.setTimeout(function () {
+                        window.location.reload();
+                    }, 500);
                 })
                 .catch(function (error) {
                     showDndToast(error.message, true);
@@ -1018,8 +1086,8 @@
         if (action === 'move') {
             var modalElement = prepareDocumentMoveModal(
                 documentId,
-                menu.dataset.sectionId || '',
-                menu.dataset.markId || '',
+                sectionId,
+                markId,
                 false
             );
             if (modalElement) {
@@ -1030,8 +1098,8 @@
         if (action === 'change-section') {
             var changeModal = prepareDocumentMoveModal(
                 documentId,
-                menu.dataset.sectionId || '',
-                menu.dataset.markId || '',
+                sectionId,
+                markId,
                 true
             );
             if (changeModal) {
@@ -1566,6 +1634,33 @@
         if (table) {
             table.querySelectorAll('tbody a').forEach(function (link) {
                 link.setAttribute('draggable', 'false');
+            });
+        }
+        if (!shareButtonHandlerBound) {
+            shareButtonHandlerBound = true;
+            document.addEventListener('click', function (event) {
+                var button = event.target.closest('.doc-share-btn');
+                if (!button) {
+                    return;
+                }
+                event.preventDefault();
+                var shareUrl = button.getAttribute('data-share-url');
+                if (!shareUrl) {
+                    return;
+                }
+                requestShareLink(shareUrl)
+                    .then(function (data) {
+                        return copyText(data.url).then(function () {
+                            var row = button.closest('tr[data-document-id]');
+                            if (row) {
+                                row.dataset.shareActive = '1';
+                            }
+                            showShareLinkCopied(data);
+                        });
+                    })
+                    .catch(function (error) {
+                        showDndToast(error.message, true);
+                    });
             });
         }
         initColumnOrder();

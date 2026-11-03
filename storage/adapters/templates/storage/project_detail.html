@@ -129,6 +129,10 @@
     <button type="button" class="dropdown-item" role="menuitem" data-doc-action="share">
         <i class="bi bi-link-45deg me-2" aria-hidden="true"></i>Скопировать ссылку
     </button>
+    <button type="button" class="dropdown-item" role="menuitem" data-doc-action="revoke-share"
+            id="docRevokeShareItem" hidden>
+        <i class="bi bi-link-45deg me-2" aria-hidden="true"></i>Отозвать ссылку
+    </button>
     <button type="button" class="dropdown-item" role="menuitem" data-doc-action="move">
         <i class="bi bi-folder-symlink me-2" aria-hidden="true"></i>Переместить в…
     </button>
@@ -576,5 +580,5 @@
 
 {% block extra_js %}
 <script src="{% static 'js/vendor/Sortable.min.js' %}"></script>
-<script src="{% static 'js/app.js' %}?v=20261107-s6-folder-menu2"></script>
+<script src="{% static 'js/app.js' %}?v=20261107-s6-share-year"></script>
 {% endblock %}

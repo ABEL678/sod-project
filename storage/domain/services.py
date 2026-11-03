@@ -1,5 +1,6 @@
 import base64
 from collections import defaultdict
+from datetime import timedelta
 import io
 import uuid
 
@@ -1983,17 +1984,62 @@ def restore_folder(user: User, folder: Folder) -> None:
         )
 
 
+SHARE_LINK_TTL = timedelta(days=365)
+
+
 def generate_share_link(user: User, document: Document) -> str:
-    """Генерирует и сохраняет публичный токен документа."""
+    """Генерирует/продлевает публичный токен документа на 30 дней."""
     if not check_read_permission(user, document):
         raise PermissionDenied("Нет прав на создание ссылки")
     if document.is_deleted:
         raise ValueError("Нельзя создать ссылку на удалённый документ")
 
+    now = timezone.now()
+    update_fields = []
     if not document.public_link_token:
         document.public_link_token = uuid.uuid4()
-        document.save(update_fields=['public_link_token'])
+        update_fields.append('public_link_token')
+    if (
+        document.public_link_expires_at is None
+        or document.public_link_expires_at <= now
+    ):
+        document.public_link_expires_at = now + SHARE_LINK_TTL
+        update_fields.append('public_link_expires_at')
+    if update_fields:
+        document.save(update_fields=update_fields)
     return str(document.public_link_token)
+
+
+def _can_manage_share_link(user: User, document: Document) -> bool:
+    """Владелец документа, ГИП проекта или админ компании."""
+    if user is None or not user.is_authenticated:
+        return False
+    if user.is_superuser:
+        return True
+    if not check_read_permission(user, document):
+        return False
+    profile = getattr(user, 'userprofile', None)
+    if profile is not None and profile.role == 'admin':
+        return True
+    if document.created_by_id == user.pk:
+        return True
+    return _is_project_gip(user, document.project)
+
+
+def revoke_share_link(user: User, document: Document) -> Document:
+    """Отзывает публичную ссылку документа."""
+    if not _can_manage_share_link(user, document):
+        raise PermissionDenied("Нет прав на отзыв ссылки")
+    if document.is_deleted:
+        raise ValueError("Нельзя отозвать ссылку у удалённого документа")
+
+    document.public_link_token = None
+    document.public_link_expires_at = None
+    document.save(update_fields=[
+        'public_link_token',
+        'public_link_expires_at',
+    ])
+    return document
 
 
 def get_trash(user: User, project: Project) -> dict:

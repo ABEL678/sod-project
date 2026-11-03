@@ -46,6 +46,11 @@ urlpatterns = [
     path('folders/<int:folder_id>/delete/', views.FolderDeleteView.as_view(), name='folder_delete'),
     path('folders/<int:folder_id>/download/', views.FolderDownloadView.as_view(), name='folder_download'),
     path('documents/<int:document_id>/share/', views.DocumentShareLinkView.as_view(), name='document_share_link'),
+    path(
+        'documents/<int:document_id>/share/revoke/',
+        views.DocumentShareRevokeView.as_view(),
+        name='document_share_revoke',
+    ),
     path('projects/<int:project_id>/search/', views.SearchView.as_view(), name='search'),
     path('projects/<int:project_id>/upload-ajax/', views.DocumentUploadAjaxView.as_view(), name='document_upload_ajax'),
     path('projects/<int:project_id>/views/save/', views.DocumentViewSaveView.as_view(), name='document_view_save'),

@@ -162,6 +162,7 @@ sod_project/
 | current_version | FK → DocumentVersion, null=True | Текущая актуальная версия |
 | status | CharField(20), choices | WIP, SHARED, PUBLISHED, ARCHIVED (жизненный цикл) |
 | public_link_token | UUIDField, null=True, unique=True | Токен публичной ссылки |
+| public_link_expires_at | DateTimeField, null=True | Срок действия публичной ссылки (30 дней) |
 | is_deleted | BooleanField | Мягкое удаление (корзина) |
 | deleted_at | DateTimeField, null=True | Дата помещения в корзину |
 | created_at | DateTimeField | |

@@ -392,7 +392,7 @@ class T8CoreViewTests(T8CoreTestBase):
     def test_share_link_view_returns_url(self):
         document = self.make_document()
         self.client.force_login(self.user_viewer)
-        response = self.client.get(
+        response = self.client.post(
             reverse('storage:document_share_link', args=[document.pk])
         )
         self.assertEqual(response.status_code, 200)

@@ -19,6 +19,7 @@ from django.http import (
     HttpResponse,
     HttpResponseBadRequest,
     HttpResponseForbidden,
+    HttpResponseGone,
     HttpResponseNotFound,
     JsonResponse,
 )
@@ -102,6 +103,7 @@ from storage.domain.services import (
     get_company_members,
     get_user_company,
     get_zone_counts,
+    revoke_share_link,
     document_actions,
     document_workflow_actions,
     _effective_zone,
@@ -1281,10 +1283,13 @@ class FolderDownloadView(LoginRequiredMixin, View):
 
 
 class DocumentShareLinkView(LoginRequiredMixin, View):
-    def get(self, request, document_id):
+    """Создаёт/продлевает публичную ссылку. Только POST с CSRF."""
+
+    def post(self, request, document_id):
         document = get_object_or_404(
             get_accessible_documents(request.user),
             pk=document_id,
+            is_deleted=False,
         )
         try:
             token = generate_share_link(request.user, document)
@@ -1293,7 +1298,30 @@ class DocumentShareLinkView(LoginRequiredMixin, View):
         url = request.build_absolute_uri(
             reverse('storage:document_detail', args=[document.pk])
         )
-        return JsonResponse({'token': token, 'url': f'{url}?share={token}'})
+        return JsonResponse({
+            'token': token,
+            'url': f'{url}?share={token}',
+            'expires_at': (
+                document.public_link_expires_at.isoformat()
+                if document.public_link_expires_at else None
+            ),
+        })
+
+
+class DocumentShareRevokeView(LoginRequiredMixin, View):
+    """Отзывает публичную ссылку. Только POST с CSRF."""
+
+    def post(self, request, document_id):
+        document = get_object_or_404(
+            get_accessible_documents(request.user),
+            pk=document_id,
+            is_deleted=False,
+        )
+        try:
+            revoke_share_link(request.user, document)
+        except (PermissionDenied, ValueError) as exc:
+            return JsonResponse({'status': 'error', 'error': str(exc)}, status=403)
+        return JsonResponse({'status': 'ok'})
 
 
 class DocumentMoveView(LoginRequiredMixin, View):
@@ -2083,6 +2111,11 @@ class DocumentDetailView(LoginRequiredMixin, DetailView):
             )
             if document is None:
                 raise Http404
+            if (
+                document.public_link_expires_at is None
+                or document.public_link_expires_at <= timezone.now()
+            ):
+                return HttpResponseGone('Срок действия ссылки истек')
             self.object = document
             self.public_view = True
             _remember_document(request, document.pk)

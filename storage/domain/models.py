@@ -1,5 +1,6 @@
 from django.db import models
 from django.contrib.auth.models import User
+from django.utils import timezone
 
 
 class Company(models.Model):
@@ -151,6 +152,11 @@ class Document(models.Model):
         unique=True,
         verbose_name="Публичный токен",
     )
+    public_link_expires_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        verbose_name="Публичная ссылка действует до",
+    )
     is_deleted = models.BooleanField(default=False, verbose_name="Удален")
     deleted_at = models.DateTimeField(null=True, blank=True, verbose_name="Дата удаления")
     deleted_with_parent = models.BooleanField(
@@ -165,6 +171,14 @@ class Document(models.Model):
         unique_together = ('project', 'section', 'code')
         verbose_name = "Документ"
         verbose_name_plural = "Документы"
+
+    @property
+    def has_active_share_link(self) -> bool:
+        return bool(
+            self.public_link_token
+            and self.public_link_expires_at
+            and self.public_link_expires_at > timezone.now()
+        )
 
     def __str__(self):
         return f'{self.code} - {self.name}'
