@@ -207,7 +207,9 @@ class FolderServiceTests(T8CoreTestBase):
         token = generate_share_link(self.user_gip, document)
         document.refresh_from_db()
         self.assertEqual(str(document.public_link_token), token)
-        self.assertEqual(generate_share_link(self.user_viewer, document), token)
+        self.assertEqual(generate_share_link(self.user_gip, document), token)
+        with self.assertRaises(PermissionDenied):
+            generate_share_link(self.user_viewer, document)
 
     def test_soft_delete_and_restore_document(self):
         document = self.make_document()
@@ -391,7 +393,7 @@ class T8CoreViewTests(T8CoreTestBase):
 
     def test_share_link_view_returns_url(self):
         document = self.make_document()
-        self.client.force_login(self.user_viewer)
+        self.client.force_login(self.user_gip)
         response = self.client.post(
             reverse('storage:document_share_link', args=[document.pk])
         )
@@ -548,6 +550,7 @@ class T67AuditTest(T8CoreTestBase):
     def test_internal_status_only_in_wip_and_permissions(self):
         document = self.make_document(code='T67-ZONE')
         document.status = 'in_review'
+        document._from_service = True
         document.save(update_fields=['status'])
         with self.assertRaises(ValueError):
             update_internal_status(self.user_gip, document, 'send_to_review')

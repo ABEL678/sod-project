@@ -1073,12 +1073,14 @@ class VirtualZoneTest(TestCase):
         }
         for status, zone in expected.items():
             document.status = status
+            document._from_service = True
             document.save(update_fields=['status'])
             self.assertEqual(_effective_zone(document), zone)
 
     def test_developer_cannot_upload_to_folderless_published_document(self):
         document = self._upload(self.admin, 'VZ-PUBLISHED')
         document.status = 'approved'
+        document._from_service = True
         document.save(update_fields=['status'])
 
         with self.assertRaises(PermissionDenied):
@@ -1087,6 +1089,7 @@ class VirtualZoneTest(TestCase):
     def test_folderless_archive_rejects_developer_and_admin(self):
         document = self._upload(self.admin, 'VZ-ARCHIVE')
         document.status = 'archived'
+        document._from_service = True
         document.save(update_fields=['status'])
 
         for user in (self.developer, self.admin):

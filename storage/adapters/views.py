@@ -2200,6 +2200,17 @@ class DocumentDetailView(LoginRequiredMixin, DetailView):
                 args=[self.object.current_version_id],
             )
 
+        share_query = ''
+        if getattr(self, 'public_view', False):
+            share_token = self.request.GET.get('share')
+            if share_token:
+                share_query = '?' + urlencode({'share': share_token})
+        if share_query:
+            if pdf_url:
+                pdf_url += share_query
+            if pdf_url_current:
+                pdf_url_current += share_query
+
         params = self.request.GET.copy()
         params.pop('version', None)
         current_version_url = self.request.path
@@ -2343,22 +2354,41 @@ class DocumentUploadAjaxView(LoginRequiredMixin, View):
         return response
 
 
-class DocumentDownloadView(LoginRequiredMixin, View):
+class DocumentDownloadView(View):
     def get(self, request, version_id):
+        share_token = (request.GET.get('share') or '').strip()
         versions = DocumentVersion.objects.select_related('document__project').filter(
             document__is_deleted=False,
         )
 
-        if not request.user.is_superuser:
-            company = get_user_company(request.user)
-            if company is None:
+        if share_token:
+            try:
+                token = uuid.UUID(share_token)
+            except (TypeError, ValueError, AttributeError):
+                raise Http404
+            version = versions.filter(
+                pk=version_id,
+                document__public_link_token=token,
+            ).first()
+            if version is None:
+                raise Http404
+            expires_at = version.document.public_link_expires_at
+            if expires_at is None or expires_at <= timezone.now():
+                return HttpResponseGone('Срок действия ссылки истек')
+        else:
+            if not request.user.is_authenticated:
+                from django.contrib.auth.views import redirect_to_login
+
+                return redirect_to_login(request.get_full_path())
+            if not request.user.is_superuser:
+                company = get_user_company(request.user)
+                if company is None:
+                    return HttpResponseForbidden('Нет прав на скачивание файла')
+                versions = versions.filter(document__project__company=company)
+
+            version = get_object_or_404(versions, pk=version_id)
+            if not check_read_permission(request.user, version.document):
                 return HttpResponseForbidden('Нет прав на скачивание файла')
-            versions = versions.filter(document__project__company=company)
-
-        version = get_object_or_404(versions, pk=version_id)
-
-        if not check_read_permission(request.user, version.document):
-            return HttpResponseForbidden('Нет прав на скачивание файла')
 
         _remember_document(request, version.document_id)
 

@@ -102,6 +102,7 @@ class Sprint5TestBase(TestCase):
         document.status = status
         if folder is not None:
             document.folder = folder
+        document._from_service = True
         document.save(update_fields=['status', 'folder'])
         return document
 
@@ -229,6 +230,7 @@ class CopyDocumentSyncTests(Sprint5TestBase):
             code='CPY-1', folder=self.published_folder, status='approved',
         )
         document.suitability_code = 'A'
+        document._from_service = True
         document.save(update_fields=['suitability_code'])
 
         copied = copy_document(
@@ -248,6 +250,7 @@ class CopyDocumentSyncTests(Sprint5TestBase):
             code='CPY-2', folder=self.published_folder, status='approved',
         )
         document.suitability_code = 'A'
+        document._from_service = True
         document.save(update_fields=['suitability_code'])
 
         # Зона PUBLISHED доступна на запись только администратору — копию
@@ -292,6 +295,7 @@ class SavedViewColumnFilterTests(Sprint5TestBase):
             code='A-1', folder=self.published_folder, status='approved',
         )
         approved.suitability_code = 'A'
+        approved._from_service = True
         approved.save(update_fields=['suitability_code'])
 
         rows = get_project_documents_for_view(

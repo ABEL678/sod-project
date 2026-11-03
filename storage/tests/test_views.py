@@ -202,6 +202,7 @@ class ViewTests(TestCase):
     def test_search_page_filters_by_status(self):
         approved = self._upload(code='АР-01')
         approved.document.status = 'approved'
+        approved.document._from_service = True
         approved.document.save(update_fields=['status'])
         self._upload(code='АР-02')
         self.client.force_login(self.user_gip)

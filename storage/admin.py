@@ -31,6 +31,7 @@ class DocumentAdmin(admin.ModelAdmin):
     list_display = ('code', 'name', 'project', 'section', 'doc_type', 'status')
     list_filter = ('project', 'section', 'doc_type', 'status')
     search_fields = ('code', 'name')
+    readonly_fields = ('status', 'suitability_code')
 
 
 @admin.register(DocumentVersion)

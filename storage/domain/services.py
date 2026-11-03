@@ -857,6 +857,20 @@ def _ensure_project_zones(project: Project, user: User | None = None) -> bool:
     }
     actor = user or project.created_by
     for zone in missing_zones:
+        # Переименованная зона до миграции: ищем корневую папку с тем же
+        # zone, но не структурный корень ИРД/ПД/РД.
+        existing = Folder.objects.filter(
+            project=project,
+            parent__isnull=True,
+            section__isnull=True,
+            zone=zone,
+            is_deleted=False,
+        ).exclude(name__in=ROOT_SUPERFOLDER_NAMES).first()
+        if existing is not None:
+            if not existing.is_system_zone:
+                existing.is_system_zone = True
+                existing.save(update_fields=['is_system_zone'])
+            continue
         Folder.objects.create(
             project=project,
             section=None,
@@ -1628,6 +1642,7 @@ def move_document(
         document.suitability_code = target_suitability
         update_fields.append('suitability_code')
 
+    document._from_service = True
     document.save(update_fields=update_fields)
     return document
 
@@ -1990,8 +2005,8 @@ SHARE_LINK_TTL = timedelta(days=365)
 
 
 def generate_share_link(user: User, document: Document) -> str:
-    """Генерирует/продлевает публичный токен документа на 30 дней."""
-    if not check_read_permission(user, document):
+    """Генерирует/продлевает публичный токен документа на 365 дней."""
+    if not _can_manage_share_link(user, document):
         raise PermissionDenied("Нет прав на создание ссылки")
     if document.is_deleted:
         raise ValueError("Нельзя создать ссылку на удалённый документ")
@@ -2590,6 +2605,7 @@ def update_document_status(
     ):
         document.suitability_code = new_suitability
         update_fields.append('suitability_code')
+    document._from_service = True
     document.save(update_fields=update_fields)
     return document
 
@@ -2744,8 +2760,10 @@ def update_internal_status(
     update_fields = ['internal_status', 'updated_at']
     # Синхронизация старого поля status с внутренним WIP-статусом
     if document.status != 'draft':
+        validate_transition(document, 'draft', user)
         document.status = 'draft'
         update_fields.append('status')
+    document._from_service = True
     document.save(update_fields=update_fields)
     return document
 
@@ -2920,6 +2938,7 @@ def transition_document_zone(
     if action_code == 'return_wip':
         document.internal_status = 'rework'
 
+    document._from_service = True
     document.save(update_fields=[
         'folder', 'status', 'suitability_code', 'internal_status', 'updated_at',
     ])
@@ -3117,6 +3136,7 @@ def upload_document(
                 ):
                     doc.suitability_code = target_suitability
                     update_fields.append('suitability_code')
+            doc._from_service = True
             doc.save(update_fields=update_fields)
 
         # Вычисляем следующую версию

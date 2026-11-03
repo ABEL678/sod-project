@@ -1,3 +1,6 @@
+from copy import copy
+
+from django.core.exceptions import ValidationError
 from django.db import models
 from django.contrib.auth.models import User
 from django.utils import timezone
@@ -179,6 +182,46 @@ class Document(models.Model):
             and self.public_link_expires_at
             and self.public_link_expires_at > timezone.now()
         )
+
+    def save(self, *args, **kwargs):
+        """Не даёт менять статус/пригодность в обход FSM.
+
+        Штатные сервисы выставляют ``_from_service = True`` после своей
+        проверки. Для прямых сохранений используется создатель документа
+        как пользователь перехода.
+        """
+        update_fields = kwargs.get('update_fields')
+        touches_status = update_fields is None or bool(
+            {'status', 'suitability_code'} & set(update_fields or ())
+        )
+        if not self._state.adding and touches_status:
+            old = Document.objects.filter(pk=self.pk).values(
+                'status', 'suitability_code'
+            ).first()
+            if old and (
+                old['status'] != self.status
+                or old['suitability_code'] != self.suitability_code
+            ) and not getattr(self, '_from_service', False):
+                from storage.domain.services import validate_transition
+
+                user = getattr(self, '_transition_user', None) or self.created_by
+                if user is None:
+                    raise ValidationError(
+                        "Нельзя изменить статус документа без пользователя"
+                    )
+                previous = copy(self)
+                previous.status = old['status']
+                previous.suitability_code = old['suitability_code']
+                validate_transition(
+                    previous,
+                    self.status,
+                    user,
+                    self.suitability_code,
+                )
+        result = super().save(*args, **kwargs)
+        if getattr(self, '_from_service', False):
+            self._from_service = False
+        return result
 
     def __str__(self):
         return f'{self.code} - {self.name}'
