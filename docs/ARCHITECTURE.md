@@ -118,6 +118,7 @@ sod_project/
 | is_system_zone | BooleanField | True только у 4 системных папок зон; зона определяется полем, а не именем |
 | is_deleted | BooleanField | Мягкое удаление (корзина) |
 | deleted_at | DateTimeField, null=True | Дата помещения в корзину |
+| deleted_with_project | BooleanField | Удалена вместе с проектом (для restore_project) |
 | created_at | DateTimeField | |
 | created_by | FK → User | |
 | full_code | CharField(100), blank | Полный шифр комплекта (генерируется автоматически): `[base_code]-[section.code]-[parent.code]-[code]` (например, «2345-12-АР-01») |
@@ -161,9 +162,10 @@ sod_project/
 | current_version | FK → DocumentVersion, null=True | Текущая актуальная версия |
 | status | CharField(20), choices | WIP, SHARED, PUBLISHED, ARCHIVED (жизненный цикл) |
 | public_link_token | UUIDField, null=True, unique=True | Токен публичной ссылки |
-| public_link_expires_at | DateTimeField, null=True | Срок действия публичной ссылки (30 дней) |
+| public_link_expires_at | DateTimeField, null=True | Срок действия публичной ссылки (365 дней) |
 | is_deleted | BooleanField | Мягкое удаление (корзина) |
 | deleted_at | DateTimeField, null=True | Дата помещения в корзину |
+| deleted_with_project | BooleanField | Удалён вместе с проектом (для restore_project) |
 | created_at | DateTimeField | |
 | created_by | FK → User | |
 | updated_at | DateTimeField | |

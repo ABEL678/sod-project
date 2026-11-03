@@ -166,6 +166,10 @@ class Document(models.Model):
         default=False,
         verbose_name="Удален вместе с родителем",
     )
+    deleted_with_project = models.BooleanField(
+        default=False,
+        verbose_name="Удален вместе с проектом",
+    )
     created_at = models.DateTimeField(auto_now_add=True, verbose_name="Дата создания")
     created_by = models.ForeignKey(User, on_delete=models.PROTECT, verbose_name="Создатель")
     updated_at = models.DateTimeField(auto_now=True, verbose_name="Дата обновления")
@@ -285,6 +289,10 @@ class Folder(models.Model):
     deleted_with_parent = models.BooleanField(
         default=False,
         verbose_name="Удалена вместе с родителем",
+    )
+    deleted_with_project = models.BooleanField(
+        default=False,
+        verbose_name="Удалена вместе с проектом",
     )
     created_at = models.DateTimeField(auto_now_add=True, verbose_name="Дата создания")
     created_by = models.ForeignKey(

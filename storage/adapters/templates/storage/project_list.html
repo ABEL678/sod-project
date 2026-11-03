@@ -15,7 +15,7 @@
                 Создавать и управлять проектами могут только Администраторы и ГИП
             </div>
         </div>
-        {% if can_create_project %}
+        {% if can_create_project and active_tab != 'trash' %}
             <button type="button"
                     class="btn btn-primary btn-sm"
                     id="openCreateProject"
@@ -25,6 +25,18 @@
             </button>
         {% endif %}
     </div>
+    <ul class="nav nav-pills mb-3">
+        <li class="nav-item">
+            <a class="nav-link{% if active_tab != 'trash' %} active{% endif %}"
+               href="{% url 'storage:project_list' %}">Активные</a>
+        </li>
+        <li class="nav-item">
+            <a class="nav-link{% if active_tab == 'trash' %} active{% endif %}"
+               href="{% url 'storage:project_list' %}?tab=trash">
+                Корзина
+            </a>
+        </li>
+    </ul>
     {% if messages %}
         {% for message in messages %}
             <div class="alert {% if message.tags == 'error' %}alert-danger{% else %}alert-{{ message.tags }}{% endif %}">{{ message }}</div>
@@ -44,20 +56,39 @@
                 </thead>
                 <tbody>
                 {% for project in projects %}
-                    <tr data-href="{% url 'storage:project_detail' project.pk %}"
-                        class="project-row{% if project.status == 'archived' %} table-secondary text-muted{% endif %}"
-                        title="Открыть проект {{ project.name }}">
+                    <tr {% if active_tab != 'trash' %}data-href="{% url 'storage:project_detail' project.pk %}"{% endif %}
+                        class="project-row{% if active_tab == 'trash' or project.status == 'archived' %} table-secondary text-muted{% endif %}"
+                        title="{% if active_tab == 'trash' %}Проект в корзине{% else %}Открыть проект {{ project.name }}{% endif %}">
                         <td class="fw-semibold"><span class="cde-chip">{{ project.code }}</span></td>
-                        <td><a href="{% url 'storage:project_detail' project.pk %}">{{ project.name }}</a></td>
+                        <td>
+                            {% if active_tab == 'trash' %}
+                                {{ project.name }}
+                            {% else %}
+                                <a href="{% url 'storage:project_detail' project.pk %}">{{ project.name }}</a>
+                            {% endif %}
+                        </td>
                         <td>{{ project.customer|default:"—" }}</td>
                         <td>
-                            {% if project.status == 'archived' %}
+                            {% if active_tab == 'trash' %}
+                                <span class="cde-badge cde-badge--archived">В корзине</span>
+                            {% elif project.status == 'archived' %}
                                 <span class="cde-badge cde-badge--archived">В архиве</span>
                             {% else %}
                                 <span class="cde-badge cde-badge--active">{{ project.get_status_display }}</span>
                             {% endif %}
                         </td>
                         <td class="text-end">
+                            {% if active_tab == 'trash' %}
+                                <form method="post"
+                                      action="{% url 'storage:project_restore' project.pk %}">
+                                    {% csrf_token %}
+                                    <button type="submit"
+                                            class="btn btn-sm btn-outline-secondary{% if not project.can_restore %} disabled{% endif %}"
+                                            {% if not project.can_restore %}disabled title="Нет прав"{% endif %}>
+                                        <i class="bi bi-arrow-counterclockwise me-1" aria-hidden="true"></i>Восстановить
+                                    </button>
+                                </form>
+                            {% else %}
                             <div class="dropdown">
                                 <button type="button"
                                         class="btn btn-sm btn-link text-muted p-0"
@@ -112,11 +143,12 @@
                                     </li>
                                 </ul>
                             </div>
+                            {% endif %}
                         </td>
                     </tr>
                 {% empty %}
                     <tr>
-                        <td colspan="5" class="text-center text-muted py-4">Проектов пока нет</td>
+                        <td colspan="5" class="text-center text-muted py-4">{% if active_tab == 'trash' %}Корзина пуста{% else %}Проектов пока нет{% endif %}</td>
                     </tr>
                 {% endfor %}
                 </tbody>

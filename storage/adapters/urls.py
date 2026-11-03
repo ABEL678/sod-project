@@ -22,6 +22,11 @@ urlpatterns = [
     path('projects/<int:project_id>/archive/', views.ProjectArchiveView.as_view(), name='project_archive'),
     path('projects/<int:project_id>/delete/', views.ProjectDeleteView.as_view(), name='project_delete'),
     path(
+        'projects/<int:project_id>/restore/',
+        views.ProjectRestoreView.as_view(),
+        name='project_restore',
+    ),
+    path(
         'projects/<int:project_id>/reset-structure/',
         views.ProjectResetStructureView.as_view(),
         name='project_reset_structure',

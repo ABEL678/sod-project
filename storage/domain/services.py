@@ -167,8 +167,19 @@ def _check_company_access(user: User, company_id: int) -> bool:
 
 
 def get_accessible_projects(user: User):
-    """Проекты компании пользователя (superuser видит все, кроме удалённых)."""
+    """Проекты компании пользователя (superuser видит всё, кроме удалённых)."""
     queryset = Project.objects.filter(is_deleted=False)
+    if user.is_superuser:
+        return queryset
+    company = get_user_company(user)
+    if company is None:
+        return queryset.none()
+    return queryset.filter(company=company)
+
+
+def get_deleted_projects(user: User):
+    """Проекты компании в корзине (только для просмотра/восстановления)."""
+    queryset = Project.objects.filter(is_deleted=True)
     if user.is_superuser:
         return queryset
     company = get_user_company(user)
@@ -1017,6 +1028,11 @@ def can_delete_project(user: User, project: Project) -> bool:
     return can_archive_project(user, project)
 
 
+def can_restore_project(user: User, project: Project) -> bool:
+    """Восстановление: только суперюзер или админ компании."""
+    return can_archive_project(user, project)
+
+
 _UNSET = object()
 
 
@@ -1136,14 +1152,67 @@ def archive_project(user: User, project: Project) -> Project:
     return project
 
 
+@transaction.atomic
 def delete_project(user: User, project: Project) -> Project:
-    """Мягко удаляет проект (is_deleted)."""
+    """Мягко удаляет проект и его активное содержимое."""
     if not can_delete_project(user, project):
         raise PermissionDenied("Нет прав на удаление проекта")
+    now = timezone.now()
     project.is_deleted = True
-    project.deleted_at = timezone.now()
+    project.deleted_at = now
     project.status = 'archived'
     project.save(update_fields=['is_deleted', 'deleted_at', 'status'])
+
+    Folder.objects.filter(
+        project=project,
+        is_deleted=False,
+    ).update(
+        is_deleted=True,
+        deleted_at=now,
+        deleted_with_project=True,
+    )
+    Document.objects.filter(
+        project=project,
+        is_deleted=False,
+    ).update(
+        is_deleted=True,
+        deleted_at=now,
+        deleted_with_project=True,
+    )
+    return project
+
+
+@transaction.atomic
+def restore_project(user: User, project: Project) -> Project:
+    """Восстанавливает проект и его содержимое, удалённое вместе с ним."""
+    if not can_restore_project(user, project):
+        raise PermissionDenied("Нет прав на восстановление проекта")
+    if not project.is_deleted:
+        raise ValueError("Проект не находится в корзине")
+
+    project.is_deleted = False
+    project.deleted_at = None
+    project.status = 'active'
+    project.save(update_fields=['is_deleted', 'deleted_at', 'status'])
+
+    Folder.objects.filter(
+        project=project,
+        is_deleted=True,
+        deleted_with_project=True,
+    ).update(
+        is_deleted=False,
+        deleted_at=None,
+        deleted_with_project=False,
+    )
+    Document.objects.filter(
+        project=project,
+        is_deleted=True,
+        deleted_with_project=True,
+    ).update(
+        is_deleted=False,
+        deleted_at=None,
+        deleted_with_project=False,
+    )
     return project
 
 

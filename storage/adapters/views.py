@@ -62,6 +62,7 @@ from storage.domain.services import (
     can_delete_project,
     can_edit_project,
     can_manage_project_participants,
+    can_restore_project,
     check_issue_permission,
     can_purge_trash,
     check_read_permission,
@@ -82,6 +83,7 @@ from storage.domain.services import (
     get_accessible_documents,
     get_accessible_projects,
     get_accessible_sections,
+    get_deleted_projects,
     get_readable_documents,
     rename_section,
     reorder_folders,
@@ -118,6 +120,7 @@ from storage.domain.services import (
     move_documents,
     move_folder,
     normalize_document_view_config,
+    restore_project,
     rename_folder,
     reset_project_structure,
     restore_document,
@@ -448,18 +451,31 @@ class ProjectListView(LoginRequiredMixin, ListView):
     ordering = ['code']
 
     def get_queryset(self):
+        if self.request.GET.get('tab') == 'trash':
+            return get_deleted_projects(self.request.user)
         return get_accessible_projects(self.request.user)
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         user = self.request.user
+        active_tab = 'trash' if self.request.GET.get('tab') == 'trash' else 'active'
+        context['active_tab'] = active_tab
         context['can_create_project'] = can_create_project(user)
         context['project_status_choices'] = Project.STATUS_CHOICES
         projects = list(context['projects'])
         for project in projects:
-            project.can_edit = can_edit_project(user, project)
-            project.can_archive = can_archive_project(user, project)
-            project.can_delete = can_delete_project(user, project)
+            project.can_edit = (
+                active_tab == 'active' and can_edit_project(user, project)
+            )
+            project.can_archive = (
+                active_tab == 'active' and can_archive_project(user, project)
+            )
+            project.can_delete = (
+                active_tab == 'active' and can_delete_project(user, project)
+            )
+            project.can_restore = (
+                active_tab == 'trash' and can_restore_project(user, project)
+            )
         context['projects'] = projects
         if context['can_create_project']:
             company = get_user_company(user)
@@ -1056,6 +1072,23 @@ class ProjectDeleteView(LoginRequiredMixin, View):
             messages.error(request, str(exc))
         else:
             messages.success(request, f'Проект «{project.name}» удалён.')
+        return redirect('storage:project_list')
+
+
+class ProjectRestoreView(LoginRequiredMixin, View):
+    """Восстанавливает проект из корзины (только админ/суперюзер)."""
+
+    def post(self, request, project_id):
+        project = get_object_or_404(
+            get_deleted_projects(request.user),
+            pk=project_id,
+        )
+        try:
+            restore_project(request.user, project)
+        except (PermissionDenied, ValueError) as exc:
+            messages.error(request, str(exc))
+        else:
+            messages.success(request, f'Проект «{project.name}» восстановлен.')
         return redirect('storage:project_list')
 
 
