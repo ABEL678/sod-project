@@ -1602,6 +1602,16 @@ def move_document(
     # только для канонических зон.
     target_status = _status_for_zone(folder)
     target_suitability = _suitability_for_zone(folder)
+    if target_status is not None and (
+        target_status != document.status
+        or target_suitability != document.suitability_code
+    ):
+        validate_transition(
+            document,
+            target_status,
+            user,
+            target_suitability,
+        )
     if (
         _approval_target_changes(
             document,
@@ -2409,6 +2419,189 @@ ZONE_WORKFLOW_ACTIONS = {
 _ZONE_BY_STATUS = {status: zone for zone, status in ZONE_STATUS_MAP.items()}
 
 
+# FSM статусов документа. Ключи — текущий/целевой Document.status.
+STATUS_TRANSITIONS = {
+    'draft': frozenset({'in_review', 'approved', 'archived'}),
+    'in_review': frozenset({'draft', 'approved'}),
+    'approved': frozenset({'archived', 'draft', 'in_review'}),
+    'archived': frozenset({'draft', 'in_review', 'approved'}),
+}
+
+TRANSITION_ROLES = {
+    ('draft', 'in_review'): frozenset({
+        'admin', 'gip', 'developer', 'contractor',
+    }),
+    ('draft', 'approved'): frozenset({'admin'}),
+    ('draft', 'archived'): frozenset({'admin'}),
+    ('in_review', 'draft'): frozenset({'admin', 'gip'}),
+    ('in_review', 'approved'): frozenset({'admin', 'gip'}),
+    ('approved', 'archived'): frozenset({'admin'}),
+    ('approved', 'draft'): frozenset({'admin'}),
+    ('approved', 'in_review'): frozenset({'admin'}),
+    ('archived', 'draft'): frozenset({'admin'}),
+    ('archived', 'in_review'): frozenset({'admin'}),
+    ('archived', 'approved'): frozenset({'admin'}),
+}
+
+SUITABILITY_TRANSITIONS = {
+    'S0': frozenset({'S0', 'S1', 'S2', 'S3', 'S4'}),
+    'S1': frozenset({'S0', 'S1', 'S2', 'S3', 'S4'}),
+    'S2': frozenset({'S0', 'S1', 'S2', 'S3', 'S4'}),
+    'S3': frozenset({'S0', 'S1', 'S2', 'S3', 'S4', 'A', 'B'}),
+    'S4': frozenset({'S3', 'S4', 'A', 'B'}),
+    'A': frozenset({'A', 'B', 'CR'}),
+    'B': frozenset({'A', 'B', 'CR'}),
+    'CR': frozenset({'A', 'B', 'CR'}),
+}
+
+_STATUS_SUITABILITY = {
+    status: ZONE_SUITABILITY_MAP[zone]
+    for zone, status in ZONE_STATUS_MAP.items()
+}
+
+
+def _user_role(user: User) -> str | None:
+    profile = getattr(user, 'userprofile', None) if user is not None else None
+    return profile.role if profile is not None else None
+
+
+def can_transition(
+    document: Document,
+    new_status: str,
+    user: User,
+    new_suitability: str | None = None,
+) -> bool:
+    """Проверяет допустимость перехода статуса/кода пригодности."""
+    if user is None or not user.is_authenticated or document.is_deleted:
+        return False
+    if new_status not in dict(Document.STATUS_CHOICES):
+        return False
+    if (
+        new_suitability is not None
+        and new_suitability not in dict(Document.SUITABILITY_CHOICES)
+    ):
+        return False
+
+    role = _user_role(user)
+    is_admin = bool(
+        user.is_superuser or role == 'admin'
+    )
+    if (
+        is_admin
+        and not user.is_superuser
+        and not _check_company_access(user, document.project.company_id)
+    ):
+        return False
+
+    target_suitability = (
+        new_suitability
+        if new_suitability is not None
+        else _STATUS_SUITABILITY.get(new_status)
+    )
+    # T70: открытые замечания блокируют утверждение (кроме архивации).
+    if (
+        new_status == 'approved'
+        or (
+            target_suitability in ('S4', 'A')
+            and new_status != 'archived'
+        )
+    ) and _has_open_issues(document):
+        return False
+
+    if new_status == document.status:
+        if new_suitability is None or new_suitability == document.suitability_code:
+            return True
+        if is_admin:
+            return True
+        return new_suitability in SUITABILITY_TRANSITIONS.get(
+            document.suitability_code, frozenset()
+        )
+
+    # Администратор/суперюзер может выходить из архива и выполнять
+    # служебные переходы, но T70-проверка выше остаётся обязательной.
+    if is_admin:
+        return True
+
+    if new_status not in STATUS_TRANSITIONS.get(document.status, frozenset()):
+        return False
+    allowed_roles = TRANSITION_ROLES.get(
+        (document.status, new_status), frozenset()
+    )
+    if role not in allowed_roles:
+        return False
+    if role == 'gip':
+        return _is_project_gip(user, document.project)
+    if role in ('developer', 'contractor'):
+        if document.created_by_id != user.pk:
+            return False
+        if not check_write_permission(user, document.section):
+            return False
+
+    if (
+        new_suitability is not None
+        and new_suitability != document.suitability_code
+        and new_suitability not in SUITABILITY_TRANSITIONS.get(
+            document.suitability_code, frozenset()
+        )
+    ):
+        return False
+    return True
+
+
+def validate_transition(
+    document: Document,
+    new_status: str,
+    user: User,
+    new_suitability: str | None = None,
+) -> None:
+    """Выбрасывает ValidationError, если переход недопустим."""
+    if new_status not in dict(Document.STATUS_CHOICES):
+        raise ValidationError("Неизвестный статус документа")
+    if (
+        new_suitability is not None
+        and new_suitability not in dict(Document.SUITABILITY_CHOICES)
+    ):
+        raise ValidationError("Неизвестный код пригодности документа")
+    if can_transition(document, new_status, user, new_suitability):
+        return
+
+    if document.status == 'archived' and _user_role(user) != 'admin':
+        raise ValidationError(
+            "Нельзя выйти из архива без прав администратора"
+        )
+    if new_status == 'approved' and _has_open_issues(document):
+        raise ValidationError(
+            "Нельзя утвердить документ с открытыми замечаниями"
+        )
+    current_label = dict(Document.STATUS_CHOICES).get(
+        document.status, document.status
+    )
+    target_label = dict(Document.STATUS_CHOICES).get(new_status, new_status)
+    raise ValidationError(
+        f"Переход из «{current_label}» в «{target_label}» запрещён"
+    )
+
+
+def update_document_status(
+    user: User,
+    document: Document,
+    new_status: str,
+    new_suitability: str | None = None,
+) -> Document:
+    """Единая точка смены статуса с FSM-валидацией."""
+    validate_transition(document, new_status, user, new_suitability)
+    update_fields = ['status', 'updated_at']
+    document.status = new_status
+    if (
+        new_suitability is not None
+        and new_suitability != document.suitability_code
+    ):
+        document.suitability_code = new_suitability
+        update_fields.append('suitability_code')
+    document.save(update_fields=update_fields)
+    return document
+
+
 def _effective_zone(document: Document) -> str:
     """Зона документа; документы вне зон-папок считаются в WIP (черновик)."""
     folder = document.folder
@@ -2627,6 +2820,15 @@ def document_workflow_actions(user: User, document: Document) -> list[dict]:
             continue
         if code in ('publish', 'approve') and _has_open_issues(document):
             continue
+        target_status = ZONE_STATUS_MAP.get(spec['to'])
+        target_suitability = ZONE_SUITABILITY_MAP.get(spec['to'])
+        if not can_transition(
+            document,
+            target_status,
+            user,
+            target_suitability,
+        ):
+            continue
         if _workflow_role_allowed(user, document, code):
             actions.append({
                 'code': code,
@@ -2692,6 +2894,15 @@ def transition_document_zone(
             )
         )
 
+    target_status = ZONE_STATUS_MAP.get(action['to'])
+    target_suitability = ZONE_SUITABILITY_MAP.get(action['to'])
+    validate_transition(
+        document,
+        target_status,
+        user,
+        target_suitability,
+    )
+
     if action_code == 'submit_review':
         if document.internal_status != 'ready_to_share':
             raise ValueError(
@@ -2703,23 +2914,12 @@ def transition_document_zone(
                 "Нельзя подать на согласование документ с открытыми замечаниями"
             )
 
-    target_suitability = ZONE_SUITABILITY_MAP.get(action['to'])
-    if (
-        target_suitability in ('S4', 'A')
-        and action_code != 'archive'
-        and _has_open_issues(document)
-    ):
-        raise ValueError(
-            "Нельзя утвердить документ с открытыми замечаниями"
-        )
-
     target_folder = document.folder
     if target_folder is None or _is_canonical_zone_folder(target_folder):
         target_folder = _get_or_create_zone_folder(
             document.project, action['to'], user
         )
     document.folder = target_folder
-    target_status = ZONE_STATUS_MAP.get(action['to'])
     if target_status is not None and target_status != document.status:
         document.status = target_status
 
@@ -2890,6 +3090,16 @@ def upload_document(
                 update_fields.append('folder')
                 target_status = _status_for_zone(folder)
                 target_suitability = _suitability_for_zone(folder)
+                if target_status is not None and (
+                    target_status != doc.status
+                    or target_suitability != doc.suitability_code
+                ):
+                    validate_transition(
+                        doc,
+                        target_status,
+                        user,
+                        target_suitability,
+                    )
                 if (
                     (
                         _approval_target_changes(

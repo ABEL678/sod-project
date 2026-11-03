@@ -1376,6 +1376,11 @@ class DocumentMoveView(LoginRequiredMixin, View):
                 {'status': 'error', 'error': str(exc)},
                 status=403,
             )
+        except ValidationError as exc:
+            return JsonResponse(
+                {'status': 'error', 'error': ' '.join(exc.messages)},
+                status=400,
+            )
         except ValueError as exc:
             return JsonResponse(
                 {'status': 'error', 'error': str(exc)},
@@ -1428,6 +1433,11 @@ class DocumentWorkflowView(LoginRequiredMixin, View):
                 {'status': 'error', 'error': str(exc)},
                 status=403,
             )
+        except ValidationError as exc:
+            return JsonResponse(
+                {'status': 'error', 'error': ' '.join(exc.messages)},
+                status=400,
+            )
         except ValueError as exc:
             return JsonResponse(
                 {'status': 'error', 'error': str(exc)},
@@ -1469,6 +1479,11 @@ class DocumentInternalStatusView(LoginRequiredMixin, View):
             return JsonResponse(
                 {'status': 'error', 'error': str(exc)},
                 status=403,
+            )
+        except ValidationError as exc:
+            return JsonResponse(
+                {'status': 'error', 'error': ' '.join(exc.messages)},
+                status=400,
             )
         except ValueError as exc:
             return JsonResponse(
@@ -1848,6 +1863,8 @@ class DocumentBulkActionView(LoginRequiredMixin, View):
                 messages.success(request, f'В корзину отправлено: {len(documents)}.')
             else:
                 messages.error(request, 'Неизвестное действие.')
+        except ValidationError as exc:
+            messages.error(request, ' '.join(exc.messages))
         except (PermissionDenied, ValueError) as exc:
             messages.error(request, str(exc))
 
@@ -2316,6 +2333,11 @@ class DocumentUploadAjaxView(LoginRequiredMixin, View):
                 comment=request.POST.get('comment', ''),
                 folder=folder,
             )
+        except ValidationError as exc:
+            return JsonResponse(
+                {'error': ' '.join(exc.messages)},
+                status=400,
+            )
         except (PermissionDenied, ValueError) as exc:
             return JsonResponse({'error': str(exc)}, status=400)
 
@@ -2487,6 +2509,9 @@ class SimulateMailImportView(LoginRequiredMixin, View):
                 file=fake_file,
                 comment='Импортировано из почты (симуляция)',
             )
+        except ValidationError as exc:
+            messages.error(request, ' '.join(exc.messages))
+            return redirect('storage:project_detail', pk=project.pk)
         except (PermissionDenied, ValueError) as exc:
             messages.error(request, str(exc))
             return redirect('storage:project_detail', pk=project.pk)
