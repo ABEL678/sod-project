@@ -1,6 +1,6 @@
 {% load static %}
 <div class="folder-node" data-folder-id="{{ folder.pk }}" data-section-id="{{ folder.section_id|default:'' }}" data-folder-name="{{ folder.name }}">
-    <div class="folder-row list-group-item d-flex align-items-center gap-1{% if selected_folder.pk == folder.pk %} folder-selected{% endif %}{% if folder.parent is None and folder.section is None and folder.name in CANONICAL_ZONE_NAMES %} folder-row-zone{% endif %}"
+    <div class="folder-row list-group-item d-flex align-items-center gap-1{% if selected_folder.pk == folder.pk %} folder-selected{% endif %}{% if folder.is_system_zone %} folder-row-zone{% endif %}"
          data-folder-id="{{ folder.pk }}"
          data-folder-row
          data-zone="{{ folder.zone }}"

@@ -54,7 +54,6 @@ from storage.domain.models import (
 )
 from storage.domain.services import (
     DOCUMENT_VIEW_COLUMNS,
-    CANONICAL_ZONE_NAMES,
     add_company_member,
     allowed_issue_statuses,
     archive_project,
@@ -701,7 +700,7 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
             folder
             for folder in all_roots
             if folder.section_id is None
-            and folder.name not in CANONICAL_ZONE_NAMES
+            and not folder.is_system_zone
         ]
         folder_roots = [
             folder for folder in all_roots if folder.section_id is not None
@@ -712,7 +711,7 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
             if not (
                 folder.parent_id is None
                 and folder.section_id is None
-                and folder.name in CANONICAL_ZONE_NAMES
+                and folder.is_system_zone
             )
         ]
         document_move_folders = list(
@@ -720,11 +719,7 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
                 project=project,
                 is_deleted=False,
             )
-            .exclude(
-                parent__isnull=True,
-                section__isnull=True,
-                name__in=CANONICAL_ZONE_NAMES,
-            )
+            .exclude(is_system_zone=True)
             .select_related('section')
             .order_by('order', 'name')
         )
@@ -871,7 +866,6 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
             'can_purge_trash': can_purge_trash(user, project),
             'doc_type_choices': Document.DOC_TYPE_CHOICES,
             'status_choices': Document.STATUS_CHOICES,
-            'CANONICAL_ZONE_NAMES': CANONICAL_ZONE_NAMES,
             'active_zone': active_zone,
             'zone_segments': [
                 {

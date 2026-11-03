@@ -233,6 +233,10 @@ class Folder(models.Model):
         default='WIP',
         verbose_name="Зона жизненного цикла",
     )
+    is_system_zone = models.BooleanField(
+        default=False,
+        verbose_name="Системная папка зоны",
+    )
     is_deleted = models.BooleanField(default=False, verbose_name="Удалена")
     deleted_at = models.DateTimeField(null=True, blank=True, verbose_name="Дата удаления")
     deleted_with_parent = models.BooleanField(

@@ -54,13 +54,6 @@ DOCUMENT_VIEW_SORT_FIELDS = ('code', 'name', 'date', 'version')
 DOCUMENT_VIEW_MIN_WIDTH = 50
 DOCUMENT_VIEW_MAX_WIDTH = 800
 
-CANONICAL_ZONE_NAMES = {
-    '01. В работе',
-    '02. На согласовании',
-    '03. Опубликовано',
-    '04. Архив',
-}
-
 ZONE_STATUS_MAP = {
     'WIP': 'draft',
     'SHARED': 'in_review',
@@ -117,17 +110,14 @@ def _approval_target_changes(
 
 
 def _is_canonical_zone_folder(folder: Folder | None) -> bool:
-    """Проверяет, является ли папка канонической зоной проекта.
-
-    Каноническая зона — это корневая папка (parent=None, section=None)
-    с одним из 4 канонических имён.
-    """
+    """Проверяет, является ли папка системной папкой зоны проекта."""
     if folder is None:
         return False
-    return (
-        folder.parent is None
-        and folder.section is None
-        and folder.name in CANONICAL_ZONE_NAMES
+    return bool(
+        folder.is_system_zone
+        and folder.parent_id is None
+        and folder.section_id is None
+        and folder.zone in dict(Folder.ZONE_CHOICES)
     )
 
 
@@ -803,7 +793,7 @@ def reset_project_structure(actor: User, project: Project) -> dict:
         project=project,
         parent=None,
         section=None,
-    ).exclude(name__in=CANONICAL_ZONE_NAMES)
+    ).exclude(is_system_zone=True)
     removed_folders = roots.delete()[0]
     # Удаляем и старые технические Section: активных документов уже нет.
     removed_sections = Section.objects.filter(project=project).delete()[0]
@@ -842,6 +832,7 @@ def _ensure_project_zones(project: Project, user: User | None = None) -> bool:
         Folder.objects.filter(
             project=project,
             zone__in=dict(Folder.ZONE_CHOICES),
+            is_system_zone=True,
             code='',
             parent__isnull=True,
             section__isnull=True,
@@ -873,6 +864,7 @@ def _ensure_project_zones(project: Project, user: User | None = None) -> bool:
             name=zone_name_map[zone],
             order=zone_order_map[zone],
             zone=zone,
+            is_system_zone=True,
             created_by=actor,
         )
     return True
@@ -2611,11 +2603,11 @@ def _effective_zone(document: Document) -> str:
 
 
 def _zone_filter_q(zone: str) -> Q:
-    """Условие фильтра по виртуальной зоне (канонические зоны + статус)."""
+    """Условие фильтра по виртуальной зоне (системные зоны + статус)."""
     canonical = Folder.objects.filter(
         parent__isnull=True,
         section__isnull=True,
-        name__in=CANONICAL_ZONE_NAMES,
+        is_system_zone=True,
     )
     return (
         Q(folder_id__in=canonical.filter(zone=zone).values('pk'))
