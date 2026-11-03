@@ -24,6 +24,46 @@
     <div class="spacer"></div>
 
     {% if user.is_authenticated %}
+    {% if topbar_project and request.resolver_match.url_name == 'project_detail' and active_tab != 'documents' %}
+        <button type="button"
+                class="topbar-icon-btn topbar-mobile-sidebar"
+                data-role="sidebar-mobile-toggle"
+                aria-controls="projectSidebar"
+                aria-expanded="false"
+                title="Разделы проекта"
+                aria-label="Открыть разделы проекта">
+            <i class="bi bi-list" aria-hidden="true"></i>
+        </button>
+    {% endif %}
+
+    <div class="dropdown topbar-mobile-menu">
+        <button type="button"
+                class="topbar-icon-btn"
+                data-bs-toggle="dropdown"
+                aria-expanded="false"
+                title="Меню"
+                aria-label="Открыть меню">
+            <i class="bi bi-list-ul" aria-hidden="true"></i>
+        </button>
+        <ul class="dropdown-menu dropdown-menu-end">
+            {% if topbar_project %}
+                <li>
+                    <a class="dropdown-item" href="{% url 'issues:issue_registry' topbar_project.pk %}">
+                        <i class="bi bi-list-check me-2" aria-hidden="true"></i>Замечания проекта
+                    </a>
+                </li>
+            {% endif %}
+            <li>
+                <a class="dropdown-item" href="{% url 'issues:my_issues' %}">
+                    <i class="bi bi-chat-left-text me-2" aria-hidden="true"></i>Мои замечания
+                    {% if my_open_issues_count %}
+                        <span class="badge rounded-pill text-bg-primary ms-1">{{ my_open_issues_count }}</span>
+                    {% endif %}
+                </a>
+            </li>
+        </ul>
+    </div>
+
         {% if user.userprofile.role == 'admin' or user.userprofile.role == 'gip' or user.is_superuser %}
             {% if request.resolver_match.url_name == 'project_list' %}
                 <a href="{% url 'storage:dashboard' %}" class="btn btn-sm btn-outline-secondary"
@@ -36,7 +76,7 @@
         {# T68: сводный реестр замечаний текущего проекта #}
         {% if topbar_project %}
             <a href="{% url 'issues:issue_registry' topbar_project.pk %}"
-               class="btn btn-sm btn-outline-secondary{% if request.resolver_match.url_name == 'issue_registry' %} active{% endif %}"
+               class="btn btn-sm btn-outline-secondary topbar-action-desktop{% if request.resolver_match.url_name == 'issue_registry' %} active{% endif %}"
                title="Замечания проекта {{ topbar_project.code }}"
                {% if request.resolver_match.url_name == 'issue_registry' %}aria-current="page"{% endif %}>
                 <i class="bi bi-list-check" aria-hidden="true"></i>
@@ -45,7 +85,7 @@
         {% endif %}
 
         {# Волна 3: личный инбокс замечаний + колокольчик уведомлений #}
-        <a href="{% url 'issues:my_issues' %}" class="btn btn-sm btn-outline-secondary position-relative"
+        <a href="{% url 'issues:my_issues' %}" class="btn btn-sm btn-outline-secondary position-relative topbar-action-desktop"
            title="Мои замечания — назначенные мне и созданные мной">
             <i class="bi bi-chat-left-text" aria-hidden="true"></i>
             <span class="d-none d-xl-inline ms-1">Мои замечания</span>

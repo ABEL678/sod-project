@@ -76,6 +76,15 @@
 
     <div class="toolbar" data-role="toolbar">
         <div class="toolbar-left">
+            <button type="button"
+                    class="btn btn-sm btn-outline-secondary sidebar-mobile-toggle"
+                    data-role="sidebar-mobile-toggle"
+                    aria-controls="projectSidebar"
+                    aria-expanded="false"
+                    title="Разделы проекта"
+                    aria-label="Открыть разделы проекта">
+                <i class="bi bi-list" aria-hidden="true"></i>
+            </button>
             <span class="toolbar-count text-muted small text-nowrap">
                 {% if table.paginator %}{{ table.paginator.count }}{% else %}{{ documents|length }}{% endif %} док.
             </span>

@@ -125,6 +125,13 @@ body.app-body {
     margin-left: auto;
 }
 
+.topbar-mobile-sidebar,
+.topbar-mobile-menu,
+.sidebar-mobile-toggle,
+.sidebar-backdrop {
+    display: none;
+}
+
 .topbar-icon-btn {
     width: 30px;
     height: 30px;
@@ -1529,10 +1536,136 @@ body.modal-open {
 @media (max-width: 820px) {
     :root {
         --app-sidebar-w: 210px;
+        --app-topbar-h: 52px;
     }
 
-    .topbar-project {
+    .topbar {
+        gap: 6px;
+        height: 52px;
+        min-height: 52px;
+        padding: 0 8px;
+    }
+
+    .topbar-left {
         display: none;
+    }
+
+    .brand-watermark,
+    .topbar-action-desktop,
+    .topbar-username,
+    .topbar-project {
+        display: none !important;
+    }
+
+    .topbar-mobile-sidebar,
+    .topbar-mobile-menu,
+    .sidebar-mobile-toggle {
+        display: inline-flex;
+    }
+
+    .app-layout {
+        grid-template-columns: minmax(0, 1fr);
+        overflow: hidden;
+    }
+
+    .app-main {
+        overflow: hidden;
+    }
+
+    .app-sidebar {
+        position: fixed;
+        top: var(--app-topbar-h);
+        bottom: 0;
+        left: 0;
+        z-index: 1050;
+        width: min(84vw, 320px);
+        visibility: visible;
+        transform: translateX(-100%);
+        transition: transform .2s ease;
+        box-shadow: 8px 0 24px rgba(15, 23, 42, .18);
+    }
+
+    .app-shell.mobile-sidebar-open .app-sidebar {
+        transform: translateX(0);
+        visibility: visible;
+    }
+
+    .sidebar-resizer,
+    .sidebar-restore {
+        display: none !important;
+    }
+
+    .sidebar-backdrop {
+        position: fixed;
+        top: var(--app-topbar-h);
+        right: 0;
+        bottom: 0;
+        left: 0;
+        z-index: 1040;
+        display: none;
+        background: rgba(15, 23, 42, .45);
+    }
+
+    .app-shell.mobile-sidebar-open .sidebar-backdrop {
+        display: block;
+    }
+
+    .toolbar {
+        padding: 6px 8px;
+    }
+
+    .toolbar-left {
+        flex-basis: 100%;
+    }
+
+    .toolbar-spacer {
+        display: none;
+    }
+
+    .toolbar-actions {
+        flex: 1 1 100%;
+        width: 100%;
+        justify-content: flex-start;
+    }
+
+    .toolbar-search-form {
+        flex: 1 1 100%;
+        width: 100%;
+        max-width: none;
+        margin: 0 0 2px;
+        order: -1;
+    }
+
+    .toolbar .btn {
+        min-height: 36px;
+    }
+
+    .doc-table-wrap {
+        max-height: calc(100dvh - 190px);
+        overflow: auto;
+        -webkit-overflow-scrolling: touch;
+    }
+
+    .doc-table {
+        min-width: 720px;
+        font-size: 14px;
+    }
+
+    .doc-table thead th {
+        height: 44px;
+    }
+
+    .doc-table tbody td {
+        height: 52px;
+    }
+
+    .doc-table .wf-btn,
+    .doc-table .doc-share-btn {
+        min-width: 36px;
+        min-height: 36px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
     }
 
     .toolbar-select {

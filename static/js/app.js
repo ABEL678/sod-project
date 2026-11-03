@@ -44,9 +44,66 @@
             shell.classList.add('sidebar-collapsed');
         }
 
+        var mobileQuery = window.matchMedia('(max-width: 820px)');
+        var mobileToggles = Array.prototype.slice.call(
+            document.querySelectorAll('[data-role="sidebar-mobile-toggle"]')
+        );
+        var sidebar = document.getElementById('projectSidebar');
+        var backdrop = document.querySelector('[data-role="sidebar-backdrop"]');
+
+        function setMobileSidebar(open) {
+            shell.classList.toggle('mobile-sidebar-open', Boolean(open) && mobileQuery.matches);
+            mobileToggles.forEach(function (toggle) {
+                toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+            });
+            if (open && mobileQuery.matches) {
+                shell.classList.remove('sidebar-collapsed');
+            }
+        }
+
+        mobileToggles.forEach(function (toggle) {
+            toggle.addEventListener('click', function () {
+                setMobileSidebar(!shell.classList.contains('mobile-sidebar-open'));
+            });
+        });
+        if (backdrop) {
+            backdrop.addEventListener('click', function () {
+                setMobileSidebar(false);
+            });
+        }
+        if (sidebar) {
+            sidebar.addEventListener('click', function (event) {
+                if (!mobileQuery.matches) {
+                    return;
+                }
+                if (event.target.closest('a, [data-folder-id]')) {
+                    setMobileSidebar(false);
+                }
+            });
+        }
+        document.addEventListener('keydown', function (event) {
+            if (event.key === 'Escape') {
+                setMobileSidebar(false);
+            }
+        });
+        var onMobileChange = function () {
+            if (!mobileQuery.matches) {
+                shell.classList.remove('mobile-sidebar-open');
+            }
+        };
+        if (mobileQuery.addEventListener) {
+            mobileQuery.addEventListener('change', onMobileChange);
+        } else if (mobileQuery.addListener) {
+            mobileQuery.addListener(onMobileChange);
+        }
+
         var collapse = document.getElementById('sidebarCollapse');
         if (collapse) {
             collapse.addEventListener('click', function () {
+                if (mobileQuery.matches) {
+                    setMobileSidebar(false);
+                    return;
+                }
                 shell.classList.add('sidebar-collapsed');
                 writeStorage(SIDEBAR_COLLAPSED_KEY, '1');
             });
