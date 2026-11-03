@@ -35,6 +35,8 @@
   /* --- Границы --- */
   --c-border-hairline: #E4E4E0;
   --c-border-default: #D4D4CE;
+  --c-border-soft: #E2E8F0;
+  --c-border-strong: #CBD5E1;
   --c-border-header: #374151;  /* граница графитового хедера */
   --c-border-header-control: #8A93A6;  /* рамки ghost-кнопок на хедере */
 
@@ -42,9 +44,17 @@
   --c-text-primary: #191917;
   --c-text-secondary: #6E6E68;
   --c-text-muted: #71716A;
+  --c-text-faint: #94A3B8;
   --c-text-on-dark: #F2F2EF;
   --c-text-on-dark-muted: #B4B5BA;
   --c-text-inverse: #FFFFFF;
+
+  /* --- Тёмный canvas вьювера --- */
+  --c-viewer-sunken: #1F2023;
+  --c-viewer-raised: #2B2C30;
+  --c-viewer-border: #3A3B40;
+  --c-viewer-text: #D7D7D2;
+  --c-viewer-pdf-bg: #525659;
 
   /* --- Акцент (единственный) --- */
   --c-accent: #3D5A98;
