@@ -2952,18 +2952,6 @@ class SubmitFeedbackView(LoginRequiredMixin, View):
 
     def post(self, request):
         company = get_user_company(request.user)
-        if company is None:
-            return JsonResponse(
-                {
-                    "ok": False,
-                    "errors": {
-                        "non_field_errors": [
-                            "У пользователя не указана компания"
-                        ]
-                    },
-                },
-                status=400,
-            )
 
         try:
             feedback = submit_feedback(

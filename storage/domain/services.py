@@ -3971,6 +3971,51 @@ FEEDBACK_SCREENSHOT_EXTENSIONS = {"jpg", "jpeg", "png", "webp"}
 FEEDBACK_ADMIN_COMMENT_MAX_LENGTH = 2000
 
 
+def _resolve_feedback_company(user, company):
+    """Определяет компанию для обратной связи.
+
+    Superuser без профиля/компании привязывается к первой компании или
+    к новой «Stream-CAD». Обычный пользователь без компании получает
+    понятную ValidationError.
+    """
+    profile = getattr(user, "userprofile", None)
+
+    if user.is_superuser:
+        if company is None:
+            if profile is not None and profile.company_id is not None:
+                company = profile.company
+            else:
+                company = Company.objects.order_by("pk").first()
+                if company is None:
+                    company, _ = Company.objects.get_or_create(
+                        name="Stream-CAD"
+                    )
+
+        if profile is None:
+            UserProfile.objects.create(
+                user=user,
+                company=company,
+                role="admin",
+            )
+        elif profile.company_id is None:
+            profile.company = company
+            profile.save(update_fields=["company"])
+        elif profile.company_id != company.pk:
+            raise PermissionDenied("Пользователь не привязан к этой компании")
+
+        return company
+
+    if profile is None or profile.company_id is None:
+        raise ValidationError(
+            "У вас не указана компания. Обратитесь к администратору."
+        )
+    if company is None:
+        return profile.company
+    if profile.company_id != company.pk:
+        raise PermissionDenied("Пользователь не привязан к этой компании")
+    return company
+
+
 def submit_feedback(
     user,
     company,
@@ -3989,13 +4034,7 @@ def submit_feedback(
     if user is None or not user.is_authenticated:
         raise PermissionDenied("Отправить обратную связь может только пользователь")
 
-    profile = getattr(user, "userprofile", None)
-    if (
-        company is None
-        or profile is None
-        or profile.company_id != company.pk
-    ):
-        raise PermissionDenied("Пользователь не привязан к этой компании")
+    company = _resolve_feedback_company(user, company)
 
     message = (message or "").strip()
     if not message:

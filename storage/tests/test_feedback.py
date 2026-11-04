@@ -293,3 +293,59 @@ class FeedbackViewTests(FeedbackFixtureMixin, TestCase):
             {'message': 'Без логина'},
         )
         self.assertEqual(response.status_code, 302)
+
+
+    def test_superuser_without_profile_gets_company_and_feedback(self):
+        self.client.force_login(self.superuser)
+        response = self.client.post(
+            reverse('storage:feedback_submit'),
+            {'message': 'Фидбек суперюзера', 'category': 'BUG'},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertTrue(payload['ok'])
+        first_company = Company.objects.order_by('pk').first()
+        profile = UserProfile.objects.get(user=self.superuser)
+        self.assertEqual(profile.company, first_company)
+        feedback = Feedback.objects.get(pk=payload['id'])
+        self.assertEqual(feedback.author, self.superuser)
+        self.assertEqual(feedback.company, first_company)
+
+    def test_user_without_company_gets_400(self):
+        user = User.objects.create_user('no_company', password='pass')
+        self.client.force_login(user)
+        response = self.client.post(
+            reverse('storage:feedback_submit'),
+            {'message': 'Фидбек без компании', 'category': 'BUG'},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        errors = response.json()['errors']['non_field_errors']
+        self.assertIn(
+            'У вас не указана компания. Обратитесь к администратору.',
+            errors,
+        )
+        self.assertFalse(Feedback.objects.filter(author=user).exists())
+
+
+class FeedbackNoCompanyFallbackTests(TestCase):
+    def test_superuser_without_company_creates_stream_cad(self):
+        Company.objects.all().delete()
+        user = User.objects.create_superuser(
+            'root_no_company',
+            password='pass',
+        )
+        self.client.force_login(user)
+        response = self.client.post(
+            reverse('storage:feedback_submit'),
+            {'message': 'Фидбек без компаний', 'category': 'BUG'},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        company = Company.objects.get(name='Stream-CAD')
+        profile = UserProfile.objects.get(user=user)
+        self.assertEqual(profile.company, company)
+        self.assertEqual(profile.role, 'admin')
+        feedback = Feedback.objects.get(author=user)
+        self.assertEqual(feedback.company, company)

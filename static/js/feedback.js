@@ -98,6 +98,7 @@
                 errorsBox.textContent = 'Проверьте выделенные поля формы.';
                 errorsBox.classList.remove('d-none');
             }
+            return generic;
         }
 
         function setBusy(busy) {
@@ -175,7 +176,10 @@
                     && result.payload
                     && result.payload.errors
                 ) {
-                    showErrors(result.payload.errors);
+                    var generalErrors = showErrors(result.payload.errors);
+                    if (generalErrors.length) {
+                        showToast('Ошибка: ' + generalErrors.join(' '));
+                    }
                     return;
                 }
                 showToast('Не удалось отправить, попробуйте позже.');
