@@ -147,7 +147,11 @@ sod_project/
 - 3 структурные корневые папки: «Исходные данные (ИРД)», «ПД (Проектная документация)», «РД (Рабочая документация)»;
 - 4 системные папки зон: `01. В работе` (WIP), `02. На согласовании` (SHARED), `03. Опубликовано` (PUBLISHED), `04. Архив` (ARCHIVE), помеченные `is_system_zone=True`.
 
+**Плоская структура ПД/РД:** все папки внутри суперпапок ИРД/ПД/РД создаются в едином скрытом разделе `Section(code='COMMON')`. Раздел `COMMON` не отображается в дереве и фильтрах (`get_sections_with_counts()` его исключает); он нужен только как технический контейнер, чтобы структура папок оставалась плоской, а марка определялась по папке, а не по `Section`.
+
 Системные папки зон скрыты из дерева и используются только workflow-логикой. Зона хранится в `Folder.zone`; переименование папки её не меняет.
+
+**Зоны и share-ссылки:** принадлежность папки к зоне определяется полем `Folder.is_system_zone` (True только у 4 системных папок зон), а не именем. Публичная ссылка на документ хранится в `Document.public_link_token`, а срок её действия — в `Document.public_link_expires_at` (по умолчанию 365 дней); ссылка не отдаёт замечания.
 
 #### Document
 | Поле | Тип | Описание |
@@ -294,6 +298,25 @@ sod_project/
 | is_read | BooleanField | Флаг прочтения |
 | created_at | DateTimeField | |
 
+#### Feedback (подготовка к бете)
+| Поле | Тип | Описание |
+|---|---|---|
+| id | PK | |
+| company | FK → Company, related_name='feedback_items' | Компания (мультитенантность) |
+| author | FK → User, null=True, on_delete=SET_NULL | Автор обращения; при удалении пользователя запись сохраняется |
+| category | CharField(20), choices | BUG, UX, IDEA, OTHER |
+| message | TextField | Что случилось |
+| page_url | CharField(500), blank | URL страницы, где возникла проблема |
+| contact_email | EmailField, blank | Контакт для связи; при пустом значении подставляется email пользователя |
+| screenshot | ImageField, null=True, blank | Скриншот, `upload_to='feedback/screenshots/%Y/%m/'` |
+| status | CharField(20), choices | NEW, IN_PROGRESS, RESOLVED, REJECTED |
+| admin_comment | TextField, blank | Комментарий администратора |
+| created_at | DateTimeField, auto_now_add | Дата создания |
+| updated_at | DateTimeField, auto_now | Дата обновления |
+
+**Индекс:** `(company, status, -created_at)` — для выборки в экране администратора.
+**Сортировка:** `-created_at`.
+
 ### 3.3. Связи
 
 User 1─1 UserProfile
@@ -328,6 +351,9 @@ def export_pdf_with_issues(user, document) -> bytes: ... (PDF с маркапа�
 def add_issue_comment(user, issue, text) -> IssueComment | None: ... (проверка чтения и роли)
 def delete_issue_crop(user, issue) -> Issue: ... (удаление маркапа с проверкой прав)
 def get_all_companies(platform_owner) -> QuerySet[Company]: ... (только для суперюзера)
+def submit_feedback(user, company, message, category="BUG", page_url="", contact_email="", screenshot=None, file_storage=None) -> Feedback: ... (валидация message/category/email; скриншот через FileStorage)
+def list_feedback(user, company, status=None, category=None) -> QuerySet[Feedback]: ... (admin компании / superuser; фильтры status/category)
+def update_feedback_status(user, feedback, new_status, admin_comment="") -> Feedback: ... (admin компании feedback / superuser; new_status in Status.values; admin_comment ≤ 2000)
 
 **Правило:** upload_document() — единственная точка создания версий.
 
