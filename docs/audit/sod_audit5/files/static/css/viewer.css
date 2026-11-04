@@ -1,0 +1,970 @@
+/* Алиасы --status-* (коды моделей -> токены) генерируются в tokens.css
+   из tokens.json. Здесь — только вьювер-специфика. */
+body {
+    margin: 0;
+    height: 100vh;
+    overflow: hidden;
+}
+
+.topbar .chip {
+    font-size: 12px;
+    color: var(--c-text-secondary);
+    white-space: nowrap;
+}
+
+.topbar .chip .mono {
+    font-family: "JetBrains Mono", Consolas, monospace;
+    font-size: 11.5px;
+}
+
+.toolbar {
+    height: 44px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 16px;
+    background: var(--c-text-inverse);
+    border-bottom: 1px solid var(--c-border-hairline);
+}
+
+.toolbar .group {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.toolbar .divider {
+    width: 1px;
+    height: 22px;
+    background: var(--c-border-hairline);
+}
+
+.toolbar .page-label {
+    color: var(--c-text-secondary);
+    font-size: 12.5px;
+}
+
+.toolbar .tbtn {
+    width: 28px;
+    height: 28px;
+    border: 1px solid var(--c-border-hairline);
+    border-radius: 7px;
+    background: var(--c-text-inverse);
+    color: var(--c-text-primary);
+    display: inline-grid;
+    place-items: center;
+    cursor: pointer;
+    font-size: 14px;
+}
+
+.toolbar .tbtn svg {
+    width: 14px;
+    height: 14px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.8;
+}
+
+.toolbar .tbtn:hover {
+    background: var(--c-bg-app);
+}
+
+.toolbar .zoom-label {
+    min-width: 44px;
+    text-align: center;
+    font-size: 12.5px;
+    color: var(--c-text-primary);
+}
+
+.num,
+.mono {
+    font-family: "JetBrains Mono", Consolas, monospace;
+    font-variant-numeric: tabular-nums;
+}
+
+.workspace {
+    display: flex;
+    height: calc(100vh - 96px);
+    overflow: hidden;
+}
+
+.stage {
+    flex: 1;
+    min-width: 0;
+    overflow: auto;
+    padding: 18px;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    background: var(--c-bg-canvas);
+}
+
+#pdfViewer {
+    width: 100%;
+    min-height: 100%;
+    max-height: none;
+    background: transparent;
+}
+
+.splitter {
+    width: 4px;
+    flex-shrink: 0;
+    cursor: col-resize;
+    background: var(--c-border-hairline);
+}
+
+.panel {
+    width: 380px;
+    min-width: 320px;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    background: var(--c-text-inverse);
+    border-left: 1px solid var(--c-border-hairline);
+}
+
+.panel-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--c-border-hairline);
+}
+
+.panel-head h2 {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 600;
+}
+
+.panel-head .count {
+    color: var(--c-text-secondary);
+    font-size: 12px;
+}
+
+.panel-head #newIssueBtn {
+    margin-left: auto;
+    height: 28px;
+    padding: 0 10px;
+    font-size: 12px;
+}
+
+.list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 10px;
+}
+
+.panel .card {
+    display: flex;
+    gap: 9px;
+    padding: 9px;
+    margin-bottom: 8px;
+    border: 1px solid var(--c-border-hairline);
+    border-radius: 10px;
+    background: var(--c-text-inverse);
+    cursor: pointer;
+}
+
+.panel .card:hover,
+.panel .card.is-active {
+    background: var(--c-bg-app);
+    border-color: var(--c-accent, #3D5A98);
+}
+
+.mark-badge {
+    flex-shrink: 0;
+    width: 30px;
+    height: 24px;
+    display: grid;
+    place-items: center;
+    border: 1px solid var(--mk);
+    border-radius: 7px;
+    background: var(--mkb);
+    color: var(--mk-text);
+    font: 500 11px/1 "JetBrains Mono", Consolas, monospace;
+}
+
+.card-body {
+    min-width: 0;
+    flex: 1;
+}
+
+.card-title {
+    font-size: 13px;
+    line-height: 1.35;
+    color: var(--c-text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.card-meta {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    margin-top: 5px;
+    color: var(--c-text-secondary);
+    font-size: 11px;
+}
+
+.panel .badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 7px;
+    border-radius: 999px;
+    background: var(--sbg);
+    color: var(--sfg);
+    font-size: 10.5px;
+    font-weight: 500;
+    white-space: nowrap;
+}
+
+.detail {
+    display: none;
+    flex: 1;
+    flex-direction: column;
+    min-height: 0;
+}
+
+.detail-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--c-border-hairline);
+}
+
+.detail-head .back,
+.detail-head .navbtn {
+    border: 1px solid var(--c-border-hairline);
+    background: var(--c-text-inverse);
+    border-radius: 6px;
+    height: 26px;
+    min-width: 26px;
+    cursor: pointer;
+}
+
+.detail-head .no {
+    color: var(--c-text-secondary);
+    font: 500 12px "JetBrains Mono", Consolas, monospace;
+}
+
+.detail-head .nav {
+    margin-left: auto;
+    display: flex;
+    gap: 4px;
+}
+
+.detail-scroll {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 12px 14px 24px;
+}
+
+@media (max-width: 1000px) {
+    .panel {
+        width: 340px;
+    }
+}
+
+.toolbar .zoom-select {
+    height: 28px;
+    padding: 0 6px;
+    border: 1px solid var(--c-border-hairline);
+    border-radius: 7px;
+    background: var(--c-text-inverse);
+    color: var(--c-text-primary);
+    font: 500 12.5px "JetBrains Mono", Consolas, monospace;
+    cursor: pointer;
+}
+
+.card-actions {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 6px;
+}
+
+.card-actions .btn {
+    height: 24px;
+    padding: 0 8px;
+    font-size: 11px;
+}
+
+.panel-head {
+    padding: 8px 12px 6px;
+}
+
+.panel-head h2 {
+    font-size: 14px;
+}
+
+.status-tabs {
+    display: flex;
+    gap: 4px;
+    padding: 0 10px 8px;
+    overflow-x: auto;
+    border-bottom: 1px solid var(--c-border-hairline);
+}
+
+.status-tab {
+    flex-shrink: 0;
+    border: 0;
+    border-radius: 999px;
+    padding: 4px 8px;
+    background: transparent;
+    color: var(--c-text-secondary);
+    font-size: 12px;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.status-tab:hover {
+    background: var(--c-bg-app);
+}
+
+.status-tab.active {
+    background: var(--c-accent-subtle);
+    color: var(--c-accent);
+    font-weight: 500;
+}
+
+.status-tab .num {
+    margin-left: 2px;
+    font-size: 11px;
+}
+
+.toolbar .page-input {
+    width: 48px;
+    height: 28px;
+    padding: 0 4px;
+    border: 1px solid var(--c-border-hairline);
+    border-radius: 7px;
+    background: var(--c-text-inverse);
+    color: var(--c-text-primary);
+    text-align: center;
+    font-size: 12px;
+    -moz-appearance: textfield;
+}
+
+.toolbar .page-input::-webkit-outer-spin-button,
+.toolbar .page-input::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+
+/* T66: compact issue panel */
+.panel {
+    width: 420px;
+    min-width: 360px;
+}
+
+.panel-head {
+    padding: 6px 10px;
+}
+
+.panel-head h2 {
+    font-size: 15px;
+    margin: 0 0 4px;
+}
+
+.status-tabs {
+    padding: 0 8px 6px;
+}
+
+.status-tab {
+    height: 30px;
+    padding: 0 8px;
+    font-size: 12px;
+}
+
+.list {
+    padding: 8px;
+}
+
+.panel .card {
+    padding: 8px;
+    margin-bottom: 6px;
+}
+
+.card-title {
+    font-size: 13px;
+}
+
+.card-meta {
+    margin-top: 4px;
+    font-size: 11px;
+}
+
+/* T67: wider issue panel */
+.status-tabs {
+    flex-wrap: nowrap;
+    gap: 2px;
+}
+
+.status-tab {
+    font-size: 11px;
+    padding: 0 6px;
+}
+
+/* T64: версии и сравнение */
+.version-badge {
+    display: inline-flex;
+    align-items: center;
+    height: 26px;
+    padding: 0 8px;
+    border: 1px solid var(--s-review-solid);
+    border-radius: 999px;
+    background: rgba(255, 193, 7, .14);
+    color: var(--s-review-on);
+    font-size: 11.5px;
+    white-space: nowrap;
+}
+
+.version-back {
+    display: inline-flex;
+    align-items: center;
+    height: 26px;
+    padding: 0 8px;
+    border: 1px solid var(--c-border-default);
+    border-radius: 6px;
+    color: var(--c-text-primary);
+    font-size: 11.5px;
+    text-decoration: none;
+    white-space: nowrap;
+}
+
+.version-back:hover {
+    background: var(--c-bg-surface-hover);
+    color: var(--c-accent, #3D5A98);
+}
+
+.toolbar .compare-toggle {
+    white-space: nowrap;
+}
+
+.toolbar .compare-toggle:disabled {
+    opacity: .5;
+    cursor: not-allowed;
+}
+
+.version-issues-note {
+    margin: 6px 8px 0;
+    padding: 6px 9px;
+    border: 1px solid var(--s-review-solid);
+    border-radius: 6px;
+    background: rgba(255, 193, 7, .12);
+    color: var(--s-review-on);
+    font-size: 11.5px;
+    line-height: 1.35;
+}
+
+.stage.is-comparing {
+    overflow: hidden;
+    padding: 10px;
+}
+
+.compare-stage {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    gap: 10px;
+    align-items: stretch;
+}
+
+.compare-pane {
+    flex: 1 1 0;
+    min-width: 0;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    border: 1px solid var(--c-viewer-border);
+    border-radius: 6px;
+    background: var(--c-viewer-sunken);
+    overflow: hidden;
+}
+
+.compare-pane-head {
+    flex: 0 0 auto;
+    padding: 5px 10px;
+    border-bottom: 1px solid var(--c-viewer-border);
+    background: var(--c-viewer-raised);
+    color: var(--c-viewer-text);
+    font-size: 11.5px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.compare-pane .compare-viewer {
+    flex: 1 1 auto;
+    min-height: 0;
+    max-height: none;
+    overflow: auto;
+    padding: 10px;
+    background: var(--c-bg-canvas);
+    cursor: default;
+}
+
+.compare-pane .compare-viewer .pdf-page {
+    width: auto;
+    margin: 0 auto;
+}
+
+/* A21: toolbar layout */
+.toolbar.viewer-toolbar {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+}
+
+.toolbar.viewer-toolbar::-webkit-scrollbar {
+    display: none;
+}
+
+.toolbar.viewer-toolbar .group,
+.toolbar.viewer-toolbar .divider,
+.toolbar.viewer-toolbar .tbtn,
+.toolbar.viewer-toolbar .form-select,
+.toolbar.viewer-toolbar .form-control,
+.toolbar.viewer-toolbar .page-input,
+.toolbar.viewer-toolbar .zoom-select,
+.toolbar.viewer-toolbar .version-badge,
+.toolbar.viewer-toolbar .version-back {
+    flex: 0 0 auto;
+}
+
+.toolbar.viewer-toolbar .page-label {
+    flex: 0 0 auto;
+    white-space: nowrap;
+}
+
+.toolbar.viewer-toolbar .compare-toggle {
+    width: auto;
+    padding: 0 10px;
+    font-size: 12px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.toolbar.viewer-toolbar .compare-toggle svg {
+    flex: 0 0 auto;
+}
+
+.toolbar.viewer-toolbar .tbtn:disabled {
+    opacity: .5;
+    cursor: not-allowed;
+}
+
+/* T65: slider comparison */
+.slider-stage {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: flex-start;
+    justify-content: flex-start;
+}
+
+.slider-frame {
+    position: relative;
+    flex: 0 0 auto;
+    margin: 0 auto;
+    overflow: hidden;
+    background: var(--c-text-inverse);
+    border: 1px solid var(--c-viewer-border);
+}
+
+.slider-layer {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+}
+
+.slider-layer .pdf-page {
+    position: absolute;
+    top: 0;
+    left: 0;
+    margin: 0;
+}
+
+.slider-layer-selected {
+    z-index: 0;
+}
+
+.slider-layer-current {
+    clip-path: inset(0 calc(100% - var(--split, 50%)) 0 0);
+    z-index: 1;
+}
+
+.slider-divider {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: var(--split, 50%);
+    width: 2px;
+    transform: translateX(-1px);
+    background: var(--c-text-inverse);
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, .35);
+    cursor: col-resize;
+    z-index: 3;
+    touch-action: none;
+    user-select: none;
+}
+
+.slider-handle {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 30px;
+    height: 30px;
+    transform: translate(-50%, -50%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--c-border-strong);
+    border-radius: 50%;
+    background: var(--c-text-inverse);
+    color: var(--c-text-primary);
+    font-size: 14px;
+    line-height: 1;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, .25);
+}
+
+.stage.is-sliding {
+    padding: 10px;
+}
+
+/* ==========================================================================
+   Мини-карта (Спринт 2): живое превью листа + рамка видимой области.
+   Плавающая поверх тёмного канваса — не отнимает ширину у панели замечаний
+   (в отличие от старой sidebar-миникарты, которую снесли в 4d3620b).
+   ========================================================================== */
+.stage {
+    position: relative;
+}
+
+.pdf-minimap {
+    position: absolute;
+    right: 16px;
+    bottom: 16px;
+    z-index: 30;
+    padding: 6px;
+    background: var(--c-bg-surface, #fff);
+    border: 1px solid var(--c-border-default, #D4D4CE);
+    border-radius: var(--r-md, 8px);
+    box-shadow: var(--shadow-3, 0 8px 24px rgba(25, 25, 23, 0.14));
+    cursor: crosshair;
+    user-select: none;
+}
+
+.pdf-minimap.is-hidden {
+    display: none;
+}
+
+.pdf-minimap-label {
+    font: 500 11px/16px var(--font-mono, monospace);
+    color: var(--c-text-secondary, #6E6E68);
+    padding: 0 2px 4px;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+}
+
+.pdf-minimap-view {
+    position: relative;
+}
+
+.pdf-minimap canvas {
+    display: block;
+    border: 1px solid var(--c-border-hairline, #E4E4E0);
+    background: var(--c-text-inverse);
+}
+
+.pdf-minimap-rect {
+    position: absolute;
+    border: 2px solid var(--c-accent, var(--c-accent, #3D5A98));
+    background: color-mix(in srgb, var(--c-accent) 12%, transparent);
+    border-radius: 2px;
+    pointer-events: none;
+    box-sizing: border-box;
+}
+
+/* На узких экранах мини-карта только мешает — прячем (как и старую) */
+@media (max-width: 1000px) {
+    .pdf-minimap {
+        display: none;
+    }
+}
+
+
+/* ==========================================================================
+   Волна 3: кластеризация маркеров
+   ========================================================================== */
+.pdf-pin-cluster {
+    position: absolute;
+    transform: translate(-50%, -50%);
+    z-index: 6;
+    min-width: 26px;
+    height: 26px;
+    padding: 0 6px;
+    border: 2px solid var(--c-text-inverse);
+    border-radius: 999px;
+    font: 700 11.5px/22px var(--font-mono, monospace);
+    text-align: center;
+    cursor: pointer;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.28);
+    transition: transform .12s ease;
+}
+
+.pdf-pin-cluster:hover { transform: translate(-50%, -50%) scale(1.12); }
+
+.pdf-cluster-popup {
+    position: absolute;
+    transform: translate(-10%, 12px);
+    z-index: 40;
+    min-width: 240px;
+    max-width: 300px;
+    background: var(--c-bg-surface, #fff);
+    border: 1px solid var(--c-border-default, #D4D4CE);
+    border-radius: var(--r-md, 8px);
+    box-shadow: var(--shadow-3, 0 8px 24px rgba(25, 25, 23, 0.2));
+    overflow: hidden;
+}
+
+.pdf-cluster-popup-head {
+    padding: 7px 12px;
+    border-bottom: 1px solid var(--c-border-hairline, #E4E4E0);
+    background: var(--c-bg-app, #F6F6F4);
+    font: 600 12px/16px var(--font-sans, sans-serif);
+    color: var(--c-text-primary, #191917);
+}
+
+.pdf-cluster-popup-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 7px 12px;
+    border: 0;
+    border-bottom: 1px solid var(--c-border-hairline, #E4E4E0);
+    background: transparent;
+    text-align: left;
+    cursor: pointer;
+}
+
+.pdf-cluster-popup-item:last-child { border-bottom: 0; }
+.pdf-cluster-popup-item:hover { background: var(--c-bg-row-hover, #F3F3F0); }
+
+.pdf-cluster-popup-id {
+    flex: 0 0 auto;
+    padding: 1px 6px;
+    border-radius: 999px;
+    color: var(--c-text-inverse);
+    font: 700 10.5px/15px var(--font-mono, monospace);
+}
+
+.pdf-cluster-popup-text {
+    font-size: 12px;
+    color: var(--c-text-primary, #191917);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* ==========================================================================
+   Волна 3: секции карточки замечания
+   ========================================================================== */
+.issue-card-section { border-top: 1px solid var(--c-border-hairline, #E4E4E0); }
+.issue-card-section:first-of-type { border-top: 0; }
+
+.issue-card-section > summary {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 0;
+    font: 600 11.5px/16px var(--font-sans, sans-serif);
+    color: var(--c-text-secondary, #6E6E68);
+    cursor: pointer;
+    user-select: none;
+    list-style: none;
+}
+
+.issue-card-section > summary::-webkit-details-marker { display: none; }
+.issue-card-section > summary::before { content: '\F282'; font-family: 'bootstrap-icons'; font-size: 10px; transition: transform .15s ease; }
+.issue-card-section[open] > summary::before { transform: rotate(90deg); }
+.issue-card-section[open] > summary { color: var(--c-text-primary, #191917); }
+
+.issue-section-count {
+    background: var(--c-bg-app, #F6F6F4);
+    border-radius: 999px;
+    font: 500 10.5px/16px var(--font-mono, monospace);
+    padding: 0 7px;
+}
+
+.viewer-workflow-actions {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+}
+
+.viewer-workflow-actions .btn {
+    font-size: 11px;
+    padding: 2px 8px;
+}
+
+/* Спринт 6: тост вьювера — замена блокирующему alert() */
+.viewer-toast {
+    position: fixed;
+    left: 50%;
+    bottom: 24px;
+    transform: translateX(-50%) translateY(8px);
+    background: var(--c-text-primary, #191917);
+    color: var(--c-text-inverse, #FFFFFF);
+    font-size: 13px;
+    padding: 10px 18px;
+    border-radius: 10px;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 160ms ease, transform 160ms ease;
+    z-index: 3000;
+    max-width: 70vw;
+}
+.viewer-toast.is-visible {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+}
+
+/* ---------- Спринт 8: полоса листов, наложение, меню сравнения ---------- */
+
+.thumb-rail {
+  width: 132px;
+  flex: 0 0 132px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  background: var(--c-viewer-raised, #2B2C30);
+  border-right: 1px solid var(--c-viewer-border, #3A3B40);
+  padding: 8px 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  scrollbar-width: thin;
+}
+
+.thumb {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  border: 1px solid var(--c-viewer-border, #3A3B40);
+  border-radius: 6px;
+  background: transparent;
+  padding: 4px 4px 2px;
+  cursor: pointer;
+  transition: border-color .12s ease, background-color .12s ease;
+}
+
+.thumb:hover,
+.thumb:focus-visible {
+  border-color: var(--c-accent-on-header-strong, #9FB6DF);
+  background: rgba(255, 255, 255, .05);
+}
+
+.thumb.is-active {
+  border-color: var(--c-accent, #3D5A98);
+  box-shadow: 0 0 0 1px var(--c-accent, #3D5A98);
+}
+
+.thumb canvas {
+  max-width: 100%;
+  background: var(--c-text-inverse);
+  border-radius: 3px;
+}
+
+.thumb__page {
+  font-size: 10.5px;
+  color: var(--c-text-on-dark-muted, #B4B5BA);
+}
+
+/* Наложение */
+
+.overlay-stage {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--c-viewer-sunken, #1F2023);
+}
+
+.overlay-scroll {
+  flex: 1 1 auto;
+  overflow: auto;
+  display: grid;
+  place-items: center;
+  cursor: grab;
+}
+
+.overlay-scroll.is-dragging { cursor: grabbing; }
+
+.overlay-frame {
+  position: relative;
+  margin: 24px;
+}
+
+.overlay-pane {
+  position: absolute;
+  top: 0;
+  left: 0;
+}
+
+.overlay-pane .pdf-page { margin: 0; }
+
+.overlay-pane--base { position: relative; }
+
+.overlay-pane--top {
+  pointer-events: none;
+  will-change: transform, opacity;
+}
+
+.overlay-hud {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  padding: 6px 12px;
+  font-size: 11.5px;
+  color: var(--c-text-on-dark-muted, #B4B5BA);
+  background: var(--c-viewer-raised, #2B2C30);
+  border-top: 1px solid var(--c-viewer-border, #3A3B40);
+}
+
+.overlay-hud__top { color: var(--c-accent-on-header, #9FB6DF); }
+
+.overlay-hud__hint { margin-left: auto; opacity: .75; }
+
+/* Меню сравнения */
+
+.compare-menu .dropdown-menu {
+  min-width: 230px;
+  box-shadow: 0 12px 30px rgba(15, 23, 42, .22);
+}
+
+.compare-menu-dropdown .dropdown-item {
+  border-radius: 6px;
+  font-size: 13px;
+  padding: 6px 10px;
+}
+
+.compare-menu-dropdown .dropdown-item:hover,
+.compare-menu-dropdown .dropdown-item:focus-visible {
+  background: var(--c-accent-subtle, #EDF1F7);
+  color: var(--c-accent, #3D5A98);
+}
+
+#compareMenuBtn.active {
+  border-color: var(--c-accent, #3D5A98);
+  color: var(--c-accent, #3D5A98);
+}

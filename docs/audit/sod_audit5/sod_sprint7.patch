@@ -1,0 +1,816 @@
+diff --git a/sod_core/settings.py b/sod_core/settings.py
+index d9e3354..78c62c1 100644
+--- a/sod_core/settings.py
++++ b/sod_core/settings.py
+@@ -236,3 +236,47 @@ CSRF_COOKIE_SECURE = SESSION_COOKIE_SECURE
+ # На VPS включите DJANGO_SECURE_SSL_REDIRECT=True.
+ # По умолчанию выключено, чтобы не ломать локальный HTTP и тесты.
+ SECURE_SSL_REDIRECT = env_bool('DJANGO_SECURE_SSL_REDIRECT', False)
++
++
++# Логирование (Спринт 7). Раньше LOGGING отсутствовал: ошибки 500 в проде
++# уходили только в stderr gunicorn без формата и уровней.
++# Уровень корня настраивается через DJANGO_LOG_LEVEL (по умолчанию INFO).
++LOGGING = {
++    'version': 1,
++    'disable_existing_loggers': False,
++    'formatters': {
++        'standard': {
++            'format': '{levelname} {asctime} {name} {message}',
++            'style': '{',
++        },
++    },
++    'handlers': {
++        'console': {
++            'class': 'logging.StreamHandler',
++            'formatter': 'standard',
++        },
++    },
++    'root': {
++        'handlers': ['console'],
++        'level': os.environ.get('DJANGO_LOG_LEVEL', 'INFO'),
++    },
++    'loggers': {
++        # 4xx/5xx запросы: в проде ERROR-события (traceback 500-х).
++        'django.request': {
++            'handlers': ['console'],
++            'level': 'WARNING',
++            'propagate': False,
++        },
++        # Сервисный слой СОД: аудит-события, отказы в правах.
++        'storage': {
++            'handlers': ['console'],
++            'level': 'INFO',
++            'propagate': False,
++        },
++        'issues': {
++            'handlers': ['console'],
++            'level': 'INFO',
++            'propagate': False,
++        },
++    },
++}
+diff --git a/static/css/redesign.css b/static/css/redesign.css
+index a477983..ac2036c 100644
+--- a/static/css/redesign.css
++++ b/static/css/redesign.css
+@@ -703,3 +703,75 @@ tr.doc-row-flash > td { animation: wf-row-flash 1.5s ease; }
+ @media (prefers-reduced-motion: reduce) {
+     .panel-spinner { animation: none; }
+ }
++
++/* ---------- Спринт 7: «Последние документы» (восстановление Спринта 3) ---------- */
++
++.recent-documents {
++  margin: 12px 16px 0;
++  padding: 10px 14px;
++  background: var(--c-bg-surface);
++  border: 1px solid var(--c-border-soft);
++  border-radius: 12px;
++}
++
++.recent-documents__title {
++  display: flex;
++  align-items: center;
++  gap: 8px;
++  margin: 0 0 8px;
++  font-size: 13px;
++  font-weight: 600;
++  letter-spacing: .02em;
++  text-transform: uppercase;
++  color: var(--c-text-secondary);
++}
++
++.recent-documents__title .bi {
++  color: var(--c-accent);
++}
++
++.recent-documents__list {
++  display: flex;
++  flex-direction: column;
++  gap: 6px;
++  margin: 0;
++  padding: 0;
++  list-style: none;
++}
++
++.recent-documents__item {
++  display: flex;
++  align-items: center;
++  flex-wrap: wrap;
++  gap: 8px;
++  min-width: 0;
++  font-size: 13.5px;
++}
++
++.recent-documents__link {
++  color: var(--c-text-primary);
++  text-decoration: none;
++  overflow: hidden;
++  text-overflow: ellipsis;
++  white-space: nowrap;
++  max-width: 46ch;
++  border-radius: 6px;
++}
++
++.recent-documents__link:hover,
++.recent-documents__link:focus-visible {
++  color: var(--c-accent);
++  text-decoration: underline;
++}
++
++.recent-documents__time {
++  margin-left: auto;
++  font-size: 12px;
++  color: var(--c-text-muted);
++}
++
++@media (max-width: 820px) {
++  .recent-documents { margin: 8px 8px 0; }
++  .recent-documents__link { max-width: 100%; }
++  .recent-documents__time { margin-left: 0; width: 100%; }
++}
+diff --git a/static/js/app.js b/static/js/app.js
+index 6954620..6fd2a67 100644
+--- a/static/js/app.js
++++ b/static/js/app.js
+@@ -573,6 +573,8 @@
+ 
+     var dragDocumentId = null;
+     var dragFolderId = null;
++    var dragDocumentSectionId = null;
++    var dragFolderSectionId = null;
+     var toastTimer = null;
+ 
+     function dndTypes(event) {
+@@ -619,6 +621,8 @@
+         });
+         dragDocumentId = null;
+         dragFolderId = null;
++        dragDocumentSectionId = null;
++        dragFolderSectionId = null;
+     }
+ 
+     function isArchiveZone(target) {
+@@ -752,10 +756,16 @@
+                 event.stopPropagation();
+                 dragDocumentId = documentId;
+                 dragFolderId = null;
++                dragDocumentSectionId = row.dataset.sectionId || '';
++                dragFolderSectionId = null;
+                 event.dataTransfer.effectAllowed = 'copyMove';
+                 event.dataTransfer.clearData();
+                 event.dataTransfer.setData('text/plain', documentId);
+                 event.dataTransfer.setData('application/x-sod-document-id', documentId);
++                event.dataTransfer.setData(
++                    'application/x-sod-section-id',
++                    row.dataset.sectionId || ''
++                );
+                 row.classList.add('is-dragging');
+                 showDropOverlay(false);
+                 return;
+@@ -777,10 +787,16 @@
+             event.stopPropagation();
+             dragDocumentId = null;
+             dragFolderId = folderId;
++            dragDocumentSectionId = null;
++            dragFolderSectionId = (folderNode && folderNode.dataset.sectionId) || '';
+             event.dataTransfer.effectAllowed = 'move';
+             event.dataTransfer.clearData();
+             event.dataTransfer.setData('application/x-sod-folder-id', folderId);
+             event.dataTransfer.setData('text/plain', 'folder:' + folderId);
++            event.dataTransfer.setData(
++                'application/x-sod-folder-section-id',
++                dragFolderSectionId
++            );
+             folderRow.classList.add('is-dragging-folder');
+             showDropOverlay(false);
+         });
+@@ -859,6 +875,32 @@
+                 if (target.dataset.dropFolder === folderId) {
+                     return;
+                 }
++                // Спринт 7: DnD не меняет марку. Перенос папки в другой
++                // раздел (напрямую или через папку чужой марки) запрещён —
++                // подсказываем штатную кнопку «Сменить раздел».
++                var targetFolderSection = '';
++                if (target.dataset.dropSection) {
++                    targetFolderSection = target.dataset.dropSection;
++                } else {
++                    var targetFolderNode = target.closest('[data-folder-id]');
++                    targetFolderSection = (
++                        targetFolderNode && targetFolderNode.dataset.sectionId
++                    ) || '';
++                }
++                var sourceFolderSection = transfer.getData(
++                    'application/x-sod-folder-section-id'
++                ) || dragFolderSectionId || '';
++                if (
++                    targetFolderSection &&
++                    sourceFolderSection &&
++                    targetFolderSection !== sourceFolderSection
++                ) {
++                    showDndToast(
++                        'Для смены марки используйте кнопку «Сменить раздел»',
++                        true
++                    );
++                    return;
++                }
+                 var folderBody = new FormData();
+                 if (target.dataset.dropFolder) {
+                     folderBody.append('parent_id', target.dataset.dropFolder);
+@@ -886,8 +928,47 @@
+             var body = new FormData();
+             if (target.dataset.dropFolder) {
+                 body.append('folder_id', target.dataset.dropFolder);
++                // Спринт 7: папка в чужой марке — это смена раздела.
++                // Сохраняем жест, но требуем явного подтверждения.
++                var targetDocFolderNode = target.closest('[data-folder-id]');
++                var targetDocSection = (
++                    targetDocFolderNode && targetDocFolderNode.dataset.sectionId
++                ) || '';
++                var sourceDocSection = transfer.getData(
++                    'application/x-sod-section-id'
++                ) || dragDocumentSectionId || '';
++                if (
++                    !copyRequested &&
++                    targetDocSection &&
++                    sourceDocSection &&
++                    targetDocSection !== sourceDocSection
++                ) {
++                    if (!window.confirm(
++                        'Переместить документ в папку другого раздела («'
++                        + targetName + '»)? Это изменит его марку.'
++                    )) {
++                        return;
++                    }
++                    body.append('allow_section_change', '1');
++                }
+             } else if (target.dataset.dropSection) {
+                 body.append('section_id', target.dataset.dropSection);
++                var sourceSection = transfer.getData(
++                    'application/x-sod-section-id'
++                ) || dragDocumentSectionId || '';
++                if (
++                    !copyRequested &&
++                    sourceSection &&
++                    target.dataset.dropSection !== sourceSection
++                ) {
++                    if (!window.confirm(
++                        'Перенести документ в «' + targetName + '»? '
++                        + 'Это изменит его марку (раздел).'
++                    )) {
++                        return;
++                    }
++                    body.append('allow_section_change', '1');
++                }
+             }
+ 
+             var verb = copyRequested ? 'Копируем' : 'Перемещаем';
+diff --git a/storage/adapters/templates/storage/search.html b/storage/adapters/templates/storage/search.html
+index fb1e622..daf85ee 100644
+--- a/storage/adapters/templates/storage/search.html
++++ b/storage/adapters/templates/storage/search.html
+@@ -66,6 +66,31 @@
+         </div>
+     </div>
+ 
++    {% if not query and recent_documents %}
++    <section class="recent-documents" id="recent-documents" aria-labelledby="recentDocumentsTitle">
++        <h2 id="recentDocumentsTitle" class="recent-documents__title">
++            <i class="bi bi-clock-history" aria-hidden="true"></i>
++            Последние документы
++        </h2>
++        <ul class="recent-documents__list">
++            {% for item in recent_documents %}
++            <li class="recent-documents__item">
++                <a class="recent-documents__link" href="{% url 'storage:document_detail' item.doc.pk %}">
++                    {{ item.doc.code }} — {{ item.doc.name }}
++                </a>
++                <span class="cde-badge cde-badge--accent">{{ item.doc.get_doc_type_display }}</span>
++                {% if item.doc.current_version %}
++                <span class="cde-chip">v{{ item.doc.current_version.version_number }}</span>
++                {% endif %}
++                <span class="recent-documents__time cde-tnum">
++                    {% if item.opened_at %}открывался {{ item.opened_at|date:"d.m.Y, H:i" }}{% endif %}
++                </span>
++            </li>
++            {% endfor %}
++        </ul>
++    </section>
++    {% endif %}
++
+     <div class="card shadow-sm">
+         <div class="card-header bg-white d-flex justify-content-between align-items-center">
+             <span class="fw-semibold">Найдено документов: {{ documents|length }}</span>
+diff --git a/storage/adapters/views.py b/storage/adapters/views.py
+index 6fbee08..4322187 100644
+--- a/storage/adapters/views.py
++++ b/storage/adapters/views.py
+@@ -853,11 +853,6 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
+             'all_folders': all_folders,
+             'document_move_folders': document_move_folders,
+             'folder_move_folders': folder_move_folders,
+-            'recent_documents': _recent_documents(
+-                self.request,
+-                user,
+-                project,
+-            ),
+             'documents': documents,
+             'document_views': document_views,
+             'selected_view': selected_view,
+@@ -1387,14 +1382,18 @@ class DocumentMoveView(LoginRequiredMixin, View):
+                     allow_section_change=allow_section_change,
+                 )
+             elif section_id:
+-                if not allow_section_change:
+-                    raise ValueError(
+-                        "Смена раздела через обычное перемещение запрещена"
+-                    )
+                 section = get_object_or_404(
+                     get_accessible_sections(request.user, document.project),
+                     pk=section_id,
+                 )
++                # Спринт 7: сброс в корень СВОЕГО раздела (жест «вынести из
++                # папки») разрешён без явного подтверждения — марка не меняется.
++                # Кросс-разделный перенос требует allow_section_change=1
++                # (кнопка «Сменить раздел» или confirm в JS при DnD).
++                if section.pk != document.section_id and not allow_section_change:
++                    raise ValueError(
++                        "Смена раздела через обычное перемещение запрещена"
++                    )
+                 move_document_to_section(request.user, document, section)
+             else:
+                 move_document(
+@@ -2082,6 +2081,14 @@ class SearchView(LoginRequiredMixin, TemplateView):
+             status=status or None,
+         )
+ 
++        # Спринт 7: «Недавние» показываем только в пустом поиске —
++        # там это отправная точка, а не шум над таблицей проекта.
++        recent_documents = (
++            _recent_documents(self.request, user, project)
++            if not query
++            else []
++        )
++
+         context.update({
+             'project': project,
+             'documents': documents,
+@@ -2092,6 +2099,7 @@ class SearchView(LoginRequiredMixin, TemplateView):
+             'selected_status': status,
+             'doc_type_choices': doc_type_choices,
+             'status_choices': status_choices,
++            'recent_documents': recent_documents,
+         })
+         return context
+ 
+diff --git a/storage/domain/services.py b/storage/domain/services.py
+index 59b014d..5b52cd5 100644
+--- a/storage/domain/services.py
++++ b/storage/domain/services.py
+@@ -5,6 +5,7 @@ import io
+ import uuid
+ 
+ import fitz
++from PIL import Image, UnidentifiedImageError
+ 
+ from django.core.exceptions import PermissionDenied, ValidationError
+ from django.core.files.base import ContentFile
+@@ -4063,6 +4064,26 @@ def submit_feedback(
+         if extension == "jpeg":
+             extension = "jpg"
+ 
++        # Спринт 7: content_type приходит от клиента и подделывается —
++        # проверяем, что байты действительно являются изображением.
++        try:
++            screenshot.open("rb")
++            screenshot.seek(0)
++        except (AttributeError, OSError):
++            pass
++        try:
++            with Image.open(screenshot) as _img:
++                _img.verify()
++        except (UnidentifiedImageError, OSError, ValueError) as exc:
++            raise ValidationError(
++                {"screenshot": "Файл не является корректным изображением"}
++            ) from exc
++        finally:
++            try:
++                screenshot.seek(0)
++            except (AttributeError, OSError):
++                pass
++
+         storage = file_storage or default_storage
+         upload_to = Feedback._meta.get_field("screenshot").upload_to
+         if isinstance(upload_to, str):
+diff --git a/storage/management/commands/create_demo_project.py b/storage/management/commands/create_demo_project.py
+index 3fb67e0..a00178f 100644
+--- a/storage/management/commands/create_demo_project.py
++++ b/storage/management/commands/create_demo_project.py
+@@ -15,6 +15,7 @@ from datetime import timedelta
+ from urllib.parse import urlencode
+ 
+ import fitz
++from django.conf import settings
+ from django.contrib.auth import get_user_model
+ from django.core.exceptions import PermissionDenied
+ from django.core.files.uploadedfile import SimpleUploadedFile
+@@ -90,8 +91,29 @@ class Command(BaseCommand):
+             action='store_true',
+             help='Удалить существующий DEMO-2026 и создать заново.',
+         )
++        parser.add_argument(
++            '--force',
++            action='store_true',
++            help=(
++                'Разрешить запуск в продакшене (DJANGO_DEBUG=False). '
++                'Команда создаёт аккаунты с известным паролем '
++                f'«{DEMO_PASSWORD}» — без --force в проде она отклоняется.'
++            ),
++        )
+ 
+     def handle(self, *args, **options):
++        # Спринт 7: guard от запуска в продакшене. Демо-аккаунты создаются
++        # с публично известным паролем и ролью admin — на боевом сервере
++        # это прямой обход аутентификации.
++        if not settings.DEBUG and not options.get('force'):
++            raise CommandError(
++                'create_demo_project создаёт аккаунты с известным паролем '
++                f'«{DEMO_PASSWORD}» и ролью admin. В продакшене '
++                '(DJANGO_DEBUG=False) это небезопасно: передайте --force, '
++                'если вы действительно хотите это сделать, и смените '
++                'пароли сразу после демо.'
++            )
++
+         self._created_files: list[str] = []
+         self._accounts: list[dict] = []
+ 
+diff --git a/storage/tests/test_demo_command.py b/storage/tests/test_demo_command.py
+index f1abdb3..cade6b6 100644
+--- a/storage/tests/test_demo_command.py
++++ b/storage/tests/test_demo_command.py
+@@ -35,6 +35,10 @@ class CreateDemoProjectTests(TestCase):
+ 
+     def _run(self, **options):
+         stdout = StringIO()
++        # Спринт 7: тестовый раннер принудительно ставит DEBUG=False,
++        # поэтому все вызовы проходят с force=True (guard проверяется
++        # отдельно в test_sprint7.DemoCommandGuardTests).
++        options.setdefault('force', True)
+         call_command(
+             'create_demo_project',
+             stdout=stdout,
+diff --git a/storage/tests/test_sprint7.py b/storage/tests/test_sprint7.py
+new file mode 100644
+index 0000000..0796f99
+--- /dev/null
++++ b/storage/tests/test_sprint7.py
+@@ -0,0 +1,199 @@
++"""Спринт 7: контракт перемещений, регрессии и защитные правки.
++
++Покрывает находки генерального аудита 5.0 (ревизия 92f237c):
++- DnD-контракт «Сменить раздел»: сброс в корень своего раздела без флага,
++  кросс-разделный перенос только с allow_section_change=1;
++- зона-гвардия PUBLISHED/SHARED/ARCHIVE не обходится через явный флаг;
++- create_demo_project не запускается в продакшене без --force;
++- скриншот обратной связи проверяется как изображение (PIL), а не
++  только по content_type;
++- LOGGING настроен (django.request, storage, issues);
++- разметка: панель «Последние документы» восстановлена, DnD-пейлоад
++  несёт исходный раздел.
++"""
++from io import BytesIO
++
++from django.conf import settings
++from django.core.exceptions import ValidationError
++from django.core.management import call_command
++from django.core.management.base import CommandError
++from django.core.files.uploadedfile import SimpleUploadedFile
++from django.test import TestCase, override_settings
++from django.urls import reverse
++
++from storage.domain.models import Company
++from storage.domain.services import submit_feedback
++from storage.tests.test_sprint5 import Sprint5TestBase
++from storage.tests.test_feedback import TINY_PNG
++
++
++class DemoCommandGuardTests(TestCase):
++    """Демо-команда создаёт admin-аккаунты с известным паролем."""
++
++    @override_settings(DEBUG=False)
++    def test_demo_command_refuses_in_production(self):
++        with self.assertRaises(CommandError) as ctx:
++            call_command('create_demo_project', verbosity=0)
++        self.assertIn('--force', str(ctx.exception))
++        self.assertIn('demo12345', str(ctx.exception))
++
++    @override_settings(DEBUG=False)
++    def test_demo_command_force_flag_unblocks_production(self):
++        call_command('create_demo_project', force=True, verbosity=0)
++        from storage.domain.models import Project
++        self.assertTrue(Project.objects.filter(code='DEMO-2026').exists())
++
++    @override_settings(DEBUG=True)
++    def test_demo_command_runs_in_dev_mode(self):
++        # Тестовый раннер Django принудительно ставит DEBUG=False,
++        # поэтому dev-режим эмулируем явно.
++        call_command('create_demo_project', verbosity=0)
++        from storage.domain.models import Project
++        self.assertTrue(Project.objects.filter(code='DEMO-2026').exists())
++
++
++class DocumentSectionMoveViewTests(Sprint5TestBase):
++    """Вьюха перемещения: зона-гвардия сильнее явного флага."""
++
++    def test_published_document_rejected_even_with_flag(self):
++        document = self.make_document(
++            code='PUB-7', folder=self.published_folder, status='approved',
++        )
++        self.client.force_login(self.user_gip)
++
++        response = self.client.post(
++            reverse('storage:document_move', args=[document.pk]),
++            {
++                'section_id': self.section_kr.pk,
++                'allow_section_change': '1',
++            },
++        )
++
++        self.assertEqual(response.status_code, 403)
++        self.assertIn('workflow-кнопки', response.json()['error'])
++        document.refresh_from_db()
++        self.assertEqual(document.section_id, self.section_ar.pk)
++        self.assertEqual(document.folder_id, self.published_folder.pk)
++
++
++class FeedbackScreenshotPilTests(TestCase):
++    """Скриншот обратной связи: PIL-верификация байтов."""
++
++    def setUp(self):
++        self.company = Company.objects.create(name='Компания С7')
++        from django.contrib.auth import get_user_model
++        from storage.domain.models import UserProfile
++
++        user = get_user_model().objects.create_user('feedback7', password='pass')
++        UserProfile.objects.create(user=user, role='admin', company=self.company)
++        self.user = user
++
++    def _submit(self, upload):
++        return submit_feedback(
++            self.user,
++            self.company,
++            'Сообщение со скриншотом',
++            screenshot=upload,
++        )
++
++    def test_fake_png_with_spoofed_content_type_rejected(self):
++        upload = SimpleUploadedFile(
++            'screen.png',
++            b'definitely not an image at all',
++            content_type='image/png',
++        )
++        with self.assertRaises(ValidationError) as ctx:
++            self._submit(upload)
++        self.assertIn(
++            'не является корректным изображением',
++            str(ctx.exception.message_dict['screenshot']),
++        )
++
++    def test_fake_png_via_extension_only_rejected(self):
++        """Даже валидный content_type не спасёт битые байты: проверяется
++        содержимое, а не заголовок части multipart."""
++        upload = SimpleUploadedFile(
++            'screen.png', b'\x00\x01\x02\x03garbage',
++            content_type='image/png',
++        )
++        with self.assertRaises(ValidationError):
++            self._submit(upload)
++
++    def test_valid_jpeg_content_type_saved(self):
++        from PIL import Image
++
++        buffer = BytesIO()
++        Image.new('RGB', (2, 2), color=(200, 60, 40)).save(
++            buffer, format='JPEG', quality=85,
++        )
++        upload = SimpleUploadedFile(
++            'photo.jpg', buffer.getvalue(), content_type='image/jpeg',
++        )
++        feedback = self._submit(upload)
++        self.assertTrue(feedback.screenshot.name.endswith('.jpg'))
++
++    def test_valid_png_saved(self):
++        upload = SimpleUploadedFile(
++            'screen.png', TINY_PNG, content_type='image/png',
++        )
++        feedback = self._submit(upload)
++        self.assertTrue(feedback.screenshot.name.startswith('feedback/screenshots/'))
++        self.assertTrue(feedback.screenshot.storage.exists(feedback.screenshot.name))
++
++
++class LoggingConfigTests(TestCase):
++    """LOGGING-конфигурация присутствует и покрывает ключевые логгеры."""
++
++    def test_logging_configured(self):
++        config = settings.LOGGING
++        self.assertIn('console', config['handlers'])
++        self.assertIn('django.request', config['loggers'])
++        self.assertEqual(
++            config['loggers']['django.request']['level'], 'WARNING',
++        )
++        self.assertIn('storage', config['loggers'])
++        self.assertIn('issues', config['loggers'])
++
++    def test_root_handler_wired(self):
++        self.assertEqual(settings.LOGGING['root']['handlers'], ['console'])
++
++
++class Sprint7MarkupTests(TestCase):
++    """Статические проверки разметки/JS по находкам аудита 5.0."""
++
++    def _read(self, path):
++        with open(path, encoding='utf-8') as fh:
++            return fh.read()
++
++    def test_app_js_dnd_payload_carries_source_section(self):
++        js = self._read('static/js/app.js')
++        self.assertIn('application/x-sod-section-id', js)
++        self.assertIn('application/x-sod-folder-section-id', js)
++        # подтверждение при кросс-разделном переносе документа
++        self.assertIn('allow_section_change', js)
++
++    def test_recent_documents_live_in_search_empty_state(self):
++        # Панель убрана со страницы проекта (шум) и показывается
++        # в пустом поиске — как отправная точка.
++        project_html = self._read(
++            'storage/adapters/templates/storage/project_detail.html'
++        )
++        self.assertNotIn('id="recent-documents"', project_html)
++        search_html = self._read(
++            'storage/adapters/templates/storage/search.html'
++        )
++        self.assertIn('id="recent-documents"', search_html)
++        self.assertIn('not query and recent_documents', search_html)
++
++    def test_folder_kebab_change_section_still_present(self):
++        # Кебаб папки строится в JS (контракт T68), документный — в шаблоне.
++        js = self._read('static/js/app.js')
++        self.assertIn('data-folder-change-section', js)
++        html = self._read(
++            'storage/adapters/templates/storage/project_detail.html'
++        )
++        self.assertIn('data-doc-action="change-section"', html)
++
++    def test_redesign_css_has_recent_documents_block(self):
++        css = self._read('static/css/redesign.css')
++        self.assertIn('.recent-documents', css)
+diff --git a/storage/tests/test_t8_core.py b/storage/tests/test_t8_core.py
+index 48780b4..9efa2e4 100644
+--- a/storage/tests/test_t8_core.py
++++ b/storage/tests/test_t8_core.py
+@@ -511,8 +511,12 @@ class T67AuditTest(T8CoreTestBase):
+         child = create_folder(
+             self.user_gip, self.project, 'Nested', parent=root, code='11'
+         )
++        # Спринт 7: перенос между разделами — явный, через allow_section_change.
+         move_folder(
+-            self.user_gip, root, section=self.other_section
++            self.user_gip,
++            root,
++            section=self.other_section,
++            allow_section_change=True,
+         )
+         root.refresh_from_db()
+         child.refresh_from_db()
+diff --git a/storage/tests/test_t9_dnd.py b/storage/tests/test_t9_dnd.py
+index 96f1825..2e41c8b 100644
+--- a/storage/tests/test_t9_dnd.py
++++ b/storage/tests/test_t9_dnd.py
+@@ -47,7 +47,10 @@ class T9DragAndDropTests(T8UltimateTestBase):
+         self.client.force_login(self.user_gip)
+         response = self.client.post(
+             reverse('storage:document_move', args=[document.pk]),
+-            {'section_id': self.other_section.pk},
++            {
++                'section_id': self.other_section.pk,
++                'allow_section_change': '1',
++            },
+         )
+ 
+         self.assertEqual(response.status_code, 200)
+@@ -55,6 +58,38 @@ class T9DragAndDropTests(T8UltimateTestBase):
+         self.assertEqual(document.section_id, self.other_section.pk)
+         self.assertIsNone(document.folder_id)
+ 
++    def test_drop_on_own_section_root_needs_no_flag(self):
++        """Спринт 7: сброс в корень СВОЕГО раздела — без подтверждения."""
++        folder = create_folder(self.user_gip, self.project, 'АР', section=self.section)
++        document = self.make_document(code='DND-3A', folder=folder)
++
++        self.client.force_login(self.user_gip)
++        response = self.client.post(
++            reverse('storage:document_move', args=[document.pk]),
++            {'section_id': self.section.pk},
++        )
++
++        self.assertEqual(response.status_code, 200)
++        document.refresh_from_db()
++        self.assertEqual(document.section_id, self.section.pk)
++        self.assertIsNone(document.folder_id)
++
++    def test_drop_on_other_section_without_flag_rejected(self):
++        """Спринт 7: кросс-разделный DnD без allow_section_change → 400."""
++        folder = create_folder(self.user_gip, self.project, 'РД', section=self.section)
++        document = self.make_document(code='DND-3B', folder=folder)
++
++        self.client.force_login(self.user_gip)
++        response = self.client.post(
++            reverse('storage:document_move', args=[document.pk]),
++            {'section_id': self.other_section.pk},
++        )
++
++        self.assertEqual(response.status_code, 400)
++        self.assertIn('error', response.json())
++        document.refresh_from_db()
++        self.assertEqual(document.section_id, self.section.pk)
++
+     def test_drop_is_forbidden_for_viewer(self):
+         folder = create_folder(self.user_gip, self.project, 'РД', section=self.section)
+         document = self.make_document(code='DND-4')
+diff --git a/storage/tests/test_t9_dnd_copy.py b/storage/tests/test_t9_dnd_copy.py
+index 2d024ee..9241f5e 100644
+--- a/storage/tests/test_t9_dnd_copy.py
++++ b/storage/tests/test_t9_dnd_copy.py
+@@ -107,7 +107,8 @@ class T9DndCopyFolderTests(T8UltimateTestBase):
+         root.refresh_from_db()
+         self.assertIsNone(root.parent_id)
+ 
+-    def test_folder_can_move_to_another_section(self):
++    def test_folder_cannot_move_to_another_section_via_plain_dnd(self):
++        """Спринт 7: DnD папки в чужой раздел запрещён — 400 с подсказкой."""
+         folder = create_folder(self.user_gip, self.project, 'РД', section=self.section)
+         other = create_folder(
+             self.user_gip, self.project, 'Другой',
+@@ -120,6 +121,28 @@ class T9DndCopyFolderTests(T8UltimateTestBase):
+             {'section_id': self.other_section.pk},
+         )
+ 
++        self.assertEqual(response.status_code, 400)
++        self.assertIn('Сменить раздел', response.json()['error'])
++        folder.refresh_from_db()
++        self.assertEqual(folder.section_id, self.section.pk)
++
++    def test_folder_can_move_to_another_section_with_explicit_flag(self):
++        """Спринт 7: явный перенос между разделами (allow_section_change=1)."""
++        folder = create_folder(self.user_gip, self.project, 'РД', section=self.section)
++        other = create_folder(
++            self.user_gip, self.project, 'Другой',
++            section=self.other_section, code='02',
++        )
++        self.client.force_login(self.user_gip)
++
++        response = self.client.post(
++            reverse('storage:folder_move', args=[folder.pk]),
++            {
++                'section_id': self.other_section.pk,
++                'allow_section_change': '1',
++            },
++        )
++
+         self.assertEqual(response.status_code, 200)
+         folder.refresh_from_db()
+         self.assertIsNone(folder.parent_id)
+diff --git a/storage/tests/test_views.py b/storage/tests/test_views.py
+index 0c614c8..4f2f10a 100644
+--- a/storage/tests/test_views.py
++++ b/storage/tests/test_views.py
+@@ -476,10 +476,17 @@ class ViewTests(TestCase):
+             [version.document_id],
+         )
+ 
+-        response = self.client.get(reverse('storage:project_detail', args=[self.project.pk]))
++        # Спринт 7: панель «Недавние» переехала со страницы проекта
++        # в пустое состояние поиска — там это отправная точка.
++        response = self.client.get(reverse('storage:search', args=[self.project.pk]))
+         self.assertContains(response, 'id="recent-documents"')
+         self.assertContains(response, 'Последние документы')
+ 
++        searched = self.client.get(
++            reverse('storage:search', args=[self.project.pk]) + '?q=Документ'
++        )
++        self.assertNotContains(searched, 'id="recent-documents"')
++
+     def test_recent_documents_tracked_on_download(self):
+         version = self._upload()
+         self.client.force_login(self.user_gip)
+@@ -503,7 +510,7 @@ class ViewTests(TestCase):
+         )
+ 
+         self.user_contractor.userprofile.allowed_sections.clear()
+-        response = self.client.get(reverse('storage:project_detail', args=[self.project.pk]))
++        response = self.client.get(reverse('storage:search', args=[self.project.pk]))
+ 
+         self.assertEqual(response.context['recent_documents'], [])
+ 

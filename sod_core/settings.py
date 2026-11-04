@@ -250,3 +250,47 @@ CSRF_COOKIE_SECURE = SESSION_COOKIE_SECURE
 # На VPS включите DJANGO_SECURE_SSL_REDIRECT=True.
 # По умолчанию выключено, чтобы не ломать локальный HTTP и тесты.
 SECURE_SSL_REDIRECT = env_bool('DJANGO_SECURE_SSL_REDIRECT', False)
+
+
+# Логирование (Спринт 7). Раньше LOGGING отсутствовал: ошибки 500 в проде
+# уходили только в stderr gunicorn без формата и уровней.
+# Уровень корня настраивается через DJANGO_LOG_LEVEL (по умолчанию INFO).
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'standard': {
+            'format': '{levelname} {asctime} {name} {message}',
+            'style': '{',
+        },
+    },
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+            'formatter': 'standard',
+        },
+    },
+    'root': {
+        'handlers': ['console'],
+        'level': os.environ.get('DJANGO_LOG_LEVEL', 'INFO'),
+    },
+    'loggers': {
+        # 4xx/5xx запросы: в проде ERROR-события (traceback 500-х).
+        'django.request': {
+            'handlers': ['console'],
+            'level': 'WARNING',
+            'propagate': False,
+        },
+        # Сервисный слой СОД: аудит-события, отказы в правах.
+        'storage': {
+            'handlers': ['console'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+        'issues': {
+            'handlers': ['console'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+    },
+}

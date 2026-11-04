@@ -1,0 +1,3110 @@
+diff --git a/scripts/perf_probe.py b/scripts/perf_probe.py
+new file mode 100644
+index 0000000..ecf41f3
+--- /dev/null
++++ b/scripts/perf_probe.py
+@@ -0,0 +1,104 @@
++"""Нагрузочные замеры СОД на демо-данных (для отчёта Аудит 5.0).
++
++Запуск: python manage.py shell < scripts/perf_probe.py
++Создаёт демо-проект, замеряет запросы/время ключевых страниц,
++увеличивая объём данных (10/50/150 документов).
++"""
++import io
++import time
++
++from django.conf import settings
++from django.core.files.uploadedfile import SimpleUploadedFile
++from django.db import connection, reset_queries
++from django.test import Client
++from django.urls import reverse
++
++from storage.domain.models import Document
++from storage.management.commands.create_demo_project import Command
++from storage.domain.services import upload_document
++
++PDF_BYTES = (
++    b'%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n'
++    b'2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n'
++    b'3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 300 200]>>endobj\n'
++    b'xref\n0 4\ntrailer<</Size 4/Root 1 0 R>>\n%%EOF'
++)
++
++
++def measure(client, url, label):
++    reset_queries()
++    start = time.perf_counter()
++    response = client.get(url)
++    elapsed = (time.perf_counter() - start) * 1000
++    queries = len(connection.queries)
++    status = response.status_code
++    print(f'{label:38s} {status}  {elapsed:8.1f} ms  {queries:4d} queries')
++    return elapsed, queries
++
++
++def main():
++    settings.DEBUG = True  # для recording connection.queries
++    cmd = Command()
++    cmd._created_files = []
++    cmd._accounts = []
++    cmd._create_demo(company_id=None, username=None, reset=True)
++
++    from storage.domain.models import Company, Project, Section, UserProfile, ProjectMembership
++    from django.contrib.auth import get_user_model
++
++    User = get_user_model()
++    gip = User.objects.get(username='demo_gip')
++    company = Company.objects.first()
++    project = Project.objects.exclude(code='DEMO-2026').first() or Project.objects.filter(code='DEMO-2026').first()
++    demo = Project.objects.get(code='DEMO-2026')
++    section = Section.objects.filter(project=demo).first()
++
++    client = Client(HTTP_HOST='localhost')
++    client.force_login(gip)
++
++    detail_url = reverse('storage:project_detail', args=[demo.pk])
++    dashboard_url = reverse('storage:dashboard')
++    search_url = reverse('storage:search', args=[demo.pk]) + '?q=лист'
++
++    doc = Document.objects.filter(project=demo).select_related('current_version').first()
++    document_url = reverse('storage:document_detail', args=[doc.pk])
++
++    print('=== базовый прогон (демо-проект, ~40 документов) ===')
++    measure(client, dashboard_url, 'Дашборд')
++    measure(client, detail_url, 'Страница проекта (реестр)')
++    measure(client, detail_url + '?tab=documents&zone=PUBLISHED', 'Реестр + зона PUBLISHED')
++    measure(client, detail_url + '?tab=documents&status=in_review', 'Реестр + фильтр статуса')
++    measure(client, search_url, 'Поиск по проекту')
++    measure(client, document_url, 'Карточка документа (вьювер)')
++
++    print('\n=== разгон: добавляем документы в демо-проект ===')
++    for target in (100, 300):
++        current = Document.objects.filter(project=demo).count()
++        add = max(0, target - current)
++        created = 0
++        for index in range(add):
++            code = f'LOAD-{target}-{index:04d}'
++            try:
++                upload_document(
++                    user=gip,
++                    project=demo,
++                    section=section,
++                    code=code,
++                    name=f'Нагрузочный документ {index}',
++                    doc_type='drawing',
++                    file=SimpleUploadedFile(f'{code}.pdf', PDF_BYTES),
++                )
++                created += 1
++            except Exception:
++                break
++        print(f'--- документов всего: {Document.objects.filter(project=demo).count()} '
++              f'(добавлено {created}) ---')
++        measure(client, dashboard_url, 'Дашборд')
++        measure(client, detail_url, 'Страница проекта (реестр)')
++        measure(client, search_url, 'Поиск по проекту')
++        measure(client, document_url, 'Карточка документа')
++
++
++# Запускается через `manage.py shell < scripts/perf_probe.py`:
++# __name__ там не '__main__', поэтому вызываем напрямую.
++main()
+diff --git a/scripts/perf_profile.py b/scripts/perf_profile.py
+new file mode 100644
+index 0000000..cbbf3ae
+--- /dev/null
++++ b/scripts/perf_profile.py
+@@ -0,0 +1,43 @@
++"""Профилировщик N+1 реестра: топ повторяющихся SQL-запросов."""
++from collections import Counter
++
++from django.conf import settings
++from django.db import connection, reset_queries
++from django.test import Client
++from django.urls import reverse
++
++from storage.management.commands.create_demo_project import Command
++
++settings.DEBUG = True
++cmd = Command()
++cmd._created_files = []
++cmd._accounts = []
++cmd._create_demo(company_id=None, username=None, reset=True)
++
++from django.contrib.auth import get_user_model
++from storage.domain.models import Project
++
++User = get_user_model()
++gip = User.objects.get(username='demo_gip')
++demo = Project.objects.get(code='DEMO-2026')
++
++client = Client(HTTP_HOST='localhost')
++client.force_login(gip)
++url = reverse('storage:project_detail', args=[demo.pk])
++
++reset_queries()
++client.get(url)
++patterns = Counter()
++for q in connection.queries:
++    sql = q['sql']
++    # нормализуем литералы
++    key = sql
++    for ch in '0123456789':
++        key = key.replace(f' = {ch}', ' = N').replace(f'({ch}', '(N')
++    patterns[key] += 1
++
++print(f'total queries: {len(connection.queries)}')
++print('--- top-8 patterns ---')
++for key, count in patterns.most_common(8):
++    tail = key[key.index(' WHERE '):][:200] if ' WHERE ' in key else ''
++    print(f'{count:4d}x  {tail}')
+diff --git a/scripts/perf_trace.py b/scripts/perf_trace.py
+new file mode 100644
+index 0000000..717aac8
+--- /dev/null
++++ b/scripts/perf_trace.py
+@@ -0,0 +1,45 @@
++"""Ловим стеки вызовов повторяющихся запросов Project.objects.get."""
++import traceback
++
++from django.conf import settings
++from django.db import connection
++from django.test import Client
++from django.urls import reverse
++
++from storage.management.commands.create_demo_project import Command
++
++settings.DEBUG = True
++cmd = Command()
++cmd._created_files = []
++cmd._accounts = []
++cmd._create_demo(company_id=None, username=None, reset=True)
++
++from django.contrib.auth import get_user_model
++from storage.domain.models import Project
++
++User = get_user_model()
++gip = User.objects.get(username='demo_gip')
++demo = Project.objects.get(code='DEMO-2026')
++
++seen = set()
++
++def tracer(execute, sql, params, many, context):
++    if 'FROM "storage_folder" WHERE "storage_folder"."id"' in sql and len(seen) < 3:
++        stack = [
++            frame for frame in traceback.extract_stack()
++            if ('tables' in frame.filename or 'django_scotty' in frame.filename or 'template' in frame.filename.lower())
++        ]
++        key = tuple((f.filename.split('/sod-wt5/')[-1], f.lineno, f.name) for f in stack[-10:])
++        if key not in seen:
++            seen.add(key)
++            print('=== stack for project get ===')
++            for f in reversed(stack[-10:]):
++                print(f'  {f.filename.split("/sod-wt5/")[-1]}:{f.lineno} in {f.name}')
++    return execute(sql, params, many, context)
++
++client = Client(HTTP_HOST='localhost')
++client.force_login(gip)
++url = reverse('storage:project_detail', args=[demo.pk])
++with connection.execute_wrapper(tracer):
++    client.get(url)
++print('done')
+diff --git a/sod_core/settings.py b/sod_core/settings.py
+index d9e3354..78c62c1 100644
+--- a/sod_core/settings.py
++++ b/sod_core/settings.py
+@@ -236,3 +236,47 @@ CSRF_COOKIE_SECURE = SESSION_COOKIE_SECURE
+ # На VPS включите DJANGO_SECURE_SSL_REDIRECT=True.
+ # По умолчанию выключено, чтобы не ломать локальный HTTP и тесты.
+ SECURE_SSL_REDIRECT = env_bool('DJANGO_SECURE_SSL_REDIRECT', False)
++
++
++# Логирование (Спринт 7). Раньше LOGGING отсутствовал: ошибки 500 в проде
++# уходили только в stderr gunicorn без формата и уровней.
++# Уровень корня настраивается через DJANGO_LOG_LEVEL (по умолчанию INFO).
++LOGGING = {
++    'version': 1,
++    'disable_existing_loggers': False,
++    'formatters': {
++        'standard': {
++            'format': '{levelname} {asctime} {name} {message}',
++            'style': '{',
++        },
++    },
++    'handlers': {
++        'console': {
++            'class': 'logging.StreamHandler',
++            'formatter': 'standard',
++        },
++    },
++    'root': {
++        'handlers': ['console'],
++        'level': os.environ.get('DJANGO_LOG_LEVEL', 'INFO'),
++    },
++    'loggers': {
++        # 4xx/5xx запросы: в проде ERROR-события (traceback 500-х).
++        'django.request': {
++            'handlers': ['console'],
++            'level': 'WARNING',
++            'propagate': False,
++        },
++        # Сервисный слой СОД: аудит-события, отказы в правах.
++        'storage': {
++            'handlers': ['console'],
++            'level': 'INFO',
++            'propagate': False,
++        },
++        'issues': {
++            'handlers': ['console'],
++            'level': 'INFO',
++            'propagate': False,
++        },
++    },
++}
+diff --git a/static/css/app.css b/static/css/app.css
+index 8555648..548a90e 100644
+--- a/static/css/app.css
++++ b/static/css/app.css
+@@ -9,7 +9,7 @@
+     --app-border-strong: var(--c-border-strong);
+     --app-ink: var(--c-text-primary);
+     --app-muted: var(--c-text-muted);
+-    --app-topbar-bg: var(--c-bg-header, #3A4558);
++    --app-topbar-bg: var(--c-bg-header, #FFFFFF);
+     --app-topbar-fg: var(--c-text-on-dark);
+     --app-sidebar-bg: var(--c-bg-surface-hover);
+     --app-accent: var(--c-accent, #3D5A98);
+@@ -973,8 +973,8 @@ body.app-body {
+     height: 48px;
+     padding: 0 8px;
+     border-bottom: 1px solid var(--c-border-soft);
+-    background: var(--c-text-inverse);
+-    color: var(--c-bg-header, #3A4558);
++    background: var(--c-bg-surface);
++    color: var(--c-text-primary);
+     white-space: nowrap;
+     overflow: hidden;
+     text-overflow: ellipsis;
+@@ -1756,89 +1756,6 @@ body.modal-open {
+     white-space: nowrap;
+ }
+ 
+-.th-filter {
+-    position: relative;
+-    flex: 0 0 auto;
+-}
+-
+-.th-filter summary {
+-    list-style: none;
+-}
+-
+-.th-filter summary::-webkit-details-marker {
+-    display: none;
+-}
+-
+-.th-filter-toggle {
+-    width: 20px;
+-    height: 20px;
+-    display: inline-flex;
+-    align-items: center;
+-    justify-content: center;
+-    border-radius: 4px;
+-    color: var(--c-text-faint);
+-    font-size: 11px;
+-    cursor: pointer;
+-}
+-
+-.th-filter-toggle:hover,
+-.th-filter[open] .th-filter-toggle,
+-.th-filter.is-active .th-filter-toggle {
+-    background: var(--c-accent-subtle);
+-    color: var(--c-accent);
+-}
+-
+-.th-filter.is-active .th-filter-toggle {
+-    box-shadow: inset 0 0 0 1px var(--c-accent-on-header-strong, #CBD8EF);
+-}
+-
+-.th-filter-menu {
+-    position: absolute;
+-    top: calc(100% + 5px);
+-    left: 0;
+-    z-index: 60;
+-    width: 240px;
+-    padding: 10px;
+-    border: 1px solid var(--app-border);
+-    border-radius: 8px;
+-    background: var(--c-text-inverse);
+-    box-shadow: 0 10px 28px rgba(15, 23, 42, .18);
+-    white-space: normal;
+-    font-weight: 400;
+-    text-transform: none;
+-    letter-spacing: 0;
+-}
+-
+-.th-filter-title {
+-    margin-bottom: 6px;
+-    color: var(--c-text-primary);
+-    font-size: 11px;
+-    font-weight: 700;
+-    text-transform: uppercase;
+-    letter-spacing: .04em;
+-}
+-
+-.th-filter-menu .form-select,
+-.th-filter-menu .form-control {
+-    width: 100%;
+-    height: 30px;
+-    min-height: 30px;
+-    font-size: 12.5px;
+-}
+-
+-.th-filter-actions {
+-    display: flex;
+-    align-items: center;
+-    gap: 6px;
+-    margin-top: 8px;
+-}
+-
+-.th-filter-actions .btn-link {
+-    margin-left: auto;
+-    color: var(--app-muted);
+-    font-size: 12px;
+-}
+-
+ .col-drag {
+     flex: 0 0 auto;
+     display: inline-flex;
+@@ -1941,8 +1858,8 @@ body.modal-open {
+         display: none;
+     }
+ 
+-    .th-filter-menu {
+-        width: 210px;
++    .filter-bar__fields {
++        gap: 6px;
+     }
+ }
+ 
+@@ -1955,62 +1872,6 @@ body.modal-open {
+     min-height: 0;
+ }
+ 
+-.filter-panel {
+-    flex: 0 0 auto;
+-    padding: 8px 12px 9px;
+-    border-bottom: 1px solid var(--app-border);
+-    background: var(--c-bg-surface-hover);
+-}
+-
+-.filter-panel-main {
+-    display: flex;
+-    align-items: flex-end;
+-    flex-wrap: wrap;
+-    gap: 8px;
+-}
+-
+-.filter-view {
+-    flex: 0 0 auto;
+-}
+-
+-.filter-field {
+-    display: flex;
+-    flex-direction: column;
+-    gap: 2px;
+-    min-width: 132px;
+-}
+-
+-.filter-field .form-label {
+-    margin: 0;
+-    color: var(--c-text-muted);
+-    font-size: 10px;
+-    font-weight: 700;
+-    letter-spacing: .05em;
+-    text-transform: uppercase;
+-}
+-
+-.filter-field .form-select,
+-.filter-field .form-control {
+-    min-width: 132px;
+-    height: 31px;
+-}
+-
+-.filter-search {
+-    flex: 1 1 240px;
+-    min-width: 220px;
+-}
+-
+-.filter-search .form-control {
+-    width: 100%;
+-    min-width: 0;
+-}
+-
+-.filter-actions {
+-    display: flex;
+-    gap: 6px;
+-    padding-bottom: 0;
+-}
+-
+ .toolbar {
+     flex: 0 0 auto;
+ }
+@@ -2196,16 +2057,6 @@ body.modal-open {
+     gap: 4px;
+ }
+ 
+-@media (max-width: 900px) {
+-    .filter-view {
+-        width: 100%;
+-    }
+-
+-    .filter-search {
+-        flex-basis: 100%;
+-    }
+-}
+-
+ /* ---------- T9-FIX-DND: drag document rows onto folders/sections ---------- */
+ 
+ #documentsTable tbody tr[draggable="true"] {
+diff --git a/static/css/redesign.css b/static/css/redesign.css
+index a477983..2c9a0ae 100644
+--- a/static/css/redesign.css
++++ b/static/css/redesign.css
+@@ -1,9 +1,9 @@
+ /* Цвета — только через дизайн-токены (tokens.css, источник: tokens.json) */
+-/* Спринт 4: топбар — графит #3A4558. Кнопки — ghost-стиль со светлой рамкой,
+-   лого-марка и аватар — светлые, крошки — светло-серые (текст on-dark). */
++/* Спринт 8: топбар — светлый #FFFFFF. Кнопки — ghost со светлой рамкой,
++   лого-марка — акцентная #3D5A98, крошки — серые (текст on-dark = тёмный). */
+ .topbar { position: relative; z-index: 1045; height: 52px; background: var(--c-bg-header); border-bottom: 1px solid var(--c-border-header); display: flex; align-items: center; padding: 0 16px; gap: 12px; }
+ .topbar .brand { font-weight: 600; font-size: 15px; display: flex; align-items: center; gap: 8px; }
+-.topbar .brand-mark { width: 26px; height: 26px; border-radius: 7px; background: var(--c-text-inverse); color: var(--c-bg-header); display: grid; place-items: center; font-size: 11px; font-weight: 700; letter-spacing: .02em; }
++.topbar .brand-mark { width: 26px; height: 26px; border-radius: 7px; background: var(--c-accent); color: var(--c-text-inverse); display: grid; place-items: center; font-size: 11px; font-weight: 700; letter-spacing: .02em; }
+ .topbar .crumb { color: var(--c-text-on-dark-muted); font-size: 13.5px; display: flex; gap: 6px; }
+ .topbar .crumb .doc { color: var(--c-text-on-dark); font-weight: 500; }
+ .topbar .spacer { flex: 1; }
+@@ -76,7 +76,7 @@ body { background: var(--c-bg-app); font-family: 'Golos Text', 'Inter', system-u
+ }
+ 
+ /* T85: header/breadcrumbs/table polish.
+-   Спринт 4: --c-bg-header теперь графит #3A4558 (см. tokens.json). */
++   Спринт 8: --c-bg-header теперь светлый #FFFFFF (см. tokens.json). */
+ .topbar {
+     background: var(--c-bg-header) !important;
+     border-bottom: 1px solid var(--c-border-header);
+@@ -703,3 +703,222 @@ tr.doc-row-flash > td { animation: wf-row-flash 1.5s ease; }
+ @media (prefers-reduced-motion: reduce) {
+     .panel-spinner { animation: none; }
+ }
++
++/* ---------- Спринт 7: «Последние документы» (восстановление Спринта 3) ---------- */
++
++.recent-documents {
++  margin: 12px 16px 0;
++  padding: 10px 14px;
++  background: var(--c-bg-surface);
++  border: 1px solid var(--c-border-soft);
++  border-radius: 12px;
++}
++
++.recent-documents__title {
++  display: flex;
++  align-items: center;
++  gap: 8px;
++  margin: 0 0 8px;
++  font-size: 13px;
++  font-weight: 600;
++  letter-spacing: .02em;
++  text-transform: uppercase;
++  color: var(--c-text-secondary);
++}
++
++.recent-documents__title .bi {
++  color: var(--c-accent);
++}
++
++.recent-documents__list {
++  display: flex;
++  flex-direction: column;
++  gap: 6px;
++  margin: 0;
++  padding: 0;
++  list-style: none;
++}
++
++.recent-documents__item {
++  display: flex;
++  align-items: center;
++  flex-wrap: wrap;
++  gap: 8px;
++  min-width: 0;
++  font-size: 13.5px;
++}
++
++.recent-documents__link {
++  color: var(--c-text-primary);
++  text-decoration: none;
++  overflow: hidden;
++  text-overflow: ellipsis;
++  white-space: nowrap;
++  max-width: 46ch;
++  border-radius: 6px;
++}
++
++.recent-documents__link:hover,
++.recent-documents__link:focus-visible {
++  color: var(--c-accent);
++  text-decoration: underline;
++}
++
++.recent-documents__time {
++  margin-left: auto;
++  font-size: 12px;
++  color: var(--c-text-muted);
++}
++
++@media (max-width: 820px) {
++  .recent-documents { margin: 8px 8px 0; }
++  .recent-documents__link { max-width: 100%; }
++  .recent-documents__time { margin-left: 0; width: 100%; }
++}
++
++/* ---------- Спринт 8: видимый фильтр-бар ---------- */
++
++.filter-bar {
++  margin: 0 0 10px;
++  padding: 10px 12px;
++  background: var(--c-bg-surface);
++  border: 1px solid var(--c-border-soft);
++  border-radius: 12px;
++  transition: border-color .15s ease, box-shadow .15s ease;
++}
++
++.filter-bar.is-filtered {
++  border-color: var(--c-accent);
++  box-shadow: 0 0 0 1px var(--c-accent);
++  background: var(--c-accent-subtle);
++}
++
++.filter-bar__fields {
++  display: flex;
++  flex-wrap: wrap;
++  align-items: flex-end;
++  gap: 8px 10px;
++}
++
++.filter-field {
++  display: flex;
++  flex-direction: column;
++  gap: 3px;
++  min-width: 130px;
++}
++
++.filter-field--search { flex: 1 1 200px; min-width: 180px; }
++.filter-field--search input { width: 100%; }
++
++.filter-field__label {
++  font-size: 10.5px;
++  font-weight: 600;
++  letter-spacing: .05em;
++  text-transform: uppercase;
++  color: var(--c-text-secondary);
++  padding-left: 2px;
++}
++
++.filter-bar.is-filtered .filter-field__label { color: var(--c-accent-on-subtle); }
++
++.filter-bar__reset {
++  height: 31px;
++  padding: 0 10px;
++  margin-left: auto;
++  display: inline-flex;
++  align-items: center;
++  gap: 6px;
++  border: 1px solid var(--c-border-default);
++  border-radius: 8px;
++  background: var(--c-bg-surface);
++  color: var(--c-text-secondary);
++  font-size: 12.5px;
++  font-weight: 500;
++  white-space: nowrap;
++  transition: color .15s ease, border-color .15s ease, background-color .15s ease;
++}
++
++.filter-bar__reset:hover,
++.filter-bar__reset:focus-visible {
++  color: var(--s-attention, #B42318);
++  border-color: var(--s-attention, #B42318);
++  background: var(--c-bg-surface);
++}
++
++.filter-chips {
++  display: flex;
++  flex-wrap: wrap;
++  align-items: center;
++  gap: 6px;
++  margin-top: 8px;
++  padding-top: 8px;
++  border-top: 1px dashed var(--c-border-default);
++}
++
++.filter-chips__hint {
++  display: inline-flex;
++  align-items: center;
++  gap: 5px;
++  font-size: 12px;
++  font-weight: 600;
++  color: var(--c-accent-on-subtle);
++}
++
++.filter-chip {
++  display: inline-flex;
++  align-items: center;
++  gap: 5px;
++  padding: 2px 4px 2px 8px;
++  border: 1px solid var(--c-accent);
++  border-radius: 999px;
++  background: var(--c-bg-surface);
++  font-size: 12px;
++  line-height: 1.4;
++  max-width: 100%;
++}
++
++.filter-chip__name { color: var(--c-text-secondary); }
++
++.filter-chip__value {
++  color: var(--c-text-primary);
++  font-weight: 600;
++  max-width: 26ch;
++  overflow: hidden;
++  text-overflow: ellipsis;
++  white-space: nowrap;
++}
++
++.filter-chip__clear {
++  width: 16px;
++  height: 16px;
++  display: inline-grid;
++  place-items: center;
++  border: 0;
++  border-radius: 50%;
++  background: transparent;
++  color: var(--c-text-secondary);
++  font-size: 9px;
++  cursor: pointer;
++  transition: background-color .12s ease, color .12s ease;
++}
++
++.filter-chip__clear:hover,
++.filter-chip__clear:focus-visible {
++  background: var(--c-accent);
++  color: var(--c-text-inverse);
++}
++
++.filter-chips__count {
++  margin-left: auto;
++  font-size: 12px;
++  color: var(--c-text-secondary);
++  white-space: nowrap;
++}
++
++@media (max-width: 820px) {
++  .filter-bar { padding: 8px; }
++  .filter-field { min-width: calc(50% - 5px); }
++  .filter-field--search { flex-basis: 100%; min-width: 100%; }
++  .filter-bar__reset { margin-left: 0; }
++  .filter-chips__count { margin-left: 0; width: 100%; }
++}
+diff --git a/static/css/viewer.css b/static/css/viewer.css
+index e0da918..042cd4b 100644
+--- a/static/css/viewer.css
++++ b/static/css/viewer.css
+@@ -836,3 +836,135 @@ body {
+     opacity: 1;
+     transform: translateX(-50%) translateY(0);
+ }
++
++/* ---------- Спринт 8: полоса листов, наложение, меню сравнения ---------- */
++
++.thumb-rail {
++  width: 132px;
++  flex: 0 0 132px;
++  overflow-y: auto;
++  overflow-x: hidden;
++  background: var(--c-viewer-raised, #2B2C30);
++  border-right: 1px solid var(--c-viewer-border, #3A3B40);
++  padding: 8px 6px;
++  display: flex;
++  flex-direction: column;
++  gap: 8px;
++  scrollbar-width: thin;
++}
++
++.thumb {
++  display: flex;
++  flex-direction: column;
++  align-items: center;
++  gap: 2px;
++  border: 1px solid var(--c-viewer-border, #3A3B40);
++  border-radius: 6px;
++  background: transparent;
++  padding: 4px 4px 2px;
++  cursor: pointer;
++  transition: border-color .12s ease, background-color .12s ease;
++}
++
++.thumb:hover,
++.thumb:focus-visible {
++  border-color: var(--c-accent-on-header-strong, #9FB6DF);
++  background: rgba(255, 255, 255, .05);
++}
++
++.thumb.is-active {
++  border-color: var(--c-accent, #3D5A98);
++  box-shadow: 0 0 0 1px var(--c-accent, #3D5A98);
++}
++
++.thumb canvas {
++  max-width: 100%;
++  background: var(--c-text-inverse);
++  border-radius: 3px;
++}
++
++.thumb__page {
++  font-size: 10.5px;
++  color: var(--c-text-on-dark-muted, #B4B5BA);
++}
++
++/* Наложение */
++
++.overlay-stage {
++  position: absolute;
++  inset: 0;
++  display: flex;
++  flex-direction: column;
++  background: var(--c-viewer-sunken, #1F2023);
++}
++
++.overlay-scroll {
++  flex: 1 1 auto;
++  overflow: auto;
++  display: grid;
++  place-items: center;
++  cursor: grab;
++}
++
++.overlay-scroll.is-dragging { cursor: grabbing; }
++
++.overlay-frame {
++  position: relative;
++  margin: 24px;
++}
++
++.overlay-pane {
++  position: absolute;
++  top: 0;
++  left: 0;
++}
++
++.overlay-pane .pdf-page { margin: 0; }
++
++.overlay-pane--base { position: relative; }
++
++.overlay-pane--top {
++  pointer-events: none;
++  will-change: transform, opacity;
++}
++
++.overlay-hud {
++  flex: 0 0 auto;
++  display: flex;
++  flex-wrap: wrap;
++  align-items: center;
++  gap: 8px 14px;
++  padding: 6px 12px;
++  font-size: 11.5px;
++  color: var(--c-text-on-dark-muted, #B4B5BA);
++  background: var(--c-viewer-raised, #2B2C30);
++  border-top: 1px solid var(--c-viewer-border, #3A3B40);
++}
++
++.overlay-hud__top { color: var(--c-accent-on-header, #9FB6DF); }
++
++.overlay-hud__hint { margin-left: auto; opacity: .75; }
++
++/* Меню сравнения */
++
++.compare-menu .dropdown-menu {
++  min-width: 230px;
++  box-shadow: 0 12px 30px rgba(15, 23, 42, .22);
++}
++
++.compare-menu-dropdown .dropdown-item {
++  border-radius: 6px;
++  font-size: 13px;
++  padding: 6px 10px;
++}
++
++.compare-menu-dropdown .dropdown-item:hover,
++.compare-menu-dropdown .dropdown-item:focus-visible {
++  background: var(--c-accent-subtle, #EDF1F7);
++  color: var(--c-accent, #3D5A98);
++}
++
++#compareMenuBtn.active {
++  border-color: var(--c-accent, #3D5A98);
++  color: var(--c-accent, #3D5A98);
++}
+diff --git a/static/design-tokens/tokens.css b/static/design-tokens/tokens.css
+index 408b4a5..f5a81e5 100644
+--- a/static/design-tokens/tokens.css
++++ b/static/design-tokens/tokens.css
+@@ -4,7 +4,7 @@
+    ========================================================================== */
+ /*
+    CDE «Среда общих данных» — дизайн-токены (CSS Custom Properties)
+-   Источник истины: tokens.json · Версия 20261102.2
++   Источник истины: tokens.json · Версия 20261108.1
+    ----------------------------------------------------------------------------
+    Подключение:  <link rel="stylesheet" href="tokens.css">
+    Шрифты — самолокальные (Спринт 3, P1): static/fonts/fonts.css,
+@@ -28,8 +28,8 @@
+   --c-bg-surface-hover: #FAFAF8;
+   --c-bg-surface-sunken: #EFEFEC;
+   --c-bg-canvas: #26272B;  /* тёмный canvas вьювера */
+-  --c-bg-header: #3A4558;  /* графитовый хедер */
+-  --c-bg-header-hover: rgba(255, 255, 255, 0.08);  /* ховер ghost-кнопок на тёмном */
++  --c-bg-header: #FFFFFF;  /* графитовый хедер */
++  --c-bg-header-hover: #F0F3F8;  /* ховер ghost-кнопок на тёмном */
+   --c-bg-row-hover: #EDF2F9;  /* ховер кликабельной строки */
+ 
+   /* --- Границы --- */
+@@ -37,16 +37,16 @@
+   --c-border-default: #D4D4CE;
+   --c-border-soft: #E2E8F0;
+   --c-border-strong: #CBD5E1;
+-  --c-border-header: #374151;  /* граница графитового хедера */
+-  --c-border-header-control: #8A93A6;  /* рамки ghost-кнопок на хедере */
++  --c-border-header: #E1E5EC;  /* граница графитового хедера */
++  --c-border-header-control: #7C8698;  /* рамки ghost-кнопок на хедере */
+ 
+   /* --- Текст --- */
+   --c-text-primary: #191917;
+   --c-text-secondary: #6E6E68;
+   --c-text-muted: #71716A;
+   --c-text-faint: #94A3B8;
+-  --c-text-on-dark: #F2F2EF;
+-  --c-text-on-dark-muted: #B4B5BA;
++  --c-text-on-dark: #1F2430;
++  --c-text-on-dark-muted: #5D6575;
+   --c-text-inverse: #FFFFFF;
+ 
+   /* --- Тёмный canvas вьювера --- */
+@@ -62,8 +62,8 @@
+   --c-accent-pressed: #2A4478;
+   --c-accent-subtle: #EDF1F7;
+   --c-accent-on-subtle: #2F4A7E;
+-  --c-accent-on-header: #9FB6DF;  /* акцент-ссылки на графитовом хедере */
+-  --c-accent-on-header-strong: #CBD8EF;  /* ховер акцента на хедере */
++  --c-accent-on-header: #3D5A98;  /* акцент-ссылки на графитовом хедере */
++  --c-accent-on-header-strong: #33508A;  /* ховер акцента на хедере */
+ 
+   /* --- Статусы: solid / subtle / on --- */
+   --s-wait-solid: #4674A4;  --s-wait-subtle: #EBF2F9;  --s-wait-on: #2D5C88; /* Открыто (NEW), черновик */
+diff --git a/static/design-tokens/tokens.json b/static/design-tokens/tokens.json
+index f2297b9..0809522 100644
+--- a/static/design-tokens/tokens.json
++++ b/static/design-tokens/tokens.json
+@@ -1,5 +1,5 @@
+ {
+-  "version": "20261102.2",
++  "version": "20261108.1",
+   "product": "СОД «Среда общих данных» · Stream-CAD",
+   "description": "Единый источник правды дизайн-системы. Из этого файла генерируются: static/design-tokens/tokens.css, static/js/design-tokens.js, storage/domain/design_colors.py. Генератор: python scripts/build_design_tokens.py (проверка дрейфа: --check, гоняется в CI).",
+   "color": {
+@@ -9,8 +9,8 @@
+       "surface-hover": "#FAFAF8",
+       "surface-sunken": "#EFEFEC",
+       "canvas": "#26272B",
+-      "header": "#3A4558",
+-      "header-hover": "rgba(255, 255, 255, 0.08)",
++      "header": "#FFFFFF",
++      "header-hover": "#F0F3F8",
+       "row-hover": "#EDF2F9"
+     },
+     "border": {
+@@ -18,16 +18,16 @@
+       "default": "#D4D4CE",
+       "soft": "#E2E8F0",
+       "strong": "#CBD5E1",
+-      "header": "#374151",
+-      "header-control": "#8A93A6"
++      "header": "#E1E5EC",
++      "header-control": "#7C8698"
+     },
+     "text": {
+       "primary": "#191917",
+       "secondary": "#6E6E68",
+       "muted": "#71716A",
+       "faint": "#94A3B8",
+-      "on-dark": "#F2F2EF",
+-      "on-dark-muted": "#B4B5BA",
++      "on-dark": "#1F2430",
++      "on-dark-muted": "#5D6575",
+       "inverse": "#FFFFFF"
+     },
+     "accent": {
+@@ -36,8 +36,8 @@
+       "pressed": "#2A4478",
+       "subtle": "#EDF1F7",
+       "on-subtle": "#2F4A7E",
+-      "on-header": "#9FB6DF",
+-      "on-header-strong": "#CBD8EF"
++      "on-header": "#3D5A98",
++      "on-header-strong": "#33508A"
+     },
+     "viewer": {
+       "sunken": "#1F2023",
+diff --git a/static/js/app.js b/static/js/app.js
+index 6954620..d1ae075 100644
+--- a/static/js/app.js
++++ b/static/js/app.js
+@@ -573,6 +573,8 @@
+ 
+     var dragDocumentId = null;
+     var dragFolderId = null;
++    var dragDocumentSectionId = null;
++    var dragFolderSectionId = null;
+     var toastTimer = null;
+ 
+     function dndTypes(event) {
+@@ -619,6 +621,8 @@
+         });
+         dragDocumentId = null;
+         dragFolderId = null;
++        dragDocumentSectionId = null;
++        dragFolderSectionId = null;
+     }
+ 
+     function isArchiveZone(target) {
+@@ -752,10 +756,16 @@
+                 event.stopPropagation();
+                 dragDocumentId = documentId;
+                 dragFolderId = null;
++                dragDocumentSectionId = row.dataset.sectionId || '';
++                dragFolderSectionId = null;
+                 event.dataTransfer.effectAllowed = 'copyMove';
+                 event.dataTransfer.clearData();
+                 event.dataTransfer.setData('text/plain', documentId);
+                 event.dataTransfer.setData('application/x-sod-document-id', documentId);
++                event.dataTransfer.setData(
++                    'application/x-sod-section-id',
++                    row.dataset.sectionId || ''
++                );
+                 row.classList.add('is-dragging');
+                 showDropOverlay(false);
+                 return;
+@@ -777,10 +787,16 @@
+             event.stopPropagation();
+             dragDocumentId = null;
+             dragFolderId = folderId;
++            dragDocumentSectionId = null;
++            dragFolderSectionId = (folderNode && folderNode.dataset.sectionId) || '';
+             event.dataTransfer.effectAllowed = 'move';
+             event.dataTransfer.clearData();
+             event.dataTransfer.setData('application/x-sod-folder-id', folderId);
+             event.dataTransfer.setData('text/plain', 'folder:' + folderId);
++            event.dataTransfer.setData(
++                'application/x-sod-folder-section-id',
++                dragFolderSectionId
++            );
+             folderRow.classList.add('is-dragging-folder');
+             showDropOverlay(false);
+         });
+@@ -859,6 +875,32 @@
+                 if (target.dataset.dropFolder === folderId) {
+                     return;
+                 }
++                // Спринт 7: DnD не меняет марку. Перенос папки в другой
++                // раздел (напрямую или через папку чужой марки) запрещён —
++                // подсказываем штатную кнопку «Сменить раздел».
++                var targetFolderSection = '';
++                if (target.dataset.dropSection) {
++                    targetFolderSection = target.dataset.dropSection;
++                } else {
++                    var targetFolderNode = target.closest('[data-folder-id]');
++                    targetFolderSection = (
++                        targetFolderNode && targetFolderNode.dataset.sectionId
++                    ) || '';
++                }
++                var sourceFolderSection = transfer.getData(
++                    'application/x-sod-folder-section-id'
++                ) || dragFolderSectionId || '';
++                if (
++                    targetFolderSection &&
++                    sourceFolderSection &&
++                    targetFolderSection !== sourceFolderSection
++                ) {
++                    showDndToast(
++                        'Для смены марки используйте кнопку «Сменить раздел»',
++                        true
++                    );
++                    return;
++                }
+                 var folderBody = new FormData();
+                 if (target.dataset.dropFolder) {
+                     folderBody.append('parent_id', target.dataset.dropFolder);
+@@ -886,8 +928,47 @@
+             var body = new FormData();
+             if (target.dataset.dropFolder) {
+                 body.append('folder_id', target.dataset.dropFolder);
++                // Спринт 7: папка в чужой марке — это смена раздела.
++                // Сохраняем жест, но требуем явного подтверждения.
++                var targetDocFolderNode = target.closest('[data-folder-id]');
++                var targetDocSection = (
++                    targetDocFolderNode && targetDocFolderNode.dataset.sectionId
++                ) || '';
++                var sourceDocSection = transfer.getData(
++                    'application/x-sod-section-id'
++                ) || dragDocumentSectionId || '';
++                if (
++                    !copyRequested &&
++                    targetDocSection &&
++                    sourceDocSection &&
++                    targetDocSection !== sourceDocSection
++                ) {
++                    if (!window.confirm(
++                        'Переместить документ в папку другого раздела («'
++                        + targetName + '»)? Это изменит его марку.'
++                    )) {
++                        return;
++                    }
++                    body.append('allow_section_change', '1');
++                }
+             } else if (target.dataset.dropSection) {
+                 body.append('section_id', target.dataset.dropSection);
++                var sourceSection = transfer.getData(
++                    'application/x-sod-section-id'
++                ) || dragDocumentSectionId || '';
++                if (
++                    !copyRequested &&
++                    sourceSection &&
++                    target.dataset.dropSection !== sourceSection
++                ) {
++                    if (!window.confirm(
++                        'Перенести документ в «' + targetName + '»? '
++                        + 'Это изменит его марку (раздел).'
++                    )) {
++                        return;
++                    }
++                    body.append('allow_section_change', '1');
++                }
+             }
+ 
+             var verb = copyRequested ? 'Копируем' : 'Перемещаем';
+@@ -1571,7 +1652,11 @@
+         }
+     }
+ 
+-    function refreshColumnFilters() {
++    /* ---------- Спринт 8: видимый фильтр-бар ----------
++       Колоночные воронки (.th-filter) убраны: непонятно, когда отфильтровано.
++       Теперь — выпадающие фильтры над таблицей + чипы активных условий. */
++
++    function refreshFilters() {
+         var form = document.getElementById('filtersForm');
+         if (!form) {
+             return;
+@@ -1583,105 +1668,75 @@
+         }
+     }
+ 
+-    function bindColumnFilter(column, fieldId, kind) {
+-        var header = document.querySelector(
+-            'th[data-column="' + column + '"]'
+-        );
+-        var hidden = document.getElementById(fieldId);
+-        if (!header || !hidden || header.querySelector('.th-filter')) {
++    function initFilterBar() {
++        var form = document.getElementById('filtersForm');
++        if (!form || form.dataset.filterReady === '1') {
+             return;
+         }
+-        var wrapper = document.createElement('span');
+-        wrapper.className = 'th-filter dropdown';
+-        var button = document.createElement('button');
+-        button.type = 'button';
+-        button.className = 'th-filter-btn';
+-        button.setAttribute('data-bs-toggle', 'dropdown');
+-        button.setAttribute('aria-expanded', 'false');
+-        button.title = 'Фильтр';
+-        button.innerHTML = '<i class="bi bi-funnel" aria-hidden="true"></i>';
+-        var menu = document.createElement('div');
+-        menu.className = 'dropdown-menu p-2';
+-        var control;
++        form.dataset.filterReady = '1';
+         var timer = null;
+ 
+-        function syncActive() {
+-            button.classList.toggle('is-active', Boolean(hidden.value));
+-        }
+-
+-        function scheduleRefresh() {
+-            syncActive();
++        function submitNow() {
+             if (timer) {
+                 window.clearTimeout(timer);
++                timer = null;
+             }
+-            timer = window.setTimeout(refreshColumnFilters, kind === 'text' ? 350 : 0);
+-        }
+-
+-        if (kind === 'select') {
+-            control = document.createElement('select');
+-            control.className = 'form-select form-select-sm';
+-            Array.from(hidden.options).forEach(function (option) {
+-                var cloned = document.createElement('option');
+-                cloned.value = option.value;
+-                cloned.textContent = option.textContent;
+-                control.appendChild(cloned);
+-            });
+-            control.value = hidden.value || '';
+-            control.addEventListener('change', function () {
+-                hidden.value = control.value;
+-                scheduleRefresh();
+-            });
+-        } else {
+-            control = document.createElement('input');
+-            control.type = 'search';
+-            control.className = 'form-control form-control-sm';
+-            control.placeholder = header.textContent.trim() || 'Поиск';
+-            control.value = hidden.value || '';
+-            control.addEventListener('input', function () {
+-                hidden.value = control.value;
+-                scheduleRefresh();
+-            });
+-            control.addEventListener('keydown', function (event) {
+-                if (event.key === 'Enter') {
+-                    event.preventDefault();
+-                    refreshColumnFilters();
+-                }
+-            });
++            refreshFilters();
+         }
+ 
+-        menu.appendChild(control);
+-        wrapper.appendChild(button);
+-        wrapper.appendChild(menu);
+-        header.appendChild(wrapper);
+-        syncActive();
+-    }
+-
+-    function initColumnFilters() {
+-        bindColumnFilter('section', 'id_section', 'select');
+-        bindColumnFilter('doc_type', 'id_doc_type', 'select');
+-        bindColumnFilter('suitability', 'id_suitability_code', 'select');
+-        bindColumnFilter('internal-status', 'id_internal_status', 'select');
+-        bindColumnFilter('code', 'id_code', 'text');
+-        bindColumnFilter('name', 'id_name', 'text');
+-
+-        var search = document.getElementById('globalSearch');
+-        var hiddenSearch = document.getElementById('quickFilter');
+-        if (!search || !hiddenSearch || search.dataset.filterReady === '1') {
+-            return;
+-        }
+-        search.dataset.filterReady = '1';
+-        var timer = null;
+-        search.addEventListener('input', function () {
+-            hiddenSearch.value = search.value;
++        // Селекты применяются сразу, текст — с задержкой 350 мс.
++        form.addEventListener('change', function (event) {
++            if (event.target && event.target.matches('select')) {
++                submitNow();
++            }
++        });
++        form.addEventListener('input', function (event) {
++            if (
++                !event.target ||
++                !event.target.matches('input[type="search"], input[type="text"]')
++            ) {
++                return;
++            }
+             if (timer) {
+                 window.clearTimeout(timer);
+             }
+-            timer = window.setTimeout(refreshColumnFilters, 350);
++            timer = window.setTimeout(refreshFilters, 350);
+         });
+-        search.addEventListener('keydown', function (event) {
+-            if (event.key === 'Enter') {
++        form.addEventListener('keydown', function (event) {
++            if (event.key === 'Enter' && event.target.matches('input')) {
++                event.preventDefault();
++                submitNow();
++            }
++        });
++
++        // Чипы активных фильтров и «Сбросить всё» живут вне формы
++        // (HTMX пересобирает панель — вешаем делегированно).
++        document.addEventListener('click', function (event) {
++            var chip = event.target.closest('[data-filter-chip-clear]');
++            if (chip) {
+                 event.preventDefault();
+-                refreshColumnFilters();
++                var name = chip.getAttribute('data-filter-chip-clear');
++                var field = form.elements[name];
++                if (field && field.value !== undefined) {
++                    field.value = '';
++                }
++                submitNow();
++                return;
++            }
++            var reset = event.target.closest('[data-filter-reset]');
++            if (reset) {
++                event.preventDefault();
++                form.reset();
++                form.querySelectorAll(
++                    'select, input[type="search"], input[type="text"]'
++                ).forEach(function (el) {
++                    el.value = '';
++                });
++                var zoneInput = form.querySelector('[data-role="zone-input"]');
++                if (zoneInput) {
++                    zoneInput.value = '';
++                }
++                submitNow();
+             }
+         });
+     }
+@@ -1721,7 +1776,7 @@
+             });
+         }
+         initColumnOrder();
+-        initColumnFilters();
++        initFilterBar();
+         updateBulkBar();
+         updateUploadTarget();
+         highlightNewRow();
+diff --git a/static/js/design-tokens.js b/static/js/design-tokens.js
+index 24ce663..a1dbe03 100644
+--- a/static/js/design-tokens.js
++++ b/static/js/design-tokens.js
+@@ -6,7 +6,7 @@
+     'use strict';
+ 
+     window.CDE_TOKENS = {
+-        version: '20261102.2',
++        version: '20261108.1',
+         /* HEX-цвет маркера по коду статуса (для canvas и рамок) */
+         statusHex: {
+             CANCELLED: '#3F3F3C',
+diff --git a/static/js/pdf_viewer.js b/static/js/pdf_viewer.js
+index d53ef47..3b607bd 100644
+--- a/static/js/pdf_viewer.js
++++ b/static/js/pdf_viewer.js
+@@ -40,6 +40,16 @@
+ 
+     const pdfUrl = viewer.dataset.pdfUrl;
+     const pdfUrlCurrent = viewer.dataset.pdfUrlCurrent || '';
++    // Спринт 8: карта URL всех доступных версий — цель сравнения
++    // выбирается в меню, сравнение доступно из любой версии.
++    const compareUrls = (function () {
++        try {
++            const raw = viewer.dataset.pdfUrls || '';
++            return raw ? JSON.parse(raw) : {};
++        } catch (error) {
++            return {};
++        }
++    })();
+     const isCurrentView = viewer.dataset.isCurrent !== 'false';
+     const createUrl = viewer.dataset.issueCreateUrl;
+     const canCreate = viewer.dataset.canCreate === '1' && isCurrentView;
+@@ -799,6 +809,7 @@
+             totalLabel.textContent = String(total);
+         }
+         updateMinimapLabel();
++        updateThumbsActive();
+     }
+ 
+     function renderPage(pageNumber) {
+@@ -907,6 +918,8 @@
+                 viewer.classList.remove('is-pan');
+                 toggleToolbarButton('text', textMode);
+                 toggleToolbarButton('pan', false);
++            } else if (action === 'thumbs') {
++                toggleThumbs();
+             }
+         });
+ 
+@@ -1213,50 +1226,56 @@
+         }
+     }
+ 
+-    function updateComparisonButton() {
+-        const button = document.getElementById('compareToggleBtn');
+-        if (!button) {
+-            return;
++    function compareTargetUrl() {
++        const select = document.getElementById('compareVersionSelect');
++        if (select && select.value && compareUrls[select.value]) {
++            return compareUrls[select.value];
+         }
+-        const sideActive = comparison.active && comparison.mode === 'side';
+-        button.textContent = sideActive
+-            ? 'Закрыть сравнение'
+-            : 'Сравнить с текущей';
+-        button.disabled = !sideActive && (isCurrentView || !pdfUrlCurrent);
++        return pdfUrlCurrent || null;
+     }
+ 
+-    function updateSliderButton() {
+-        const button = document.getElementById('sliderToggleBtn');
+-        if (!button) {
+-            return;
++    function compareTargetLabel() {
++        const select = document.getElementById('compareVersionSelect');
++        if (select && select.selectedOptions && select.selectedOptions.length) {
++            return select.selectedOptions[0].textContent.trim();
+         }
+-        const label = document.getElementById('sliderToggleLabel');
+-        const sliderActive = comparison.active && comparison.mode === 'slider';
+-        if (sliderActive) {
+-            if (label) {
+-                label.textContent = 'Закрыть сравнение';
+-            }
+-            button.disabled = false;
+-            button.title = 'Закрыть наложение';
++        return 'текущая версия';
++    }
++
++    function hasCompareTarget() {
++        return Boolean(compareTargetUrl() && pdfUrl);
++    }
++
++    function updateCompareMenu() {
++        const button = document.getElementById('compareMenuBtn');
++        if (!button) {
+             return;
+         }
++        const label = document.getElementById('compareMenuLabel');
++        const closeItem = document.getElementById('compareCloseItem');
++        const closeDivider = document.getElementById('compareCloseDivider');
++        const overlayControls = document.getElementById('overlayControls');
+         if (label) {
+-            label.textContent = 'Наложение';
+-        }
+-        button.disabled = isCurrentView
+-            || !pdfUrl
+-            || !pdfUrlCurrent
+-            || comparison.geometryMismatch
+-            || comparison.loading;
+-        if (comparison.geometryMismatch) {
+-            button.title = 'Наложение доступно только для листов с одинаковой геометрией. Используйте режим «Рядом».';
+-        } else if (isCurrentView) {
+-            button.title = 'Доступно только при просмотре не-current версии';
+-        } else if (comparison.loading) {
+-            button.title = 'Проверка геометрии…';
+-        } else {
+-            button.title = 'Сравнение / наложение версий: тяните шторку мышью, пальцем или стрелками ←/→';
++            label.textContent = comparison.active
++                ? 'Сравнение: '
++                  + (comparison.mode === 'side' ? 'рядом'
++                     : comparison.mode === 'slider' ? 'шторка' : 'наложение')
++                : 'Сравнить';
++        }
++        button.disabled = !hasCompareTarget();
++        if (closeItem) {
++            closeItem.classList.toggle('d-none', !comparison.active);
++        }
++        if (closeDivider) {
++            closeDivider.classList.toggle('d-none', !comparison.active);
++        }
++        if (overlayControls) {
++            overlayControls.classList.toggle(
++                'd-none',
++                !(comparison.active && comparison.mode === 'overlay'),
++            );
+         }
++        button.classList.toggle('active', comparison.active);
+     }
+ 
+     function loadComparisonPane(pane) {
+@@ -1454,23 +1473,34 @@
+             if (comparison.mode === 'slider') {
+                 updateSliderFrame();
+             }
++            if (comparison.mode === 'overlay') {
++                updateOverlayFrame();
++            }
+         });
+     }
+ 
+     function startComparison(mode, selectedDocument, currentDocument) {
+-        if (isCurrentView || !pdfUrl || !pdfUrlCurrent) {
++        const targetUrl = compareTargetUrl();
++        if (!pdfUrl || !targetUrl) {
+             return null;
+         }
+         const compareStage = document.getElementById('compareStage');
+         const sliderStage = document.getElementById('sliderStage');
++        const overlayStage = document.getElementById('overlayStage');
+         const stage = document.getElementById('pdf-panel');
+-        const selectedViewer = document.getElementById(
+-            mode === 'side' ? 'compareViewerSelected' : 'sliderViewerSelected'
+-        );
+-        const currentViewer = document.getElementById(
+-            mode === 'side' ? 'compareViewerCurrent' : 'sliderViewerCurrent'
+-        );
+-        if (!compareStage || !sliderStage || !selectedViewer || !currentViewer) {
++        const paneIds = {
++            side: ['compareViewerSelected', 'compareViewerCurrent'],
++            slider: ['sliderViewerSelected', 'sliderViewerCurrent'],
++            overlay: ['overlayViewerSelected', 'overlayViewerCurrent'],
++        };
++        const ids = paneIds[mode];
++        if (!ids) {
++            return null;
++        }
++        const selectedViewer = document.getElementById(ids[0]);
++        const currentViewer = document.getElementById(ids[1]);
++        if (!compareStage || !sliderStage || !overlayStage
++                || !selectedViewer || !currentViewer) {
+             return null;
+         }
+         if (comparison.active) {
+@@ -1483,8 +1513,9 @@
+         comparison.scale = currentScale;
+         comparison.rotation = currentRotation;
+         updateMinimapVisibility();
++        updateThumbsVisibility();
+         comparison.selected = comparisonPane(selectedViewer, pdfUrl, false);
+-        comparison.current = comparisonPane(currentViewer, pdfUrlCurrent, true);
++        comparison.current = comparisonPane(currentViewer, targetUrl, true);
+         comparison.selected.pdfDocument = selectedDocument || null;
+         comparison.current.pdfDocument = currentDocument || null;
+         bindComparisonPane(comparison.selected);
+@@ -1493,17 +1524,31 @@
+         if (mode === 'slider') {
+             setSliderSplit(50);
+         }
++        if (mode === 'overlay') {
++            resetOverlayOffset();
++        }
+ 
+         compareStage.classList.toggle('d-none', mode !== 'side');
+         sliderStage.classList.toggle('d-none', mode !== 'slider');
++        overlayStage.classList.toggle('d-none', mode !== 'overlay');
+         viewer.classList.add('d-none');
+         setFitButtonsEnabled(false);
+         if (stage) {
+             stage.classList.toggle('is-comparing', mode === 'side');
+             stage.classList.toggle('is-sliding', mode === 'slider');
+-        }
+-        updateComparisonButton();
+-        updateSliderButton();
++            stage.classList.toggle('is-overlay', mode === 'overlay');
++        }
++        // Подписи панелей «рядом»: слева — открытая версия, справа — цель.
++        compareStage.querySelectorAll('.compare-pane-head').forEach(
++            function (head, index) {
++                head.textContent = index === 0
++                    ? 'Выбранная версия '
++                      + (viewer.dataset.selectedVersionNumber
++                         ? 'v' + viewer.dataset.selectedVersionNumber : '')
++                    : 'Цель сравнения — ' + compareTargetLabel();
++            },
++        );
++        updateCompareMenu();
+         updateComparisonPageControls();
+ 
+         const loads = [];
+@@ -1526,7 +1571,7 @@
+             closeComparison();
+             return;
+         }
+-        if (isCurrentView || !pdfUrl || !pdfUrlCurrent) {
++        if (!hasCompareTarget()) {
+             return;
+         }
+         if (comparison.active) {
+@@ -1534,30 +1579,28 @@
+         }
+         comparison.requestId += 1;
+         comparison.loading = false;
+-        updateSliderButton();
++        updateCompareMenu();
+         startComparison('side');
+     }
+ 
+-    function openSliderComparison() {
+-        if (isCurrentView || !pdfUrl || !pdfUrlCurrent) {
+-            return;
+-        }
+-        if (comparison.active && comparison.mode === 'slider') {
++    function prepareAlignedComparison(mode) {
++        // Шторка и наложение требуют одинаковой геометрии листов.
++        if (comparison.active && comparison.mode === mode) {
+             closeComparison();
+             return;
+         }
+-        if (comparison.loading) {
++        if (!hasCompareTarget() || comparison.loading) {
+             return;
+         }
+-
++        const targetUrl = compareTargetUrl();
+         const requestId = comparison.requestId + 1;
+         comparison.requestId = requestId;
+         comparison.loading = true;
+-        updateSliderButton();
++        updateCompareMenu();
+ 
+         Promise.all([
+             window.pdfjsLib.getDocument(pdfUrl).promise,
+-            window.pdfjsLib.getDocument(pdfUrlCurrent).promise,
++            window.pdfjsLib.getDocument(targetUrl).promise,
+         ]).then(function (documents) {
+             if (requestId !== comparison.requestId) {
+                 return null;
+@@ -1577,18 +1620,20 @@
+                 ) {
+                     comparison.geometryMismatch = true;
+                     comparison.loading = false;
+-                    updateSliderButton();
++                    updateCompareMenu();
+                     viewerNotify(
+-                        'Шторка доступна только для листов с одинаковой геометрией. Используйте режим «Рядом».'
++                        mode === 'overlay'
++                            ? 'Наложение доступно только для листов с одинаковой геометрией. Используйте режим «Рядом».'
++                            : 'Шторка доступна только для листов с одинаковой геометрией. Используйте режим «Рядом».'
+                     );
+                     return null;
+                 }
+                 comparison.geometryMismatch = false;
+                 comparison.loading = false;
+-                if (comparison.active && comparison.mode === 'side') {
++                if (comparison.active) {
+                     closeComparison();
+                 }
+-                startComparison('slider', documents[0], documents[1]);
++                startComparison(mode, documents[0], documents[1]);
+                 return null;
+             });
+         }).catch(function () {
+@@ -1596,7 +1641,7 @@
+                 return;
+             }
+             comparison.loading = false;
+-            updateSliderButton();
++            updateCompareMenu();
+             viewerNotify('Не удалось загрузить PDF для сравнения.');
+         });
+     }
+@@ -1632,6 +1677,7 @@
+ 
+         const compareStage = document.getElementById('compareStage');
+         const sliderStage = document.getElementById('sliderStage');
++        const overlayStage = document.getElementById('overlayStage');
+         const stage = document.getElementById('pdf-panel');
+         if (compareStage) {
+             compareStage.classList.add('d-none');
+@@ -1639,14 +1685,20 @@
+         if (sliderStage) {
+             sliderStage.classList.add('d-none');
+         }
++        if (overlayStage) {
++            overlayStage.classList.add('d-none');
++        }
+         if (stage) {
+             stage.classList.remove('is-comparing');
+             stage.classList.remove('is-sliding');
++            stage.classList.remove('is-overlay');
+         }
+         viewer.classList.remove('d-none');
+         setFitButtonsEnabled(true);
+-        updateComparisonButton();
+-        updateSliderButton();
++        resetOverlayOffset();
++        updateMinimapVisibility();
++        updateThumbsVisibility();
++        updateCompareMenu();
+ 
+         if (pdfDocument) {
+             currentPage = page;
+@@ -1656,6 +1708,252 @@
+         }
+     }
+ 
++    /* ---------- Спринт 8: наложение чертежей ---------- */
++
++    const overlayState = { opacity: 0.5, blend: 'normal', offsetX: 0, offsetY: 0 };
++
++    function overlayTopPane() {
++        return document.getElementById('overlayViewerSelected');
++    }
++
++    function overlayFrameEl() {
++        return document.getElementById('overlayFrame');
++    }
++
++    function applyOverlayStyle() {
++        const top = overlayTopPane();
++        if (top) {
++            top.style.opacity = String(overlayState.opacity);
++            top.style.mixBlendMode = overlayState.blend;
++            top.style.transform = 'translate('
++                + overlayState.offsetX + 'px, ' + overlayState.offsetY + 'px)';
++        }
++        const label = document.getElementById('overlayOpacityValue');
++        if (label) {
++            label.textContent = Math.round(overlayState.opacity * 100) + '%';
++        }
++    }
++
++    function updateOverlayFrame() {
++        const pane = comparison.current || comparison.selected;
++        const frame = overlayFrameEl();
++        if (!pane || !pane.viewport || !frame) {
++            return;
++        }
++        frame.style.width = Math.ceil(pane.viewport.width) + 'px';
++        frame.style.height = Math.ceil(pane.viewport.height) + 'px';
++        applyOverlayStyle();
++    }
++
++    function resetOverlayOffset() {
++        overlayState.offsetX = 0;
++        overlayState.offsetY = 0;
++        applyOverlayStyle();
++    }
++
++    function initOverlay() {
++        const opacity = document.getElementById('overlayOpacity');
++        if (opacity) {
++            opacity.addEventListener('input', function () {
++                overlayState.opacity = Number(opacity.value) / 100;
++                applyOverlayStyle();
++            });
++        }
++        const blend = document.getElementById('overlayBlend');
++        if (blend) {
++            blend.addEventListener('change', function () {
++                overlayState.blend = blend.value;
++                applyOverlayStyle();
++            });
++        }
++        document.addEventListener('click', function (event) {
++            const nudge = event.target.closest('[data-overlay-nudge]');
++            if (nudge) {
++                event.preventDefault();
++                const parts = (nudge.getAttribute('data-overlay-nudge') || '').split(',');
++                const direction = parts[0];
++                const dx = direction === 'left' ? -1 : direction === 'right' ? 1 : 0;
++                const dy = direction === 'up' ? -1 : direction === 'down' ? 1 : 0;
++                const step = event.shiftKey ? 10 : 1;
++                overlayState.offsetX += dx * step;
++                overlayState.offsetY += dy * step;
++                applyOverlayStyle();
++                return;
++            }
++            if (event.target.closest('#overlayResetOffset')) {
++                event.preventDefault();
++                resetOverlayOffset();
++            }
++        });
++
++        const scroll = document.getElementById('overlayScroll');
++        if (!scroll) {
++            return;
++        }
++        let dragging = false;
++        let startX = 0;
++        let startY = 0;
++        let startOffsetX = 0;
++        let startOffsetY = 0;
++        scroll.addEventListener('pointerdown', function (event) {
++            if (!comparison.active || comparison.mode !== 'overlay') {
++                return;
++            }
++            if (event.button !== 0 || event.target.closest('.overlay-hud')) {
++                return;
++            }
++            dragging = true;
++            startX = event.clientX;
++            startY = event.clientY;
++            startOffsetX = overlayState.offsetX;
++            startOffsetY = overlayState.offsetY;
++            scroll.classList.add('is-dragging');
++            event.preventDefault();
++        });
++        window.addEventListener('pointermove', function (event) {
++            if (!dragging) {
++                return;
++            }
++            overlayState.offsetX = startOffsetX + (event.clientX - startX);
++            overlayState.offsetY = startOffsetY + (event.clientY - startY);
++            applyOverlayStyle();
++        });
++        window.addEventListener('pointerup', function () {
++            dragging = false;
++            scroll.classList.remove('is-dragging');
++        });
++        scroll.addEventListener('wheel', function (event) {
++            if (!event.ctrlKey) {
++                return;
++            }
++            event.preventDefault();
++            if (event.deltaY < 0) {
++                window.zoomIn();
++            } else {
++                window.zoomOut();
++            }
++        }, {passive: false});
++    }
++
++    /* ---------- Спринт 8: полоса листов (миниатюры) ---------- */
++
++    const thumbs = { open: false, built: false, items: new Map(), observer: null };
++
++    function thumbRail() {
++        return document.getElementById('thumbRail');
++    }
++
++    function updateThumbsVisibility() {
++        const rail = thumbRail();
++        const toggle = document.getElementById('thumbsToggle');
++        if (!rail) {
++            return;
++        }
++        const shown = thumbs.open && !comparison.active;
++        rail.classList.toggle('d-none', !shown);
++        if (toggle) {
++            toggle.classList.toggle('active', shown);
++            toggle.setAttribute('aria-expanded', shown ? 'true' : 'false');
++        }
++        if (shown && pdfDocument) {
++            buildThumbRail();
++        }
++    }
++
++    function toggleThumbs() {
++        thumbs.open = !thumbs.open;
++        updateThumbsVisibility();
++    }
++    window.toggleThumbs = toggleThumbs;
++
++    function buildThumbRail() {
++        const rail = thumbRail();
++        if (!rail || !pdfDocument || thumbs.built) {
++            return;
++        }
++        thumbs.built = true;
++        rail.innerHTML = '';
++        thumbs.items.clear();
++        for (let number = 1; number <= pdfDocument.numPages; number += 1) {
++            const button = document.createElement('button');
++            button.type = 'button';
++            button.className = 'thumb';
++            button.dataset.page = String(number);
++            button.setAttribute('aria-label', 'Страница ' + number);
++            const canvas = document.createElement('canvas');
++            canvas.width = 160;
++            canvas.height = 226;
++            canvas.dataset.rendered = '0';
++            const label = document.createElement('span');
++            label.className = 'thumb__page num';
++            label.textContent = String(number);
++            button.appendChild(canvas);
++            button.appendChild(label);
++            button.addEventListener('click', function () {
++                window.goToPage(number);
++            });
++            rail.appendChild(button);
++            thumbs.items.set(number, { button: button, canvas: canvas });
++        }
++        if ('IntersectionObserver' in window) {
++            thumbs.observer = new IntersectionObserver(function (entries) {
++                entries.forEach(function (entry) {
++                    if (entry.isIntersecting) {
++                        renderThumb(Number(entry.target.dataset.page));
++                    }
++                });
++            }, { root: rail, rootMargin: '240px' });
++            thumbs.items.forEach(function (item) {
++                thumbs.observer.observe(item.button);
++            });
++        } else {
++            thumbs.items.forEach(function (item) {
++                renderThumb(Number(item.button.dataset.page));
++            });
++        }
++        updateThumbsActive();
++    }
++
++    function renderThumb(pageNumber) {
++        const item = thumbs.items.get(pageNumber);
++        if (!item || item.canvas.dataset.rendered === '1' || !pdfDocument) {
++            return;
++        }
++        item.canvas.dataset.rendered = '1';
++        pdfDocument.getPage(pageNumber).then(function (page) {
++            const base = page.getViewport({ scale: 1, rotation: currentRotation });
++            const scale = 140 / base.width;
++            const viewport = page.getViewport({ scale: scale, rotation: currentRotation });
++            const outputScale = window.devicePixelRatio || 1;
++            item.canvas.width = Math.floor(viewport.width * outputScale);
++            item.canvas.height = Math.floor(viewport.height * outputScale);
++            item.canvas.style.width = Math.floor(viewport.width) + 'px';
++            item.canvas.style.height = Math.floor(viewport.height) + 'px';
++            const context = item.canvas.getContext('2d');
++            context.setTransform(outputScale, 0, 0, outputScale, 0, 0);
++            return page.render({
++                canvasContext: context,
++                viewport: viewport,
++            }).promise;
++        }).catch(function () {
++            item.canvas.dataset.rendered = '0';
++        });
++    }
++
++    function updateThumbsActive() {
++        if (!thumbs.items.size) {
++            return;
++        }
++        const activePage = comparison.active ? comparison.page : currentPage;
++        thumbs.items.forEach(function (item, number) {
++            item.button.classList.toggle('is-active', number === activePage);
++        });
++        const active = thumbs.items.get(activePage);
++        if (active && thumbs.open) {
++            active.button.scrollIntoView({ block: 'nearest' });
++        }
++    }
++
+     function initDetails() {
+         const saveButton = document.getElementById('detailAnswerSave');
+         const answerField = document.getElementById('detailAnswer');
+@@ -2187,16 +2485,40 @@
+     };
+     window.closePdfComparison = closeComparison;
+ 
+-    const compareToggleBtn = document.getElementById('compareToggleBtn');
+-    if (compareToggleBtn) {
+-        compareToggleBtn.addEventListener('click', openComparison);
+-    }
+-    const sliderToggleBtn = document.getElementById('sliderToggleBtn');
+-    if (sliderToggleBtn) {
+-        sliderToggleBtn.addEventListener('click', openSliderComparison);
++    /* Спринт 8: меню сравнения — режимы и цель выбираются в одном месте */
++    const compareSelect = document.getElementById('compareVersionSelect');
++    if (compareSelect) {
++        compareSelect.addEventListener('change', function () {
++            comparison.geometryMismatch = false;
++            if (comparison.active) {
++                const mode = comparison.mode;
++                closeComparison();
++                if (mode === 'side') {
++                    startComparison('side');
++                } else {
++                    prepareAlignedComparison(mode);
++                }
++            }
++        });
+     }
+-    updateComparisonButton();
+-    updateSliderButton();
++    document.addEventListener('click', function (event) {
++        const item = event.target.closest('[data-compare-mode]');
++        if (item) {
++            event.preventDefault();
++            const mode = item.getAttribute('data-compare-mode');
++            if (mode === 'side') {
++                openComparison();
++            } else {
++                prepareAlignedComparison(mode);
++            }
++            return;
++        }
++        if (event.target.closest('#compareCloseItem')) {
++            event.preventDefault();
++            closeComparison();
++        }
++    });
++    updateCompareMenu();
+ 
+     // Смена статуса без перезагрузки: обновляем внутренний список и маркеры на листе.
+     document.addEventListener('issue:status-changed', function (event) {
+@@ -2219,9 +2541,11 @@
+     initToolbar();
+     initPan();
+     initSlider();
++    initOverlay();
+     initContextMenu();
+     initDetails();
+     initMinimap();
++    updateThumbsVisibility();
+     if (issues.length) {
+         selectIssue(issues[0].id);
+     }
+diff --git a/static/js/sw-bypass-list.js b/static/js/sw-bypass-list.js
+index 1171205..6c157c0 100644
+--- a/static/js/sw-bypass-list.js
++++ b/static/js/sw-bypass-list.js
+@@ -12,6 +12,7 @@
+         '/dashboard/',
+         '/documents/',
+         '/download/',
++        '/feedback/',
+         '/folders/',
+         '/issues/',
+         '/jsi18n/',
+diff --git a/static/manifest.webmanifest b/static/manifest.webmanifest
+index 0541af1..e36a53b 100644
+--- a/static/manifest.webmanifest
++++ b/static/manifest.webmanifest
+@@ -8,7 +8,7 @@
+   "orientation": "any",
+   "lang": "ru",
+   "background_color": "#F6F6F4",
+-  "theme_color": "#3A4558",
++  "theme_color": "#FFFFFF",
+   "icons": [
+     {
+       "src": "/static/icons/icon-192.png",
+diff --git a/storage/adapters/templates/storage/_documents_panel.html b/storage/adapters/templates/storage/_documents_panel.html
+index 440bdd1..9ae1728 100644
+--- a/storage/adapters/templates/storage/_documents_panel.html
++++ b/storage/adapters/templates/storage/_documents_panel.html
+@@ -41,12 +41,13 @@
+     </nav>
+ 
+     {% comment %}
+-    Спринт 2: фильтры применяются сразу — по change у селектов и с
+-    задержкой 350 мс при наборе в поиске. Кнопка «Найти» больше не нужна
+-    (скрытый submit оставлен для доступности/Enter).
++    Спринт 8: фильтры снова видимы — выпадающий бар над таблицей.
++    Селекты применяются сразу, поиск — с задержкой 350 мс (app.js).
++    Активные условия показываются чипами с × и «Сбросить всё», бар
++    подсвечивается, пока хотя бы один фильтр задан.
+     {% endcomment %}
+     <form id="filtersForm"
+-          class="d-none"
++          class="filter-bar {% if active_filter_chips %}is-filtered{% endif %}"
+           method="get"
+           action="{% url 'storage:project_detail' project.pk %}"
+           hx-get="{% url 'storage:project_detail' project.pk %}"
+@@ -65,13 +66,64 @@
+             <input type="hidden" name="folder" value="{{ selected_folder.pk }}">
+         {% endif %}
+         <input type="hidden" name="sort" value="{{ active_sort|default:'' }}">
+-        {{ filter.form.section }}
+-        {{ filter.form.doc_type }}
+-        {{ filter.form.suitability_code }}
+-        {{ filter.form.internal_status }}
+-        {{ filter.form.code }}
+-        {{ filter.form.name }}
+-        {{ filter.form.q }}
++        <div class="d-none">{{ filter.form.code }}{{ filter.form.name }}</div>
++
++        <div class="filter-bar__fields">
++            <div class="filter-field">
++                <label class="filter-field__label" for="{{ filter.form.section.id_for_label }}">Раздел</label>
++                {{ filter.form.section }}
++            </div>
++            <div class="filter-field">
++                <label class="filter-field__label" for="{{ filter.form.doc_type.id_for_label }}">Тип</label>
++                {{ filter.form.doc_type }}
++            </div>
++            <div class="filter-field">
++                <label class="filter-field__label" for="{{ filter.form.status.id_for_label }}">Статус</label>
++                {{ filter.form.status }}
++            </div>
++            <div class="filter-field">
++                <label class="filter-field__label" for="{{ filter.form.suitability_code.id_for_label }}">Пригодность</label>
++                {{ filter.form.suitability_code }}
++            </div>
++            <div class="filter-field">
++                <label class="filter-field__label" for="{{ filter.form.internal_status.id_for_label }}">Внутр. статус</label>
++                {{ filter.form.internal_status }}
++            </div>
++            <div class="filter-field filter-field--search">
++                <label class="filter-field__label" for="{{ filter.form.q.id_for_label }}">Поиск</label>
++                {{ filter.form.q }}
++            </div>
++            {% if active_filter_chips %}
++            <button type="button" class="filter-bar__reset" data-filter-reset
++                    title="Сбросить все фильтры, зоны и поиск">
++                <i class="bi bi-x-circle" aria-hidden="true"></i>
++                Сбросить всё
++            </button>
++            {% endif %}
++        </div>
++
++        {% if active_filter_chips %}
++        <div class="filter-chips" role="status" aria-label="Активные фильтры">
++            <span class="filter-chips__hint">
++                <i class="bi bi-funnel-fill" aria-hidden="true"></i>
++                Отфильтровано:
++            </span>
++            {% for chip in active_filter_chips %}
++            <span class="filter-chip">
++                <span class="filter-chip__name">{{ chip.label }}:</span>
++                <span class="filter-chip__value cde-tnum">{{ chip.display }}</span>
++                <button type="button" class="filter-chip__clear"
++                        data-filter-chip-clear="{{ chip.param }}"
++                        aria-label="Убрать фильтр «{{ chip.label }}»">
++                    <i class="bi bi-x-lg" aria-hidden="true"></i>
++                </button>
++            </span>
++            {% endfor %}
++            <span class="filter-chips__count cde-tnum">
++                найдено: {% if table.paginator %}{{ table.paginator.count }}{% else %}{{ documents|length }}{% endif %}
++            </span>
++        </div>
++        {% endif %}
+     </form>
+ 
+     <div class="toolbar" data-role="toolbar">
+diff --git a/storage/adapters/templates/storage/base.html b/storage/adapters/templates/storage/base.html
+index a95a237..596d4df 100644
+--- a/storage/adapters/templates/storage/base.html
++++ b/storage/adapters/templates/storage/base.html
+@@ -20,7 +20,7 @@ document_detail — у него своя разметка и свой набор
+     <meta charset="utf-8">
+     <meta name="viewport" content="width=device-width, initial-scale=1">
+     <title>{% block title %}Stream-CAD{% endblock %}</title>
+-    <meta name="theme-color" content="#3A4558">
++    <meta name="theme-color" content="#FFFFFF">
+     <link rel="manifest" href="/static/manifest.webmanifest">
+     <link rel="icon" type="image/png" href="/static/icons/icon-192.png">
+     <link rel="stylesheet" href="{% static 'css/bootstrap.min.css' %}">
+diff --git a/storage/adapters/templates/storage/document_detail.html b/storage/adapters/templates/storage/document_detail.html
+index 6e82d3d..91d9b99 100644
+--- a/storage/adapters/templates/storage/document_detail.html
++++ b/storage/adapters/templates/storage/document_detail.html
+@@ -5,7 +5,7 @@
+ <meta charset="UTF-8">
+ <meta name="viewport" content="width=device-width, initial-scale=1">
+ <title>{{ document.code }} — {{ document.name }}</title>
+-<meta name="theme-color" content="#3A4558">
++<meta name="theme-color" content="#FFFFFF">
+ <link rel="manifest" href="/static/manifest.webmanifest">
+ <link rel="icon" type="image/png" href="/static/icons/icon-192.png">
+ <link rel="stylesheet" href="{% static 'fonts/fonts.css' %}">
+@@ -111,17 +111,60 @@
+       <span class="version-badge">Просмотр версии v{{ selected_version.version_number }} (не текущая)</span>
+       <a class="version-back" href="{{ current_version_url }}">Вернуться к текущей</a>
+     {% endif %}
+-    <button class="tbtn compare-toggle" id="compareToggleBtn" type="button"
+-            title="Сравнить рядом"
+-            {% if is_current_version or not document.current_version %}disabled{% endif %}>
+-      Сравнить с текущей
+-    </button>
+-    <button class="tbtn compare-toggle" id="sliderToggleBtn" type="button"
+-            title="Сравнение / наложение версий: тяните шторку мышью, пальцем или стрелками ←/→"
+-            {% if is_current_version or not document.current_version %}disabled{% endif %}>
+-      <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M8 2.5v11" fill="none" stroke="currentColor" stroke-width="1.4"/></svg>
+-      <span id="sliderToggleLabel">Наложение</span>
+-    </button>
++    {# Спринт 8: сравнение доступно из любой версии — цель выбирается в меню. #}
++    <div class="dropdown compare-menu">
++      <button class="tbtn compare-toggle" id="compareMenuBtn" type="button"
++              data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-expanded="false"
++              title="Сравнение версий: рядом, шторка, наложение"
++              {% if not pdf_urls_json %}disabled{% endif %}>
++        <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M8 2.5v11M1.5 8h6.5" fill="none" stroke="currentColor" stroke-width="1.4"/></svg>
++        <span id="compareMenuLabel">Сравнить</span>
++      </button>
++      <div class="dropdown-menu compare-menu-dropdown p-2" aria-labelledby="compareMenuBtn">
++        <label class="form-label small fw-semibold mb-1" for="compareVersionSelect">С чем сравнить</label>
++        <select class="form-select form-select-sm mb-2" id="compareVersionSelect">
++          {% for v in versions %}
++            {% if selected_version and v.pk != selected_version.pk %}
++              <option value="{{ v.pk }}" {% if v.pk == document.current_version_id %}selected{% endif %}>
++                v{{ v.version_number }}{% if v.pk == document.current_version_id %} (текущая){% endif %}
++              </option>
++            {% endif %}
++          {% endfor %}
++        </select>
++        <button class="dropdown-item" type="button" data-compare-mode="side">
++          <i class="bi bi-layout-split me-2" aria-hidden="true"></i>Рядом
++        </button>
++        <button class="dropdown-item" type="button" data-compare-mode="slider">
++          <i class="bi bi-layout-sidebar-inset me-2" aria-hidden="true"></i>Шторка
++        </button>
++        <button class="dropdown-item" type="button" data-compare-mode="overlay">
++          <i class="bi bi-layers me-2" aria-hidden="true"></i>Наложение
++        </button>
++        <hr class="dropdown-divider">
++        <div id="overlayControls" class="d-none px-1">
++          <label class="form-label small mb-1 d-flex justify-content-between" for="overlayOpacity">
++            Прозрачность
++            <span class="num" id="overlayOpacityValue">50%</span>
++          </label>
++          <input type="range" class="form-range" id="overlayOpacity" min="5" max="100" step="5" value="50">
++          <label class="form-label small mt-1 mb-1" for="overlayBlend">Режим наложения</label>
++          <select class="form-select form-select-sm" id="overlayBlend">
++            <option value="normal" selected>Обычный</option>
++            <option value="difference">Разница</option>
++            <option value="multiply">Умножение</option>
++          </select>
++          <div class="d-flex gap-1 mt-2 flex-wrap">
++            <button class="btn btn-sm btn-outline-secondary py-0" type="button" data-overlay-nudge="left,-1" title="Сдвинуть верхний слой влево">←</button>
++            <button class="btn btn-sm btn-outline-secondary py-0" type="button" data-overlay-nudge="right,1" title="Сдвинуть верхний слой вправо">→</button>
++            <button class="btn btn-sm btn-outline-secondary py-0" type="button" data-overlay-nudge="up,-1" title="Сдвинуть верхний слой вверх">↑</button>
++            <button class="btn btn-sm btn-outline-secondary py-0" type="button" data-overlay-nudge="down,1" title="Сдвинуть верхний слой вниз">↓</button>
++            <button class="btn btn-sm btn-outline-secondary py-0 ms-auto" type="button" id="overlayResetOffset" title="Сбросить сдвиг">0</button>
++          </div>
++        </div>
++        <hr class="dropdown-divider" id="compareCloseDivider">
++        <button class="dropdown-item text-danger" type="button" id="compareCloseItem">Закрыть сравнение</button>
++      </div>
++    </div>
+   </div>
+   <span class="divider"></span>
+   {% endif %}
+@@ -156,6 +199,11 @@
+             title="Мини-карта: превью листа и видимой области" aria-label="Мини-карта">
+       <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.4"/><rect x="8" y="7" width="4.5" height="4" fill="currentColor" opacity="0.55"/></svg>
+     </button>
++    <button class="tbtn" id="thumbsToggle" onclick="toggleThumbs()" type="button"
++            title="Полоса листов: миниатюры всех страниц" aria-label="Полоса листов"
++            aria-expanded="false" aria-controls="thumbRail">
++      <i class="bi bi-grid-3x2-gap" aria-hidden="true"></i>
++    </button>
+   </div>
+ </div>
+ 
+@@ -169,9 +217,11 @@
+ 
+ <div class="workspace" id="main-splitter">
+   <section class="stage" id="pdf-panel">
++    <aside class="thumb-rail d-none" id="thumbRail" aria-label="Страницы документа"></aside>
+     <div class="pdf-viewer" id="pdfViewer"
+          data-pdf-url="{{ pdf_url }}"
+          data-pdf-url-current="{{ pdf_url_current }}"
++         data-pdf-urls="{{ pdf_urls_json }}"
+          data-current-version-id="{{ document.current_version_id|default:'' }}"
+          data-selected-version-id="{{ selected_version.pk|default:'' }}"
+          data-selected-version-number="{{ selected_version.version_number|default:'' }}"
+@@ -212,6 +262,21 @@
+         </div>
+       </div>
+     </div>
++
++    {# Спринт 8: настоящее наложение чертежей — верхний слой регулируется по прозрачности, режиму смешивания и сдвигу. #}
++    <div class="overlay-stage d-none" id="overlayStage">
++      <div class="overlay-scroll" id="overlayScroll">
++        <div class="overlay-frame" id="overlayFrame">
++          <div class="overlay-pane overlay-pane--base" id="overlayViewerCurrent"></div>
++          <div class="overlay-pane overlay-pane--top" id="overlayViewerSelected"></div>
++        </div>
++      </div>
++      <div class="overlay-hud">
++        <span class="overlay-hud__base"><i class="bi bi-square" aria-hidden="true"></i> низ — выбранная версия</span>
++        <span class="overlay-hud__top"><i class="bi bi-square-fill" aria-hidden="true"></i> верх — цель сравнения</span>
++        <span class="overlay-hud__hint">Тяните мышью для совмещения · Ctrl+колесо — масштаб</span>
++      </div>
++    </div>
+   </section>
+ 
+   <div class="splitter" id="drag-divider"></div>
+diff --git a/storage/adapters/templates/storage/search.html b/storage/adapters/templates/storage/search.html
+index fb1e622..daf85ee 100644
+--- a/storage/adapters/templates/storage/search.html
++++ b/storage/adapters/templates/storage/search.html
+@@ -66,6 +66,31 @@
+         </div>
+     </div>
+ 
++    {% if not query and recent_documents %}
++    <section class="recent-documents" id="recent-documents" aria-labelledby="recentDocumentsTitle">
++        <h2 id="recentDocumentsTitle" class="recent-documents__title">
++            <i class="bi bi-clock-history" aria-hidden="true"></i>
++            Последние документы
++        </h2>
++        <ul class="recent-documents__list">
++            {% for item in recent_documents %}
++            <li class="recent-documents__item">
++                <a class="recent-documents__link" href="{% url 'storage:document_detail' item.doc.pk %}">
++                    {{ item.doc.code }} — {{ item.doc.name }}
++                </a>
++                <span class="cde-badge cde-badge--accent">{{ item.doc.get_doc_type_display }}</span>
++                {% if item.doc.current_version %}
++                <span class="cde-chip">v{{ item.doc.current_version.version_number }}</span>
++                {% endif %}
++                <span class="recent-documents__time cde-tnum">
++                    {% if item.opened_at %}открывался {{ item.opened_at|date:"d.m.Y, H:i" }}{% endif %}
++                </span>
++            </li>
++            {% endfor %}
++        </ul>
++    </section>
++    {% endif %}
++
+     <div class="card shadow-sm">
+         <div class="card-header bg-white d-flex justify-content-between align-items-center">
+             <span class="fw-semibold">Найдено документов: {{ documents|length }}</span>
+diff --git a/storage/adapters/views.py b/storage/adapters/views.py
+index 6fbee08..d761eeb 100644
+--- a/storage/adapters/views.py
++++ b/storage/adapters/views.py
+@@ -207,6 +207,18 @@ FILTER_QUERY_KEYS = (
+     'code', 'name',
+ )
+ 
++# Спринт 8: чипы активных фильтров — (param, подпись, choices для display).
++FILTER_CHIP_FIELDS = (
++    ('q', 'Поиск', None),
++    ('section', 'Раздел', None),
++    ('doc_type', 'Тип', Document.DOC_TYPE_CHOICES),
++    ('status', 'Статус', Document.STATUS_CHOICES),
++    ('suitability_code', 'Пригодность', Document.SUITABILITY_CHOICES),
++    ('internal_status', 'Внутр. статус', Document.INTERNAL_STATUS_CHOICES),
++    ('code', 'Шифр', None),
++    ('name', 'Название', None),
++)
++
+ DOCUMENT_SORT_COLUMN_MAP = {
+     'code': 'code',
+     'name': 'name',
+@@ -666,8 +678,52 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
+                 changed = True
+         if changed:
+             kwargs['data'] = data
++        # Спринт 8: таблица должна строиться на аннотированном queryset
++        # (select_related проекта/версий + счётчики открытых замечаний),
++        # иначе каждая строка реестра порождает N+1 запросов через
++        # document_actions → can_transition/_has_open_issues.
++        kwargs['queryset'] = self.get_queryset()
+         return kwargs
+ 
++    def _build_filter_chips(self, saved_filters, get_params, sections, active_zone):
++        """Спринт 8: чипы активных фильтров для строки «Отфильтровано».
++
++        Учитываются и GET-параметры, и фильтры сохранённого вида
++        (get_filterset_kwargs подмешивает их в форму).
++        """
++        chips = []
++        for param, label, choices in FILTER_CHIP_FIELDS:
++            value = (get_params.get(param) or '').strip()
++            if not value and saved_filters:
++                value = str(saved_filters.get(param) or '').strip()
++            if not value:
++                continue
++            if param == 'section':
++                section = next(
++                    (s for s in sections if str(s.pk) == value), None,
++                )
++                display = (
++                    f'{section.code} — {section.name}' if section else value
++                )
++            elif choices:
++                display = dict(choices).get(value, value)
++            else:
++                display = value
++            chips.append({
++                'param': param,
++                'label': label,
++                'display': display,
++            })
++        if active_zone:
++            chips.insert(0, {
++                'param': 'zone',
++                'label': 'Зона',
++                'display': dict(Folder.ZONE_CHOICES).get(
++                    active_zone, active_zone,
++                ),
++            })
++        return chips
++
+     def get_table_kwargs(self):
+         kwargs = super().get_table_kwargs()
+         visible = set(self._get_view_state()[2]['columns'])
+@@ -741,7 +797,19 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
+                 is_deleted=False,
+             )
+             .exclude(is_system_zone=True)
+-            .select_related('section')
++            # Спринт 8: project/parent нужны check_write_permission,
++            # check_zone_permission и get_folder_mark_id на каждую папку —
++            # без select_related это ~130 запросов N+1 на страницу.
++            .select_related(
++                'section',
++                'section__project',
++                'project',
++                'parent',
++                'parent__parent',
++                'parent__parent__parent',
++                'parent__parent__parent__parent',
++                'parent__parent__parent__parent__parent',
++            )
+             .order_by('order', 'name')
+         )
+         for folder in document_move_folders:
+@@ -832,6 +900,13 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
+                 or needle in str(document.get('author', '')).lower()
+             ]
+ 
++        active_filter_chips = self._build_filter_chips(
++            view_config['filters'],
++            self.request.GET,
++            sections,
++            active_zone,
++        )
++
+         highlight_id = None
+         raw_highlight = (self.request.GET.get('highlight') or '').strip()
+         if raw_highlight.isdigit():
+@@ -853,11 +928,6 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
+             'all_folders': all_folders,
+             'document_move_folders': document_move_folders,
+             'folder_move_folders': folder_move_folders,
+-            'recent_documents': _recent_documents(
+-                self.request,
+-                user,
+-                project,
+-            ),
+             'documents': documents,
+             'document_views': document_views,
+             'selected_view': selected_view,
+@@ -872,6 +942,7 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
+             'highlight_id': highlight_id,
+             'highlight_seconds': HIGHLIGHT_ROW_SECONDS,
+             'active_search': active_search,
++            'active_filter_chips': active_filter_chips,
+             'view_config': view_config,
+             'widths_json': json.dumps(view_config['widths']),
+             'active_filters': view_config['filters'],
+@@ -1387,14 +1458,18 @@ class DocumentMoveView(LoginRequiredMixin, View):
+                     allow_section_change=allow_section_change,
+                 )
+             elif section_id:
+-                if not allow_section_change:
+-                    raise ValueError(
+-                        "Смена раздела через обычное перемещение запрещена"
+-                    )
+                 section = get_object_or_404(
+                     get_accessible_sections(request.user, document.project),
+                     pk=section_id,
+                 )
++                # Спринт 7: сброс в корень СВОЕГО раздела (жест «вынести из
++                # папки») разрешён без явного подтверждения — марка не меняется.
++                # Кросс-разделный перенос требует allow_section_change=1
++                # (кнопка «Сменить раздел» или confirm в JS при DnD).
++                if section.pk != document.section_id and not allow_section_change:
++                    raise ValueError(
++                        "Смена раздела через обычное перемещение запрещена"
++                    )
+                 move_document_to_section(request.user, document, section)
+             else:
+                 move_document(
+@@ -2082,6 +2157,14 @@ class SearchView(LoginRequiredMixin, TemplateView):
+             status=status or None,
+         )
+ 
++        # Спринт 7: «Недавние» показываем только в пустом поиске —
++        # там это отправная точка, а не шум над таблицей проекта.
++        recent_documents = (
++            _recent_documents(self.request, user, project)
++            if not query
++            else []
++        )
++
+         context.update({
+             'project': project,
+             'documents': documents,
+@@ -2092,6 +2175,7 @@ class SearchView(LoginRequiredMixin, TemplateView):
+             'selected_status': status,
+             'doc_type_choices': doc_type_choices,
+             'status_choices': status_choices,
++            'recent_documents': recent_documents,
+         })
+         return context
+ 
+@@ -2262,6 +2346,21 @@ class DocumentDetailView(LoginRequiredMixin, DetailView):
+         context['pdf_url'] = pdf_url
+         context['pdf_url_current'] = pdf_url_current
+         context['current_version_url'] = current_version_url
++
++        # Спринт 8: сравнение доступно из ЛЮБОЙ версии — цель сравнения
++        # выбирается в выпадающем меню (текущая версия по умолчанию).
++        pdf_urls = {}
++        for version_item in versions:
++            url = reverse(
++                'storage:document_download', args=[version_item.pk],
++            )
++            if share_query:
++                url += share_query
++            pdf_urls[str(version_item.pk)] = url
++        context['pdf_urls_json'] = json.dumps(pdf_urls)
++        context['selected_version_pk'] = (
++            selected_version.pk if selected_version else None
++        )
+         context['open_issues_count'] = 0
+         context['issues_registry_url'] = ''
+         issues = list(get_issues_for_version(self.object))
+diff --git a/storage/domain/design_colors.py b/storage/domain/design_colors.py
+index 369a630..34567e0 100644
+--- a/storage/domain/design_colors.py
++++ b/storage/domain/design_colors.py
+@@ -3,7 +3,7 @@
+ Правки вносить в tokens.json, затем: python scripts/build_design_tokens.py
+ """
+ 
+-TOKENS_VERSION = '20261102.2'
++TOKENS_VERSION = '20261108.1'
+ DEFAULT_STATUS = 'NEW'
+ 
+ # HEX-цвета статусов замечаний (совпадают с tokens.css и design-tokens.js).
+diff --git a/storage/domain/services.py b/storage/domain/services.py
+index 59b014d..4ac4ab2 100644
+--- a/storage/domain/services.py
++++ b/storage/domain/services.py
+@@ -5,6 +5,7 @@ import io
+ import uuid
+ 
+ import fitz
++from PIL import Image, UnidentifiedImageError
+ 
+ from django.core.exceptions import PermissionDenied, ValidationError
+ from django.core.files.base import ContentFile
+@@ -165,7 +166,12 @@ def _check_company_access(user: User, company_id: int) -> bool:
+     """Проверяет, что пользователь принадлежит компании (superuser — вне ограничений)."""
+     if user.is_superuser:
+         return True
+-    company = get_user_company(user)
++    # Спринт 8: кэш на время жизни инстанса пользователя (один запрос).
++    # Без него каждая строка реестра × каждое действие дёргало БД
++    # (get_user_company = 2 запроса) — на 25 строках ~140 запросов.
++    if not hasattr(user, '_sod_company_cache'):
++        user._sod_company_cache = get_user_company(user)
++    company = user._sod_company_cache
+     return company is not None and company.pk == company_id
+ 
+ 
+@@ -546,8 +552,16 @@ def get_project_documents_queryset(
+ 
+     return queryset.select_related(
+         'section',
++        'section__project',
++        'project',
+         'folder',
+         'folder__parent',
++        'folder__parent__parent',
++        'folder__parent__parent__parent',
++        'folder__parent__parent__parent__parent',
++        'folder__parent__parent__parent__parent__parent',
++        'folder__section',
++        'folder__section__project',
+         'current_version',
+         'current_version__uploaded_by',
+         'created_by',
+@@ -1530,7 +1544,14 @@ def get_folder_tree(user: User, project: Project) -> list[Folder]:
+             is_deleted=False,
+         )
+         .filter(Q(section__in=accessible_sections) | Q(section__isnull=True))
+-        .select_related('section')
++        # Спринт 8: шаблон дерева обращается к folder.parent — без
++        # select_related это запрос на каждый узел.
++        .select_related(
++            'section',
++            'parent',
++            'parent__parent',
++            'parent__parent__parent',
++        )
+         .annotate(
+             document_count=Count(
+                 'documents',
+@@ -4063,6 +4084,26 @@ def submit_feedback(
+         if extension == "jpeg":
+             extension = "jpg"
+ 
++        # Спринт 7: content_type приходит от клиента и подделывается —
++        # проверяем, что байты действительно являются изображением.
++        try:
++            screenshot.open("rb")
++            screenshot.seek(0)
++        except (AttributeError, OSError):
++            pass
++        try:
++            with Image.open(screenshot) as _img:
++                _img.verify()
++        except (UnidentifiedImageError, OSError, ValueError) as exc:
++            raise ValidationError(
++                {"screenshot": "Файл не является корректным изображением"}
++            ) from exc
++        finally:
++            try:
++                screenshot.seek(0)
++            except (AttributeError, OSError):
++                pass
++
+         storage = file_storage or default_storage
+         upload_to = Feedback._meta.get_field("screenshot").upload_to
+         if isinstance(upload_to, str):
+diff --git a/storage/management/commands/create_demo_project.py b/storage/management/commands/create_demo_project.py
+index 3fb67e0..a00178f 100644
+--- a/storage/management/commands/create_demo_project.py
++++ b/storage/management/commands/create_demo_project.py
+@@ -15,6 +15,7 @@ from datetime import timedelta
+ from urllib.parse import urlencode
+ 
+ import fitz
++from django.conf import settings
+ from django.contrib.auth import get_user_model
+ from django.core.exceptions import PermissionDenied
+ from django.core.files.uploadedfile import SimpleUploadedFile
+@@ -90,8 +91,29 @@ class Command(BaseCommand):
+             action='store_true',
+             help='Удалить существующий DEMO-2026 и создать заново.',
+         )
++        parser.add_argument(
++            '--force',
++            action='store_true',
++            help=(
++                'Разрешить запуск в продакшене (DJANGO_DEBUG=False). '
++                'Команда создаёт аккаунты с известным паролем '
++                f'«{DEMO_PASSWORD}» — без --force в проде она отклоняется.'
++            ),
++        )
+ 
+     def handle(self, *args, **options):
++        # Спринт 7: guard от запуска в продакшене. Демо-аккаунты создаются
++        # с публично известным паролем и ролью admin — на боевом сервере
++        # это прямой обход аутентификации.
++        if not settings.DEBUG and not options.get('force'):
++            raise CommandError(
++                'create_demo_project создаёт аккаунты с известным паролем '
++                f'«{DEMO_PASSWORD}» и ролью admin. В продакшене '
++                '(DJANGO_DEBUG=False) это небезопасно: передайте --force, '
++                'если вы действительно хотите это сделать, и смените '
++                'пароли сразу после демо.'
++            )
++
+         self._created_files: list[str] = []
+         self._accounts: list[dict] = []
+ 
+diff --git a/storage/tests/test_demo_command.py b/storage/tests/test_demo_command.py
+index f1abdb3..cade6b6 100644
+--- a/storage/tests/test_demo_command.py
++++ b/storage/tests/test_demo_command.py
+@@ -35,6 +35,10 @@ class CreateDemoProjectTests(TestCase):
+ 
+     def _run(self, **options):
+         stdout = StringIO()
++        # Спринт 7: тестовый раннер принудительно ставит DEBUG=False,
++        # поэтому все вызовы проходят с force=True (guard проверяется
++        # отдельно в test_sprint7.DemoCommandGuardTests).
++        options.setdefault('force', True)
+         call_command(
+             'create_demo_project',
+             stdout=stdout,
+diff --git a/storage/tests/test_sprint7.py b/storage/tests/test_sprint7.py
+new file mode 100644
+index 0000000..0796f99
+--- /dev/null
++++ b/storage/tests/test_sprint7.py
+@@ -0,0 +1,199 @@
++"""Спринт 7: контракт перемещений, регрессии и защитные правки.
++
++Покрывает находки генерального аудита 5.0 (ревизия 92f237c):
++- DnD-контракт «Сменить раздел»: сброс в корень своего раздела без флага,
++  кросс-разделный перенос только с allow_section_change=1;
++- зона-гвардия PUBLISHED/SHARED/ARCHIVE не обходится через явный флаг;
++- create_demo_project не запускается в продакшене без --force;
++- скриншот обратной связи проверяется как изображение (PIL), а не
++  только по content_type;
++- LOGGING настроен (django.request, storage, issues);
++- разметка: панель «Последние документы» восстановлена, DnD-пейлоад
++  несёт исходный раздел.
++"""
++from io import BytesIO
++
++from django.conf import settings
++from django.core.exceptions import ValidationError
++from django.core.management import call_command
++from django.core.management.base import CommandError
++from django.core.files.uploadedfile import SimpleUploadedFile
++from django.test import TestCase, override_settings
++from django.urls import reverse
++
++from storage.domain.models import Company
++from storage.domain.services import submit_feedback
++from storage.tests.test_sprint5 import Sprint5TestBase
++from storage.tests.test_feedback import TINY_PNG
++
++
++class DemoCommandGuardTests(TestCase):
++    """Демо-команда создаёт admin-аккаунты с известным паролем."""
++
++    @override_settings(DEBUG=False)
++    def test_demo_command_refuses_in_production(self):
++        with self.assertRaises(CommandError) as ctx:
++            call_command('create_demo_project', verbosity=0)
++        self.assertIn('--force', str(ctx.exception))
++        self.assertIn('demo12345', str(ctx.exception))
++
++    @override_settings(DEBUG=False)
++    def test_demo_command_force_flag_unblocks_production(self):
++        call_command('create_demo_project', force=True, verbosity=0)
++        from storage.domain.models import Project
++        self.assertTrue(Project.objects.filter(code='DEMO-2026').exists())
++
++    @override_settings(DEBUG=True)
++    def test_demo_command_runs_in_dev_mode(self):
++        # Тестовый раннер Django принудительно ставит DEBUG=False,
++        # поэтому dev-режим эмулируем явно.
++        call_command('create_demo_project', verbosity=0)
++        from storage.domain.models import Project
++        self.assertTrue(Project.objects.filter(code='DEMO-2026').exists())
++
++
++class DocumentSectionMoveViewTests(Sprint5TestBase):
++    """Вьюха перемещения: зона-гвардия сильнее явного флага."""
++
++    def test_published_document_rejected_even_with_flag(self):
++        document = self.make_document(
++            code='PUB-7', folder=self.published_folder, status='approved',
++        )
++        self.client.force_login(self.user_gip)
++
++        response = self.client.post(
++            reverse('storage:document_move', args=[document.pk]),
++            {
++                'section_id': self.section_kr.pk,
++                'allow_section_change': '1',
++            },
++        )
++
++        self.assertEqual(response.status_code, 403)
++        self.assertIn('workflow-кнопки', response.json()['error'])
++        document.refresh_from_db()
++        self.assertEqual(document.section_id, self.section_ar.pk)
++        self.assertEqual(document.folder_id, self.published_folder.pk)
++
++
++class FeedbackScreenshotPilTests(TestCase):
++    """Скриншот обратной связи: PIL-верификация байтов."""
++
++    def setUp(self):
++        self.company = Company.objects.create(name='Компания С7')
++        from django.contrib.auth import get_user_model
++        from storage.domain.models import UserProfile
++
++        user = get_user_model().objects.create_user('feedback7', password='pass')
++        UserProfile.objects.create(user=user, role='admin', company=self.company)
++        self.user = user
++
++    def _submit(self, upload):
++        return submit_feedback(
++            self.user,
++            self.company,
++            'Сообщение со скриншотом',
++            screenshot=upload,
++        )
++
++    def test_fake_png_with_spoofed_content_type_rejected(self):
++        upload = SimpleUploadedFile(
++            'screen.png',
++            b'definitely not an image at all',
++            content_type='image/png',
++        )
++        with self.assertRaises(ValidationError) as ctx:
++            self._submit(upload)
++        self.assertIn(
++            'не является корректным изображением',
++            str(ctx.exception.message_dict['screenshot']),
++        )
++
++    def test_fake_png_via_extension_only_rejected(self):
++        """Даже валидный content_type не спасёт битые байты: проверяется
++        содержимое, а не заголовок части multipart."""
++        upload = SimpleUploadedFile(
++            'screen.png', b'\x00\x01\x02\x03garbage',
++            content_type='image/png',
++        )
++        with self.assertRaises(ValidationError):
++            self._submit(upload)
++
++    def test_valid_jpeg_content_type_saved(self):
++        from PIL import Image
++
++        buffer = BytesIO()
++        Image.new('RGB', (2, 2), color=(200, 60, 40)).save(
++            buffer, format='JPEG', quality=85,
++        )
++        upload = SimpleUploadedFile(
++            'photo.jpg', buffer.getvalue(), content_type='image/jpeg',
++        )
++        feedback = self._submit(upload)
++        self.assertTrue(feedback.screenshot.name.endswith('.jpg'))
++
++    def test_valid_png_saved(self):
++        upload = SimpleUploadedFile(
++            'screen.png', TINY_PNG, content_type='image/png',
++        )
++        feedback = self._submit(upload)
++        self.assertTrue(feedback.screenshot.name.startswith('feedback/screenshots/'))
++        self.assertTrue(feedback.screenshot.storage.exists(feedback.screenshot.name))
++
++
++class LoggingConfigTests(TestCase):
++    """LOGGING-конфигурация присутствует и покрывает ключевые логгеры."""
++
++    def test_logging_configured(self):
++        config = settings.LOGGING
++        self.assertIn('console', config['handlers'])
++        self.assertIn('django.request', config['loggers'])
++        self.assertEqual(
++            config['loggers']['django.request']['level'], 'WARNING',
++        )
++        self.assertIn('storage', config['loggers'])
++        self.assertIn('issues', config['loggers'])
++
++    def test_root_handler_wired(self):
++        self.assertEqual(settings.LOGGING['root']['handlers'], ['console'])
++
++
++class Sprint7MarkupTests(TestCase):
++    """Статические проверки разметки/JS по находкам аудита 5.0."""
++
++    def _read(self, path):
++        with open(path, encoding='utf-8') as fh:
++            return fh.read()
++
++    def test_app_js_dnd_payload_carries_source_section(self):
++        js = self._read('static/js/app.js')
++        self.assertIn('application/x-sod-section-id', js)
++        self.assertIn('application/x-sod-folder-section-id', js)
++        # подтверждение при кросс-разделном переносе документа
++        self.assertIn('allow_section_change', js)
++
++    def test_recent_documents_live_in_search_empty_state(self):
++        # Панель убрана со страницы проекта (шум) и показывается
++        # в пустом поиске — как отправная точка.
++        project_html = self._read(
++            'storage/adapters/templates/storage/project_detail.html'
++        )
++        self.assertNotIn('id="recent-documents"', project_html)
++        search_html = self._read(
++            'storage/adapters/templates/storage/search.html'
++        )
++        self.assertIn('id="recent-documents"', search_html)
++        self.assertIn('not query and recent_documents', search_html)
++
++    def test_folder_kebab_change_section_still_present(self):
++        # Кебаб папки строится в JS (контракт T68), документный — в шаблоне.
++        js = self._read('static/js/app.js')
++        self.assertIn('data-folder-change-section', js)
++        html = self._read(
++            'storage/adapters/templates/storage/project_detail.html'
++        )
++        self.assertIn('data-doc-action="change-section"', html)
++
++    def test_redesign_css_has_recent_documents_block(self):
++        css = self._read('static/css/redesign.css')
++        self.assertIn('.recent-documents', css)
+diff --git a/storage/tests/test_sprint8.py b/storage/tests/test_sprint8.py
+new file mode 100644
+index 0000000..841059e
+--- /dev/null
++++ b/storage/tests/test_sprint8.py
+@@ -0,0 +1,150 @@
++"""Спринт 8: светлый хедер, фильтр-бар, вьювер.
++
++- фильтры снова видимы: выпадающий бар + чипы «Отфильтровано» + сброс;
++- колоночные воронки (.th-filter) убраны из JS;
++- светлый хедер: токены --c-bg-header = #FFFFFF, theme-color синхронизирован;
++- полоса предпросмотра листов и наложение чертежей — разметка/JS.
++"""
++from django.test import TestCase
++from django.urls import reverse
++
++from storage.tests.test_sprint5 import Sprint5TestBase
++
++
++class FilterBarTests(Sprint5TestBase):
++    def _page(self, query=''):
++        self.client.force_login(self.user_gip)
++        url = reverse('storage:project_detail', args=[self.project.pk])
++        return self.client.get(url + ('?' + query if query else ''))
++
++    def test_filter_bar_visible_by_default(self):
++        response = self._page('tab=documents')
++        self.assertEqual(response.status_code, 200)
++        self.assertContains(response, 'class="filter-bar')
++        self.assertNotContains(response, 'class="th-filter')
++        # поля фильтров присутствуют и видимы (не внутри d-none)
++        self.assertContains(response, 'id="id_section"')
++        self.assertContains(response, 'id="id_doc_type"')
++        self.assertContains(response, 'id="quickFilter"')
++
++    def test_filtered_state_shows_chips_and_reset(self):
++        response = self._page('tab=documents&status=in_review')
++        self.assertContains(response, 'filter-bar is-filtered')
++        self.assertContains(response, 'Отфильтровано')
++        self.assertContains(response, 'Статус:')
++        self.assertContains(response, 'На проверке')
++        self.assertContains(response, 'data-filter-chip-clear="status"')
++        self.assertContains(response, 'data-filter-reset')
++
++    def test_zone_chip_displayed(self):
++        response = self._page('tab=documents&zone=PUBLISHED')
++        self.assertContains(response, 'Зона:')
++        self.assertContains(response, 'Опубликовано')
++        self.assertContains(response, 'data-filter-chip-clear="zone"')
++
++    def test_section_chip_uses_section_name(self):
++        response = self._page(
++            f'tab=documents&section={self.section_ar.pk}'
++        )
++        self.assertContains(response, 'Раздел:')
++        self.assertContains(response, 'АР')
++
++    def test_no_chips_without_filters(self):
++        response = self._page('tab=documents')
++        self.assertNotContains(response, 'filter-chips')
++        self.assertNotContains(response, 'data-filter-reset')
++
++
++class ViewerCompareTests(Sprint5TestBase):
++    def _detail(self, document):
++        self.client.force_login(self.user_gip)
++        return self.client.get(
++            reverse('storage:document_detail', args=[document.pk]),
++        )
++
++    def test_document_detail_exposes_compare_menu_and_overlay(self):
++        document = self.make_document(code='CMP-1')
++        response = self._detail(document)
++        self.assertEqual(response.status_code, 200)
++        self.assertContains(response, 'id="compareMenuBtn"')
++        self.assertContains(response, 'id="compareVersionSelect"')
++        self.assertContains(response, 'data-compare-mode="overlay"')
++        self.assertContains(response, 'data-compare-mode="side"')
++        self.assertContains(response, 'data-compare-mode="slider"')
++        self.assertContains(response, 'id="overlayStage"')
++        self.assertContains(response, 'id="overlayControls"')
++        self.assertContains(response, 'id="overlayOpacity"')
++
++    def test_document_detail_exposes_pdf_urls_and_thumb_rail(self):
++        document = self.make_document(code='CMP-2')
++        response = self._detail(document)
++        self.assertContains(response, 'data-pdf-urls=')
++        self.assertContains(response, 'id="thumbRail"')
++        self.assertContains(response, 'id="thumbsToggle"')
++
++    def test_pdf_urls_cover_all_versions(self):
++        import json as jsonlib
++        import html as htmlmod
++
++        from django.core.files.uploadedfile import SimpleUploadedFile
++        from storage.domain.services import upload_document
++
++        document = self.make_document(code='CMP-3')
++        # upload_document находит документ по (проект, раздел, код)
++        # и добавляет вторую версию.
++        upload_document(
++            user=self.user_gip,
++            project=self.project,
++            section=self.section_ar,
++            code=document.code,
++            name=document.name,
++            doc_type='drawing',
++            file=SimpleUploadedFile('CMP-3.pdf', b'pdf-v2'),
++        )
++        response = self._detail(document)
++        viewer = next(
++            chunk for chunk in response.content.decode().split('<div')
++            if 'data-pdf-urls' in chunk
++        )
++        fragment = viewer.split('data-pdf-urls="')[1].split('"')[0]
++        payload = jsonlib.loads(htmlmod.unescape(fragment))
++        self.assertEqual(len(payload), 2)
++        self.assertTrue(
++            all(url.startswith('/download/') for url in payload.values())
++        )
++
++    def test_viewer_js_has_overlay_and_thumbs(self):
++        with open('static/js/pdf_viewer.js', encoding='utf-8') as fh:
++            js = fh.read()
++        self.assertIn('overlayState', js)
++        self.assertIn('mixBlendMode', js)
++        self.assertIn('IntersectionObserver', js)
++        self.assertIn('buildThumbRail', js)
++        self.assertIn('prepareAlignedComparison', js)
++        self.assertNotIn('sliderToggleBtn', js)
++
++
++class FilterBarStaticTests(TestCase):
++    def _read(self, path):
++        with open(path, encoding='utf-8') as fh:
++            return fh.read()
++
++    def test_app_js_uses_filter_bar_and_dropped_column_funnels(self):
++        js = self._read('static/js/app.js')
++        self.assertIn('initFilterBar', js)
++        self.assertNotIn('bindColumnFilter', js)
++        # упоминается только в комментарии, не в рабочем коде
++        self.assertNotIn("wrapper.className = 'th-filter", js)
++        self.assertNotIn('header.appendChild(wrapper)', js)
++
++    def test_light_header_tokens(self):
++        import json
++        tokens = json.load(open('static/design-tokens/tokens.json'))
++        self.assertEqual(tokens['color']['surface']['header'], '#FFFFFF')
++        self.assertEqual(tokens['color']['text']['on-dark'], '#1F2430')
++        self.assertEqual(tokens['color']['accent']['on-header'], '#3D5A98')
++
++    def test_theme_color_synced_light(self):
++        base = self._read('storage/adapters/templates/storage/base.html')
++        self.assertIn('content="#FFFFFF"', base)
++        self.assertNotIn('3A4558', base)
+diff --git a/storage/tests/test_t8_core.py b/storage/tests/test_t8_core.py
+index 48780b4..9efa2e4 100644
+--- a/storage/tests/test_t8_core.py
++++ b/storage/tests/test_t8_core.py
+@@ -511,8 +511,12 @@ class T67AuditTest(T8CoreTestBase):
+         child = create_folder(
+             self.user_gip, self.project, 'Nested', parent=root, code='11'
+         )
++        # Спринт 7: перенос между разделами — явный, через allow_section_change.
+         move_folder(
+-            self.user_gip, root, section=self.other_section
++            self.user_gip,
++            root,
++            section=self.other_section,
++            allow_section_change=True,
+         )
+         root.refresh_from_db()
+         child.refresh_from_db()
+diff --git a/storage/tests/test_t9_dnd.py b/storage/tests/test_t9_dnd.py
+index 96f1825..2e41c8b 100644
+--- a/storage/tests/test_t9_dnd.py
++++ b/storage/tests/test_t9_dnd.py
+@@ -47,7 +47,10 @@ class T9DragAndDropTests(T8UltimateTestBase):
+         self.client.force_login(self.user_gip)
+         response = self.client.post(
+             reverse('storage:document_move', args=[document.pk]),
+-            {'section_id': self.other_section.pk},
++            {
++                'section_id': self.other_section.pk,
++                'allow_section_change': '1',
++            },
+         )
+ 
+         self.assertEqual(response.status_code, 200)
+@@ -55,6 +58,38 @@ class T9DragAndDropTests(T8UltimateTestBase):
+         self.assertEqual(document.section_id, self.other_section.pk)
+         self.assertIsNone(document.folder_id)
+ 
++    def test_drop_on_own_section_root_needs_no_flag(self):
++        """Спринт 7: сброс в корень СВОЕГО раздела — без подтверждения."""
++        folder = create_folder(self.user_gip, self.project, 'АР', section=self.section)
++        document = self.make_document(code='DND-3A', folder=folder)
++
++        self.client.force_login(self.user_gip)
++        response = self.client.post(
++            reverse('storage:document_move', args=[document.pk]),
++            {'section_id': self.section.pk},
++        )
++
++        self.assertEqual(response.status_code, 200)
++        document.refresh_from_db()
++        self.assertEqual(document.section_id, self.section.pk)
++        self.assertIsNone(document.folder_id)
++
++    def test_drop_on_other_section_without_flag_rejected(self):
++        """Спринт 7: кросс-разделный DnD без allow_section_change → 400."""
++        folder = create_folder(self.user_gip, self.project, 'РД', section=self.section)
++        document = self.make_document(code='DND-3B', folder=folder)
++
++        self.client.force_login(self.user_gip)
++        response = self.client.post(
++            reverse('storage:document_move', args=[document.pk]),
++            {'section_id': self.other_section.pk},
++        )
++
++        self.assertEqual(response.status_code, 400)
++        self.assertIn('error', response.json())
++        document.refresh_from_db()
++        self.assertEqual(document.section_id, self.section.pk)
++
+     def test_drop_is_forbidden_for_viewer(self):
+         folder = create_folder(self.user_gip, self.project, 'РД', section=self.section)
+         document = self.make_document(code='DND-4')
+diff --git a/storage/tests/test_t9_dnd_copy.py b/storage/tests/test_t9_dnd_copy.py
+index 2d024ee..9241f5e 100644
+--- a/storage/tests/test_t9_dnd_copy.py
++++ b/storage/tests/test_t9_dnd_copy.py
+@@ -107,7 +107,8 @@ class T9DndCopyFolderTests(T8UltimateTestBase):
+         root.refresh_from_db()
+         self.assertIsNone(root.parent_id)
+ 
+-    def test_folder_can_move_to_another_section(self):
++    def test_folder_cannot_move_to_another_section_via_plain_dnd(self):
++        """Спринт 7: DnD папки в чужой раздел запрещён — 400 с подсказкой."""
+         folder = create_folder(self.user_gip, self.project, 'РД', section=self.section)
+         other = create_folder(
+             self.user_gip, self.project, 'Другой',
+@@ -120,6 +121,28 @@ class T9DndCopyFolderTests(T8UltimateTestBase):
+             {'section_id': self.other_section.pk},
+         )
+ 
++        self.assertEqual(response.status_code, 400)
++        self.assertIn('Сменить раздел', response.json()['error'])
++        folder.refresh_from_db()
++        self.assertEqual(folder.section_id, self.section.pk)
++
++    def test_folder_can_move_to_another_section_with_explicit_flag(self):
++        """Спринт 7: явный перенос между разделами (allow_section_change=1)."""
++        folder = create_folder(self.user_gip, self.project, 'РД', section=self.section)
++        other = create_folder(
++            self.user_gip, self.project, 'Другой',
++            section=self.other_section, code='02',
++        )
++        self.client.force_login(self.user_gip)
++
++        response = self.client.post(
++            reverse('storage:folder_move', args=[folder.pk]),
++            {
++                'section_id': self.other_section.pk,
++                'allow_section_change': '1',
++            },
++        )
++
+         self.assertEqual(response.status_code, 200)
+         folder.refresh_from_db()
+         self.assertIsNone(folder.parent_id)
+diff --git a/storage/tests/test_views.py b/storage/tests/test_views.py
+index 0c614c8..4f2f10a 100644
+--- a/storage/tests/test_views.py
++++ b/storage/tests/test_views.py
+@@ -476,10 +476,17 @@ class ViewTests(TestCase):
+             [version.document_id],
+         )
+ 
+-        response = self.client.get(reverse('storage:project_detail', args=[self.project.pk]))
++        # Спринт 7: панель «Недавние» переехала со страницы проекта
++        # в пустое состояние поиска — там это отправная точка.
++        response = self.client.get(reverse('storage:search', args=[self.project.pk]))
+         self.assertContains(response, 'id="recent-documents"')
+         self.assertContains(response, 'Последние документы')
+ 
++        searched = self.client.get(
++            reverse('storage:search', args=[self.project.pk]) + '?q=Документ'
++        )
++        self.assertNotContains(searched, 'id="recent-documents"')
++
+     def test_recent_documents_tracked_on_download(self):
+         version = self._upload()
+         self.client.force_login(self.user_gip)
+@@ -503,7 +510,7 @@ class ViewTests(TestCase):
+         )
+ 
+         self.user_contractor.userprofile.allowed_sections.clear()
+-        response = self.client.get(reverse('storage:project_detail', args=[self.project.pk]))
++        response = self.client.get(reverse('storage:search', args=[self.project.pk]))
+ 
+         self.assertEqual(response.context['recent_documents'], [])
+ 
