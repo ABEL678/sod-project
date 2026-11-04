@@ -1,7 +1,7 @@
 # ARCHITECTURE.md — СОД для проектной компании
 
-**Версия:** 1.4
-**Дата:** 2026-10-30
+**Версия:** 1.5
+**Дата:** 2026-11-04
 **Статус:** Принято, обязательно к соблюдению при генерации кода
 
 ## 1. Контекст
@@ -317,6 +317,25 @@ sod_project/
 **Индекс:** `(company, status, -created_at)` — для выборки в экране администратора.
 **Сортировка:** `-created_at`.
 
+#### ApiToken (API Gateway, 4A)
+| Поле | Тип | Описание |
+|---|---|---|
+| id | PK | |
+| company | FK → Company, on_delete=CASCADE, related_name='api_tokens' | Компания-владелец токена |
+| name | CharField(100) | Название (для кого выдан) |
+| token_prefix | CharField(8) | Первые 8 символов токена — только для поиска/отображения |
+| token_hash | CharField(64), unique | SHA-256 хэш токена; сырое значение в БД не хранится |
+| scopes | JSONField, default=list | `projects:create`, `projects:read`, `issues:sync`, `issues:read` |
+| is_active | BooleanField | Отзыв токена |
+| expires_at | DateTimeField, null=True | Срок действия; пусто — бессрочный |
+| created_at | DateTimeField, auto_now_add | |
+| created_by | FK → User, on_delete=SET_NULL, null=True | Создатель; при аутентификации становится `request.user` |
+| last_used_at | DateTimeField, null=True | Обновляется при каждом успешном запросе |
+
+**Индекс:** `(company, is_active)`.
+**Сортировка:** `-created_at`.
+**Правило:** сырой токен (`secrets.token_urlsafe(48)`) показывается один раз при создании; в БД хранятся только `token_prefix` и `token_hash`.
+
 ### 3.3. Связи
 
 User 1─1 UserProfile
@@ -354,6 +373,9 @@ def get_all_companies(platform_owner) -> QuerySet[Company]: ... (только д
 def submit_feedback(user, company, message, category="BUG", page_url="", contact_email="", screenshot=None, file_storage=None) -> Feedback: ... (валидация message/category/email; скриншот через FileStorage)
 def list_feedback(user, company, status=None, category=None) -> QuerySet[Feedback]: ... (admin компании / superuser; фильтры status/category)
 def update_feedback_status(user, feedback, new_status, admin_comment="") -> Feedback: ... (admin компании feedback / superuser; new_status in Status.values; admin_comment ≤ 2000)
+def create_api_token(user, company, name, scopes, expires_at=None) -> tuple[ApiToken, str]: ... (admin компании / superuser; валидные scopes; возвращает сырой токен один раз)
+def revoke_api_token(user, token) -> None: ... (admin компании токена / superuser; is_active=False)
+def list_api_tokens(user, company) -> QuerySet[ApiToken]: ... (admin компании / superuser; только токены своей компании)
 
 **Правило:** upload_document() — единственная точка создания версий.
 
@@ -381,11 +403,36 @@ class FileStorage(Protocol):
 3. **Режимы развертывания:** SaaS (облако Stream-CAD) и On-premise (коробка на сервере клиента).
 
 ### 6.2. Контракты API СОД (для внутренних систем)
-- `POST /api/v1/projects/` (ГИП-Ассистент)
+- `POST /api/v1/projects/` (ГИП-Ассистент) — реализовано в 4A
 - `GET /api/v1/projects/{code}/specifications/` (ВОР-билдер)
 - `POST /api/v1/projects/{code}/vor/` (ВОР-билдер)
 - `POST /api/v1/projects/{code}/issues/sync/` (Витро-трекер)
 - `GET /api/v1/projects/{code}/issues/pending/` (Витро-трекер)
+
+**Аутентификация API (4A):**
+- Заголовок `Authorization: Bearer <token>`. Токен ищется по SHA-256 хэшу, проверяются `is_active`, `expires_at` и активность пользователя-создателя.
+- `request.user` = создатель токена (проверка обычных прав), `request.auth` = `ApiToken` (проверка scopes).
+- Обязательный scope для создания проекта — `projects:create`.
+- Компания проекта берётся из `ApiToken.company`; параметр `company` в теле запроса игнорируется (изоляция компаний).
+- Ошибки возвращаются в конверте `{"errors": {...}}`: 401 — нет/невалидный/истёкший токен, 403 — нет scope, 400 — ошибка валидации.
+
+**`POST /api/v1/projects/` — тело запроса:**
+```json
+{
+  "code": "TEST-API-01",
+  "name": "Тест API",
+  "customer": "ООО Тест",
+  "base_code": "2345-12",
+  "template_key": "FULL"
+}
+```
+`code` и `name` обязательны; `customer` и `base_code` — опциональны; `template_key` — `PD_87`, `RD_GOST` или `FULL` (по умолчанию `FULL`).
+Успех — `201 {"id": 1, "code": "TEST-API-01", "name": "Тест API"}`. Дубликат `code` — 400.
+
+**Управление токенами (UI, 4A):**
+- `GET /api-tokens/` — список токенов компании (admin / superuser).
+- `POST /api-tokens/create/` — создание; сырой токен показывается один раз.
+- `POST /api-tokens/<id>/revoke/` — отзыв.
 
 ### 6.3. Интеграция с SharePoint
 - **Маркапы на PDF:** Пины на чертеже (Этап 8).

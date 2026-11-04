@@ -56,6 +56,18 @@
 
 ## Журнал (Changelog)
 
+### 04.11.2026 — 4A: API Gateway, часть 1 (API-ключи + POST /api/v1/projects/)
+
+- Модель `ApiToken` (company, name, token_prefix, token_hash, scopes, is_active, expires_at, created_by, last_used_at), миграция `external_api.0001`.
+- Сервисы `create_api_token` / `revoke_api_token` / `list_api_tokens` (admin/superuser, валидация scopes).
+- `ApiTokenAuthentication` (Bearer, SHA-256, `last_used_at`, `request.user` = создатель, `request.auth` = токен).
+- `HasScope` permission, `api_exception_handler` (конверт `{"errors": {...}}`).
+- `POST /api/v1/projects/` (scope `projects:create`, компания из токена, `create_project_from_template`, 201/400/401/403).
+- UI токенов: `/api-tokens/` (список, создание с показом raw-токена один раз, отзыв), CSRF.
+- `djangorestframework>=3.15,<4` в `requirements.txt`.
+- 17 тестов, `manage.py check` OK, `check_raw_hex.py` OK.
+- `ARCHITECTURE.md` (ApiToken, контракты, 6.2), `MASTER_SPEC.md` (Этап 14 «в работе»).
+
 ### 04.11.2026 — Подготовка к бете: Шаги 1–2 (1A, 1B, 2A, 2B)
 
 **1A (APPROVE): Брендированные 404/500.**

@@ -4205,3 +4205,109 @@ def update_feedback_status(
         update_fields.append("admin_comment")
     feedback.save(update_fields=update_fields)
     return feedback
+
+
+def _check_api_token_admin(user: User, company: Company | None) -> None:
+    """Проверяет право управлять API-токенами компании."""
+    if user is None or not user.is_authenticated:
+        raise PermissionDenied("Нет доступа к API-токенам")
+    if company is None:
+        raise PermissionDenied("Компания не указана")
+    if user.is_superuser:
+        return
+    profile = getattr(user, "userprofile", None)
+    if (
+        profile is None
+        or profile.role != "admin"
+        or profile.company_id != company.pk
+    ):
+        raise PermissionDenied("Нет доступа к API-токенам")
+
+
+def create_api_token(
+    user: User,
+    company: Company,
+    name: str,
+    scopes: list[str],
+    expires_at=None,
+):
+    """Создаёт API-токен. Возвращает (ApiToken, raw_token).
+
+    raw_token показывается пользователю ОДИН РАЗ, в БД хранится только хэш.
+    Доступ: admin компании / superuser. scopes — валидные значения ApiToken.Scope.
+    """
+    import hashlib
+    import secrets
+
+    from external_api.models import ApiToken
+
+    _check_api_token_admin(user, company)
+
+    name = (name or "").strip()
+    if not name:
+        raise ValidationError({"name": "Название токена обязательно"})
+    if len(name) > 100:
+        raise ValidationError(
+            {"name": "Название токена не может быть длиннее 100 символов"}
+        )
+
+    if isinstance(scopes, str):
+        scopes = [scopes]
+    normalized_scopes = []
+    for scope in scopes or []:
+        scope = (scope or "").strip()
+        if scope and scope not in normalized_scopes:
+            normalized_scopes.append(scope)
+    if not normalized_scopes:
+        raise ValidationError({"scopes": "Выберите хотя бы один scope"})
+    invalid = [
+        scope
+        for scope in normalized_scopes
+        if scope not in ApiToken.Scope.values
+    ]
+    if invalid:
+        raise ValidationError({"scopes": "Неверные scopes"})
+
+    if expires_at is not None:
+        if timezone.is_naive(expires_at):
+            expires_at = timezone.make_aware(expires_at)
+        if expires_at <= timezone.now():
+            raise ValidationError(
+                {"expires_at": "Срок действия должен быть в будущем"}
+            )
+
+    raw_token = secrets.token_urlsafe(48)
+    token = ApiToken.objects.create(
+        company=company,
+        name=name,
+        token_prefix=raw_token[:8],
+        token_hash=hashlib.sha256(raw_token.encode()).hexdigest(),
+        scopes=normalized_scopes,
+        expires_at=expires_at,
+        created_by=user,
+    )
+    return token, raw_token
+
+
+def revoke_api_token(user: User, token) -> None:
+    """Отзывает токен (is_active=False). Доступ: admin компании / superuser."""
+    from external_api.models import ApiToken
+
+    if not isinstance(token, ApiToken):
+        raise ValidationError({"token": "Неверный токен"})
+    _check_api_token_admin(user, token.company)
+    if token.is_active:
+        token.is_active = False
+        token.save(update_fields=["is_active"])
+
+
+def list_api_tokens(user: User, company: Company):
+    """Список токенов компании. Доступ: admin / superuser."""
+    from external_api.models import ApiToken
+
+    _check_api_token_admin(user, company)
+    return (
+        ApiToken.objects.filter(company=company)
+        .select_related("created_by")
+        .order_by("-created_at")
+    )

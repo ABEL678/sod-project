@@ -26,6 +26,8 @@ urlpatterns = [
     path('logout/', auth_views.LogoutView.as_view(), name='logout'),
     path('', include('issues.urls')),
     path('', include('storage.adapters.urls')),
+    path('', include('external_api.ui_urls')),
+    path('api/v1/', include('external_api.urls')),
 ] + static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
 
 handler404 = 'django.views.defaults.page_not_found'

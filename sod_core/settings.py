@@ -93,9 +93,23 @@ INSTALLED_APPS = [
     'django_htmx',
     'crispy_forms',
     'crispy_bootstrap5',
+    'rest_framework',
     'storage',
     'issues',
+    'external_api',
 ]
+
+REST_FRAMEWORK = {
+    'DEFAULT_AUTHENTICATION_CLASSES': [
+        'external_api.authentication.ApiTokenAuthentication',
+    ],
+    'DEFAULT_PERMISSION_CLASSES': [
+        'rest_framework.permissions.IsAuthenticated',
+    ],
+    'DEFAULT_RENDERER_CLASSES': ['rest_framework.renderers.JSONRenderer'],
+    'DEFAULT_PARSER_CLASSES': ['rest_framework.parsers.JSONParser'],
+    'EXCEPTION_HANDLER': 'external_api.exceptions.api_exception_handler',
+}
 
 CRISPY_ALLOWED_TEMPLATE_PACKS = 'bootstrap5'
 CRISPY_TEMPLATE_PACK = 'bootstrap5'
