@@ -1,0 +1,49 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>500 — Ошибка сервера — Stream-CAD</title>
+    <link rel="icon" type="image/png" href="{% static 'icons/icon-192.png' %}">
+    <link rel="stylesheet" href="{% static 'css/bootstrap.min.css' %}">
+    <link rel="stylesheet" href="{% static 'design-tokens/tokens.css' %}">
+    <link rel="stylesheet" href="{% static 'fonts/fonts.css' %}">
+    <link rel="stylesheet" href="{% static 'css/redesign.css' %}">
+    <link rel="stylesheet" href="{% static 'fonts/bootstrap-icons/bootstrap-icons.min.css' %}">
+    <link rel="stylesheet" href="{% static 'css/app.css' %}">
+</head>
+<body class="bg-light">
+<a class="skip-link" href="#main-content">Перейти к содержимому</a>
+<header class="topbar">
+    <a class="brand" href="/" style="text-decoration: none; color: inherit;">
+        <span class="brand-mark">СОД</span>
+    </a>
+    <div class="brand-watermark">
+        <span class="brand-text">Stream-CAD</span>
+        <span class="brand-slogan">Управляйте потоком чертежей</span>
+    </div>
+    <div class="spacer"></div>
+</header>
+<main id="main-content" class="cde-error-page">
+    <section class="cde-error-card" aria-labelledby="error-title">
+        <div class="cde-error-icon" aria-hidden="true">
+            <i class="bi bi-tools"></i>
+        </div>
+        <div class="cde-error-code">500</div>
+        <h1 id="error-title" class="cde-error-title">Что-то пошло не так</h1>
+        <p class="cde-error-text">
+            Мы уже знаем о проблеме. Попробуйте обновить страницу или вернуться позже.
+        </p>
+        <div class="cde-error-actions">
+            <a class="btn btn-primary" href="/">
+                <i class="bi bi-house-door me-1" aria-hidden="true"></i>На главную
+            </a>
+            <button type="button" class="btn btn-outline-secondary" onclick="location.reload()">
+                <i class="bi bi-arrow-clockwise me-1" aria-hidden="true"></i>Обновить
+            </button>
+        </div>
+    </section>
+</main>
+</body>
+</html>
