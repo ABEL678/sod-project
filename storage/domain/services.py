@@ -8,6 +8,8 @@ import fitz
 
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.core.files.base import ContentFile
+from django.core.files.storage import default_storage
+from django.core.validators import validate_email
 from django.db.models import Count, Max, Prefetch, Q, QuerySet
 from django.db import transaction
 from django.utils import timezone
@@ -17,6 +19,7 @@ from storage.domain.models import (
     Document,
     DocumentVersion,
     DocumentView,
+    Feedback,
     Folder,
     MailRule,
     Project,
@@ -3956,3 +3959,210 @@ def update_company_info(
         company.is_private = is_private
     company.save()
     return company
+
+
+FEEDBACK_SCREENSHOT_MAX_SIZE = 10 * 1024 * 1024
+FEEDBACK_SCREENSHOT_TYPES = {
+    "image/jpeg": "jpg",
+    "image/png": "png",
+    "image/webp": "webp",
+}
+FEEDBACK_SCREENSHOT_EXTENSIONS = {"jpg", "jpeg", "png", "webp"}
+FEEDBACK_ADMIN_COMMENT_MAX_LENGTH = 2000
+
+
+def submit_feedback(
+    user,
+    company,
+    message: str,
+    category: str = "BUG",
+    page_url: str = "",
+    contact_email: str = "",
+    screenshot=None,
+    file_storage=None,
+) -> Feedback:
+    """Создаёт запись обратной связи от пользователя.
+
+    Скриншот сохраняется через FileStorage-порт: адаптер передаёт view,
+    по умолчанию используется Django default_storage.
+    """
+    if user is None or not user.is_authenticated:
+        raise PermissionDenied("Отправить обратную связь может только пользователь")
+
+    profile = getattr(user, "userprofile", None)
+    if (
+        company is None
+        or profile is None
+        or profile.company_id != company.pk
+    ):
+        raise PermissionDenied("Пользователь не привязан к этой компании")
+
+    message = (message or "").strip()
+    if not message:
+        raise ValidationError({"message": "Сообщение не может быть пустым"})
+    if len(message) > 5000:
+        raise ValidationError(
+            {"message": "Сообщение не может быть длиннее 5000 символов"}
+        )
+
+    category = category or Feedback.Category.BUG
+    if category not in Feedback.Category.values:
+        raise ValidationError({"category": "Неверная категория обратной связи"})
+
+    page_url = (page_url or "").strip()
+    if len(page_url) > 500:
+        raise ValidationError(
+            {"page_url": "URL страницы не может быть длиннее 500 символов"}
+        )
+
+    contact_email = (contact_email or "").strip() or (user.email or "").strip()
+    if contact_email:
+        try:
+            validate_email(contact_email)
+        except ValidationError as exc:
+            raise ValidationError({"contact_email": exc.messages}) from exc
+
+    feedback = Feedback(
+        company=company,
+        author=user,
+        category=category,
+        message=message,
+        page_url=page_url,
+        contact_email=contact_email,
+    )
+
+    saved_path = None
+    if screenshot is not None:
+        size = getattr(screenshot, "size", 0) or 0
+        if size > FEEDBACK_SCREENSHOT_MAX_SIZE:
+            raise ValidationError(
+                {"screenshot": "Скриншот не должен превышать 10 МБ"}
+            )
+
+        content_type = (
+            getattr(screenshot, "content_type", "") or ""
+        ).split(";", 1)[0].strip().lower()
+        original_name = getattr(screenshot, "name", "") or ""
+        original_ext = (
+            original_name.rsplit(".", 1)[-1].lower()
+            if "." in original_name
+            else ""
+        )
+
+        if content_type:
+            extension = FEEDBACK_SCREENSHOT_TYPES.get(content_type)
+        else:
+            extension = original_ext
+            if extension not in FEEDBACK_SCREENSHOT_EXTENSIONS:
+                extension = None
+
+        if extension is None:
+            raise ValidationError(
+                {"screenshot": "Допустимы только JPEG, PNG, WebP"}
+            )
+        if extension == "jpeg":
+            extension = "jpg"
+
+        storage = file_storage or default_storage
+        upload_to = Feedback._meta.get_field("screenshot").upload_to
+        if isinstance(upload_to, str):
+            folder = timezone.now().strftime(upload_to)
+        else:
+            folder = f"feedback/screenshots/{timezone.now():%Y/%m}/"
+        path = f"{folder}{uuid.uuid4().hex}.{extension}"
+        saved_path = storage.save(path, screenshot)
+        feedback.screenshot.name = saved_path
+        feedback.screenshot._committed = True
+
+    try:
+        feedback.save()
+    except Exception:
+        if saved_path is not None:
+            storage.delete(saved_path)
+        raise
+
+    return feedback
+
+
+def list_feedback(
+    user,
+    company,
+    status: str | None = None,
+    category: str | None = None,
+):
+    """Возвращает обратную связь компании для администратора или superuser."""
+    if user is None or not user.is_authenticated:
+        raise PermissionDenied("Нет доступа к обратной связи")
+
+    if not user.is_superuser:
+        profile = getattr(user, "userprofile", None)
+        if (
+            company is None
+            or profile is None
+            or profile.role != "admin"
+            or profile.company_id != company.pk
+        ):
+            raise PermissionDenied("Нет доступа к обратной связи")
+
+    if company is None:
+        raise PermissionDenied("Компания не указана")
+
+    queryset = (
+        Feedback.objects.filter(company=company)
+        .select_related("author")
+        .order_by("-created_at")
+    )
+
+    if status is not None:
+        if status not in Feedback.Status.values:
+            raise ValidationError({"status": "Неверный статус обратной связи"})
+        queryset = queryset.filter(status=status)
+
+    if category is not None:
+        if category not in Feedback.Category.values:
+            raise ValidationError({"category": "Неверная категория обратной связи"})
+        queryset = queryset.filter(category=category)
+
+    return queryset
+
+
+def update_feedback_status(
+    user,
+    feedback,
+    new_status: str,
+    admin_comment: str = "",
+) -> Feedback:
+    """Меняет статус обратной связи и, при необходимости, комментарий админа."""
+    if user is None or not user.is_authenticated:
+        raise PermissionDenied("Нет доступа к обратной связи")
+
+    if not user.is_superuser:
+        profile = getattr(user, "userprofile", None)
+        if (
+            profile is None
+            or profile.role != "admin"
+            or profile.company_id != feedback.company_id
+        ):
+            raise PermissionDenied("Нет доступа к обратной связи")
+
+    if new_status not in Feedback.Status.values:
+        raise ValidationError({"status": "Неверный статус обратной связи"})
+
+    comment = (admin_comment or "").strip()
+    if len(comment) > FEEDBACK_ADMIN_COMMENT_MAX_LENGTH:
+        raise ValidationError(
+            {
+                "admin_comment": (
+                    "Комментарий не может быть длиннее "
+                    f"{FEEDBACK_ADMIN_COMMENT_MAX_LENGTH} символов"
+                )
+            }
+        )
+
+    feedback.status = new_status
+    update_fields = ["status", "updated_at"]
+    if comment:
+        feedback.admin_comment = comment
+        update_fields.append("admin_comment")
+    feedback.save(update_fields=update_fields)
+    return feedback

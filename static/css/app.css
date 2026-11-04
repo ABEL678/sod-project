@@ -2572,3 +2572,116 @@ body.modal-open {
     background-color: var(--s-review-subtle) !important;
     border-left: 4px solid var(--s-review-solid) !important;
 }
+
+/* ---------- Task 1A: брендированные страницы ошибок 404/500 ---------- */
+
+.cde-error-page {
+    min-height: calc(100vh - 52px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: var(--sp-8) var(--sp-4);
+    background: var(--c-bg-app);
+}
+
+.cde-error-card {
+    width: 100%;
+    max-width: 560px;
+    padding: var(--sp-8) var(--sp-6);
+    text-align: center;
+    background: var(--c-bg-surface);
+    border: 1px solid var(--c-border-hairline);
+    border-radius: var(--r-lg);
+    box-shadow: var(--shadow-2);
+}
+
+.cde-error-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 64px;
+    height: 64px;
+    margin-bottom: var(--sp-4);
+    border-radius: var(--r-pill);
+    background: var(--c-accent-subtle);
+    color: var(--c-accent);
+    font-size: 30px;
+}
+
+.cde-error-code {
+    font-family: var(--font-mono);
+    font-size: 56px;
+    font-weight: 600;
+    line-height: 1;
+    color: var(--c-accent);
+    letter-spacing: .04em;
+}
+
+.cde-error-title {
+    margin: var(--sp-3) 0 var(--sp-2);
+    font-size: var(--text-display);
+    line-height: var(--lh-display);
+    font-weight: 600;
+    color: var(--c-text-primary);
+}
+
+.cde-error-text {
+    margin: 0 auto var(--sp-6);
+    max-width: 42ch;
+    font-size: var(--text-body-lg);
+    line-height: var(--lh-body-lg);
+    color: var(--c-text-secondary);
+}
+
+.cde-error-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: var(--sp-2);
+}
+
+@media (max-width: 575.98px) {
+    .cde-error-page {
+        min-height: calc(100vh - 52px);
+        padding: var(--sp-4) var(--sp-3);
+    }
+
+    .cde-error-card {
+        padding: var(--sp-6) var(--sp-4);
+    }
+
+    .cde-error-code {
+        font-size: 44px;
+    }
+
+    .cde-error-actions {
+        flex-direction: column;
+    }
+
+    .cde-error-actions .btn {
+        width: 100%;
+    }
+}
+
+/* ---------- 2B: обратная связь ---------- */
+
+.feedback-message-cell {
+    max-width: 34ch;
+}
+
+.feedback-message-full {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+.feedback-screenshot {
+    max-height: 320px;
+    object-fit: contain;
+}
+
+@media (max-width: 767.98px) {
+    .feedback-message-cell {
+        max-width: 24ch;
+    }
+}

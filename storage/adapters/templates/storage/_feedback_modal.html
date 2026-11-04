@@ -1,0 +1,126 @@
+{% comment %}
+Модалка «Сообщить об ошибке» (2B). Подключается в base.html только
+для аутентифицированных пользователей. Отправка — fetch в FeedbackSubmitView.
+{% endcomment %}
+<div class="modal fade"
+     id="feedbackModal"
+     tabindex="-1"
+     aria-labelledby="feedbackModalLabel"
+     aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable">
+        <div class="modal-content">
+            <form id="feedbackForm"
+                  method="post"
+                  action="{% url 'storage:feedback_submit' %}"
+                  data-submit-url="{% url 'storage:feedback_submit' %}"
+                  novalidate>
+                {% csrf_token %}
+                <div class="modal-header">
+                    <h2 class="modal-title fs-5" id="feedbackModalLabel">Сообщить об ошибке</h2>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрыть"></button>
+                </div>
+                <div class="modal-body">
+                    <div id="feedbackErrors"
+                         class="alert alert-danger d-none"
+                         role="alert"
+                         aria-live="assertive"></div>
+
+                    <div class="mb-3">
+                        <label for="feedbackCategory" class="form-label">Категория</label>
+                        <select class="form-select" id="feedbackCategory" name="category">
+                            <option value="BUG" selected>Ошибка</option>
+                            <option value="UX">Неудобство</option>
+                            <option value="IDEA">Идея</option>
+                            <option value="OTHER">Другое</option>
+                        </select>
+                        <div class="invalid-feedback" data-feedback-error="category"></div>
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="feedbackMessage" class="form-label">Что случилось</label>
+                        <textarea class="form-control"
+                                  id="feedbackMessage"
+                                  name="message"
+                                  rows="4"
+                                  maxlength="5000"
+                                  required
+                                  aria-describedby="feedbackMessageHelp feedbackMessageCounter"></textarea>
+                        <div class="d-flex justify-content-between gap-2">
+                            <div id="feedbackMessageHelp" class="form-text">
+                                Опишите, что произошло и что вы ожидали увидеть.
+                            </div>
+                            <div id="feedbackMessageCounter" class="form-text text-nowrap">
+                                <span id="feedbackMessageCount">0</span> / 5000
+                            </div>
+                        </div>
+                        <div class="invalid-feedback" data-feedback-error="message"></div>
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="feedbackPageUrl" class="form-label">Где</label>
+                        <input type="text"
+                               class="form-control"
+                               id="feedbackPageUrl"
+                               name="page_url"
+                               readonly>
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="feedbackContactEmail" class="form-label">Контакт для связи</label>
+                        <input type="email"
+                               class="form-control"
+                               id="feedbackContactEmail"
+                               name="contact_email"
+                               value="{{ user.email }}"
+                               aria-describedby="feedbackContactHelp">
+                        <div id="feedbackContactHelp" class="form-text">
+                            Необязательно. Если пусто — используем email профиля.
+                        </div>
+                        <div class="invalid-feedback" data-feedback-error="contact_email"></div>
+                    </div>
+
+                    <div class="mb-1">
+                        <label for="feedbackScreenshot" class="form-label">Скриншот</label>
+                        <input type="file"
+                               class="form-control"
+                               id="feedbackScreenshot"
+                               name="screenshot"
+                               accept="image/jpeg,image/png,image/webp"
+                               aria-describedby="feedbackScreenshotHelp">
+                        <div id="feedbackScreenshotHelp" class="form-text">
+                            JPEG, PNG или WebP, до 10 МБ.
+                        </div>
+                        <div class="invalid-feedback" data-feedback-error="screenshot"></div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">
+                        Отмена
+                    </button>
+                    <button type="submit" class="btn btn-primary" id="feedbackSubmit">
+                        <span class="spinner-border spinner-border-sm d-none"
+                              id="feedbackSpinner"
+                              aria-hidden="true"></span>
+                        <span id="feedbackSubmitLabel">Отправить</span>
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<div class="toast-container position-fixed bottom-0 end-0 p-3">
+    <div id="feedbackToast"
+         class="toast"
+         role="status"
+         aria-live="polite"
+         aria-atomic="true">
+        <div class="d-flex">
+            <div class="toast-body" id="feedbackToastBody"></div>
+            <button type="button"
+                    class="btn-close me-2 m-auto"
+                    data-bs-dismiss="toast"
+                    aria-label="Закрыть"></button>
+        </div>
+    </div>
+</div>

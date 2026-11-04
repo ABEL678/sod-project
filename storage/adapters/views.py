@@ -12,6 +12,7 @@ from django.contrib.auth.decorators import login_required
 from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.core.paginator import Paginator
 from django.db.models import Count, Max, Q
 from django.http import (
     FileResponse,
@@ -25,7 +26,7 @@ from django.http import (
 )
 from django import forms
 from django.contrib.staticfiles import finders
-from django.shortcuts import get_object_or_404, redirect
+from django.shortcuts import get_object_or_404, redirect, render
 from django.template.loader import get_template
 from django.urls import reverse, reverse_lazy
 from django.utils import timezone
@@ -45,6 +46,7 @@ from storage.domain.models import (
     Company,
     Document,
     DocumentVersion,
+    Feedback,
     Folder,
     MailRule,
     Project,
@@ -113,6 +115,7 @@ from storage.domain.services import (
     update_internal_status,
     ZONE_WORKFLOW_ACTIONS,
     list_document_views,
+    list_feedback,
     list_project_participants,
     move_document,
     remove_company_member,
@@ -127,7 +130,9 @@ from storage.domain.services import (
     restore_folder,
     save_document_view,
     search_documents,
+    submit_feedback,
     update_company_info,
+    update_feedback_status,
     update_project,
     update_project_member_role,
     upload_document,
@@ -2925,3 +2930,181 @@ class DashboardView(LoginRequiredMixin, UserPassesTestMixin, TemplateView):
             messages.error(request, str(exc))
 
         return redirect('storage:dashboard')
+
+
+FEEDBACK_STATUS_BADGE = {
+    "NEW": "cde-badge--new",
+    "IN_PROGRESS": "cde-badge--in_progress",
+    "RESOLVED": "cde-badge--done",
+    "REJECTED": "cde-badge--rejected",
+}
+
+FEEDBACK_CATEGORY_BADGE = {
+    "BUG": "cde-badge--attention",
+    "UX": "cde-badge--review",
+    "IDEA": "cde-badge--wait",
+    "OTHER": "cde-badge--closed",
+}
+
+
+class SubmitFeedbackView(LoginRequiredMixin, View):
+    """Принимает обратную связь из модалки через fetch/POST."""
+
+    def post(self, request):
+        company = get_user_company(request.user)
+        if company is None:
+            return JsonResponse(
+                {
+                    "ok": False,
+                    "errors": {
+                        "non_field_errors": [
+                            "У пользователя не указана компания"
+                        ]
+                    },
+                },
+                status=400,
+            )
+
+        try:
+            feedback = submit_feedback(
+                request.user,
+                company,
+                request.POST.get("message", ""),
+                category=request.POST.get("category") or Feedback.Category.BUG,
+                page_url=request.POST.get("page_url", ""),
+                contact_email=request.POST.get("contact_email", ""),
+                screenshot=request.FILES.get("screenshot"),
+                file_storage=LocalFileStorage(),
+            )
+        except PermissionDenied as exc:
+            return JsonResponse(
+                {
+                    "ok": False,
+                    "errors": {"non_field_errors": [str(exc)]},
+                },
+                status=403,
+            )
+        except ValidationError as exc:
+            if getattr(exc, "error_dict", None):
+                errors = exc.message_dict
+            else:
+                errors = {"non_field_errors": exc.messages}
+            return JsonResponse({"ok": False, "errors": errors}, status=400)
+
+        return JsonResponse({"ok": True, "id": feedback.pk})
+
+
+class FeedbackListView(LoginRequiredMixin, UserPassesTestMixin, View):
+    """Список обратной связи компании для администратора."""
+
+    raise_exception = True
+    paginate_by = 50
+
+    def test_func(self):
+        user = self.request.user
+        return user.is_superuser or getattr(
+            getattr(user, "userprofile", None), "role", None
+        ) == "admin"
+
+    def get(self, request):
+        is_superuser = request.user.is_superuser
+        companies = None
+
+        if is_superuser:
+            companies = Company.objects.order_by("name")
+            company = None
+            raw_company = (request.GET.get("company") or "").strip()
+            if raw_company:
+                try:
+                    company = companies.filter(pk=int(raw_company)).first()
+                except (TypeError, ValueError):
+                    company = None
+                if company is None:
+                    return HttpResponseBadRequest("Компания не найдена")
+            if company is None:
+                company = get_user_company(request.user) or companies.first()
+        else:
+            company = get_user_company(request.user)
+
+        if company is None:
+            return HttpResponseBadRequest("Не указана компания")
+
+        status = (request.GET.get("status") or "").strip() or None
+        category = (request.GET.get("category") or "").strip() or None
+
+        try:
+            queryset = list_feedback(
+                request.user,
+                company,
+                status=status,
+                category=category,
+            )
+        except ValidationError as exc:
+            return HttpResponseBadRequest(str(exc))
+
+        paginator = Paginator(queryset, self.paginate_by)
+        page_obj = paginator.get_page(request.GET.get("page"))
+
+        feedback_items = list(page_obj.object_list)
+        for item in feedback_items:
+            item.status_badge_class = FEEDBACK_STATUS_BADGE.get(
+                item.status, "cde-badge--closed"
+            )
+            item.category_badge_class = FEEDBACK_CATEGORY_BADGE.get(
+                item.category, "cde-badge--closed"
+            )
+
+        return render(
+            request,
+            "feedback_list.html",
+            {
+                "page_obj": page_obj,
+                "feedback_items": feedback_items,
+                "status_choices": Feedback.Status.choices,
+                "category_choices": Feedback.Category.choices,
+                "current_status": status or "",
+                "current_category": category or "",
+                "companies": companies,
+                "selected_company_id": company.pk,
+            },
+        )
+
+
+class FeedbackStatusUpdateView(LoginRequiredMixin, View):
+    """AJAX-смена статуса/комментария обратной связи."""
+
+    def post(self, request, feedback_id):
+        feedback = get_object_or_404(Feedback, pk=feedback_id)
+        try:
+            updated = update_feedback_status(
+                request.user,
+                feedback,
+                request.POST.get("status") or feedback.status,
+                request.POST.get("admin_comment", ""),
+            )
+        except PermissionDenied as exc:
+            return JsonResponse(
+                {
+                    "ok": False,
+                    "errors": {"non_field_errors": [str(exc)]},
+                },
+                status=403,
+            )
+        except ValidationError as exc:
+            if getattr(exc, "error_dict", None):
+                errors = exc.message_dict
+            else:
+                errors = {"non_field_errors": exc.messages}
+            return JsonResponse({"ok": False, "errors": errors}, status=400)
+
+        return JsonResponse(
+            {
+                "ok": True,
+                "id": updated.pk,
+                "status": updated.status,
+                "status_display": updated.get_status_display(),
+                "status_class": FEEDBACK_STATUS_BADGE.get(
+                    updated.status, "cde-badge--closed"
+                ),
+            }
+        )

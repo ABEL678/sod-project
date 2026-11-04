@@ -94,6 +94,16 @@
             {% endif %}
         </a>
 
+        {# 2B: кнопка обратной связи #}
+        <button type="button"
+                class="btn btn-sm btn-outline-secondary"
+                data-bs-toggle="modal"
+                data-bs-target="#feedbackModal"
+                title="Сообщить об ошибке"
+                aria-label="Сообщить об ошибке">
+            <i class="bi bi-bug" aria-hidden="true"></i>
+        </button>
+
         <div class="dropdown notif-bell">
             <button type="button"
                     class="btn btn-sm btn-outline-secondary dropdown-toggle"

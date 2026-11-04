@@ -40,9 +40,15 @@ document_detail — у него своя разметка и свой набор
 {% endblock %}
 {% block content %}{% endblock %}
 {% include 'storage/_palette.html' %}
+{% if user.is_authenticated %}
+    {% include 'storage/_feedback_modal.html' %}
+{% endif %}
 <script src="{% static 'js/vendor/bootstrap.bundle.min.js' %}"></script>
 <script src="{% static 'js/vendor/htmx.min.js' %}" defer></script>
 <script src="{% static 'js/palette.js' %}?v=20261107-s6" defer></script>
+{% if user.is_authenticated %}
+    <script src="{% static 'js/feedback.js' %}?v=20261104-2b" defer></script>
+{% endif %}
 <script>
     /* Волна 3: PWA — регистрация сервис-воркера из корня (scope '/') */
     if ('serviceWorker' in navigator) {
