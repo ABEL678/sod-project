@@ -9,7 +9,7 @@
     --app-border-strong: var(--c-border-strong);
     --app-ink: var(--c-text-primary);
     --app-muted: var(--c-text-muted);
-    --app-topbar-bg: var(--c-bg-header, #3A4558);
+    --app-topbar-bg: var(--c-bg-header, #FFFFFF);
     --app-topbar-fg: var(--c-text-on-dark);
     --app-sidebar-bg: var(--c-bg-surface-hover);
     --app-accent: var(--c-accent, #3D5A98);
@@ -973,8 +973,8 @@ body.app-body {
     height: 48px;
     padding: 0 8px;
     border-bottom: 1px solid var(--c-border-soft);
-    background: var(--c-text-inverse);
-    color: var(--c-bg-header, #3A4558);
+    background: var(--c-bg-surface);
+    color: var(--c-text-primary);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -1756,89 +1756,6 @@ body.modal-open {
     white-space: nowrap;
 }
 
-.th-filter {
-    position: relative;
-    flex: 0 0 auto;
-}
-
-.th-filter summary {
-    list-style: none;
-}
-
-.th-filter summary::-webkit-details-marker {
-    display: none;
-}
-
-.th-filter-toggle {
-    width: 20px;
-    height: 20px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    border-radius: 4px;
-    color: var(--c-text-faint);
-    font-size: 11px;
-    cursor: pointer;
-}
-
-.th-filter-toggle:hover,
-.th-filter[open] .th-filter-toggle,
-.th-filter.is-active .th-filter-toggle {
-    background: var(--c-accent-subtle);
-    color: var(--c-accent);
-}
-
-.th-filter.is-active .th-filter-toggle {
-    box-shadow: inset 0 0 0 1px var(--c-accent-on-header-strong, #CBD8EF);
-}
-
-.th-filter-menu {
-    position: absolute;
-    top: calc(100% + 5px);
-    left: 0;
-    z-index: 60;
-    width: 240px;
-    padding: 10px;
-    border: 1px solid var(--app-border);
-    border-radius: 8px;
-    background: var(--c-text-inverse);
-    box-shadow: 0 10px 28px rgba(15, 23, 42, .18);
-    white-space: normal;
-    font-weight: 400;
-    text-transform: none;
-    letter-spacing: 0;
-}
-
-.th-filter-title {
-    margin-bottom: 6px;
-    color: var(--c-text-primary);
-    font-size: 11px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: .04em;
-}
-
-.th-filter-menu .form-select,
-.th-filter-menu .form-control {
-    width: 100%;
-    height: 30px;
-    min-height: 30px;
-    font-size: 12.5px;
-}
-
-.th-filter-actions {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    margin-top: 8px;
-}
-
-.th-filter-actions .btn-link {
-    margin-left: auto;
-    color: var(--app-muted);
-    font-size: 12px;
-}
-
 .col-drag {
     flex: 0 0 auto;
     display: inline-flex;
@@ -1941,8 +1858,8 @@ body.modal-open {
         display: none;
     }
 
-    .th-filter-menu {
-        width: 210px;
+    .filter-bar__fields {
+        gap: 6px;
     }
 }
 
@@ -1953,62 +1870,6 @@ body.modal-open {
     flex-direction: column;
     flex: 1 1 auto;
     min-height: 0;
-}
-
-.filter-panel {
-    flex: 0 0 auto;
-    padding: 8px 12px 9px;
-    border-bottom: 1px solid var(--app-border);
-    background: var(--c-bg-surface-hover);
-}
-
-.filter-panel-main {
-    display: flex;
-    align-items: flex-end;
-    flex-wrap: wrap;
-    gap: 8px;
-}
-
-.filter-view {
-    flex: 0 0 auto;
-}
-
-.filter-field {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    min-width: 132px;
-}
-
-.filter-field .form-label {
-    margin: 0;
-    color: var(--c-text-muted);
-    font-size: 10px;
-    font-weight: 700;
-    letter-spacing: .05em;
-    text-transform: uppercase;
-}
-
-.filter-field .form-select,
-.filter-field .form-control {
-    min-width: 132px;
-    height: 31px;
-}
-
-.filter-search {
-    flex: 1 1 240px;
-    min-width: 220px;
-}
-
-.filter-search .form-control {
-    width: 100%;
-    min-width: 0;
-}
-
-.filter-actions {
-    display: flex;
-    gap: 6px;
-    padding-bottom: 0;
 }
 
 .toolbar {
@@ -2194,16 +2055,6 @@ body.modal-open {
     display: inline-flex;
     align-items: center;
     gap: 4px;
-}
-
-@media (max-width: 900px) {
-    .filter-view {
-        width: 100%;
-    }
-
-    .filter-search {
-        flex-basis: 100%;
-    }
 }
 
 /* ---------- T9-FIX-DND: drag document rows onto folders/sections ---------- */

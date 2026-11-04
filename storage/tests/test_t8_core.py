@@ -511,8 +511,12 @@ class T67AuditTest(T8CoreTestBase):
         child = create_folder(
             self.user_gip, self.project, 'Nested', parent=root, code='11'
         )
+        # Спринт 7: перенос между разделами — явный, через allow_section_change.
         move_folder(
-            self.user_gip, root, section=self.other_section
+            self.user_gip,
+            root,
+            section=self.other_section,
+            allow_section_change=True,
         )
         root.refresh_from_db()
         child.refresh_from_db()

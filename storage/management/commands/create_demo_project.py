@@ -15,6 +15,7 @@ from datetime import timedelta
 from urllib.parse import urlencode
 
 import fitz
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -90,8 +91,29 @@ class Command(BaseCommand):
             action='store_true',
             help='Удалить существующий DEMO-2026 и создать заново.',
         )
+        parser.add_argument(
+            '--force',
+            action='store_true',
+            help=(
+                'Разрешить запуск в продакшене (DJANGO_DEBUG=False). '
+                'Команда создаёт аккаунты с известным паролем '
+                f'«{DEMO_PASSWORD}» — без --force в проде она отклоняется.'
+            ),
+        )
 
     def handle(self, *args, **options):
+        # Спринт 7: guard от запуска в продакшене. Демо-аккаунты создаются
+        # с публично известным паролем и ролью admin — на боевом сервере
+        # это прямой обход аутентификации.
+        if not settings.DEBUG and not options.get('force'):
+            raise CommandError(
+                'create_demo_project создаёт аккаунты с известным паролем '
+                f'«{DEMO_PASSWORD}» и ролью admin. В продакшене '
+                '(DJANGO_DEBUG=False) это небезопасно: передайте --force, '
+                'если вы действительно хотите это сделать, и смените '
+                'пароли сразу после демо.'
+            )
+
         self._created_files: list[str] = []
         self._accounts: list[dict] = []
 

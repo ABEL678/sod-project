@@ -66,6 +66,31 @@
         </div>
     </div>
 
+    {% if not query and recent_documents %}
+    <section class="recent-documents" id="recent-documents" aria-labelledby="recentDocumentsTitle">
+        <h2 id="recentDocumentsTitle" class="recent-documents__title">
+            <i class="bi bi-clock-history" aria-hidden="true"></i>
+            Последние документы
+        </h2>
+        <ul class="recent-documents__list">
+            {% for item in recent_documents %}
+            <li class="recent-documents__item">
+                <a class="recent-documents__link" href="{% url 'storage:document_detail' item.doc.pk %}">
+                    {{ item.doc.code }} — {{ item.doc.name }}
+                </a>
+                <span class="cde-badge cde-badge--accent">{{ item.doc.get_doc_type_display }}</span>
+                {% if item.doc.current_version %}
+                <span class="cde-chip">v{{ item.doc.current_version.version_number }}</span>
+                {% endif %}
+                <span class="recent-documents__time cde-tnum">
+                    {% if item.opened_at %}открывался {{ item.opened_at|date:"d.m.Y, H:i" }}{% endif %}
+                </span>
+            </li>
+            {% endfor %}
+        </ul>
+    </section>
+    {% endif %}
+
     <div class="card shadow-sm">
         <div class="card-header bg-white d-flex justify-content-between align-items-center">
             <span class="fw-semibold">Найдено документов: {{ documents|length }}</span>

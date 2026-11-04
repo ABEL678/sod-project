@@ -47,13 +47,48 @@ class T9DragAndDropTests(T8UltimateTestBase):
         self.client.force_login(self.user_gip)
         response = self.client.post(
             reverse('storage:document_move', args=[document.pk]),
-            {'section_id': self.other_section.pk},
+            {
+                'section_id': self.other_section.pk,
+                'allow_section_change': '1',
+            },
         )
 
         self.assertEqual(response.status_code, 200)
         document.refresh_from_db()
         self.assertEqual(document.section_id, self.other_section.pk)
         self.assertIsNone(document.folder_id)
+
+    def test_drop_on_own_section_root_needs_no_flag(self):
+        """Спринт 7: сброс в корень СВОЕГО раздела — без подтверждения."""
+        folder = create_folder(self.user_gip, self.project, 'АР', section=self.section)
+        document = self.make_document(code='DND-3A', folder=folder)
+
+        self.client.force_login(self.user_gip)
+        response = self.client.post(
+            reverse('storage:document_move', args=[document.pk]),
+            {'section_id': self.section.pk},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        document.refresh_from_db()
+        self.assertEqual(document.section_id, self.section.pk)
+        self.assertIsNone(document.folder_id)
+
+    def test_drop_on_other_section_without_flag_rejected(self):
+        """Спринт 7: кросс-разделный DnD без allow_section_change → 400."""
+        folder = create_folder(self.user_gip, self.project, 'РД', section=self.section)
+        document = self.make_document(code='DND-3B', folder=folder)
+
+        self.client.force_login(self.user_gip)
+        response = self.client.post(
+            reverse('storage:document_move', args=[document.pk]),
+            {'section_id': self.other_section.pk},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('error', response.json())
+        document.refresh_from_db()
+        self.assertEqual(document.section_id, self.section.pk)
 
     def test_drop_is_forbidden_for_viewer(self):
         folder = create_folder(self.user_gip, self.project, 'РД', section=self.section)

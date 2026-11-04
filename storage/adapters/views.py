@@ -207,6 +207,18 @@ FILTER_QUERY_KEYS = (
     'code', 'name',
 )
 
+# Спринт 8: чипы активных фильтров — (param, подпись, choices для display).
+FILTER_CHIP_FIELDS = (
+    ('q', 'Поиск', None),
+    ('section', 'Раздел', None),
+    ('doc_type', 'Тип', Document.DOC_TYPE_CHOICES),
+    ('status', 'Статус', Document.STATUS_CHOICES),
+    ('suitability_code', 'Пригодность', Document.SUITABILITY_CHOICES),
+    ('internal_status', 'Внутр. статус', Document.INTERNAL_STATUS_CHOICES),
+    ('code', 'Шифр', None),
+    ('name', 'Название', None),
+)
+
 DOCUMENT_SORT_COLUMN_MAP = {
     'code': 'code',
     'name': 'name',
@@ -666,7 +678,51 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
                 changed = True
         if changed:
             kwargs['data'] = data
+        # Спринт 8: таблица должна строиться на аннотированном queryset
+        # (select_related проекта/версий + счётчики открытых замечаний),
+        # иначе каждая строка реестра порождает N+1 запросов через
+        # document_actions → can_transition/_has_open_issues.
+        kwargs['queryset'] = self.get_queryset()
         return kwargs
+
+    def _build_filter_chips(self, saved_filters, get_params, sections, active_zone):
+        """Спринт 8: чипы активных фильтров для строки «Отфильтровано».
+
+        Учитываются и GET-параметры, и фильтры сохранённого вида
+        (get_filterset_kwargs подмешивает их в форму).
+        """
+        chips = []
+        for param, label, choices in FILTER_CHIP_FIELDS:
+            value = (get_params.get(param) or '').strip()
+            if not value and saved_filters:
+                value = str(saved_filters.get(param) or '').strip()
+            if not value:
+                continue
+            if param == 'section':
+                section = next(
+                    (s for s in sections if str(s.pk) == value), None,
+                )
+                display = (
+                    f'{section.code} — {section.name}' if section else value
+                )
+            elif choices:
+                display = dict(choices).get(value, value)
+            else:
+                display = value
+            chips.append({
+                'param': param,
+                'label': label,
+                'display': display,
+            })
+        if active_zone:
+            chips.insert(0, {
+                'param': 'zone',
+                'label': 'Зона',
+                'display': dict(Folder.ZONE_CHOICES).get(
+                    active_zone, active_zone,
+                ),
+            })
+        return chips
 
     def get_table_kwargs(self):
         kwargs = super().get_table_kwargs()
@@ -741,7 +797,19 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
                 is_deleted=False,
             )
             .exclude(is_system_zone=True)
-            .select_related('section')
+            # Спринт 8: project/parent нужны check_write_permission,
+            # check_zone_permission и get_folder_mark_id на каждую папку —
+            # без select_related это ~130 запросов N+1 на страницу.
+            .select_related(
+                'section',
+                'section__project',
+                'project',
+                'parent',
+                'parent__parent',
+                'parent__parent__parent',
+                'parent__parent__parent__parent',
+                'parent__parent__parent__parent__parent',
+            )
             .order_by('order', 'name')
         )
         for folder in document_move_folders:
@@ -832,6 +900,13 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
                 or needle in str(document.get('author', '')).lower()
             ]
 
+        active_filter_chips = self._build_filter_chips(
+            view_config['filters'],
+            self.request.GET,
+            sections,
+            active_zone,
+        )
+
         highlight_id = None
         raw_highlight = (self.request.GET.get('highlight') or '').strip()
         if raw_highlight.isdigit():
@@ -853,11 +928,6 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
             'all_folders': all_folders,
             'document_move_folders': document_move_folders,
             'folder_move_folders': folder_move_folders,
-            'recent_documents': _recent_documents(
-                self.request,
-                user,
-                project,
-            ),
             'documents': documents,
             'document_views': document_views,
             'selected_view': selected_view,
@@ -872,6 +942,7 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
             'highlight_id': highlight_id,
             'highlight_seconds': HIGHLIGHT_ROW_SECONDS,
             'active_search': active_search,
+            'active_filter_chips': active_filter_chips,
             'view_config': view_config,
             'widths_json': json.dumps(view_config['widths']),
             'active_filters': view_config['filters'],
@@ -1387,14 +1458,18 @@ class DocumentMoveView(LoginRequiredMixin, View):
                     allow_section_change=allow_section_change,
                 )
             elif section_id:
-                if not allow_section_change:
-                    raise ValueError(
-                        "Смена раздела через обычное перемещение запрещена"
-                    )
                 section = get_object_or_404(
                     get_accessible_sections(request.user, document.project),
                     pk=section_id,
                 )
+                # Спринт 7: сброс в корень СВОЕГО раздела (жест «вынести из
+                # папки») разрешён без явного подтверждения — марка не меняется.
+                # Кросс-разделный перенос требует allow_section_change=1
+                # (кнопка «Сменить раздел» или confirm в JS при DnD).
+                if section.pk != document.section_id and not allow_section_change:
+                    raise ValueError(
+                        "Смена раздела через обычное перемещение запрещена"
+                    )
                 move_document_to_section(request.user, document, section)
             else:
                 move_document(
@@ -2082,6 +2157,14 @@ class SearchView(LoginRequiredMixin, TemplateView):
             status=status or None,
         )
 
+        # Спринт 7: «Недавние» показываем только в пустом поиске —
+        # там это отправная точка, а не шум над таблицей проекта.
+        recent_documents = (
+            _recent_documents(self.request, user, project)
+            if not query
+            else []
+        )
+
         context.update({
             'project': project,
             'documents': documents,
@@ -2092,6 +2175,7 @@ class SearchView(LoginRequiredMixin, TemplateView):
             'selected_status': status,
             'doc_type_choices': doc_type_choices,
             'status_choices': status_choices,
+            'recent_documents': recent_documents,
         })
         return context
 
@@ -2262,6 +2346,21 @@ class DocumentDetailView(LoginRequiredMixin, DetailView):
         context['pdf_url'] = pdf_url
         context['pdf_url_current'] = pdf_url_current
         context['current_version_url'] = current_version_url
+
+        # Спринт 8: сравнение доступно из ЛЮБОЙ версии — цель сравнения
+        # выбирается в выпадающем меню (текущая версия по умолчанию).
+        pdf_urls = {}
+        for version_item in versions:
+            url = reverse(
+                'storage:document_download', args=[version_item.pk],
+            )
+            if share_query:
+                url += share_query
+            pdf_urls[str(version_item.pk)] = url
+        context['pdf_urls_json'] = json.dumps(pdf_urls)
+        context['selected_version_pk'] = (
+            selected_version.pk if selected_version else None
+        )
         context['open_issues_count'] = 0
         context['issues_registry_url'] = ''
         issues = list(get_issues_for_version(self.object))

@@ -476,9 +476,16 @@ class ViewTests(TestCase):
             [version.document_id],
         )
 
-        response = self.client.get(reverse('storage:project_detail', args=[self.project.pk]))
+        # Спринт 7: панель «Недавние» переехала со страницы проекта
+        # в пустое состояние поиска — там это отправная точка.
+        response = self.client.get(reverse('storage:search', args=[self.project.pk]))
         self.assertContains(response, 'id="recent-documents"')
         self.assertContains(response, 'Последние документы')
+
+        searched = self.client.get(
+            reverse('storage:search', args=[self.project.pk]) + '?q=Документ'
+        )
+        self.assertNotContains(searched, 'id="recent-documents"')
 
     def test_recent_documents_tracked_on_download(self):
         version = self._upload()
@@ -503,7 +510,7 @@ class ViewTests(TestCase):
         )
 
         self.user_contractor.userprofile.allowed_sections.clear()
-        response = self.client.get(reverse('storage:project_detail', args=[self.project.pk]))
+        response = self.client.get(reverse('storage:search', args=[self.project.pk]))
 
         self.assertEqual(response.context['recent_documents'], [])
 

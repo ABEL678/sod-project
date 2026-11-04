@@ -40,6 +40,16 @@
 
     const pdfUrl = viewer.dataset.pdfUrl;
     const pdfUrlCurrent = viewer.dataset.pdfUrlCurrent || '';
+    // Спринт 8: карта URL всех доступных версий — цель сравнения
+    // выбирается в меню, сравнение доступно из любой версии.
+    const compareUrls = (function () {
+        try {
+            const raw = viewer.dataset.pdfUrls || '';
+            return raw ? JSON.parse(raw) : {};
+        } catch (error) {
+            return {};
+        }
+    })();
     const isCurrentView = viewer.dataset.isCurrent !== 'false';
     const createUrl = viewer.dataset.issueCreateUrl;
     const canCreate = viewer.dataset.canCreate === '1' && isCurrentView;
@@ -799,6 +809,7 @@
             totalLabel.textContent = String(total);
         }
         updateMinimapLabel();
+        updateThumbsActive();
     }
 
     function renderPage(pageNumber) {
@@ -907,6 +918,8 @@
                 viewer.classList.remove('is-pan');
                 toggleToolbarButton('text', textMode);
                 toggleToolbarButton('pan', false);
+            } else if (action === 'thumbs') {
+                toggleThumbs();
             }
         });
 
@@ -1213,50 +1226,56 @@
         }
     }
 
-    function updateComparisonButton() {
-        const button = document.getElementById('compareToggleBtn');
-        if (!button) {
-            return;
+    function compareTargetUrl() {
+        const select = document.getElementById('compareVersionSelect');
+        if (select && select.value && compareUrls[select.value]) {
+            return compareUrls[select.value];
         }
-        const sideActive = comparison.active && comparison.mode === 'side';
-        button.textContent = sideActive
-            ? 'Закрыть сравнение'
-            : 'Сравнить с текущей';
-        button.disabled = !sideActive && (isCurrentView || !pdfUrlCurrent);
+        return pdfUrlCurrent || null;
     }
 
-    function updateSliderButton() {
-        const button = document.getElementById('sliderToggleBtn');
+    function compareTargetLabel() {
+        const select = document.getElementById('compareVersionSelect');
+        if (select && select.selectedOptions && select.selectedOptions.length) {
+            return select.selectedOptions[0].textContent.trim();
+        }
+        return 'текущая версия';
+    }
+
+    function hasCompareTarget() {
+        return Boolean(compareTargetUrl() && pdfUrl);
+    }
+
+    function updateCompareMenu() {
+        const button = document.getElementById('compareMenuBtn');
         if (!button) {
             return;
         }
-        const label = document.getElementById('sliderToggleLabel');
-        const sliderActive = comparison.active && comparison.mode === 'slider';
-        if (sliderActive) {
-            if (label) {
-                label.textContent = 'Закрыть сравнение';
-            }
-            button.disabled = false;
-            button.title = 'Закрыть наложение';
-            return;
-        }
+        const label = document.getElementById('compareMenuLabel');
+        const closeItem = document.getElementById('compareCloseItem');
+        const closeDivider = document.getElementById('compareCloseDivider');
+        const overlayControls = document.getElementById('overlayControls');
         if (label) {
-            label.textContent = 'Наложение';
+            label.textContent = comparison.active
+                ? 'Сравнение: '
+                  + (comparison.mode === 'side' ? 'рядом'
+                     : comparison.mode === 'slider' ? 'шторка' : 'наложение')
+                : 'Сравнить';
         }
-        button.disabled = isCurrentView
-            || !pdfUrl
-            || !pdfUrlCurrent
-            || comparison.geometryMismatch
-            || comparison.loading;
-        if (comparison.geometryMismatch) {
-            button.title = 'Наложение доступно только для листов с одинаковой геометрией. Используйте режим «Рядом».';
-        } else if (isCurrentView) {
-            button.title = 'Доступно только при просмотре не-current версии';
-        } else if (comparison.loading) {
-            button.title = 'Проверка геометрии…';
-        } else {
-            button.title = 'Сравнение / наложение версий: тяните шторку мышью, пальцем или стрелками ←/→';
+        button.disabled = !hasCompareTarget();
+        if (closeItem) {
+            closeItem.classList.toggle('d-none', !comparison.active);
         }
+        if (closeDivider) {
+            closeDivider.classList.toggle('d-none', !comparison.active);
+        }
+        if (overlayControls) {
+            overlayControls.classList.toggle(
+                'd-none',
+                !(comparison.active && comparison.mode === 'overlay'),
+            );
+        }
+        button.classList.toggle('active', comparison.active);
     }
 
     function loadComparisonPane(pane) {
@@ -1454,23 +1473,34 @@
             if (comparison.mode === 'slider') {
                 updateSliderFrame();
             }
+            if (comparison.mode === 'overlay') {
+                updateOverlayFrame();
+            }
         });
     }
 
     function startComparison(mode, selectedDocument, currentDocument) {
-        if (isCurrentView || !pdfUrl || !pdfUrlCurrent) {
+        const targetUrl = compareTargetUrl();
+        if (!pdfUrl || !targetUrl) {
             return null;
         }
         const compareStage = document.getElementById('compareStage');
         const sliderStage = document.getElementById('sliderStage');
+        const overlayStage = document.getElementById('overlayStage');
         const stage = document.getElementById('pdf-panel');
-        const selectedViewer = document.getElementById(
-            mode === 'side' ? 'compareViewerSelected' : 'sliderViewerSelected'
-        );
-        const currentViewer = document.getElementById(
-            mode === 'side' ? 'compareViewerCurrent' : 'sliderViewerCurrent'
-        );
-        if (!compareStage || !sliderStage || !selectedViewer || !currentViewer) {
+        const paneIds = {
+            side: ['compareViewerSelected', 'compareViewerCurrent'],
+            slider: ['sliderViewerSelected', 'sliderViewerCurrent'],
+            overlay: ['overlayViewerSelected', 'overlayViewerCurrent'],
+        };
+        const ids = paneIds[mode];
+        if (!ids) {
+            return null;
+        }
+        const selectedViewer = document.getElementById(ids[0]);
+        const currentViewer = document.getElementById(ids[1]);
+        if (!compareStage || !sliderStage || !overlayStage
+                || !selectedViewer || !currentViewer) {
             return null;
         }
         if (comparison.active) {
@@ -1483,8 +1513,9 @@
         comparison.scale = currentScale;
         comparison.rotation = currentRotation;
         updateMinimapVisibility();
+        updateThumbsVisibility();
         comparison.selected = comparisonPane(selectedViewer, pdfUrl, false);
-        comparison.current = comparisonPane(currentViewer, pdfUrlCurrent, true);
+        comparison.current = comparisonPane(currentViewer, targetUrl, true);
         comparison.selected.pdfDocument = selectedDocument || null;
         comparison.current.pdfDocument = currentDocument || null;
         bindComparisonPane(comparison.selected);
@@ -1493,17 +1524,31 @@
         if (mode === 'slider') {
             setSliderSplit(50);
         }
+        if (mode === 'overlay') {
+            resetOverlayOffset();
+        }
 
         compareStage.classList.toggle('d-none', mode !== 'side');
         sliderStage.classList.toggle('d-none', mode !== 'slider');
+        overlayStage.classList.toggle('d-none', mode !== 'overlay');
         viewer.classList.add('d-none');
         setFitButtonsEnabled(false);
         if (stage) {
             stage.classList.toggle('is-comparing', mode === 'side');
             stage.classList.toggle('is-sliding', mode === 'slider');
+            stage.classList.toggle('is-overlay', mode === 'overlay');
         }
-        updateComparisonButton();
-        updateSliderButton();
+        // Подписи панелей «рядом»: слева — открытая версия, справа — цель.
+        compareStage.querySelectorAll('.compare-pane-head').forEach(
+            function (head, index) {
+                head.textContent = index === 0
+                    ? 'Выбранная версия '
+                      + (viewer.dataset.selectedVersionNumber
+                         ? 'v' + viewer.dataset.selectedVersionNumber : '')
+                    : 'Цель сравнения — ' + compareTargetLabel();
+            },
+        );
+        updateCompareMenu();
         updateComparisonPageControls();
 
         const loads = [];
@@ -1526,7 +1571,7 @@
             closeComparison();
             return;
         }
-        if (isCurrentView || !pdfUrl || !pdfUrlCurrent) {
+        if (!hasCompareTarget()) {
             return;
         }
         if (comparison.active) {
@@ -1534,30 +1579,28 @@
         }
         comparison.requestId += 1;
         comparison.loading = false;
-        updateSliderButton();
+        updateCompareMenu();
         startComparison('side');
     }
 
-    function openSliderComparison() {
-        if (isCurrentView || !pdfUrl || !pdfUrlCurrent) {
-            return;
-        }
-        if (comparison.active && comparison.mode === 'slider') {
+    function prepareAlignedComparison(mode) {
+        // Шторка и наложение требуют одинаковой геометрии листов.
+        if (comparison.active && comparison.mode === mode) {
             closeComparison();
             return;
         }
-        if (comparison.loading) {
+        if (!hasCompareTarget() || comparison.loading) {
             return;
         }
-
+        const targetUrl = compareTargetUrl();
         const requestId = comparison.requestId + 1;
         comparison.requestId = requestId;
         comparison.loading = true;
-        updateSliderButton();
+        updateCompareMenu();
 
         Promise.all([
             window.pdfjsLib.getDocument(pdfUrl).promise,
-            window.pdfjsLib.getDocument(pdfUrlCurrent).promise,
+            window.pdfjsLib.getDocument(targetUrl).promise,
         ]).then(function (documents) {
             if (requestId !== comparison.requestId) {
                 return null;
@@ -1577,18 +1620,20 @@
                 ) {
                     comparison.geometryMismatch = true;
                     comparison.loading = false;
-                    updateSliderButton();
+                    updateCompareMenu();
                     viewerNotify(
-                        'Шторка доступна только для листов с одинаковой геометрией. Используйте режим «Рядом».'
+                        mode === 'overlay'
+                            ? 'Наложение доступно только для листов с одинаковой геометрией. Используйте режим «Рядом».'
+                            : 'Шторка доступна только для листов с одинаковой геометрией. Используйте режим «Рядом».'
                     );
                     return null;
                 }
                 comparison.geometryMismatch = false;
                 comparison.loading = false;
-                if (comparison.active && comparison.mode === 'side') {
+                if (comparison.active) {
                     closeComparison();
                 }
-                startComparison('slider', documents[0], documents[1]);
+                startComparison(mode, documents[0], documents[1]);
                 return null;
             });
         }).catch(function () {
@@ -1596,7 +1641,7 @@
                 return;
             }
             comparison.loading = false;
-            updateSliderButton();
+            updateCompareMenu();
             viewerNotify('Не удалось загрузить PDF для сравнения.');
         });
     }
@@ -1632,6 +1677,7 @@
 
         const compareStage = document.getElementById('compareStage');
         const sliderStage = document.getElementById('sliderStage');
+        const overlayStage = document.getElementById('overlayStage');
         const stage = document.getElementById('pdf-panel');
         if (compareStage) {
             compareStage.classList.add('d-none');
@@ -1639,20 +1685,272 @@
         if (sliderStage) {
             sliderStage.classList.add('d-none');
         }
+        if (overlayStage) {
+            overlayStage.classList.add('d-none');
+        }
         if (stage) {
             stage.classList.remove('is-comparing');
             stage.classList.remove('is-sliding');
+            stage.classList.remove('is-overlay');
         }
         viewer.classList.remove('d-none');
         setFitButtonsEnabled(true);
-        updateComparisonButton();
-        updateSliderButton();
+        resetOverlayOffset();
+        updateMinimapVisibility();
+        updateThumbsVisibility();
+        updateCompareMenu();
 
         if (pdfDocument) {
             currentPage = page;
             renderPages();
         } else {
             updatePageControls();
+        }
+    }
+
+    /* ---------- Спринт 8: наложение чертежей ---------- */
+
+    const overlayState = { opacity: 0.5, blend: 'normal', offsetX: 0, offsetY: 0 };
+
+    function overlayTopPane() {
+        return document.getElementById('overlayViewerSelected');
+    }
+
+    function overlayFrameEl() {
+        return document.getElementById('overlayFrame');
+    }
+
+    function applyOverlayStyle() {
+        const top = overlayTopPane();
+        if (top) {
+            top.style.opacity = String(overlayState.opacity);
+            top.style.mixBlendMode = overlayState.blend;
+            top.style.transform = 'translate('
+                + overlayState.offsetX + 'px, ' + overlayState.offsetY + 'px)';
+        }
+        const label = document.getElementById('overlayOpacityValue');
+        if (label) {
+            label.textContent = Math.round(overlayState.opacity * 100) + '%';
+        }
+    }
+
+    function updateOverlayFrame() {
+        const pane = comparison.current || comparison.selected;
+        const frame = overlayFrameEl();
+        if (!pane || !pane.viewport || !frame) {
+            return;
+        }
+        frame.style.width = Math.ceil(pane.viewport.width) + 'px';
+        frame.style.height = Math.ceil(pane.viewport.height) + 'px';
+        applyOverlayStyle();
+    }
+
+    function resetOverlayOffset() {
+        overlayState.offsetX = 0;
+        overlayState.offsetY = 0;
+        applyOverlayStyle();
+    }
+
+    function initOverlay() {
+        const opacity = document.getElementById('overlayOpacity');
+        if (opacity) {
+            opacity.addEventListener('input', function () {
+                overlayState.opacity = Number(opacity.value) / 100;
+                applyOverlayStyle();
+            });
+        }
+        const blend = document.getElementById('overlayBlend');
+        if (blend) {
+            blend.addEventListener('change', function () {
+                overlayState.blend = blend.value;
+                applyOverlayStyle();
+            });
+        }
+        document.addEventListener('click', function (event) {
+            const nudge = event.target.closest('[data-overlay-nudge]');
+            if (nudge) {
+                event.preventDefault();
+                const parts = (nudge.getAttribute('data-overlay-nudge') || '').split(',');
+                const direction = parts[0];
+                const dx = direction === 'left' ? -1 : direction === 'right' ? 1 : 0;
+                const dy = direction === 'up' ? -1 : direction === 'down' ? 1 : 0;
+                const step = event.shiftKey ? 10 : 1;
+                overlayState.offsetX += dx * step;
+                overlayState.offsetY += dy * step;
+                applyOverlayStyle();
+                return;
+            }
+            if (event.target.closest('#overlayResetOffset')) {
+                event.preventDefault();
+                resetOverlayOffset();
+            }
+        });
+
+        const scroll = document.getElementById('overlayScroll');
+        if (!scroll) {
+            return;
+        }
+        let dragging = false;
+        let startX = 0;
+        let startY = 0;
+        let startOffsetX = 0;
+        let startOffsetY = 0;
+        scroll.addEventListener('pointerdown', function (event) {
+            if (!comparison.active || comparison.mode !== 'overlay') {
+                return;
+            }
+            if (event.button !== 0 || event.target.closest('.overlay-hud')) {
+                return;
+            }
+            dragging = true;
+            startX = event.clientX;
+            startY = event.clientY;
+            startOffsetX = overlayState.offsetX;
+            startOffsetY = overlayState.offsetY;
+            scroll.classList.add('is-dragging');
+            event.preventDefault();
+        });
+        window.addEventListener('pointermove', function (event) {
+            if (!dragging) {
+                return;
+            }
+            overlayState.offsetX = startOffsetX + (event.clientX - startX);
+            overlayState.offsetY = startOffsetY + (event.clientY - startY);
+            applyOverlayStyle();
+        });
+        window.addEventListener('pointerup', function () {
+            dragging = false;
+            scroll.classList.remove('is-dragging');
+        });
+        scroll.addEventListener('wheel', function (event) {
+            if (!event.ctrlKey) {
+                return;
+            }
+            event.preventDefault();
+            if (event.deltaY < 0) {
+                window.zoomIn();
+            } else {
+                window.zoomOut();
+            }
+        }, {passive: false});
+    }
+
+    /* ---------- Спринт 8: полоса листов (миниатюры) ---------- */
+
+    const thumbs = { open: false, built: false, items: new Map(), observer: null };
+
+    function thumbRail() {
+        return document.getElementById('thumbRail');
+    }
+
+    function updateThumbsVisibility() {
+        const rail = thumbRail();
+        const toggle = document.getElementById('thumbsToggle');
+        if (!rail) {
+            return;
+        }
+        const shown = thumbs.open && !comparison.active;
+        rail.classList.toggle('d-none', !shown);
+        if (toggle) {
+            toggle.classList.toggle('active', shown);
+            toggle.setAttribute('aria-expanded', shown ? 'true' : 'false');
+        }
+        if (shown && pdfDocument) {
+            buildThumbRail();
+        }
+    }
+
+    function toggleThumbs() {
+        thumbs.open = !thumbs.open;
+        updateThumbsVisibility();
+    }
+    window.toggleThumbs = toggleThumbs;
+
+    function buildThumbRail() {
+        const rail = thumbRail();
+        if (!rail || !pdfDocument || thumbs.built) {
+            return;
+        }
+        thumbs.built = true;
+        rail.innerHTML = '';
+        thumbs.items.clear();
+        for (let number = 1; number <= pdfDocument.numPages; number += 1) {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'thumb';
+            button.dataset.page = String(number);
+            button.setAttribute('aria-label', 'Страница ' + number);
+            const canvas = document.createElement('canvas');
+            canvas.width = 160;
+            canvas.height = 226;
+            canvas.dataset.rendered = '0';
+            const label = document.createElement('span');
+            label.className = 'thumb__page num';
+            label.textContent = String(number);
+            button.appendChild(canvas);
+            button.appendChild(label);
+            button.addEventListener('click', function () {
+                window.goToPage(number);
+            });
+            rail.appendChild(button);
+            thumbs.items.set(number, { button: button, canvas: canvas });
+        }
+        if ('IntersectionObserver' in window) {
+            thumbs.observer = new IntersectionObserver(function (entries) {
+                entries.forEach(function (entry) {
+                    if (entry.isIntersecting) {
+                        renderThumb(Number(entry.target.dataset.page));
+                    }
+                });
+            }, { root: rail, rootMargin: '240px' });
+            thumbs.items.forEach(function (item) {
+                thumbs.observer.observe(item.button);
+            });
+        } else {
+            thumbs.items.forEach(function (item) {
+                renderThumb(Number(item.button.dataset.page));
+            });
+        }
+        updateThumbsActive();
+    }
+
+    function renderThumb(pageNumber) {
+        const item = thumbs.items.get(pageNumber);
+        if (!item || item.canvas.dataset.rendered === '1' || !pdfDocument) {
+            return;
+        }
+        item.canvas.dataset.rendered = '1';
+        pdfDocument.getPage(pageNumber).then(function (page) {
+            const base = page.getViewport({ scale: 1, rotation: currentRotation });
+            const scale = 140 / base.width;
+            const viewport = page.getViewport({ scale: scale, rotation: currentRotation });
+            const outputScale = window.devicePixelRatio || 1;
+            item.canvas.width = Math.floor(viewport.width * outputScale);
+            item.canvas.height = Math.floor(viewport.height * outputScale);
+            item.canvas.style.width = Math.floor(viewport.width) + 'px';
+            item.canvas.style.height = Math.floor(viewport.height) + 'px';
+            const context = item.canvas.getContext('2d');
+            context.setTransform(outputScale, 0, 0, outputScale, 0, 0);
+            return page.render({
+                canvasContext: context,
+                viewport: viewport,
+            }).promise;
+        }).catch(function () {
+            item.canvas.dataset.rendered = '0';
+        });
+    }
+
+    function updateThumbsActive() {
+        if (!thumbs.items.size) {
+            return;
+        }
+        const activePage = comparison.active ? comparison.page : currentPage;
+        thumbs.items.forEach(function (item, number) {
+            item.button.classList.toggle('is-active', number === activePage);
+        });
+        const active = thumbs.items.get(activePage);
+        if (active && thumbs.open) {
+            active.button.scrollIntoView({ block: 'nearest' });
         }
     }
 
@@ -2187,16 +2485,40 @@
     };
     window.closePdfComparison = closeComparison;
 
-    const compareToggleBtn = document.getElementById('compareToggleBtn');
-    if (compareToggleBtn) {
-        compareToggleBtn.addEventListener('click', openComparison);
+    /* Спринт 8: меню сравнения — режимы и цель выбираются в одном месте */
+    const compareSelect = document.getElementById('compareVersionSelect');
+    if (compareSelect) {
+        compareSelect.addEventListener('change', function () {
+            comparison.geometryMismatch = false;
+            if (comparison.active) {
+                const mode = comparison.mode;
+                closeComparison();
+                if (mode === 'side') {
+                    startComparison('side');
+                } else {
+                    prepareAlignedComparison(mode);
+                }
+            }
+        });
     }
-    const sliderToggleBtn = document.getElementById('sliderToggleBtn');
-    if (sliderToggleBtn) {
-        sliderToggleBtn.addEventListener('click', openSliderComparison);
-    }
-    updateComparisonButton();
-    updateSliderButton();
+    document.addEventListener('click', function (event) {
+        const item = event.target.closest('[data-compare-mode]');
+        if (item) {
+            event.preventDefault();
+            const mode = item.getAttribute('data-compare-mode');
+            if (mode === 'side') {
+                openComparison();
+            } else {
+                prepareAlignedComparison(mode);
+            }
+            return;
+        }
+        if (event.target.closest('#compareCloseItem')) {
+            event.preventDefault();
+            closeComparison();
+        }
+    });
+    updateCompareMenu();
 
     // Смена статуса без перезагрузки: обновляем внутренний список и маркеры на листе.
     document.addEventListener('issue:status-changed', function (event) {
@@ -2219,9 +2541,11 @@
     initToolbar();
     initPan();
     initSlider();
+    initOverlay();
     initContextMenu();
     initDetails();
     initMinimap();
+    updateThumbsVisibility();
     if (issues.length) {
         selectIssue(issues[0].id);
     }

@@ -573,6 +573,8 @@
 
     var dragDocumentId = null;
     var dragFolderId = null;
+    var dragDocumentSectionId = null;
+    var dragFolderSectionId = null;
     var toastTimer = null;
 
     function dndTypes(event) {
@@ -619,6 +621,8 @@
         });
         dragDocumentId = null;
         dragFolderId = null;
+        dragDocumentSectionId = null;
+        dragFolderSectionId = null;
     }
 
     function isArchiveZone(target) {
@@ -752,10 +756,16 @@
                 event.stopPropagation();
                 dragDocumentId = documentId;
                 dragFolderId = null;
+                dragDocumentSectionId = row.dataset.sectionId || '';
+                dragFolderSectionId = null;
                 event.dataTransfer.effectAllowed = 'copyMove';
                 event.dataTransfer.clearData();
                 event.dataTransfer.setData('text/plain', documentId);
                 event.dataTransfer.setData('application/x-sod-document-id', documentId);
+                event.dataTransfer.setData(
+                    'application/x-sod-section-id',
+                    row.dataset.sectionId || ''
+                );
                 row.classList.add('is-dragging');
                 showDropOverlay(false);
                 return;
@@ -777,10 +787,16 @@
             event.stopPropagation();
             dragDocumentId = null;
             dragFolderId = folderId;
+            dragDocumentSectionId = null;
+            dragFolderSectionId = (folderNode && folderNode.dataset.sectionId) || '';
             event.dataTransfer.effectAllowed = 'move';
             event.dataTransfer.clearData();
             event.dataTransfer.setData('application/x-sod-folder-id', folderId);
             event.dataTransfer.setData('text/plain', 'folder:' + folderId);
+            event.dataTransfer.setData(
+                'application/x-sod-folder-section-id',
+                dragFolderSectionId
+            );
             folderRow.classList.add('is-dragging-folder');
             showDropOverlay(false);
         });
@@ -859,6 +875,32 @@
                 if (target.dataset.dropFolder === folderId) {
                     return;
                 }
+                // Спринт 7: DnD не меняет марку. Перенос папки в другой
+                // раздел (напрямую или через папку чужой марки) запрещён —
+                // подсказываем штатную кнопку «Сменить раздел».
+                var targetFolderSection = '';
+                if (target.dataset.dropSection) {
+                    targetFolderSection = target.dataset.dropSection;
+                } else {
+                    var targetFolderNode = target.closest('[data-folder-id]');
+                    targetFolderSection = (
+                        targetFolderNode && targetFolderNode.dataset.sectionId
+                    ) || '';
+                }
+                var sourceFolderSection = transfer.getData(
+                    'application/x-sod-folder-section-id'
+                ) || dragFolderSectionId || '';
+                if (
+                    targetFolderSection &&
+                    sourceFolderSection &&
+                    targetFolderSection !== sourceFolderSection
+                ) {
+                    showDndToast(
+                        'Для смены марки используйте кнопку «Сменить раздел»',
+                        true
+                    );
+                    return;
+                }
                 var folderBody = new FormData();
                 if (target.dataset.dropFolder) {
                     folderBody.append('parent_id', target.dataset.dropFolder);
@@ -886,8 +928,47 @@
             var body = new FormData();
             if (target.dataset.dropFolder) {
                 body.append('folder_id', target.dataset.dropFolder);
+                // Спринт 7: папка в чужой марке — это смена раздела.
+                // Сохраняем жест, но требуем явного подтверждения.
+                var targetDocFolderNode = target.closest('[data-folder-id]');
+                var targetDocSection = (
+                    targetDocFolderNode && targetDocFolderNode.dataset.sectionId
+                ) || '';
+                var sourceDocSection = transfer.getData(
+                    'application/x-sod-section-id'
+                ) || dragDocumentSectionId || '';
+                if (
+                    !copyRequested &&
+                    targetDocSection &&
+                    sourceDocSection &&
+                    targetDocSection !== sourceDocSection
+                ) {
+                    if (!window.confirm(
+                        'Переместить документ в папку другого раздела («'
+                        + targetName + '»)? Это изменит его марку.'
+                    )) {
+                        return;
+                    }
+                    body.append('allow_section_change', '1');
+                }
             } else if (target.dataset.dropSection) {
                 body.append('section_id', target.dataset.dropSection);
+                var sourceSection = transfer.getData(
+                    'application/x-sod-section-id'
+                ) || dragDocumentSectionId || '';
+                if (
+                    !copyRequested &&
+                    sourceSection &&
+                    target.dataset.dropSection !== sourceSection
+                ) {
+                    if (!window.confirm(
+                        'Перенести документ в «' + targetName + '»? '
+                        + 'Это изменит его марку (раздел).'
+                    )) {
+                        return;
+                    }
+                    body.append('allow_section_change', '1');
+                }
             }
 
             var verb = copyRequested ? 'Копируем' : 'Перемещаем';
@@ -1571,7 +1652,11 @@
         }
     }
 
-    function refreshColumnFilters() {
+    /* ---------- Спринт 8: видимый фильтр-бар ----------
+       Колоночные воронки (.th-filter) убраны: непонятно, когда отфильтровано.
+       Теперь — выпадающие фильтры над таблицей + чипы активных условий. */
+
+    function refreshFilters() {
         var form = document.getElementById('filtersForm');
         if (!form) {
             return;
@@ -1583,105 +1668,75 @@
         }
     }
 
-    function bindColumnFilter(column, fieldId, kind) {
-        var header = document.querySelector(
-            'th[data-column="' + column + '"]'
-        );
-        var hidden = document.getElementById(fieldId);
-        if (!header || !hidden || header.querySelector('.th-filter')) {
+    function initFilterBar() {
+        var form = document.getElementById('filtersForm');
+        if (!form || form.dataset.filterReady === '1') {
             return;
         }
-        var wrapper = document.createElement('span');
-        wrapper.className = 'th-filter dropdown';
-        var button = document.createElement('button');
-        button.type = 'button';
-        button.className = 'th-filter-btn';
-        button.setAttribute('data-bs-toggle', 'dropdown');
-        button.setAttribute('aria-expanded', 'false');
-        button.title = 'Фильтр';
-        button.innerHTML = '<i class="bi bi-funnel" aria-hidden="true"></i>';
-        var menu = document.createElement('div');
-        menu.className = 'dropdown-menu p-2';
-        var control;
+        form.dataset.filterReady = '1';
         var timer = null;
 
-        function syncActive() {
-            button.classList.toggle('is-active', Boolean(hidden.value));
-        }
-
-        function scheduleRefresh() {
-            syncActive();
+        function submitNow() {
             if (timer) {
                 window.clearTimeout(timer);
+                timer = null;
             }
-            timer = window.setTimeout(refreshColumnFilters, kind === 'text' ? 350 : 0);
+            refreshFilters();
         }
 
-        if (kind === 'select') {
-            control = document.createElement('select');
-            control.className = 'form-select form-select-sm';
-            Array.from(hidden.options).forEach(function (option) {
-                var cloned = document.createElement('option');
-                cloned.value = option.value;
-                cloned.textContent = option.textContent;
-                control.appendChild(cloned);
-            });
-            control.value = hidden.value || '';
-            control.addEventListener('change', function () {
-                hidden.value = control.value;
-                scheduleRefresh();
-            });
-        } else {
-            control = document.createElement('input');
-            control.type = 'search';
-            control.className = 'form-control form-control-sm';
-            control.placeholder = header.textContent.trim() || 'Поиск';
-            control.value = hidden.value || '';
-            control.addEventListener('input', function () {
-                hidden.value = control.value;
-                scheduleRefresh();
-            });
-            control.addEventListener('keydown', function (event) {
-                if (event.key === 'Enter') {
-                    event.preventDefault();
-                    refreshColumnFilters();
-                }
-            });
-        }
-
-        menu.appendChild(control);
-        wrapper.appendChild(button);
-        wrapper.appendChild(menu);
-        header.appendChild(wrapper);
-        syncActive();
-    }
-
-    function initColumnFilters() {
-        bindColumnFilter('section', 'id_section', 'select');
-        bindColumnFilter('doc_type', 'id_doc_type', 'select');
-        bindColumnFilter('suitability', 'id_suitability_code', 'select');
-        bindColumnFilter('internal-status', 'id_internal_status', 'select');
-        bindColumnFilter('code', 'id_code', 'text');
-        bindColumnFilter('name', 'id_name', 'text');
-
-        var search = document.getElementById('globalSearch');
-        var hiddenSearch = document.getElementById('quickFilter');
-        if (!search || !hiddenSearch || search.dataset.filterReady === '1') {
-            return;
-        }
-        search.dataset.filterReady = '1';
-        var timer = null;
-        search.addEventListener('input', function () {
-            hiddenSearch.value = search.value;
-            if (timer) {
-                window.clearTimeout(timer);
+        // Селекты применяются сразу, текст — с задержкой 350 мс.
+        form.addEventListener('change', function (event) {
+            if (event.target && event.target.matches('select')) {
+                submitNow();
             }
-            timer = window.setTimeout(refreshColumnFilters, 350);
         });
-        search.addEventListener('keydown', function (event) {
-            if (event.key === 'Enter') {
+        form.addEventListener('input', function (event) {
+            if (
+                !event.target ||
+                !event.target.matches('input[type="search"], input[type="text"]')
+            ) {
+                return;
+            }
+            if (timer) {
+                window.clearTimeout(timer);
+            }
+            timer = window.setTimeout(refreshFilters, 350);
+        });
+        form.addEventListener('keydown', function (event) {
+            if (event.key === 'Enter' && event.target.matches('input')) {
                 event.preventDefault();
-                refreshColumnFilters();
+                submitNow();
+            }
+        });
+
+        // Чипы активных фильтров и «Сбросить всё» живут вне формы
+        // (HTMX пересобирает панель — вешаем делегированно).
+        document.addEventListener('click', function (event) {
+            var chip = event.target.closest('[data-filter-chip-clear]');
+            if (chip) {
+                event.preventDefault();
+                var name = chip.getAttribute('data-filter-chip-clear');
+                var field = form.elements[name];
+                if (field && field.value !== undefined) {
+                    field.value = '';
+                }
+                submitNow();
+                return;
+            }
+            var reset = event.target.closest('[data-filter-reset]');
+            if (reset) {
+                event.preventDefault();
+                form.reset();
+                form.querySelectorAll(
+                    'select, input[type="search"], input[type="text"]'
+                ).forEach(function (el) {
+                    el.value = '';
+                });
+                var zoneInput = form.querySelector('[data-role="zone-input"]');
+                if (zoneInput) {
+                    zoneInput.value = '';
+                }
+                submitNow();
             }
         });
     }
@@ -1721,7 +1776,7 @@
             });
         }
         initColumnOrder();
-        initColumnFilters();
+        initFilterBar();
         updateBulkBar();
         updateUploadTarget();
         highlightNewRow();

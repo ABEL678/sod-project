@@ -5,6 +5,7 @@ import io
 import uuid
 
 import fitz
+from PIL import Image, UnidentifiedImageError
 
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.core.files.base import ContentFile
@@ -165,7 +166,12 @@ def _check_company_access(user: User, company_id: int) -> bool:
     """Проверяет, что пользователь принадлежит компании (superuser — вне ограничений)."""
     if user.is_superuser:
         return True
-    company = get_user_company(user)
+    # Спринт 8: кэш на время жизни инстанса пользователя (один запрос).
+    # Без него каждая строка реестра × каждое действие дёргало БД
+    # (get_user_company = 2 запроса) — на 25 строках ~140 запросов.
+    if not hasattr(user, '_sod_company_cache'):
+        user._sod_company_cache = get_user_company(user)
+    company = user._sod_company_cache
     return company is not None and company.pk == company_id
 
 
@@ -546,8 +552,16 @@ def get_project_documents_queryset(
 
     return queryset.select_related(
         'section',
+        'section__project',
+        'project',
         'folder',
         'folder__parent',
+        'folder__parent__parent',
+        'folder__parent__parent__parent',
+        'folder__parent__parent__parent__parent',
+        'folder__parent__parent__parent__parent__parent',
+        'folder__section',
+        'folder__section__project',
         'current_version',
         'current_version__uploaded_by',
         'created_by',
@@ -1530,7 +1544,14 @@ def get_folder_tree(user: User, project: Project) -> list[Folder]:
             is_deleted=False,
         )
         .filter(Q(section__in=accessible_sections) | Q(section__isnull=True))
-        .select_related('section')
+        # Спринт 8: шаблон дерева обращается к folder.parent — без
+        # select_related это запрос на каждый узел.
+        .select_related(
+            'section',
+            'parent',
+            'parent__parent',
+            'parent__parent__parent',
+        )
         .annotate(
             document_count=Count(
                 'documents',
@@ -4101,6 +4122,26 @@ def submit_feedback(
             )
         if extension == "jpeg":
             extension = "jpg"
+
+        # Спринт 7: content_type приходит от клиента и подделывается —
+        # проверяем, что байты действительно являются изображением.
+        try:
+            screenshot.open("rb")
+            screenshot.seek(0)
+        except (AttributeError, OSError):
+            pass
+        try:
+            with Image.open(screenshot) as _img:
+                _img.verify()
+        except (UnidentifiedImageError, OSError, ValueError) as exc:
+            raise ValidationError(
+                {"screenshot": "Файл не является корректным изображением"}
+            ) from exc
+        finally:
+            try:
+                screenshot.seek(0)
+            except (AttributeError, OSError):
+                pass
 
         storage = file_storage or default_storage
         upload_to = Feedback._meta.get_field("screenshot").upload_to

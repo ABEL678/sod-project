@@ -107,7 +107,8 @@ class T9DndCopyFolderTests(T8UltimateTestBase):
         root.refresh_from_db()
         self.assertIsNone(root.parent_id)
 
-    def test_folder_can_move_to_another_section(self):
+    def test_folder_cannot_move_to_another_section_via_plain_dnd(self):
+        """Спринт 7: DnD папки в чужой раздел запрещён — 400 с подсказкой."""
         folder = create_folder(self.user_gip, self.project, 'РД', section=self.section)
         other = create_folder(
             self.user_gip, self.project, 'Другой',
@@ -118,6 +119,28 @@ class T9DndCopyFolderTests(T8UltimateTestBase):
         response = self.client.post(
             reverse('storage:folder_move', args=[folder.pk]),
             {'section_id': self.other_section.pk},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('Сменить раздел', response.json()['error'])
+        folder.refresh_from_db()
+        self.assertEqual(folder.section_id, self.section.pk)
+
+    def test_folder_can_move_to_another_section_with_explicit_flag(self):
+        """Спринт 7: явный перенос между разделами (allow_section_change=1)."""
+        folder = create_folder(self.user_gip, self.project, 'РД', section=self.section)
+        other = create_folder(
+            self.user_gip, self.project, 'Другой',
+            section=self.other_section, code='02',
+        )
+        self.client.force_login(self.user_gip)
+
+        response = self.client.post(
+            reverse('storage:folder_move', args=[folder.pk]),
+            {
+                'section_id': self.other_section.pk,
+                'allow_section_change': '1',
+            },
         )
 
         self.assertEqual(response.status_code, 200)

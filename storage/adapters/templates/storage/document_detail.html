@@ -5,7 +5,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{ document.code }} — {{ document.name }}</title>
-<meta name="theme-color" content="#3A4558">
+<meta name="theme-color" content="#FFFFFF">
 <link rel="manifest" href="/static/manifest.webmanifest">
 <link rel="icon" type="image/png" href="/static/icons/icon-192.png">
 <link rel="stylesheet" href="{% static 'fonts/fonts.css' %}">
@@ -111,17 +111,60 @@
       <span class="version-badge">Просмотр версии v{{ selected_version.version_number }} (не текущая)</span>
       <a class="version-back" href="{{ current_version_url }}">Вернуться к текущей</a>
     {% endif %}
-    <button class="tbtn compare-toggle" id="compareToggleBtn" type="button"
-            title="Сравнить рядом"
-            {% if is_current_version or not document.current_version %}disabled{% endif %}>
-      Сравнить с текущей
-    </button>
-    <button class="tbtn compare-toggle" id="sliderToggleBtn" type="button"
-            title="Сравнение / наложение версий: тяните шторку мышью, пальцем или стрелками ←/→"
-            {% if is_current_version or not document.current_version %}disabled{% endif %}>
-      <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M8 2.5v11" fill="none" stroke="currentColor" stroke-width="1.4"/></svg>
-      <span id="sliderToggleLabel">Наложение</span>
-    </button>
+    {# Спринт 8: сравнение доступно из любой версии — цель выбирается в меню. #}
+    <div class="dropdown compare-menu">
+      <button class="tbtn compare-toggle" id="compareMenuBtn" type="button"
+              data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-expanded="false"
+              title="Сравнение версий: рядом, шторка, наложение"
+              {% if not pdf_urls_json %}disabled{% endif %}>
+        <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M8 2.5v11M1.5 8h6.5" fill="none" stroke="currentColor" stroke-width="1.4"/></svg>
+        <span id="compareMenuLabel">Сравнить</span>
+      </button>
+      <div class="dropdown-menu compare-menu-dropdown p-2" aria-labelledby="compareMenuBtn">
+        <label class="form-label small fw-semibold mb-1" for="compareVersionSelect">С чем сравнить</label>
+        <select class="form-select form-select-sm mb-2" id="compareVersionSelect">
+          {% for v in versions %}
+            {% if selected_version and v.pk != selected_version.pk %}
+              <option value="{{ v.pk }}" {% if v.pk == document.current_version_id %}selected{% endif %}>
+                v{{ v.version_number }}{% if v.pk == document.current_version_id %} (текущая){% endif %}
+              </option>
+            {% endif %}
+          {% endfor %}
+        </select>
+        <button class="dropdown-item" type="button" data-compare-mode="side">
+          <i class="bi bi-layout-split me-2" aria-hidden="true"></i>Рядом
+        </button>
+        <button class="dropdown-item" type="button" data-compare-mode="slider">
+          <i class="bi bi-layout-sidebar-inset me-2" aria-hidden="true"></i>Шторка
+        </button>
+        <button class="dropdown-item" type="button" data-compare-mode="overlay">
+          <i class="bi bi-layers me-2" aria-hidden="true"></i>Наложение
+        </button>
+        <hr class="dropdown-divider">
+        <div id="overlayControls" class="d-none px-1">
+          <label class="form-label small mb-1 d-flex justify-content-between" for="overlayOpacity">
+            Прозрачность
+            <span class="num" id="overlayOpacityValue">50%</span>
+          </label>
+          <input type="range" class="form-range" id="overlayOpacity" min="5" max="100" step="5" value="50">
+          <label class="form-label small mt-1 mb-1" for="overlayBlend">Режим наложения</label>
+          <select class="form-select form-select-sm" id="overlayBlend">
+            <option value="normal" selected>Обычный</option>
+            <option value="difference">Разница</option>
+            <option value="multiply">Умножение</option>
+          </select>
+          <div class="d-flex gap-1 mt-2 flex-wrap">
+            <button class="btn btn-sm btn-outline-secondary py-0" type="button" data-overlay-nudge="left,-1" title="Сдвинуть верхний слой влево">←</button>
+            <button class="btn btn-sm btn-outline-secondary py-0" type="button" data-overlay-nudge="right,1" title="Сдвинуть верхний слой вправо">→</button>
+            <button class="btn btn-sm btn-outline-secondary py-0" type="button" data-overlay-nudge="up,-1" title="Сдвинуть верхний слой вверх">↑</button>
+            <button class="btn btn-sm btn-outline-secondary py-0" type="button" data-overlay-nudge="down,1" title="Сдвинуть верхний слой вниз">↓</button>
+            <button class="btn btn-sm btn-outline-secondary py-0 ms-auto" type="button" id="overlayResetOffset" title="Сбросить сдвиг">0</button>
+          </div>
+        </div>
+        <hr class="dropdown-divider" id="compareCloseDivider">
+        <button class="dropdown-item text-danger" type="button" id="compareCloseItem">Закрыть сравнение</button>
+      </div>
+    </div>
   </div>
   <span class="divider"></span>
   {% endif %}
@@ -156,6 +199,11 @@
             title="Мини-карта: превью листа и видимой области" aria-label="Мини-карта">
       <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.4"/><rect x="8" y="7" width="4.5" height="4" fill="currentColor" opacity="0.55"/></svg>
     </button>
+    <button class="tbtn" id="thumbsToggle" onclick="toggleThumbs()" type="button"
+            title="Полоса листов: миниатюры всех страниц" aria-label="Полоса листов"
+            aria-expanded="false" aria-controls="thumbRail">
+      <i class="bi bi-grid-3x2-gap" aria-hidden="true"></i>
+    </button>
   </div>
 </div>
 
@@ -169,9 +217,11 @@
 
 <div class="workspace" id="main-splitter">
   <section class="stage" id="pdf-panel">
+    <aside class="thumb-rail d-none" id="thumbRail" aria-label="Страницы документа"></aside>
     <div class="pdf-viewer" id="pdfViewer"
          data-pdf-url="{{ pdf_url }}"
          data-pdf-url-current="{{ pdf_url_current }}"
+         data-pdf-urls="{{ pdf_urls_json }}"
          data-current-version-id="{{ document.current_version_id|default:'' }}"
          data-selected-version-id="{{ selected_version.pk|default:'' }}"
          data-selected-version-number="{{ selected_version.version_number|default:'' }}"
@@ -210,6 +260,21 @@
         <div class="slider-divider" id="sliderDivider" role="separator" aria-label="Разделитель версий" aria-valuemin="0" aria-valuemax="100" aria-valuenow="50" tabindex="0">
           <span class="slider-handle" aria-hidden="true">⇔</span>
         </div>
+      </div>
+    </div>
+
+    {# Спринт 8: настоящее наложение чертежей — верхний слой регулируется по прозрачности, режиму смешивания и сдвигу. #}
+    <div class="overlay-stage d-none" id="overlayStage">
+      <div class="overlay-scroll" id="overlayScroll">
+        <div class="overlay-frame" id="overlayFrame">
+          <div class="overlay-pane overlay-pane--base" id="overlayViewerCurrent"></div>
+          <div class="overlay-pane overlay-pane--top" id="overlayViewerSelected"></div>
+        </div>
+      </div>
+      <div class="overlay-hud">
+        <span class="overlay-hud__base"><i class="bi bi-square" aria-hidden="true"></i> низ — выбранная версия</span>
+        <span class="overlay-hud__top"><i class="bi bi-square-fill" aria-hidden="true"></i> верх — цель сравнения</span>
+        <span class="overlay-hud__hint">Тяните мышью для совмещения · Ctrl+колесо — масштаб</span>
       </div>
     </div>
   </section>

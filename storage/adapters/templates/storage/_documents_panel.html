@@ -41,12 +41,13 @@
     </nav>
 
     {% comment %}
-    Спринт 2: фильтры применяются сразу — по change у селектов и с
-    задержкой 350 мс при наборе в поиске. Кнопка «Найти» больше не нужна
-    (скрытый submit оставлен для доступности/Enter).
+    Спринт 8: фильтры снова видимы — выпадающий бар над таблицей.
+    Селекты применяются сразу, поиск — с задержкой 350 мс (app.js).
+    Активные условия показываются чипами с × и «Сбросить всё», бар
+    подсвечивается, пока хотя бы один фильтр задан.
     {% endcomment %}
     <form id="filtersForm"
-          class="d-none"
+          class="filter-bar {% if active_filter_chips %}is-filtered{% endif %}"
           method="get"
           action="{% url 'storage:project_detail' project.pk %}"
           hx-get="{% url 'storage:project_detail' project.pk %}"
@@ -65,13 +66,64 @@
             <input type="hidden" name="folder" value="{{ selected_folder.pk }}">
         {% endif %}
         <input type="hidden" name="sort" value="{{ active_sort|default:'' }}">
-        {{ filter.form.section }}
-        {{ filter.form.doc_type }}
-        {{ filter.form.suitability_code }}
-        {{ filter.form.internal_status }}
-        {{ filter.form.code }}
-        {{ filter.form.name }}
-        {{ filter.form.q }}
+        <div class="d-none">{{ filter.form.code }}{{ filter.form.name }}</div>
+
+        <div class="filter-bar__fields">
+            <div class="filter-field">
+                <label class="filter-field__label" for="{{ filter.form.section.id_for_label }}">Раздел</label>
+                {{ filter.form.section }}
+            </div>
+            <div class="filter-field">
+                <label class="filter-field__label" for="{{ filter.form.doc_type.id_for_label }}">Тип</label>
+                {{ filter.form.doc_type }}
+            </div>
+            <div class="filter-field">
+                <label class="filter-field__label" for="{{ filter.form.status.id_for_label }}">Статус</label>
+                {{ filter.form.status }}
+            </div>
+            <div class="filter-field">
+                <label class="filter-field__label" for="{{ filter.form.suitability_code.id_for_label }}">Пригодность</label>
+                {{ filter.form.suitability_code }}
+            </div>
+            <div class="filter-field">
+                <label class="filter-field__label" for="{{ filter.form.internal_status.id_for_label }}">Внутр. статус</label>
+                {{ filter.form.internal_status }}
+            </div>
+            <div class="filter-field filter-field--search">
+                <label class="filter-field__label" for="{{ filter.form.q.id_for_label }}">Поиск</label>
+                {{ filter.form.q }}
+            </div>
+            {% if active_filter_chips %}
+            <button type="button" class="filter-bar__reset" data-filter-reset
+                    title="Сбросить все фильтры, зоны и поиск">
+                <i class="bi bi-x-circle" aria-hidden="true"></i>
+                Сбросить всё
+            </button>
+            {% endif %}
+        </div>
+
+        {% if active_filter_chips %}
+        <div class="filter-chips" role="status" aria-label="Активные фильтры">
+            <span class="filter-chips__hint">
+                <i class="bi bi-funnel-fill" aria-hidden="true"></i>
+                Отфильтровано:
+            </span>
+            {% for chip in active_filter_chips %}
+            <span class="filter-chip">
+                <span class="filter-chip__name">{{ chip.label }}:</span>
+                <span class="filter-chip__value cde-tnum">{{ chip.display }}</span>
+                <button type="button" class="filter-chip__clear"
+                        data-filter-chip-clear="{{ chip.param }}"
+                        aria-label="Убрать фильтр «{{ chip.label }}»">
+                    <i class="bi bi-x-lg" aria-hidden="true"></i>
+                </button>
+            </span>
+            {% endfor %}
+            <span class="filter-chips__count cde-tnum">
+                найдено: {% if table.paginator %}{{ table.paginator.count }}{% else %}{{ documents|length }}{% endif %}
+            </span>
+        </div>
+        {% endif %}
     </form>
 
     <div class="toolbar" data-role="toolbar">

@@ -35,6 +35,10 @@ class CreateDemoProjectTests(TestCase):
 
     def _run(self, **options):
         stdout = StringIO()
+        # Спринт 7: тестовый раннер принудительно ставит DEBUG=False,
+        # поэтому все вызовы проходят с force=True (guard проверяется
+        # отдельно в test_sprint7.DemoCommandGuardTests).
+        options.setdefault('force', True)
         call_command(
             'create_demo_project',
             stdout=stdout,
