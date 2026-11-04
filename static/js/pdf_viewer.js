@@ -1940,6 +1940,22 @@
         });
     }
 
+    function scrollThumbIntoRail(button) {
+        const rail = thumbRail();
+        if (!rail || !button) {
+            return;
+        }
+        // Прокручиваем только саму полосу листов: scrollIntoView()
+        // цеплял ещё и .stage и уводил основной вьювер вниз.
+        const buttonRect = button.getBoundingClientRect();
+        const railRect = rail.getBoundingClientRect();
+        if (buttonRect.top < railRect.top) {
+            rail.scrollTop += buttonRect.top - railRect.top - 6;
+        } else if (buttonRect.bottom > railRect.bottom) {
+            rail.scrollTop += buttonRect.bottom - railRect.bottom + 6;
+        }
+    }
+
     function updateThumbsActive() {
         if (!thumbs.items.size) {
             return;
@@ -1950,7 +1966,7 @@
         });
         const active = thumbs.items.get(activePage);
         if (active && thumbs.open) {
-            active.button.scrollIntoView({ block: 'nearest' });
+            scrollThumbIntoRail(active.button);
         }
     }
 
@@ -2179,11 +2195,36 @@
         }
     };
 
+    function focusViewerPage(pageNumber) {
+        const entry = pages.get(Number(pageNumber));
+        if (!entry) {
+            return;
+        }
+        const stage = viewer.closest('.stage') || viewer.parentElement;
+        if (!stage) {
+            return;
+        }
+        const pageRect = entry.wrapper.getBoundingClientRect();
+        const stageRect = stage.getBoundingClientRect();
+        const target = stage.scrollTop + pageRect.top - stageRect.top - 12;
+        stage.scrollTo({
+            top: Math.max(0, target),
+            left: 0,
+            behavior: 'smooth',
+        });
+    }
+
     window.goToPage = function (pageNumber) {
         if (comparison.active) {
             return renderComparisonPage(pageNumber);
         }
-        return renderPage(pageNumber);
+        const rendered = renderPage(pageNumber);
+        if (rendered && typeof rendered.then === 'function') {
+            return rendered.then(function () {
+                focusViewerPage(pageNumber);
+            });
+        }
+        return rendered;
     };
 
     window.prevPage = function () {
