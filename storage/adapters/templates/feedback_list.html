@@ -1,0 +1,265 @@
+{% extends 'storage/base.html' %}
+
+{% block title %}Обратная связь — Stream-CAD{% endblock %}
+
+{% block content %}
+<main id="main-content" class="container py-4">
+    <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+        <h1 class="h3 mb-0">Обратная связь</h1>
+        <span class="text-muted small">Всего: {{ page_obj.paginator.count }}</span>
+    </div>
+
+    <form method="get" class="row g-2 align-items-end mb-3">
+        {% if companies %}
+            <div class="col-12 col-md-4">
+                <label for="feedbackCompany" class="form-label">Компания</label>
+                <select class="form-select" id="feedbackCompany" name="company">
+                    {% for company in companies %}
+                        <option value="{{ company.pk }}"
+                                {% if company.pk == selected_company_id %}selected{% endif %}>
+                            {{ company.name }}
+                        </option>
+                    {% endfor %}
+                </select>
+            </div>
+        {% endif %}
+
+        <div class="col-6 col-md-3">
+            <label for="feedbackStatus" class="form-label">Статус</label>
+            <select class="form-select" id="feedbackStatus" name="status">
+                <option value="">Все</option>
+                {% for value, label in status_choices %}
+                    <option value="{{ value }}" {% if value == current_status %}selected{% endif %}>
+                        {{ label }}
+                    </option>
+                {% endfor %}
+            </select>
+        </div>
+
+        <div class="col-6 col-md-3">
+            <label for="feedbackCategoryFilter" class="form-label">Категория</label>
+            <select class="form-select" id="feedbackCategoryFilter" name="category">
+                <option value="">Все</option>
+                {% for value, label in category_choices %}
+                    <option value="{{ value }}" {% if value == current_category %}selected{% endif %}>
+                        {{ label }}
+                    </option>
+                {% endfor %}
+            </select>
+        </div>
+
+        <div class="col-12 col-md-2 d-flex flex-wrap gap-2">
+            <button type="submit" class="btn btn-primary">Применить</button>
+            {% if current_status or current_category %}
+                <a class="btn btn-outline-secondary"
+                   href="{% url 'storage:feedback_list' %}{% if companies and selected_company_id %}?company={{ selected_company_id }}{% endif %}">
+                    Сбросить
+                </a>
+            {% endif %}
+        </div>
+    </form>
+
+    {% if feedback_items %}
+        <div class="card">
+            <div class="table-responsive">
+                <table class="table table-hover align-middle mb-0">
+                    <thead>
+                        <tr>
+                            <th scope="col">Дата</th>
+                            <th scope="col">Автор</th>
+                            <th scope="col">Категория</th>
+                            <th scope="col">Сообщение</th>
+                            <th scope="col">URL</th>
+                            <th scope="col">Статус</th>
+                            <th scope="col">Действия</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for item in feedback_items %}
+                            <tr data-feedback-row
+                                data-feedback-id="{{ item.pk }}"
+                                data-status-url="{% url 'storage:feedback_status_update' item.pk %}"
+                                data-current-status="{{ item.status }}"
+                                data-admin-comment="{{ item.admin_comment }}">
+                                <td class="text-nowrap">{{ item.created_at|date:"d.m.Y H:i" }}</td>
+                                <td>
+                                    {% if item.author %}
+                                        {{ item.author.get_full_name|default:item.author.username }}
+                                    {% else %}
+                                        —
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    <span class="cde-badge {{ item.category_badge_class }}">
+                                        {{ item.get_category_display }}
+                                    </span>
+                                </td>
+                                <td class="feedback-message-cell">
+                                    {{ item.message|truncatechars:100 }}
+                                </td>
+                                <td class="text-break">
+                                    {% if item.page_url %}
+                                        {{ item.page_url|truncatechars:60 }}
+                                    {% else %}
+                                        —
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    <span class="cde-badge {{ item.status_badge_class }}"
+                                          data-feedback-status-badge>
+                                        {{ item.get_status_display }}
+                                    </span>
+                                </td>
+                                <td>
+                                    <div class="d-flex flex-wrap gap-1">
+                                        <button type="button"
+                                                class="btn btn-sm btn-outline-secondary"
+                                                data-feedback-status="IN_PROGRESS"
+                                                {% if item.status == 'IN_PROGRESS' %}disabled{% endif %}
+                                                title="В работу"
+                                                aria-label="Перевести в работу">
+                                            <i class="bi bi-arrow-repeat" aria-hidden="true"></i>
+                                            <span class="d-none d-xl-inline ms-1">В работу</span>
+                                        </button>
+                                        <button type="button"
+                                                class="btn btn-sm btn-outline-success"
+                                                data-feedback-status="RESOLVED"
+                                                {% if item.status == 'RESOLVED' %}disabled{% endif %}
+                                                title="Решено"
+                                                aria-label="Отметить решённым">
+                                            <i class="bi bi-check2" aria-hidden="true"></i>
+                                            <span class="d-none d-xl-inline ms-1">Решено</span>
+                                        </button>
+                                        <button type="button"
+                                                class="btn btn-sm btn-outline-danger"
+                                                data-feedback-status="REJECTED"
+                                                {% if item.status == 'REJECTED' %}disabled{% endif %}
+                                                title="Отклонено"
+                                                aria-label="Отклонить обращение">
+                                            <i class="bi bi-x-lg" aria-hidden="true"></i>
+                                            <span class="d-none d-xl-inline ms-1">Отклонено</span>
+                                        </button>
+                                        <button type="button"
+                                                class="btn btn-sm btn-outline-secondary"
+                                                data-bs-toggle="modal"
+                                                data-bs-target="#feedbackDetailModal"
+                                                data-feedback-open
+                                                data-feedback-message="{{ item.message }}"
+                                                data-feedback-author="{% if item.author %}{{ item.author.get_full_name|default:item.author.username }}{% else %}—{% endif %}"
+                                                data-feedback-created="{{ item.created_at|date:'d.m.Y H:i' }}"
+                                                data-feedback-category="{{ item.get_category_display }}"
+                                                data-feedback-category-class="{{ item.category_badge_class }}"
+                                                data-feedback-status-label="{{ item.get_status_display }}"
+                                                data-feedback-status-class="{{ item.status_badge_class }}"
+                                                data-feedback-url="{{ item.page_url }}"
+                                                data-feedback-screenshot="{% if item.screenshot %}{{ item.screenshot.url }}{% endif %}"
+                                                title="Открыть обращение"
+                                                aria-label="Открыть обращение">
+                                            <i class="bi bi-box-arrow-up-right" aria-hidden="true"></i>
+                                            <span class="d-none d-xl-inline ms-1">Открыть</span>
+                                        </button>
+                                    </div>
+                                </td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        {% if page_obj.has_other_pages %}
+            <nav class="mt-3" aria-label="Пагинация обратной связи">
+                <ul class="pagination justify-content-center mb-0">
+                    <li class="page-item {% if not page_obj.has_previous %}disabled{% endif %}">
+                        {% if page_obj.has_previous %}
+                            <a class="page-link"
+                               href="{% querystring page=page_obj.previous_page_number %}">Назад</a>
+                        {% else %}
+                            <span class="page-link">Назад</span>
+                        {% endif %}
+                    </li>
+                    <li class="page-item disabled">
+                        <span class="page-link">
+                            Страница {{ page_obj.number }} из {{ page_obj.paginator.num_pages }}
+                        </span>
+                    </li>
+                    <li class="page-item {% if not page_obj.has_next %}disabled{% endif %}">
+                        {% if page_obj.has_next %}
+                            <a class="page-link"
+                               href="{% querystring page=page_obj.next_page_number %}">Вперёд</a>
+                        {% else %}
+                            <span class="page-link">Вперёд</span>
+                        {% endif %}
+                    </li>
+                </ul>
+            </nav>
+        {% endif %}
+    {% else %}
+        <div class="text-center text-muted py-5">
+            <i class="bi bi-inbox fs-1 d-block mb-2" aria-hidden="true"></i>
+            <p class="mb-0">Пока нет сообщений</p>
+        </div>
+    {% endif %}
+</main>
+
+<div class="modal fade"
+     id="feedbackDetailModal"
+     tabindex="-1"
+     aria-labelledby="feedbackDetailLabel"
+     aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 class="modal-title fs-5" id="feedbackDetailLabel">Обращение</h2>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрыть"></button>
+            </div>
+            <div class="modal-body">
+                <div class="d-flex flex-wrap align-items-center gap-2 mb-3">
+                    <span id="feedbackDetailCategory" class="cde-badge"></span>
+                    <span id="feedbackDetailStatus" class="cde-badge"></span>
+                    <span id="feedbackDetailCreated" class="text-muted small"></span>
+                </div>
+
+                <p id="feedbackDetailMessage" class="feedback-message-full text-break"></p>
+
+                <div id="feedbackDetailScreenshotWrap" class="mb-3 d-none">
+                    <img id="feedbackDetailScreenshot"
+                         class="feedback-screenshot img-fluid rounded border"
+                         alt="Скриншот обращения">
+                </div>
+
+                <dl class="row small mb-3">
+                    <dt class="col-sm-3">Автор</dt>
+                    <dd class="col-sm-9" id="feedbackDetailAuthor"></dd>
+                    <dt class="col-sm-3">Где</dt>
+                    <dd class="col-sm-9 text-break" id="feedbackDetailUrl"></dd>
+                </dl>
+
+                <label for="feedbackDetailComment" class="form-label">
+                    Комментарий администратора
+                </label>
+                <textarea id="feedbackDetailComment"
+                          class="form-control"
+                          rows="3"
+                          maxlength="2000"
+                          aria-describedby="feedbackDetailCommentHelp"></textarea>
+                <div id="feedbackDetailCommentHelp" class="form-text">
+                    До 2000 символов. Пустое поле не стирает существующий комментарий.
+                </div>
+                <div id="feedbackDetailError"
+                     class="alert alert-danger d-none mt-2"
+                     role="alert"
+                     aria-live="assertive"></div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">
+                    Закрыть
+                </button>
+                <button type="button" class="btn btn-primary" id="feedbackDetailSave">
+                    Сохранить комментарий
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

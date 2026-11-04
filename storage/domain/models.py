@@ -1,5 +1,6 @@
 from copy import copy
 
+from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models
 from django.contrib.auth.models import User
@@ -462,3 +463,57 @@ class MailRule(models.Model):
 
     def __str__(self):
         return f'{self.project.code}: {self.email_filter} → {self.section.code}'
+
+
+class Feedback(models.Model):
+    """Обратная связь от тестировщиков/пользователей (бета)."""
+
+    class Status(models.TextChoices):
+        NEW = "NEW", "Новое"
+        IN_PROGRESS = "IN_PROGRESS", "В работе"
+        RESOLVED = "RESOLVED", "Решено"
+        REJECTED = "REJECTED", "Отклонено"
+
+    class Category(models.TextChoices):
+        BUG = "BUG", "Ошибка"
+        UX = "UX", "Неудобство"
+        IDEA = "IDEA", "Идея"
+        OTHER = "OTHER", "Другое"
+
+    company = models.ForeignKey(
+        "storage.Company", on_delete=models.CASCADE,
+        related_name="feedback_items", verbose_name="Компания",
+    )
+    author = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True,
+        related_name="feedback_items", verbose_name="Автор",
+    )
+    category = models.CharField(
+        max_length=20, choices=Category.choices, default=Category.BUG,
+        verbose_name="Категория",
+    )
+    message = models.TextField(verbose_name="Что случилось")
+    page_url = models.CharField(max_length=500, blank=True, verbose_name="Где (URL)")
+    contact_email = models.EmailField(blank=True, verbose_name="Контакт для связи")
+    screenshot = models.ImageField(
+        upload_to="feedback/screenshots/%Y/%m/", null=True, blank=True,
+        verbose_name="Скриншот",
+    )
+    status = models.CharField(
+        max_length=20, choices=Status.choices, default=Status.NEW,
+        verbose_name="Статус",
+    )
+    admin_comment = models.TextField(blank=True, verbose_name="Комментарий админа")
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name="Создано")
+    updated_at = models.DateTimeField(auto_now=True, verbose_name="Обновлено")
+
+    class Meta:
+        ordering = ["-created_at"]
+        verbose_name = "Обратная связь"
+        verbose_name_plural = "Обратная связь"
+        indexes = [
+            models.Index(fields=["company", "status", "-created_at"]),
+        ]
+
+    def __str__(self):
+        return f"[{self.get_category_display()}] {self.message[:60]}"
