@@ -1262,7 +1262,15 @@
                      : comparison.mode === 'slider' ? 'шторка' : 'наложение')
                 : 'Сравнить';
         }
+        // Спринт 8-фикс: disabled-кнопка без объяснения выглядит как
+        // сломанный dropdown («не реагирует»). Объясняем, почему сравнение
+        // недоступно, и возвращаем рабочую подсказку, когда цель есть.
         button.disabled = !hasCompareTarget();
+        button.title = button.disabled
+            ? (pdfUrl
+                ? 'Нечего сравнивать: у документа только одна версия'
+                : 'Сравнение недоступно: нет версий документа')
+            : 'Сравнение версий: рядом, шторка, наложение';
         if (closeItem) {
             closeItem.classList.toggle('d-none', !comparison.active);
         }
@@ -1350,6 +1358,16 @@
             const task = page.render({
                 canvasContext: context,
                 viewport: viewport,
+                /* Спринт 8: в режиме «Наложение» верхний слой (открытая
+                   версия) красится в синий, как в Vitro-CAD. pdf.js 3.11
+                   принимает pageColors прямо в render(): линии/текст рисуются
+                   foreground-цветом на background-фоне. Белый фон остаётся
+                   белым, поэтому работает любой mix-blend-mode из меню;
+                   «Рядом» и «Шторка» рендерятся как раньше. */
+                pageColors: comparison.mode === 'overlay'
+                    && pane.viewer.id === 'overlayViewerSelected'
+                    ? OVERLAY_TOP_PAGE_COLORS
+                    : null,
             });
             pane.renderTask = task;
             return task.promise.then(function () {
@@ -1710,7 +1728,15 @@
 
     /* ---------- Спринт 8: наложение чертежей ---------- */
 
-    const overlayState = { opacity: 0.5, blend: 'normal', offsetX: 0, offsetY: 0 };
+    /* Спринт 8: цвет линий верхнего слоя наложения — синий «как в Витро».
+       Фон оставляем белым: при mix-blend-mode: multiply белый верхнего
+       слоя становится прозрачным, видны только синие линии. */
+    const OVERLAY_TOP_PAGE_COLORS = {
+        background: '#FFFFFF',
+        foreground: '#2563EB',
+    };
+
+    const overlayState = { opacity: 1, blend: 'multiply', offsetX: 0, offsetY: 0 };
 
     function overlayTopPane() {
         return document.getElementById('overlayViewerSelected');
@@ -2540,6 +2566,20 @@
                     prepareAlignedComparison(mode);
                 }
             }
+        });
+    }
+    /* Меню «Сравнить» лежит в тулбаре вьювера, а тот прокручивается по
+       горизонтали (A21: .toolbar.viewer-toolbar — overflow-x: auto,
+       overflow-y: hidden). Bootstrap честно открывает dropdown по клику,
+       но раскрытое меню обрезается этим overflow и становится невидимым —
+       кажется, что кнопка не реагирует. Явно создаём инстанс Dropdown со
+       стратегией Popper «fixed»: меню позиционируется от вьюпорта и
+       выходит из-под обрезки тулбара. Обработчик data-bs-toggle на кнопке
+       не трогаем — getOrCreateInstance в data-api вернёт наш инстанс. */
+    const compareMenuBtn = document.getElementById('compareMenuBtn');
+    if (compareMenuBtn && window.bootstrap && window.bootstrap.Dropdown) {
+        window.bootstrap.Dropdown.getOrCreateInstance(compareMenuBtn, {
+            popperConfig: {strategy: 'fixed'},
         });
     }
     document.addEventListener('click', function (event) {
