@@ -3,7 +3,7 @@
 Правки вносить в tokens.json, затем: python scripts/build_design_tokens.py
 """
 
-TOKENS_VERSION = '20261108.1'
+TOKENS_VERSION = '20261109.2'
 DEFAULT_STATUS = 'NEW'
 
 # HEX-цвета статусов замечаний (совпадают с tokens.css и design-tokens.js).

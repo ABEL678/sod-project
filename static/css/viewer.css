@@ -858,6 +858,20 @@ body {
   scrollbar-width: thin;
 }
 
+/* Спринт 8: сплиттер ширины полосы листов — тянется мышью/стилусом */
+.thumb-rail-splitter {
+  flex: 0 0 6px;
+  align-self: stretch;
+  cursor: col-resize;
+  background: transparent;
+  transition: background-color .12s ease;
+}
+
+.thumb-rail-splitter:hover,
+.thumb-rail-splitter.is-dragging {
+  background: var(--c-accent-on-header, #9FB6DF);
+}
+
 .thumb {
   display: flex;
   flex-direction: column;
@@ -883,7 +897,12 @@ body {
 }
 
 .thumb canvas {
-  max-width: 100%;
+  /* Спринт 8: пропорции листа сохраняются при любой ширине полосы —
+     высота считается от intrinsic-соотношения канваса (width: 100% +
+     height: auto), а не фиксируется. */
+  width: 100%;
+  height: auto;
+  display: block;
   background: var(--c-text-inverse);
   border-radius: 3px;
 }

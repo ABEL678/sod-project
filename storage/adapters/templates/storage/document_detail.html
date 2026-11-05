@@ -5,15 +5,15 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{ document.code }} — {{ document.name }}</title>
-<meta name="theme-color" content="#FFFFFF">
+<meta name="theme-color" content="#1E293B">
 <link rel="manifest" href="/static/manifest.webmanifest">
 <link rel="icon" type="image/png" href="/static/icons/icon-192.png">
 <link rel="stylesheet" href="{% static 'fonts/fonts.css' %}">
 <link rel="stylesheet" href="{% static 'fonts/bootstrap-icons/bootstrap-icons.min.css' %}">
 <link rel="stylesheet" href="{% static 'css/bootstrap.min.css' %}">
-<link rel="stylesheet" href="{% static 'design-tokens/tokens.css' %}?v=20261109-h6">
-<link rel="stylesheet" href="{% static 'css/redesign.css' %}?v=20261107-s6-search">
-<link rel="stylesheet" href="{% static 'css/viewer.css' %}?v=20261109-h6">
+<link rel="stylesheet" href="{% static 'design-tokens/tokens.css' %}?v=20261109-hdr1">
+<link rel="stylesheet" href="{% static 'css/redesign.css' %}?v=20261109-hdr1">
+<link rel="stylesheet" href="{% static 'css/viewer.css' %}?v=20261109-hdr1">
 <link rel="stylesheet" href="{% static 'css/app.css' %}?v=20261109-h6">
 </head>
 <body>
@@ -59,7 +59,7 @@
       {% endfor %}
     </span>
   </div>
-  <form action="{% url 'storage:search' document.project.pk %}" method="get" class="d-flex">
+  <form action="{% url 'storage:search' document.project.pk %}" method="get" class="d-flex topbar-search">
     <input type="search" name="q" class="form-control form-control-sm"
            placeholder="Поиск по шифру, названию" value="{{ request.GET.q }}">
   </form>
@@ -218,6 +218,8 @@
 <div class="workspace" id="main-splitter">
   <section class="stage" id="pdf-panel">
     <aside class="thumb-rail d-none" id="thumbRail" aria-label="Страницы документа"></aside>
+    <div class="thumb-rail-splitter d-none" id="thumbRailSplitter"
+         title="Потяните, чтобы изменить ширину полосы листов" aria-hidden="true"></div>
     <div class="pdf-viewer" id="pdfViewer"
          data-pdf-url="{{ pdf_url }}"
          data-pdf-url-current="{{ pdf_url_current }}"

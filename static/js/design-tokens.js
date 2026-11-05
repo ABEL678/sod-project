@@ -6,7 +6,7 @@
     'use strict';
 
     window.CDE_TOKENS = {
-        version: '20261108.1',
+        version: '20261109.2',
         /* HEX-цвет маркера по коду статуса (для canvas и рамок) */
         statusHex: {
             CANCELLED: '#3F3F3C',

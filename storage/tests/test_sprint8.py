@@ -1,8 +1,8 @@
-"""Спринт 8: светлый хедер, фильтр-бар, вьювер.
+"""Спринт 8: тёмный графитовый хедер, фильтр-бар, вьювер.
 
 - фильтры снова видимы: выпадающий бар + чипы «Отфильтровано» + сброс;
 - колоночные воронки (.th-filter) убраны из JS;
-- светлый хедер: токены --c-bg-header = #FFFFFF, theme-color синхронизирован;
+- тёмный хедер: токены --c-bg-header = #1E293B, theme-color синхронизирован;
 - полоса предпросмотра листов и наложение чертежей — разметка/JS.
 """
 from django.test import TestCase
@@ -137,14 +137,17 @@ class FilterBarStaticTests(TestCase):
         self.assertNotIn("wrapper.className = 'th-filter", js)
         self.assertNotIn('header.appendChild(wrapper)', js)
 
-    def test_light_header_tokens(self):
+    def test_dark_header_tokens(self):
         import json
         tokens = json.load(open('static/design-tokens/tokens.json'))
-        self.assertEqual(tokens['color']['surface']['header'], '#FFFFFF')
-        self.assertEqual(tokens['color']['text']['on-dark'], '#1F2430')
-        self.assertEqual(tokens['color']['accent']['on-header'], '#3D5A98')
+        self.assertEqual(tokens['color']['surface']['header'], '#1E293B')
+        self.assertEqual(tokens['color']['text']['on-dark'], '#F8FAFC')
+        self.assertEqual(tokens['color']['accent']['on-header'], '#9FB6DF')
 
-    def test_theme_color_synced_light(self):
+    def test_theme_color_synced_dark(self):
+        import json
         base = self._read('storage/adapters/templates/storage/base.html')
-        self.assertIn('content="#FFFFFF"', base)
+        self.assertIn('content="#1E293B"', base)
         self.assertNotIn('3A4558', base)
+        manifest = json.load(open('static/manifest.webmanifest'))
+        self.assertEqual(manifest['theme_color'], '#1E293B')

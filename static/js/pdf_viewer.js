@@ -1877,6 +1877,10 @@
         }
         const shown = thumbs.open && !comparison.active;
         rail.classList.toggle('d-none', !shown);
+        const splitter = document.getElementById('thumbRailSplitter');
+        if (splitter) {
+            splitter.classList.toggle('d-none', !shown);
+        }
         if (toggle) {
             toggle.classList.toggle('active', shown);
             toggle.setAttribute('aria-expanded', shown ? 'true' : 'false');
@@ -1898,6 +1902,10 @@
             return;
         }
         thumbs.built = true;
+        if (thumbs.observer) {
+            thumbs.observer.disconnect();
+            thumbs.observer = null;
+        }
         rail.innerHTML = '';
         thumbs.items.clear();
         for (let number = 1; number <= pdfDocument.numPages; number += 1) {
@@ -1940,6 +1948,21 @@
         updateThumbsActive();
     }
 
+    /* Ширина миниатюры = доступная ширина полосы (учёт padding), поэтому
+       после перетаскивания сплиттера листы рендерятся чёткими. */
+    function thumbTargetWidth() {
+        const rail = thumbRail();
+        if (!rail) {
+            return 140;
+        }
+        const style = window.getComputedStyle(rail);
+        return Math.max(96, Math.floor(
+            rail.clientWidth
+            - parseFloat(style.paddingLeft)
+            - parseFloat(style.paddingRight)
+        ));
+    }
+
     function renderThumb(pageNumber) {
         const item = thumbs.items.get(pageNumber);
         if (!item || item.canvas.dataset.rendered === '1' || !pdfDocument) {
@@ -1948,13 +1971,13 @@
         item.canvas.dataset.rendered = '1';
         pdfDocument.getPage(pageNumber).then(function (page) {
             const base = page.getViewport({ scale: 1, rotation: currentRotation });
-            const scale = 140 / base.width;
+            const scale = thumbTargetWidth() / base.width;
             const viewport = page.getViewport({ scale: scale, rotation: currentRotation });
             const outputScale = window.devicePixelRatio || 1;
             item.canvas.width = Math.floor(viewport.width * outputScale);
             item.canvas.height = Math.floor(viewport.height * outputScale);
-            item.canvas.style.width = Math.floor(viewport.width) + 'px';
-            item.canvas.style.height = Math.floor(viewport.height) + 'px';
+            /* CSS (.thumb canvas — width: 100%, height: auto) держит пропорции;
+               инлайновые размеры не задаём, иначе лист сплющивается. */
             const context = item.canvas.getContext('2d');
             context.setTransform(outputScale, 0, 0, outputScale, 0, 0);
             return page.render({
@@ -1994,6 +2017,77 @@
         if (active && thumbs.open) {
             scrollThumbIntoRail(active.button);
         }
+    }
+
+    /* Спринт 8: сплиттер ширины полосы листов — тяните границу между
+       превью и вьювером. Pointer Events с setPointerCapture: тянуть можно
+       даже выходя курсором за пределы хэндла. По окончании — перерендер
+       миниатюр под новую ширину. Прокрутка полосы не затрагивается:
+       тянуть можно только за сам сплиттер. */
+    function initThumbRailSplitter() {
+        const rail = thumbRail();
+        const splitter = document.getElementById('thumbRailSplitter');
+        if (!rail || !splitter || rail.dataset.splitterBound === '1') {
+            return;
+        }
+        rail.dataset.splitterBound = '1';
+        let dragging = false;
+        let startX = 0;
+        let startWidth = 0;
+
+        splitter.addEventListener('pointerdown', function (event) {
+            if (event.button !== 0) {
+                return;
+            }
+            dragging = true;
+            startX = event.clientX;
+            startWidth = rail.getBoundingClientRect().width;
+            splitter.classList.add('is-dragging');
+            try {
+                splitter.setPointerCapture(event.pointerId);
+            } catch (error) {
+                /* старые браузеры без capture — останемся на pointermove хэндла */
+            }
+            document.body.style.cursor = 'col-resize';
+            document.body.style.userSelect = 'none';
+            event.preventDefault();
+        });
+
+        splitter.addEventListener('pointermove', function (event) {
+            if (!dragging) {
+                return;
+            }
+            const width = Math.min(
+                360, Math.max(96, startWidth + (event.clientX - startX))
+            );
+            rail.style.width = width + 'px';
+            rail.style.flexBasis = width + 'px';
+        });
+
+        const endDrag = function (event) {
+            if (!dragging) {
+                return;
+            }
+            dragging = false;
+            splitter.classList.remove('is-dragging');
+            document.body.style.cursor = '';
+            document.body.style.userSelect = '';
+            if (event && event.pointerId !== undefined) {
+                try {
+                    splitter.releasePointerCapture(event.pointerId);
+                } catch (error) {
+                    /* capture уже снят — не страшно */
+                }
+            }
+            /* Пересобираем миниатюры под новую ширину, сохраняя прокрутку */
+            const scrollTop = rail.scrollTop;
+            thumbs.built = false;
+            buildThumbRail();
+            rail.scrollTop = scrollTop;
+            updateThumbsActive();
+        };
+        splitter.addEventListener('pointerup', endDrag);
+        splitter.addEventListener('pointercancel', endDrag);
     }
 
     function initDetails() {
@@ -2626,6 +2720,7 @@
     initContextMenu();
     initDetails();
     initMinimap();
+    initThumbRailSplitter();
     updateThumbsVisibility();
     if (issues.length) {
         selectIssue(issues[0].id);

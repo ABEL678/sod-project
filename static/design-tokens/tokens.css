@@ -4,7 +4,7 @@
    ========================================================================== */
 /*
    CDE «Среда общих данных» — дизайн-токены (CSS Custom Properties)
-   Источник истины: tokens.json · Версия 20261108.1
+   Источник истины: tokens.json · Версия 20261109.2
    ----------------------------------------------------------------------------
    Подключение:  <link rel="stylesheet" href="tokens.css">
    Шрифты — самолокальные (Спринт 3, P1): static/fonts/fonts.css,
@@ -28,8 +28,8 @@
   --c-bg-surface-hover: #FAFAF8;
   --c-bg-surface-sunken: #EFEFEC;
   --c-bg-canvas: #26272B;  /* тёмный canvas вьювера */
-  --c-bg-header: #FFFFFF;  /* графитовый хедер */
-  --c-bg-header-hover: #F0F3F8;  /* ховер ghost-кнопок на тёмном */
+  --c-bg-header: #1E293B;  /* графитовый хедер */
+  --c-bg-header-hover: #2C3E57;  /* ховер ghost-кнопок на тёмном */
   --c-bg-row-hover: #EDF2F9;  /* ховер кликабельной строки */
 
   /* --- Границы --- */
@@ -37,16 +37,16 @@
   --c-border-default: #D4D4CE;
   --c-border-soft: #E2E8F0;
   --c-border-strong: #CBD5E1;
-  --c-border-header: #E1E5EC;  /* граница графитового хедера */
-  --c-border-header-control: #7C8698;  /* рамки ghost-кнопок на хедере */
+  --c-border-header: #334155;  /* граница графитового хедера */
+  --c-border-header-control: #5A6B84;  /* рамки ghost-кнопок на хедере */
 
   /* --- Текст --- */
   --c-text-primary: #191917;
   --c-text-secondary: #6E6E68;
   --c-text-muted: #71716A;
   --c-text-faint: #94A3B8;
-  --c-text-on-dark: #1F2430;
-  --c-text-on-dark-muted: #5D6575;
+  --c-text-on-dark: #F8FAFC;
+  --c-text-on-dark-muted: #9AA7BD;
   --c-text-inverse: #FFFFFF;
 
   /* --- Тёмный canvas вьювера --- */
@@ -62,8 +62,8 @@
   --c-accent-pressed: #2A4478;
   --c-accent-subtle: #EDF1F7;
   --c-accent-on-subtle: #2F4A7E;
-  --c-accent-on-header: #3D5A98;  /* акцент-ссылки на графитовом хедере */
-  --c-accent-on-header-strong: #33508A;  /* ховер акцента на хедере */
+  --c-accent-on-header: #9FB6DF;  /* акцент-ссылки на графитовом хедере */
+  --c-accent-on-header-strong: #C3D3EE;  /* ховер акцента на хедере */
 
   /* --- Статусы: solid / subtle / on --- */
   --s-wait-solid: #4674A4;  --s-wait-subtle: #EBF2F9;  --s-wait-on: #2D5C88; /* Открыто (NEW), черновик */
