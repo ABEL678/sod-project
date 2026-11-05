@@ -34,6 +34,13 @@ class Issue(models.Model):
     )
     description = models.TextField()
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='NEW')
+    external_id = models.CharField(
+        max_length=100,
+        blank=True,
+        null=True,
+        db_index=True,
+        verbose_name="Внешний ID",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     closed_at = models.DateTimeField(null=True, blank=True)

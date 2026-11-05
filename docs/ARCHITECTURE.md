@@ -241,6 +241,7 @@ sod_project/
 | assignee | FK → User, null=True | Ответственный-разработчик |
 | description | TextField | Текст замечания |
 | status | CharField(20), choices | NEW, IN_PROGRESS, REJECTED, DISCUSSION, DONE, CLOSED, CANCELLED |
+| external_id | CharField(100), null=True, db_index=True | ID замечания во внешней системе (Витро-трекер) для идемпотентной синхронизации |
 | closed_at | DateTimeField, null=True | Дата закрытия/аннулирования |
 | closed_by | FK → User, null=True | Кто закрыл/аннулировал |
 | page_number | PositiveIntegerField, null=True | Страница PDF |
@@ -408,6 +409,12 @@ class FileStorage(Protocol):
 - `POST /api/v1/projects/{code}/vor/` (ВОР-билдер)
 - `POST /api/v1/projects/{code}/issues/sync/` (Витро-трекер)
 - `GET /api/v1/projects/{code}/issues/pending/` (Витро-трекер)
+
+**4C — реализованные контракты:**
+- `GET /api/v1/projects/{code}/specifications/` — scope `projects:read`; пока возвращает `[]` (модели Specification нет).
+- `POST /api/v1/projects/{code}/vor/` — scope `projects:create`; пока `501` (модели VorItem нет).
+- `POST /api/v1/projects/{code}/issues/sync/` — scope `issues:sync`; принимает `external_id` (опционально), `document_code`, `issue_text`, `status`, `page_number`, `x_ratio`, `y_ratio`. При наличии `external_id` замечание ищется по нему в рамках проекта и обновляется, включая текст; без `external_id` — fallback по `document + description`.
+- `GET /api/v1/projects/{code}/issues/pending/` — scope `issues:read`; возвращает замечания в статусах `NEW`, `IN_PROGRESS`, `REJECTED`, включая `external_id` и `assignee_username`.
 
 **Аутентификация API (4A):**
 - Заголовок `Authorization: Bearer <token>`. Токен ищется по SHA-256 хэшу, проверяются `is_active`, `expires_at` и активность пользователя-создателя.

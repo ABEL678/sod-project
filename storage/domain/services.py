@@ -2,6 +2,8 @@ import base64
 from collections import defaultdict
 from datetime import timedelta
 import io
+
+from django.conf import settings
 import uuid
 
 import fitz
@@ -2094,11 +2096,8 @@ def restore_folder(user: User, folder: Folder) -> None:
         )
 
 
-SHARE_LINK_TTL = timedelta(days=365)
-
-
 def generate_share_link(user: User, document: Document) -> str:
-    """Генерирует/продлевает публичный токен документа на 365 дней."""
+    """Генерирует/продлевает публичный токен документа на настроенный TTL."""
     if not _can_manage_share_link(user, document):
         raise PermissionDenied("Нет прав на создание ссылки")
     if document.is_deleted:
@@ -2113,7 +2112,9 @@ def generate_share_link(user: User, document: Document) -> str:
         document.public_link_expires_at is None
         or document.public_link_expires_at <= now
     ):
-        document.public_link_expires_at = now + SHARE_LINK_TTL
+        document.public_link_expires_at = now + timedelta(
+            days=settings.SHARE_LINK_TTL_DAYS
+        )
         update_fields.append('public_link_expires_at')
     if update_fields:
         document.save(update_fields=update_fields)
@@ -4350,5 +4351,116 @@ def list_api_tokens(user: User, company: Company):
     return (
         ApiToken.objects.filter(company=company)
         .select_related("created_by")
+        .order_by("-created_at")
+    )
+
+def get_project_specifications(project: Project):
+    """Спецификации проекта.
+
+    Модели Specification в проекте пока нет — API возвращает пустой список.
+    """
+    return []
+
+
+def sync_issues(user: User, project: Project, issues_data: list[dict]) -> list[Issue]:
+    """Создаёт или обновляет замечания проекта по данным внешней системы.
+
+    При наличии external_id сопоставление идёт по нему в рамках проекта.
+    Без external_id используется прежний fallback: document + description.
+    Статус обновляется через сервисный слой с проверкой ролей.
+    """
+    synced = []
+    for index, item in enumerate(issues_data):
+        document = Document.objects.filter(
+            project=project,
+            code=item["document_code"],
+            is_deleted=False,
+        ).first()
+        if document is None:
+            raise ValidationError({
+                f"issues[{index}].document_code": (
+                    "Документ с таким кодом не найден в проекте"
+                ),
+            })
+        if not check_issue_permission(user, document):
+            raise PermissionDenied(
+                "Нет прав на синхронизацию замечаний к документу"
+            )
+
+        text = (item.get("issue_text") or "").strip()
+        if not text:
+            raise ValidationError({
+                f"issues[{index}].issue_text": "Текст замечания обязателен",
+            })
+
+        status = item.get("status") or "NEW"
+        external_id = (item.get("external_id") or "").strip() or None
+        if external_id:
+            issue = (
+                Issue.objects.filter(
+                    document__project=project,
+                    external_id=external_id,
+                )
+                .order_by("-created_at")
+                .first()
+            )
+        else:
+            issue = (
+                Issue.objects.filter(
+                    document=document,
+                    description=text,
+                )
+                .order_by("-created_at")
+                .first()
+            )
+
+        if issue is None:
+            issue = create_issue(
+                user,
+                document,
+                text,
+                page_number=item.get("page_number"),
+                x_ratio=item.get("x_ratio"),
+                y_ratio=item.get("y_ratio"),
+            )
+            if external_id:
+                issue.external_id = external_id
+                issue.save(update_fields=["external_id"])
+        else:
+            update_fields = []
+            if issue.description != text:
+                issue.description = text
+                update_fields.append("description")
+            if external_id and issue.external_id != external_id:
+                issue.external_id = external_id
+                update_fields.append("external_id")
+            if issue.document_id != document.pk:
+                issue.document = document
+                issue.version = None
+                update_fields.extend(["document", "version"])
+            if item.get("page_number") is not None:
+                issue.page_number = item["page_number"]
+                issue.x_ratio = item["x_ratio"]
+                issue.y_ratio = item["y_ratio"]
+                update_fields.extend(
+                    ["page_number", "x_ratio", "y_ratio"]
+                )
+            if update_fields:
+                issue.save(update_fields=update_fields)
+        if status != issue.status:
+            issue = update_issue_status(user, issue, status)
+        synced.append(issue)
+    return synced
+
+
+def get_pending_issues(project: Project):
+    """Замечания проекта в статусах NEW, IN_PROGRESS, REJECTED."""
+    return (
+        Issue.objects.filter(
+            document__project=project,
+            document__is_deleted=False,
+            status__in=OPEN_ISSUE_STATUSES,
+        )
+        .select_related("document", "assignee")
         .order_by("-created_at")
     )
