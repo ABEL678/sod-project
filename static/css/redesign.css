@@ -796,20 +796,25 @@ tr.doc-row-flash > td { animation: wf-row-flash 1.5s ease; }
 
 .filter-bar__fields {
   display: flex;
-  flex-wrap: nowrap;
+  /* Спринт 8 (правка): wrap вместо nowrap — при нехватке места поля
+     переносятся на новую строку, а не сжимаются в узкие селекты
+     с обрезанным текстом. */
+  flex-wrap: wrap;
   align-items: flex-end;
-  gap: 5px;
+  gap: 6px 8px;
 }
 
 .filter-field {
   display: flex;
-  flex: 1 1 0;
+  flex: 1 1 auto;
   flex-direction: column;
-  gap: 1px;
-  min-width: 0;
+  /* Подпись отделена от селекта (раньше gap: 1px — «липла» к рамке) */
+  gap: 2px;
+  /* Пол не даёт селектам сжиматься и обрезать текст выбранной опции */
+  min-width: 130px;
 }
 
-.filter-field--search { flex: 2 1 150px; min-width: 120px; }
+.filter-field--search { flex: 2 1 180px; min-width: 150px; }
 .filter-field--search input { width: 100%; }
 
 .filter-field select,
@@ -934,7 +939,7 @@ tr.doc-row-flash > td { animation: wf-row-flash 1.5s ease; }
 @media (max-width: 820px) {
   .filter-bar { padding: 6px 7px; }
   .filter-bar__fields { flex-wrap: wrap; }
-  .filter-field { flex: 1 1 calc(50% - 5px); min-width: calc(50% - 5px); }
+  .filter-field { flex: 1 1 calc(50% - 4px); min-width: calc(50% - 4px); }
   .filter-field--search { flex-basis: 100%; min-width: 100%; }
   .filter-bar__reset { margin-left: 0; }
   .filter-chips__count { margin-left: 0; width: 100%; }
@@ -986,3 +991,9 @@ tr.doc-row-flash > td { animation: wf-row-flash 1.5s ease; }
 .topbar .topbar-search .form-control {
     width: 100%;
 }
+
+/* Водяной знак Stream-CAD скрыт совсем: он декоративный и наезжает на
+   кнопки шапки («Замечания проекта», «Мои замечания») и поиск — замер
+   показал пересечение уже на 1280px, а состав кнопок шапки меняется.
+   Разметка .brand-watermark остаётся в шаблонах, элемент не рендерится. */
+.brand-watermark { display: none; }

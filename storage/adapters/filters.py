@@ -61,7 +61,9 @@ class DocumentFilter(django_filters.FilterSet):
         field_name='internal_status',
         choices=Document.INTERNAL_STATUS_CHOICES,
         label='Внутренний статус',
-        empty_label='Все внутренние статусы',
+        # «Все внутренние» (95px) впритык к min-width 130px селекта и
+        # обрезалось при сжатии — «Все статусы» (71px) влезает всегда.
+        empty_label='Все статусы',
         widget=forms.Select(attrs={
             'form': FILTER_FORM_ID,
             'id': 'id_internal_status',
