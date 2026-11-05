@@ -37,6 +37,8 @@
 - **1B (закрыт, APPROVE):** `manage.py create_demo_project` — демо-проект `DEMO-2026` с разделами, документами (один с 2 версиями), замечаниями в разных статусах, пином, дедлайнами, share-ссылкой, зонами. `--reset` (soft → empty_trash → hard delete), идемпотентность, `transaction.atomic()`.
 - **2A (закрыт, APPROVE):** модель `Feedback` (миграция `0027`), сервисы `submit_feedback`/`list_feedback`, `POST /feedback/submit/`, `GET /feedback/` (заглушка). `ARCHITECTURE.md` — раздел 3.2.
 - **2B (закрыт, APPROVE):** кнопка `bi-bug` в шапке, модалка (fetch + CSRF, ошибки под полями, toast, блокировка кнопки), экран `/feedback/` для админа (фильтры, пагинация 50 с `{% querystring %}`, бейджи, detail-модалка, AJAX-смена статуса через `update_feedback_status`), валидация скриншота (≤ 10 МБ, JPEG/PNG/WebP, `<uuid>.<ext>` ≤ 100), защита от `javascript:`-XSS.
+- **4A–4D (APPROVE):** API Gateway полностью готов (ApiToken, hardening, 4 эндпоинта, модели Specification/VorItem).
+- **5C-фиксы (APPROVE):** наложение версий (синий слой), тёмный хедер + белый лого-блок, поиск, превью PDF, пустое состояние таблицы.
 
 ## 4. Утверждённые палитры и токены
 - Источник правды: `static/design-tokens/tokens.json`. 
@@ -45,6 +47,6 @@
 - Маркапы на PDF — с рамками (bounding boxes) и номером в углу. Кружки без рамок — отклонены.
 
 ## 5. Текущая задача и следующий шаг
-- **Сейчас:** Шаги 1–2 подготовки к бете закрыты (1A, 1B, 2A, 2B — APPROVE). T68–T72 и Аудит 4.0 закрыты ранее. T71 (глобальный реестр замечаний) остаётся отменённым как избыточный — достаточно реестра по проекту.
-- **Следующий шаг:** Шаг 3 — проверка вживую (руками) по чек-листу (десктоп + мобильный 375×667, роли admin/gip/developer/viewer). Затем Шаг 4 — проверка nginx (`/media/` в обход share-токена).
-- **Бэклог:** `add_project_member()`, guard на production для `create_demo_project`, magic-byte проверка скриншота, кликабельный `page_url`, category-токены, `purge_project()`, унификация хранения файлов, `check_raw_hex.py` на `redesign.css`.
+- **Сейчас:** Все задачи по коду закрыты (1A–5C). API Gateway готов.
+- **Следующий шаг:** Деплой на прод (все коммиты 4A–4D, 5C-фиксы) + замер на PostgreSQL (P0 Аудита 5.0 #2).
+- **Бэклог:** UniqueConstraint для external_id, vor:create scope, миграционная инструкция, LocMemCache → Redis, check_raw_hex.py на redesign.css.
