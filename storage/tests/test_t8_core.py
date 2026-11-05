@@ -52,9 +52,9 @@ class T8CoreTestBase(TestCase):
         self.user_gip = User.objects.create_user('gip', password='pass')
         self.user_developer = User.objects.create_user('developer', password='pass')
         self.user_viewer = User.objects.create_user('viewer', password='pass')
-        UserProfile.objects.create(user=self.user_gip, role='gip', company=self.company)
-        UserProfile.objects.create(user=self.user_developer, role='developer', company=self.company)
-        UserProfile.objects.create(user=self.user_viewer, role='viewer', company=self.company)
+        UserProfile.objects.update_or_create(user=self.user_gip, defaults={'role': 'gip', 'company': self.company})[0]
+        UserProfile.objects.update_or_create(user=self.user_developer, defaults={'role': 'developer', 'company': self.company})[0]
+        UserProfile.objects.update_or_create(user=self.user_viewer, defaults={'role': 'viewer', 'company': self.company})[0]
         self.project = Project.objects.create(
             company=self.company,
             code='T8-1',
@@ -163,11 +163,8 @@ class FolderServiceTests(T8CoreTestBase):
 
     def test_contractor_does_not_see_foreign_section_folders(self):
         contractor = User.objects.create_user('contractor', password='pass')
-        profile = UserProfile.objects.create(
-            user=contractor,
-            role='contractor',
-            company=self.company,
-        )
+        profile = UserProfile.objects.update_or_create(user=contractor, defaults={'role': 'contractor', 'company': self.company,
+        })[0]
         profile.allowed_sections.add(self.section)
 
         visible = create_folder(
@@ -569,9 +566,8 @@ class T67AuditTest(T8CoreTestBase):
         )
         other_company = Company.objects.create(name='Other Company')
         outsider = User.objects.create_user('outsider', password='pass')
-        UserProfile.objects.create(
-            user=outsider, role='admin', company=other_company
-        )
+        UserProfile.objects.update_or_create(user=outsider, defaults={'role': 'admin', 'company': other_company
+        })[0]
         self.client.force_login(outsider)
 
         move_response = self.client.post(

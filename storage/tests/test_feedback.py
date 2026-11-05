@@ -37,44 +37,28 @@ class FeedbackFixtureMixin:
             password='pass',
             email='user_a@example.com',
         )
-        UserProfile.objects.create(
-            user=self.user_a,
-            company=self.company_a,
-            role='viewer',
-        )
+        UserProfile.objects.update_or_create(user=self.user_a, defaults={'role': 'viewer', 'company': self.company_a})[0]
 
         self.admin_a = User.objects.create_user(
             'admin_a',
             password='pass',
             email='admin_a@example.com',
         )
-        UserProfile.objects.create(
-            user=self.admin_a,
-            company=self.company_a,
-            role='admin',
-        )
+        UserProfile.objects.update_or_create(user=self.admin_a, defaults={'role': 'admin', 'company': self.company_a})[0]
 
         self.user_b = User.objects.create_user(
             'user_b',
             password='pass',
             email='user_b@example.com',
         )
-        UserProfile.objects.create(
-            user=self.user_b,
-            company=self.company_b,
-            role='viewer',
-        )
+        UserProfile.objects.update_or_create(user=self.user_b, defaults={'role': 'viewer', 'company': self.company_b})[0]
 
         self.admin_b = User.objects.create_user(
             'admin_b',
             password='pass',
             email='admin_b@example.com',
         )
-        UserProfile.objects.create(
-            user=self.admin_b,
-            company=self.company_b,
-            role='admin',
-        )
+        UserProfile.objects.update_or_create(user=self.admin_b, defaults={'role': 'admin', 'company': self.company_b})[0]
 
         self.superuser = User.objects.create_superuser(
             'root',

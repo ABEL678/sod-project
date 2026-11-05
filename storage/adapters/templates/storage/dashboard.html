@@ -71,6 +71,29 @@
                                 Сохранить
                             </button>
                         </form>
+                        {% if user.is_superuser %}
+                            <hr class="my-3">
+                            <form method="post" action="{% url 'storage:attach_company' %}" class="mb-0">
+                                {% csrf_token %}
+                                <label class="form-label small" for="myCompanySwitch">
+                                    Сменить компанию
+                                </label>
+                                <div class="d-flex gap-2">
+                                    <select class="form-select form-select-sm" id="myCompanySwitch"
+                                            name="company_id" aria-label="Новая компания">
+                                        {% for c in all_companies %}
+                                            <option value="{{ c.pk }}"
+                                                {% if c.pk == company.pk %}selected{% endif %}>
+                                                {{ c.name }}
+                                            </option>
+                                        {% endfor %}
+                                    </select>
+                                    <button class="btn btn-outline-secondary btn-sm text-nowrap" type="submit">
+                                        Сменить
+                                    </button>
+                                </div>
+                            </form>
+                        {% endif %}
                     </div>
                 </div>
             </div>
@@ -243,7 +266,37 @@
             </div>
         </div>
     {% else %}
-        <div class="alert alert-warning">Компания не найдена.</div>
+        {# Спринт 8, задача 7: пользователь без компании привязывается сам #}
+        <div class="card shadow-sm" style="max-width: 480px;">
+            <div class="card-header bg-white fw-semibold">
+                <i class="bi bi-building me-1"></i>Моя компания
+            </div>
+            <div class="card-body">
+                <p class="small text-muted mb-3">
+                    У вас нет привязки к компании. Выберите компанию из списка
+                    и привяжитесь — после этого станут доступны участники,
+                    проекты и логотип в шапке.
+                </p>
+                <form method="post" action="{% url 'storage:attach_company' %}">
+                    {% csrf_token %}
+                    <div class="mb-3">
+                        <label class="form-label small" for="myCompany">Выберите компанию</label>
+                        <select class="form-select form-select-sm" id="myCompany"
+                                name="company_id" required>
+                            {% for c in all_companies %}
+                                <option value="{{ c.pk }}">{{ c.name }}</option>
+                            {% empty %}
+                                <option value="">Компаний пока нет</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <button class="btn btn-primary btn-sm" type="submit"
+                            {% if not all_companies %}disabled{% endif %}>
+                        <i class="bi bi-link-45deg me-1"></i>Привязаться
+                    </button>
+                </form>
+            </div>
+        </div>
     {% endif %}
 </main>
 {% endblock %}

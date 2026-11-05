@@ -85,7 +85,7 @@ class FeedbackScreenshotPilTests(TestCase):
         from storage.domain.models import UserProfile
 
         user = get_user_model().objects.create_user('feedback7', password='pass')
-        UserProfile.objects.create(user=user, role='admin', company=self.company)
+        UserProfile.objects.update_or_create(user=user, defaults={'role': 'admin', 'company': self.company})[0]
         self.user = user
 
     def _submit(self, upload):

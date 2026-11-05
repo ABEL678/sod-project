@@ -55,10 +55,10 @@ class Sprint5TestBase(TestCase):
         self.user_gip = User.objects.create_user('gip5', password='pass')
         self.user_developer = User.objects.create_user('dev5', password='pass')
         self.user_viewer = User.objects.create_user('viewer5', password='pass')
-        UserProfile.objects.create(user=self.user_admin, role='admin', company=self.company)
-        UserProfile.objects.create(user=self.user_gip, role='gip', company=self.company)
-        UserProfile.objects.create(user=self.user_developer, role='developer', company=self.company)
-        UserProfile.objects.create(user=self.user_viewer, role='viewer', company=self.company)
+        UserProfile.objects.update_or_create(user=self.user_admin, defaults={'role': 'admin', 'company': self.company})[0]
+        UserProfile.objects.update_or_create(user=self.user_gip, defaults={'role': 'gip', 'company': self.company})[0]
+        UserProfile.objects.update_or_create(user=self.user_developer, defaults={'role': 'developer', 'company': self.company})[0]
+        UserProfile.objects.update_or_create(user=self.user_viewer, defaults={'role': 'viewer', 'company': self.company})[0]
         self.project = Project.objects.create(
             company=self.company,
             code='S5',

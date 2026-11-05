@@ -21,20 +21,17 @@ class ViewTests(TestCase):
         self.other_company = Company.objects.create(name='Компания 2')
 
         self.user_gip = User.objects.create_user('gip', password='pass')
-        UserProfile.objects.create(user=self.user_gip, role='gip', company=self.company)
+        UserProfile.objects.update_or_create(user=self.user_gip, defaults={'role': 'gip', 'company': self.company})[0]
 
         self.user_viewer = User.objects.create_user('viewer', password='pass')
-        UserProfile.objects.create(user=self.user_viewer, role='viewer', company=self.company)
+        UserProfile.objects.update_or_create(user=self.user_viewer, defaults={'role': 'viewer', 'company': self.company})[0]
 
         self.user_contractor = User.objects.create_user('contractor', password='pass')
-        UserProfile.objects.create(user=self.user_contractor, role='contractor', company=self.company)
+        UserProfile.objects.update_or_create(user=self.user_contractor, defaults={'role': 'contractor', 'company': self.company})[0]
 
         self.user_foreign_gip = User.objects.create_user('foreign_gip', password='pass')
-        UserProfile.objects.create(
-            user=self.user_foreign_gip,
-            role='gip',
-            company=self.other_company,
-        )
+        UserProfile.objects.update_or_create(user=self.user_foreign_gip, defaults={'role': 'gip', 'company': self.other_company,
+        })[0]
 
         self.project = Project.objects.create(
             company=self.company,

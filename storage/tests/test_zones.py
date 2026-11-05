@@ -33,16 +33,16 @@ def _create_test_data():
     admin = User.objects.create_user(
         username='admin', password='pass123'
     )
-    UserProfile.objects.create(user=admin, role='admin', company=company)
+    UserProfile.objects.update_or_create(user=admin, defaults={'role': 'admin', 'company': company})[0]
     
     gip = User.objects.create_user(username='gip', password='pass123')
-    gip_profile = UserProfile.objects.create(user=gip, role='gip', company=company)
+    gip_profile = UserProfile.objects.update_or_create(user=gip, defaults={'role': 'gip', 'company': company})[0]
     
     developer = User.objects.create_user(username='eng', password='pass123')
-    developer_profile = UserProfile.objects.create(user=developer, role='developer', company=company)
+    developer_profile = UserProfile.objects.update_or_create(user=developer, defaults={'role': 'developer', 'company': company})[0]
     
     viewer = User.objects.create_user(username='viewer', password='pass123')
-    UserProfile.objects.create(user=viewer, role='viewer', company=company)
+    UserProfile.objects.update_or_create(user=viewer, defaults={'role': 'viewer', 'company': company})[0]
     
     # Используем create_project для авто-создания зон
     project = create_project(

@@ -37,11 +37,11 @@ class ServiceTests(TestCase):
         self.user_viewer = User.objects.create_user('viewer', 'view@test.com', 'viewpass')
         self.user_contractor = User.objects.create_user('contr', 'con@test.com', 'conpass')
 
-        UserProfile.objects.create(user=self.user_admin, role='admin', company=self.company)
-        UserProfile.objects.create(user=self.user_gip, role='gip', company=self.company)
-        UserProfile.objects.create(user=self.user_developer, role='developer', company=self.company)
-        UserProfile.objects.create(user=self.user_viewer, role='viewer', company=self.company)
-        UserProfile.objects.create(user=self.user_contractor, role='contractor', company=self.company)
+        UserProfile.objects.update_or_create(user=self.user_admin, defaults={'role': 'admin', 'company': self.company})[0]
+        UserProfile.objects.update_or_create(user=self.user_gip, defaults={'role': 'gip', 'company': self.company})[0]
+        UserProfile.objects.update_or_create(user=self.user_developer, defaults={'role': 'developer', 'company': self.company})[0]
+        UserProfile.objects.update_or_create(user=self.user_viewer, defaults={'role': 'viewer', 'company': self.company})[0]
+        UserProfile.objects.update_or_create(user=self.user_contractor, defaults={'role': 'contractor', 'company': self.company})[0]
 
         self.project_own = Project.objects.create(
             company=self.company,
@@ -177,11 +177,8 @@ class ServiceTests(TestCase):
 
     def test_create_project_denied_for_foreign_gip(self):
         foreign_gip = User.objects.create_user('foreign_gip', 'fg@test.com', 'fgpass')
-        UserProfile.objects.create(
-            user=foreign_gip,
-            role='gip',
-            company=self.other_company,
-        )
+        UserProfile.objects.update_or_create(user=foreign_gip, defaults={'role': 'gip', 'company': self.other_company,
+        })[0]
         with self.assertRaises(PermissionDenied):
             create_project(
                 company=self.company,

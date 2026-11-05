@@ -167,6 +167,53 @@ def get_user_company(user: User) -> Company | None:
     return profile.company if profile is not None else None
 
 
+def get_my_company(user: User) -> Company | None:
+    """Компания текущего пользователя для UI (хедер, Панель управления).
+
+    Алиас get_user_company: пользователь может быть без профиля или без
+    компании — вернётся None, UI покажет блок «Моя компания».
+    """
+    return get_user_company(user)
+
+
+def attach_user_to_company(
+    user: User,
+    company: Company,
+    role: str = 'admin',
+    actor: User | None = None,
+) -> UserProfile:
+    """Создаёт/обновляет UserProfile и привязывает пользователя к компании.
+
+    Права (actor): только superuser или администратор ЭТОЙ компании.
+    По умолчанию actor = user — самопривязка в Панели управления.
+    Роль должна быть из UserProfile.ROLE_CHOICES.
+    """
+    if company is None:
+        raise ValueError('Компания не указана')
+    if role not in dict(UserProfile.ROLE_CHOICES):
+        raise ValueError('Неизвестная роль пользователя')
+
+    actor = actor if actor is not None else user
+    actor_profile = getattr(actor, 'userprofile', None)
+    allowed = actor.is_superuser or (
+        actor_profile is not None
+        and actor_profile.role == 'admin'
+        and actor_profile.company_id == company.pk
+    )
+    if not allowed:
+        raise PermissionDenied(
+            'Привязывать к компании может только администратор компании '
+            'или superuser'
+        )
+
+    with transaction.atomic():
+        profile, _ = UserProfile.objects.get_or_create(user=user)
+        profile.company = company
+        profile.role = role
+        profile.save()
+    return profile
+
+
 def _check_company_access(user: User, company_id: int) -> bool:
     """Проверяет, что пользователь принадлежит компании (superuser — вне ограничений)."""
     if user.is_superuser:

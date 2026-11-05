@@ -6,6 +6,12 @@ from django.db.models.signals import post_migrate
 class StorageConfig(AppConfig):
     name = 'storage'
 
+    def ready(self):
+        # Спринт 8, задача 7: автосоздание UserProfile новым пользователям
+        # (post_save на User). dispatch_uid в signals.py защищает от
+        # повторного подключения при autoreload.
+        from storage.domain import signals  # noqa: F401
+
 
 def _handle_post_migrate(sender, **kwargs):
     """Создаёт зоны для проектов, у которых не все 4 канонические зоны."""

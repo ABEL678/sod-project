@@ -19,17 +19,14 @@ class CompanyManagementServiceTests(TestCase):
     def setUp(self):
         self.company = Company.objects.create(name='Компания А')
         self.admin = User.objects.create_user('admin_a', password='pass')
-        UserProfile.objects.create(
-            user=self.admin, company=self.company, role='admin'
-        )
+        UserProfile.objects.update_or_create(user=self.admin, defaults={'role': 'admin'
+        , 'company': self.company})[0]
         self.developer = User.objects.create_user('dev_a', password='pass')
-        UserProfile.objects.create(
-            user=self.developer, company=self.company, role='developer'
-        )
+        UserProfile.objects.update_or_create(user=self.developer, defaults={'role': 'developer'
+        , 'company': self.company})[0]
         self.gip = User.objects.create_user('gip_a', password='pass')
-        UserProfile.objects.create(
-            user=self.gip, company=self.company, role='gip'
-        )
+        UserProfile.objects.update_or_create(user=self.gip, defaults={'role': 'gip'
+        , 'company': self.company})[0]
 
     def test_get_company_members(self):
         members = get_company_members(self.company)
@@ -55,9 +52,8 @@ class CompanyManagementServiceTests(TestCase):
     def test_admin_cannot_add_user_from_other_company(self):
         other_company = Company.objects.create(name='Компания Б')
         other_user = User.objects.create_user('other_admin', password='pass')
-        UserProfile.objects.create(
-            user=other_user, company=other_company, role='admin'
-        )
+        UserProfile.objects.update_or_create(user=other_user, defaults={'role': 'admin'
+        , 'company': other_company})[0]
         with self.assertRaises(PermissionDenied):
             add_company_member(
                 self.admin, self.company, other_user, 'developer'
@@ -129,9 +125,8 @@ class CompanyManagementServiceTests(TestCase):
 
     def test_admin_can_change_admin_role(self):
         target = User.objects.create_user('second_admin', password='pass')
-        UserProfile.objects.create(
-            user=target, company=self.company, role='admin'
-        )
+        UserProfile.objects.update_or_create(user=target, defaults={'role': 'admin'
+        , 'company': self.company})[0]
         profile = add_company_member(
             self.admin, self.company, target, 'developer'
         )
@@ -167,9 +162,8 @@ class DashboardAccessTests(TestCase):
     def setUp(self):
         self.company = Company.objects.create(name='Компания Б')
         self.developer = User.objects.create_user('dev_b', password='pass')
-        UserProfile.objects.create(
-            user=self.developer, company=self.company, role='developer'
-        )
+        UserProfile.objects.update_or_create(user=self.developer, defaults={'role': 'developer'
+        , 'company': self.company})[0]
 
     def test_dashboard_access_denied_for_developer(self):
         self.client.force_login(self.developer)

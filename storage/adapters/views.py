@@ -59,6 +59,7 @@ from storage.domain.services import (
     add_company_member,
     allowed_issue_statuses,
     archive_project,
+    attach_user_to_company,
     can_archive_project,
     can_create_project,
     can_delete_project,
@@ -3028,6 +3029,41 @@ class DashboardView(LoginRequiredMixin, UserPassesTestMixin, TemplateView):
         except (PermissionDenied, ValueError) as exc:
             messages.error(request, str(exc))
 
+        return redirect('storage:dashboard')
+
+
+class AttachCompanyView(LoginRequiredMixin, View):
+    """Спринт 8, задача 7: «Моя компания» — привязка пользователя к компании.
+
+    POST company_id (+ опционально role) из Панели управления:
+    - superuser может привязать себя к любой компании и сменить её;
+    - админ компании может привязывать пользователей к своей компании;
+    - остальные получают PermissionDenied (сообщение в messages).
+    """
+
+    def post(self, request):
+        company = Company.objects.filter(
+            pk=request.POST.get('company_id')
+        ).first()
+        if company is None:
+            messages.error(request, 'Выберите компанию из списка.')
+            return redirect('storage:dashboard')
+
+        role = request.POST.get('role', 'admin')
+        try:
+            attach_user_to_company(
+                request.user,
+                company,
+                role=role,
+                actor=request.user,
+            )
+        except (PermissionDenied, ValueError) as exc:
+            messages.error(request, str(exc))
+            return redirect('storage:dashboard')
+
+        messages.success(
+            request, f'Вы привязаны к компании «{company.name}».'
+        )
         return redirect('storage:dashboard')
 
 

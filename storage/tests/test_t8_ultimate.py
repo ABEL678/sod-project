@@ -25,11 +25,8 @@ class T8UltimateTestBase(T8CoreTestBase):
     def setUp(self):
         super().setUp()
         self.user_admin = User.objects.create_user('company_admin', password='pass')
-        UserProfile.objects.create(
-            user=self.user_admin,
-            role='admin',
-            company=self.company,
-        )
+        UserProfile.objects.update_or_create(user=self.user_admin, defaults={'role': 'admin', 'company': self.company,
+        })[0]
 
 
 class FolderNavigationTests(T8UltimateTestBase):

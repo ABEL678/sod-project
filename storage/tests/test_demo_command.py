@@ -122,7 +122,7 @@ class CreateDemoProjectTests(TestCase):
     def test_company_id_and_user_username_are_used(self):
         company = Company.objects.create(name='Тестовая компания')
         admin = User.objects.create_user('owner_admin', password='secret')
-        UserProfile.objects.create(user=admin, company=company, role='admin')
+        UserProfile.objects.update_or_create(user=admin, defaults={'role': 'admin', 'company': company})[0]
 
         self._run(company_id=company.pk, user_username='owner_admin')
 
