@@ -278,6 +278,35 @@ sod_project/
 - Из DONE developer может перевести только в DISCUSSION или IN_PROGRESS.
 - При переходе в IN_PROGRESS, если `assignee` пуст, назначается текущий пользователь.
 
+#### Specification (ВОР-билдер, 4D)
+| Поле | Тип | Описание |
+|---|---|---|
+| id | PK | |
+| project | FK → Project, related_name='specifications', CASCADE | Проект |
+| section_code | CharField(20), blank | Код раздела |
+| code | CharField(100) | Код строки |
+| name | CharField(255) | Наименование |
+| unit | CharField(20), blank | Единица измерения |
+| quantity | DecimalField(10, 2) | Количество |
+| note | TextField, blank | Примечание |
+| created_at | DateTimeField, auto_now_add | |
+
+**Уникальность:** `(project, section_code, code)`.
+
+#### VorItem (ВОР-билдер, 4D)
+| Поле | Тип | Описание |
+|---|---|---|
+| id | PK | |
+| project | FK → Project, related_name='vor_items', CASCADE | Проект |
+| section_code | CharField(20), blank | Код раздела |
+| code | CharField(100) | Код строки |
+| name | CharField(255) | Наименование |
+| unit | CharField(20), blank | Единица измерения |
+| quantity | DecimalField(10, 2) | Количество |
+| created_at | DateTimeField, auto_now_add | |
+
+**Уникальность:** `(project, section_code, code)`.
+
 #### IssueComment
 | Поле | Тип | Описание |
 |---|---|---|
@@ -410,9 +439,9 @@ class FileStorage(Protocol):
 - `POST /api/v1/projects/{code}/issues/sync/` (Витро-трекер)
 - `GET /api/v1/projects/{code}/issues/pending/` (Витро-трекер)
 
-**4C — реализованные контракты:**
-- `GET /api/v1/projects/{code}/specifications/` — scope `projects:read`; пока возвращает `[]` (модели Specification нет).
-- `POST /api/v1/projects/{code}/vor/` — scope `projects:create`; пока `501` (модели VorItem нет).
+**4C/4D — реализованные контракты:**
+- `GET /api/v1/projects/{code}/specifications/` — scope `projects:read`; возвращает строки `Specification` проекта (id, code, name, section_code, unit, quantity, note).
+- `POST /api/v1/projects/{code}/vor/` — scope `projects:create`; создаёт строки `VorItem`; возвращает `{"created": N, "items": [...]}`. Требует admin/gip компании/проекта.
 - `POST /api/v1/projects/{code}/issues/sync/` — scope `issues:sync`; принимает `external_id` (опционально), `document_code`, `issue_text`, `status`, `page_number`, `x_ratio`, `y_ratio`. При наличии `external_id` замечание ищется по нему в рамках проекта и обновляется, включая текст; без `external_id` — fallback по `document + description`.
 - `GET /api/v1/projects/{code}/issues/pending/` — scope `issues:read`; возвращает замечания в статусах `NEW`, `IN_PROGRESS`, `REJECTED`, включая `external_id` и `assignee_username`.
 

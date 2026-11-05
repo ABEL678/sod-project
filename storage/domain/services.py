@@ -1,6 +1,7 @@
 import base64
 from collections import defaultdict
 from datetime import timedelta
+from decimal import Decimal, InvalidOperation
 import io
 
 from django.conf import settings
@@ -28,8 +29,10 @@ from storage.domain.models import (
     Project,
     ProjectMembership,
     Section,
+    Specification,
     User,
     UserProfile,
+    VorItem,
 )
 from issues.models import Issue, IssueComment
 from issues.notify import (
@@ -4355,11 +4358,63 @@ def list_api_tokens(user: User, company: Company):
     )
 
 def get_project_specifications(project: Project):
-    """Спецификации проекта.
+    """Спецификации проекта."""
+    return Specification.objects.filter(project=project).order_by(
+        "section_code", "code"
+    )
 
-    Модели Specification в проекте пока нет — API возвращает пустой список.
-    """
-    return []
+
+def create_vor_items(user: User, project: Project, items: list[dict]) -> list[VorItem]:
+    """Создаёт строки ВОР с проверкой прав и валидацией входных данных."""
+    if user is None or not getattr(user, "is_authenticated", False):
+        raise PermissionDenied("Нет прав на создание ВОР")
+    role = _user_role(user)
+    allowed = (
+        user.is_superuser
+        or _is_project_gip(user, project)
+        or (
+            role == "admin"
+            and _check_company_access(user, project.company_id)
+        )
+    )
+    if not allowed:
+        raise PermissionDenied("Нет прав на создание ВОР")
+
+    prepared = []
+    for index, item in enumerate(items):
+        code = (item.get("code") or "").strip()
+        name = (item.get("name") or "").strip()
+        unit = (item.get("unit") or "").strip()
+        section_code = (item.get("section_code") or "").strip()
+        if not code:
+            raise ValidationError({f"items[{index}].code": "Код обязателен"})
+        if not name:
+            raise ValidationError({f"items[{index}].name": "Название обязательно"})
+        if not unit:
+            raise ValidationError({f"items[{index}].unit": "Ед. изм. обязательна"})
+        try:
+            quantity = Decimal(str(item.get("quantity")))
+        except (InvalidOperation, TypeError, ValueError):
+            raise ValidationError({
+                f"items[{index}].quantity": "Количество должно быть числом",
+            })
+        if quantity <= 0:
+            raise ValidationError({
+                f"items[{index}].quantity": "Количество должно быть > 0",
+            })
+        prepared.append({
+            "section_code": section_code,
+            "code": code,
+            "name": name,
+            "unit": unit,
+            "quantity": quantity,
+        })
+
+    with transaction.atomic():
+        return [
+            VorItem.objects.create(project=project, **item)
+            for item in prepared
+        ]
 
 
 def sync_issues(user: User, project: Project, issues_data: list[dict]) -> list[Issue]:

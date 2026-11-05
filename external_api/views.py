@@ -2,29 +2,43 @@ from datetime import datetime, time
 
 from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
+from django.core.cache import cache
 from django.core.exceptions import PermissionDenied
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.db import IntegrityError
 from django.http import HttpResponseBadRequest, HttpResponseForbidden
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.dateparse import parse_date, parse_datetime
 from django.views import View
+from rest_framework.exceptions import NotFound
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.throttling import UserRateThrottle
 from rest_framework.views import APIView
 
 from external_api.authentication import ApiTokenAuthentication
 from external_api.models import ApiToken
 from external_api.permissions import HasScope
-from external_api.serializers import ProjectCreateSerializer
-from storage.domain.models import Company
+from external_api.serializers import (
+    IssuePendingSerializer,
+    IssueSyncSerializer,
+    ProjectCreateSerializer,
+    SpecificationSerializer,
+    VorItemSerializer,
+)
+from storage.domain.models import Company, Project
 from storage.domain.services import (
     create_api_token,
     create_project_from_template,
+    create_vor_items,
+    get_pending_issues,
+    get_project_specifications,
     get_user_company,
     list_api_tokens,
     revoke_api_token,
+    sync_issues,
 )
 
 
@@ -33,6 +47,7 @@ class ProjectCreateView(APIView):
 
     authentication_classes = [ApiTokenAuthentication]
     permission_classes = [IsAuthenticated, HasScope]
+    throttle_classes = [UserRateThrottle]
     required_scope = ApiToken.Scope.PROJECTS_CREATE
 
     def post(self, request):
@@ -76,6 +91,146 @@ class ProjectCreateView(APIView):
         )
 
 
+def _api_project(request, code):
+    project = Project.objects.filter(
+        code=code,
+        company=request.auth.company,
+        is_deleted=False,
+    ).first()
+    if project is None:
+        raise NotFound("Проект не найден")
+    return project
+
+
+class SpecificationListView(APIView):
+    """GET /api/v1/projects/<code>/specifications/."""
+
+    authentication_classes = [ApiTokenAuthentication]
+    permission_classes = [IsAuthenticated, HasScope]
+    throttle_classes = [UserRateThrottle]
+    required_scope = ApiToken.Scope.PROJECTS_READ
+
+    def get(self, request, code):
+        project = _api_project(request, code)
+        items = get_project_specifications(project)
+        return Response(SpecificationSerializer(items, many=True).data)
+
+
+class VorCreateView(APIView):
+    """POST /api/v1/projects/<code>/vor/."""
+
+    authentication_classes = [ApiTokenAuthentication]
+    permission_classes = [IsAuthenticated, HasScope]
+    throttle_classes = [UserRateThrottle]
+    required_scope = ApiToken.Scope.PROJECTS_CREATE
+
+    def post(self, request, code):
+        project = _api_project(request, code)
+        serializer = VorItemSerializer(data=request.data, many=True)
+        serializer.is_valid(raise_exception=True)
+        try:
+            items = create_vor_items(
+                request.user,
+                project,
+                serializer.validated_data,
+            )
+        except DjangoValidationError as exc:
+            errors = (
+                exc.message_dict
+                if getattr(exc, "error_dict", None)
+                else {"non_field_errors": exc.messages}
+            )
+            return Response({"errors": errors}, status=400)
+        except IntegrityError:
+            return Response(
+                {
+                    "errors": {
+                        "non_field_errors": [
+                            "Такая строка ВОР уже существует"
+                        ]
+                    }
+                },
+                status=400,
+            )
+        except PermissionDenied as exc:
+            return Response(
+                {"errors": {"non_field_errors": [str(exc)]}},
+                status=403,
+            )
+
+        return Response(
+            {
+                "created": len(items),
+                "items": VorItemSerializer(items, many=True).data,
+            },
+            status=201,
+        )
+
+
+class IssueSyncView(APIView):
+    """POST /api/v1/projects/<code>/issues/sync/."""
+
+    authentication_classes = [ApiTokenAuthentication]
+    permission_classes = [IsAuthenticated, HasScope]
+    throttle_classes = [UserRateThrottle]
+    required_scope = ApiToken.Scope.ISSUES_SYNC
+
+    def post(self, request, code):
+        project = _api_project(request, code)
+        serializer = IssueSyncSerializer(data=request.data, many=True)
+        serializer.is_valid(raise_exception=True)
+
+        try:
+            issues = sync_issues(
+                request.user,
+                project,
+                serializer.validated_data,
+            )
+        except DjangoValidationError as exc:
+            errors = (
+                exc.message_dict
+                if getattr(exc, "error_dict", None)
+                else {"non_field_errors": exc.messages}
+            )
+            return Response({"errors": errors}, status=400)
+        except ValueError as exc:
+            return Response(
+                {"errors": {"non_field_errors": [str(exc)]}},
+                status=400,
+            )
+        except PermissionDenied as exc:
+            return Response(
+                {"errors": {"non_field_errors": [str(exc)]}},
+                status=403,
+            )
+
+        return Response(
+            {
+                "synced": len(issues),
+                "issues": IssuePendingSerializer(issues, many=True).data,
+            },
+            status=200,
+        )
+
+
+class IssuePendingView(APIView):
+    """GET /api/v1/projects/<code>/issues/pending/."""
+
+    authentication_classes = [ApiTokenAuthentication]
+    permission_classes = [IsAuthenticated, HasScope]
+    throttle_classes = [UserRateThrottle]
+    required_scope = ApiToken.Scope.ISSUES_READ
+
+    def get(self, request, code):
+        project = _api_project(request, code)
+        return Response(
+            IssuePendingSerializer(
+                get_pending_issues(project),
+                many=True,
+            ).data
+        )
+
+
 class ApiTokenAdminMixin(LoginRequiredMixin, UserPassesTestMixin):
     """Доступ к управлению токенами — только admin компании / superuser."""
 
@@ -111,6 +266,49 @@ class ApiTokenAdminMixin(LoginRequiredMixin, UserPassesTestMixin):
         return company, companies
 
 
+def _add_no_store_headers(response):
+    response["Cache-Control"] = (
+        "no-store, no-cache, must-revalidate, private"
+    )
+    response["Pragma"] = "no-cache"
+    response["Expires"] = "0"
+    return response
+
+
+def _tokens_page_response(
+    request,
+    company,
+    companies,
+    created_token=None,
+):
+    tokens = list_api_tokens(request.user, company)
+    scope_labels = dict(ApiToken.Scope.choices)
+    now = timezone.now()
+    for token in tokens:
+        token.scope_labels = [
+            scope_labels.get(scope, scope) for scope in (token.scopes or [])
+        ]
+        token.is_expired = bool(
+            token.expires_at and token.expires_at < now
+        )
+
+    response = render(
+        request,
+        "external_api/api_tokens.html",
+        {
+            "company": company,
+            "companies": companies,
+            "selected_company_id": company.pk,
+            "tokens": tokens,
+            "scope_choices": ApiToken.Scope.choices,
+            "created_token": created_token,
+        },
+    )
+    if created_token:
+        _add_no_store_headers(response)
+    return response
+
+
 class ApiTokenListView(ApiTokenAdminMixin, View):
     """Страница управления API-токенами компании."""
 
@@ -119,29 +317,24 @@ class ApiTokenListView(ApiTokenAdminMixin, View):
         if company is None:
             return HttpResponseBadRequest("Не указана компания")
 
-        tokens = list_api_tokens(request.user, company)
-        scope_labels = dict(ApiToken.Scope.choices)
-        now = timezone.now()
-        for token in tokens:
-            token.scope_labels = [
-                scope_labels.get(scope, scope) for scope in (token.scopes or [])
-            ]
-            token.is_expired = bool(
-                token.expires_at and token.expires_at < now
-            )
-        created_token = request.session.pop("api_token_raw_once", None)
+        # Убираем возможный legacy-ключ с сырым токеном из старых сессий.
+        request.session.pop("api_token_raw_once", None)
+        cache_key = request.session.pop(
+            "api_token_raw_cache_key", None
+        )
+        created_token = None
+        if cache_key:
+            try:
+                created_token = cache.get(cache_key)
+                cache.delete(cache_key)
+            except Exception:
+                created_token = None
 
-        return render(
+        return _tokens_page_response(
             request,
-            "external_api/api_tokens.html",
-            {
-                "company": company,
-                "companies": companies,
-                "selected_company_id": company.pk,
-                "tokens": tokens,
-                "scope_choices": ApiToken.Scope.choices,
-                "created_token": created_token,
-            },
+            company,
+            companies,
+            created_token=created_token,
         )
 
 
@@ -168,10 +361,28 @@ class ApiTokenCreateView(ApiTokenAdminMixin, View):
         except PermissionDenied:
             return HttpResponseForbidden("Нет доступа к API-токенам")
 
-        request.session["api_token_raw_once"] = {
+        created_token = {
             "name": token.name,
             "token": raw_token,
         }
+        cache_key = f"api_token_raw_{request.user.id}_{token.id}"
+        cache_ok = False
+        try:
+            cache.set(cache_key, created_token, timeout=60)
+            cache_ok = cache.get(cache_key) == created_token
+        except Exception:
+            cache_ok = False
+
+        if not cache_ok:
+            # Кэш недоступен — отдаём токен сразу, без редиректа.
+            return _tokens_page_response(
+                request,
+                company,
+                _companies,
+                created_token=created_token,
+            )
+
+        request.session["api_token_raw_cache_key"] = cache_key
         messages.success(request, "Токен создан. Скопируйте его сейчас.")
         return redirect(_tokens_url(request.user, company))
 

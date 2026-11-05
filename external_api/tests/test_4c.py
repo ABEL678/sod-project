@@ -1,7 +1,9 @@
 import json
 import secrets
+from decimal import Decimal
 
 from django.contrib.auth import get_user_model
+from django.core.exceptions import PermissionDenied
 from django.test import TestCase
 from django.urls import reverse
 
@@ -12,9 +14,11 @@ from storage.domain.models import (
     Document,
     Project,
     Section,
+    Specification,
     UserProfile,
+    VorItem,
 )
-from storage.domain.services import create_api_token
+from storage.domain.services import create_api_token, create_vor_items
 
 
 User = get_user_model()
@@ -98,6 +102,29 @@ class Api4CTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), [])
 
+    def test_specifications_returns_items(self):
+        Specification.objects.create(
+            project=self.project,
+            section_code="AR",
+            code="SPEC-1",
+            name="Дверь",
+            unit="шт",
+            quantity=Decimal("2.00"),
+            note="Тестовая строка",
+        )
+
+        response = self._get(
+            f"/api/v1/projects/{self.project.code}/specifications/",
+            self.raw,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(len(payload), 1)
+        self.assertEqual(payload[0]["code"], "SPEC-1")
+        self.assertEqual(payload[0]["section_code"], "AR")
+        self.assertEqual(payload[0]["quantity"], "2.00")
+
     def test_specifications_without_scope_returns_403(self):
         response = self._get(
             f"/api/v1/projects/{self.project.code}/specifications/",
@@ -114,7 +141,7 @@ class Api4CTests(TestCase):
 
         self.assertEqual(response.status_code, 404)
 
-    def test_vor_returns_501_with_valid_scope(self):
+    def test_vor_creates_items(self):
         response = self._post(
             f"/api/v1/projects/{self.project.code}/vor/",
             [
@@ -129,7 +156,30 @@ class Api4CTests(TestCase):
             self.raw,
         )
 
-        self.assertEqual(response.status_code, 501)
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.json()["created"], 1)
+        item = VorItem.objects.get(project=self.project, code="VOR-1")
+        self.assertEqual(item.name, "Позиция ВОР")
+        self.assertEqual(item.quantity, Decimal("2.00"))
+
+    def test_vor_invalid_quantity_returns_400(self):
+        response = self._post(
+            f"/api/v1/projects/{self.project.code}/vor/",
+            [{"code": "VOR-ZERO", "name": "Ноль", "unit": "шт", "quantity": 0}],
+            self.raw,
+        )
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_create_vor_items_rejects_non_admin(self):
+        stranger = User.objects.create_user("vor-stranger", password="pass")
+
+        with self.assertRaises(PermissionDenied):
+            create_vor_items(
+                stranger,
+                self.project,
+                [{"code": "VOR-X", "name": "X", "unit": "шт", "quantity": 1}],
+            )
 
     def test_vor_without_scope_returns_403(self):
         response = self._post(

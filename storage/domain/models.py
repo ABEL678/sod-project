@@ -517,3 +517,72 @@ class Feedback(models.Model):
 
     def __str__(self):
         return f"[{self.get_category_display()}] {self.message[:60]}"
+
+class Specification(models.Model):
+    """Строка спецификации проекта (ВОР-билдер)."""
+
+    project = models.ForeignKey(
+        Project,
+        on_delete=models.CASCADE,
+        related_name="specifications",
+        verbose_name="Проект",
+    )
+    section_code = models.CharField(
+        max_length=20, blank=True, verbose_name="Код раздела"
+    )
+    code = models.CharField(max_length=100, verbose_name="Код")
+    name = models.CharField(max_length=255, verbose_name="Наименование")
+    unit = models.CharField(max_length=20, blank=True, verbose_name="Ед. изм.")
+    quantity = models.DecimalField(
+        max_digits=10, decimal_places=2, verbose_name="Количество"
+    )
+    note = models.TextField(blank=True, verbose_name="Примечание")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["section_code", "code"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["project", "section_code", "code"],
+                name="uniq_spec_project_section_code",
+            ),
+        ]
+        verbose_name = "Спецификация"
+        verbose_name_plural = "Спецификации"
+
+    def __str__(self):
+        return f"{self.code} — {self.name}"
+
+class VorItem(models.Model):
+    """Строка ведомости объёмов работ проекта (ВОР-билдер)."""
+
+    project = models.ForeignKey(
+        Project,
+        on_delete=models.CASCADE,
+        related_name="vor_items",
+        verbose_name="Проект",
+    )
+    section_code = models.CharField(
+        max_length=20, blank=True, verbose_name="Код раздела"
+    )
+    code = models.CharField(max_length=100, verbose_name="Код")
+    name = models.CharField(max_length=255, verbose_name="Наименование")
+    unit = models.CharField(max_length=20, blank=True, verbose_name="Ед. изм.")
+    quantity = models.DecimalField(
+        max_digits=10, decimal_places=2, verbose_name="Количество"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["section_code", "code"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["project", "section_code", "code"],
+                name="uniq_vor_project_section_code",
+            ),
+        ]
+        verbose_name = "Строка ВОР"
+        verbose_name_plural = "Строки ВОР"
+
+    def __str__(self):
+        return f"{self.code} — {self.name}"

@@ -1,7 +1,7 @@
 from django.contrib import admin
 from .domain.models import (
     Company, Project, Section, Document, DocumentVersion, UserProfile, ProjectMembership,
-    DocumentView,
+    DocumentView, Specification, VorItem,
 )
 
 
@@ -58,3 +58,21 @@ class DocumentViewAdmin(admin.ModelAdmin):
     list_display = ('name', 'project', 'user', 'is_shared', 'created_at')
     list_filter = ('project', 'is_shared')
     search_fields = ('name',)
+
+
+@admin.register(Specification)
+class SpecificationAdmin(admin.ModelAdmin):
+    list_display = (
+        'code', 'name', 'section_code', 'unit', 'quantity', 'project',
+    )
+    list_filter = ('project', 'section_code')
+    search_fields = ('code', 'name')
+
+
+@admin.register(VorItem)
+class VorItemAdmin(admin.ModelAdmin):
+    list_display = (
+        'code', 'name', 'section_code', 'unit', 'quantity', 'project',
+    )
+    list_filter = ('project', 'section_code')
+    search_fields = ('code', 'name')

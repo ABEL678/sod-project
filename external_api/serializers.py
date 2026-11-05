@@ -1,7 +1,9 @@
+from decimal import Decimal
+
 from rest_framework import serializers
 
 from issues.models import Issue
-from storage.domain.models import Project
+from storage.domain.models import Project, Specification
 
 
 class ProjectCreateSerializer(serializers.Serializer):
@@ -33,30 +35,33 @@ class ProjectCreateSerializer(serializers.Serializer):
         return value
 
 
-class SpecificationSerializer(serializers.Serializer):
-    code = serializers.CharField(max_length=100)
-    name = serializers.CharField(max_length=255)
-    section_code = serializers.CharField(
-        max_length=50, required=False, allow_blank=True, default=""
-    )
-    unit = serializers.CharField(
-        max_length=50, required=False, allow_blank=True, default=""
-    )
-    quantity = serializers.FloatField(required=False, default=0)
-    note = serializers.CharField(
-        max_length=500, required=False, allow_blank=True, default=""
-    )
+class SpecificationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Specification
+        fields = [
+            "id",
+            "code",
+            "name",
+            "section_code",
+            "unit",
+            "quantity",
+            "note",
+        ]
 
 
 class VorItemSerializer(serializers.Serializer):
     code = serializers.CharField(max_length=100)
     name = serializers.CharField(max_length=255)
     unit = serializers.CharField(
-        max_length=50, required=False, allow_blank=True, default=""
+        max_length=20, required=False, allow_blank=True, default=""
     )
-    quantity = serializers.FloatField(required=False, default=0)
+    quantity = serializers.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        min_value=Decimal("0.01"),
+    )
     section_code = serializers.CharField(
-        max_length=50, required=False, allow_blank=True, default=""
+        max_length=20, required=False, allow_blank=True, default=""
     )
 
 
