@@ -3,7 +3,8 @@
 - сигнал post_save на User создаёт профиль каждому новому пользователю;
 - superuser привязывается к первой компании (без компаний — создаётся
   «Stream-CAD»; на мигрированной БД первая компания уже есть — «Моя
-  компания» из миграции 0005);
+  компания» из миграции 0005); обычный пользователь остаётся без
+  компании (Аудит 6.0) — привязку делает админ через Панель управления;
 - attach_user_to_company: права admin компании / superuser;
 - AttachCompanyView: UI-привязка в Панели управления.
 """
@@ -43,13 +44,17 @@ class UserProfileSignalTests(TestCase):
         self.assertEqual(profile.company.name, 'Stream-CAD')
         self.assertEqual(profile.role, 'admin')
 
-    def test_regular_user_gets_profile_with_existing_company(self):
+    def test_regular_user_gets_bare_profile_with_existing_company(self):
+        # Аудит 6.0: автопривязка к первой компании удалена. На мигрированной
+        # БД первая компания — сидируемая «Моя компания» (миграция 0005):
+        # прикрепляя каждого нового пользователя к ней, сигнал давал доступ
+        # к чужим проектам и ломал добавление в настоящую компанию
+        # (add_company_member: «Пользователь уже принадлежит другой компании»).
+        # Компанию назначает админ через Панель управления.
         Company.objects.create(name='Альфа')
         user = User.objects.create_user(username='dev1', password='DevPass123')
         profile = UserProfile.objects.get(user=user)
-        self.assertEqual(
-            profile.company_id, Company.objects.order_by('pk').first().pk,
-        )
+        self.assertIsNone(profile.company)
         self.assertEqual(profile.role, 'viewer')
 
     def test_regular_user_without_companies_gets_bare_profile(self):
@@ -68,9 +73,11 @@ class UserProfileSignalTests(TestCase):
         self.assertEqual(UserProfile.objects.filter(user=user).count(), 1)
 
     def test_get_my_company(self):
+        # Аудит 6.0: новые пользователи без компании (привязка — через
+        # Панель управления), поэтому get_my_company возвращает None.
+        Company.objects.create(name='Альфа')
         user = User.objects.create_user(username='dev4', password='DevPass123')
-        expected = Company.objects.order_by('pk').first()
-        self.assertEqual(get_my_company(user).pk, expected.pk)
+        self.assertIsNone(get_my_company(user))
         # Пользователь без профиля — None, без исключения.
         orphan = User(username='orphan')
         self.assertIsNone(get_my_company(orphan))

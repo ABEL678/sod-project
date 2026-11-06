@@ -16,6 +16,7 @@ from pathlib import Path
 DEFAULT_FILES = (
     Path('static/css/app.css'),
     Path('static/css/viewer.css'),
+    Path('static/css/redesign.css'),
 )
 HEX_RE = re.compile(r'#[0-9a-fA-F]{3,8}\b')
 VAR_RE = re.compile(r'var\(')

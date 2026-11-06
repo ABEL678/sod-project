@@ -101,6 +101,10 @@ class ViewTests(TestCase):
 
     def test_project_detail_company_fallback_without_profile(self):
         superuser = User.objects.create_superuser('root', password='pass')
+        # Аудит 6.0: сигнал создаёт профиль каждому новому пользователю.
+        # Тест проверяет fallback для УСТАРЕВШИХ пользователей без профиля
+        # (созданных до включения сигнала) — симулируем их удалением.
+        UserProfile.objects.filter(user=superuser).delete()
         self.client.force_login(superuser)
         response = self.client.get(
             reverse('storage:project_detail', args=[self.project.pk])

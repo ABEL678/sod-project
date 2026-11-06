@@ -75,7 +75,10 @@ def _issue_json(issue, user=None):
     return payload
 
 
-class IssueCreateView(CreateView):
+class IssueCreateView(LoginRequiredMixin, CreateView):
+    """Создание замечания. Аудит 6.0: явный LoginRequiredMixin —
+    аноним раньше доходил до dispatch и получал 404 (fail-closed,
+    но без редиректа на вход)."""
     model = Issue
     fields = ['description']
     http_method_names = ['post']

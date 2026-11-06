@@ -14,11 +14,15 @@
     </div>
     <div class="topbar-left">
         <nav class="crumb">
-            <a href="{% url 'storage:project_list' %}" class="company-link">
-                <span class="topbar-company">{% firstof user.userprofile.company.name topbar_company.name topbar_project.company.name "Моя компания" %}</span>
+            {# Задача 11: title — полный текст обрезанных крошек (tooltip) #}
+            {% firstof user.userprofile.company.name topbar_company.name topbar_project.company.name "Моя компания" as crumb_company %}
+            {% firstof topbar_title topbar_project.name "Проекты" as crumb_title %}
+            <a href="{% url 'storage:project_list' %}" class="company-link"
+               title="{{ crumb_company }}">
+                <span class="topbar-company">{{ crumb_company }}</span>
             </a>
             <span>/</span>
-            <span class="doc">{% firstof topbar_title topbar_project.name "Проекты" %}</span>
+            <span class="doc" title="{{ crumb_title }}">{{ crumb_title }}</span>
         </nav>
     </div>
     <div class="spacer"></div>
@@ -67,8 +71,9 @@
         {% if user.userprofile.role == 'admin' or user.userprofile.role == 'gip' or user.is_superuser %}
             {% if request.resolver_match.url_name == 'project_list' %}
                 <a href="{% url 'storage:dashboard' %}" class="btn btn-sm btn-outline-secondary"
-                   title="Только для администратора и ГИП">
-                    <i class="bi bi-gear"></i> Управление
+                   title="Только для администратора и ГИП"
+                   aria-label="Управление (только для администратора и ГИП)">
+                    <i class="bi bi-gear" aria-hidden="true"></i> Управление
                 </a>
             {% endif %}
         {% endif %}
@@ -110,6 +115,7 @@
                     data-bs-toggle="dropdown"
                     data-bs-auto-close="outside"
                     aria-expanded="false"
+                    aria-label="Уведомления"
                     title="Уведомления">
                 <i class="bi bi-bell" aria-hidden="true"></i>
                 {% if unread_notifications_count %}

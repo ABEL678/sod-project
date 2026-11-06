@@ -37,24 +37,11 @@ body { background: var(--c-bg-app); font-family: 'Golos Text', 'Inter', system-u
     opacity: 0.7;
 }
 
-/* T83: watermark brand */
+/* T83: watermark brand.
+   Аудит 6.0: правило ниже дублировалось вторым блоком (~строка 997) с другим
+   opacity — оставлен один каноничный блок (opacity 0.30, см. низ файла). */
 .topbar {
     position: relative;
-}
-
-.brand-watermark {
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    z-index: 0;
-    max-width: 42%;
-    overflow: hidden;
-    text-align: center;
-    opacity: 0.35; /* заметный, но не спорящий с контентом водяной знак */
-    pointer-events: none;
-    user-select: none;
-    white-space: nowrap;
 }
 
 .topbar > *:not(.brand-watermark) {
@@ -183,21 +170,26 @@ tr[data-href],
     gap: 12px;
     flex: 1 1 auto;
     min-width: 0;
-    max-width: 50%;
+    /* Задача 10: крошки не должны доходить до водяного знака (центр на 40%,
+       половина ширины ~76px + зазор). 40% - 300px учитывает лого-блок
+       (~209px) + половину знака + запас; 22% не даёт крошкам растягиваться
+       на широких экранах. */
+    max-width: min(22%, calc(40% - 300px));
     margin-right: auto;
     overflow: visible;
 }
 
 .topbar .crumb {
     flex: 0 1 auto;
-    flex-wrap: wrap;
     align-items: baseline;
     min-width: 0;
     max-width: 100%;
-    overflow: visible;
-    white-space: normal;
+    /* Задача 10: длинные названия обрезаются многоточием в одну строку,
+       а не переносятся и наезжают на водяной знак. */
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
     line-height: 1.25;
-    row-gap: 2px;
 }
 
 .topbar .crumb .sep,
@@ -209,10 +201,10 @@ tr[data-href],
 .topbar .crumb .doc {
     flex: 0 1 auto;
     min-width: 0;
-    overflow: visible;
-    text-overflow: clip;
-    white-space: normal;
-    overflow-wrap: anywhere;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
     line-height: 1.25;
 }
 
@@ -303,11 +295,11 @@ tr[data-href],
 }
 
 .zone-chip--published.is-active { border-color: var(--s-done-solid); color: var(--s-done-on); background: var(--s-done-subtle); }
-.zone-chip--published.is-active .zone-count { background: var(--s-done-solid); color: #fff; }
+.zone-chip--published.is-active .zone-count { background: var(--s-done-solid); color: var(--c-text-inverse); }
 .zone-chip--shared.is-active { border-color: var(--s-review-solid); color: var(--s-review-on); background: var(--s-review-subtle); }
 .zone-chip--shared.is-active .zone-count { background: var(--s-review-solid); color: var(--c-text-primary); }
 .zone-chip--archive.is-active { border-color: var(--s-closed-solid); color: var(--s-closed-on); background: var(--s-closed-subtle); }
-.zone-chip--archive.is-active .zone-count { background: var(--s-closed-solid); color: #fff; }
+.zone-chip--archive.is-active .zone-count { background: var(--s-closed-solid); color: var(--c-text-inverse); }
 
 /* Workflow-кнопки в колонке «Действия» */
 .wf-actions {
@@ -394,7 +386,7 @@ tr.doc-row-flash > td { animation: wf-row-flash 1.5s ease; }
     padding: 0 4px;
     border-radius: 999px;
     background: var(--s-attention-solid);
-    color: #fff;
+    color: var(--c-text-inverse);
     font: 700 10px/16px var(--font-sans, sans-serif);
     text-align: center;
 }
@@ -676,7 +668,7 @@ tr.doc-row-flash > td { animation: wf-row-flash 1.5s ease; }
     text-overflow: ellipsis;
     white-space: nowrap;
 }
-.upload-status.is-error { color: #B42318; font-weight: 500; }
+.upload-status.is-error { color: var(--s-attention-on); font-weight: 500; }
 
 /* Спиннер HTMX-запросов реестра: появляется, пока панель обновляется */
 .panel-spinner {
@@ -980,10 +972,11 @@ tr.doc-row-flash > td { animation: wf-row-flash 1.5s ease; }
     background: rgba(255, 255, 255, 0.22);
 }
 
-/* Поиск в шапке вьювера: узкая форма, не наезжает на водяной знак */
+/* Поиск в шапке вьювера: узкая форма (160px — ТЗ задачи 8), не наезжает
+   на водяной знак и кнопки справа. */
 .topbar .topbar-search {
-    flex: 0 1 200px;
-    max-width: 200px;
+    flex: 0 1 160px;
+    max-width: 160px;
     min-width: 140px;
     margin-left: 12px;
 }
@@ -997,7 +990,9 @@ tr.doc-row-flash > td { animation: wf-row-flash 1.5s ease; }
 .brand-watermark {
     position: absolute;
     top: 50%;
-    left: 50%;
+    /* Задача 8: сдвинут влево (40% вместо 50%) — на странице документа
+       правый край знака уходит от поиска (замер 1366: зазор ~96px). */
+    left: 40%;
     transform: translate(-50%, -50%);
     z-index: 0;
     max-width: 42%;

@@ -79,10 +79,6 @@ ALLOWED_HOSTS = env_list('DJANGO_ALLOWED_HOSTS', ('localhost', '127.0.0.1'))
 
 CSRF_TRUSTED_ORIGINS = env_list('DJANGO_CSRF_TRUSTED_ORIGINS')
 
-# Hotfix (Аудит 7): 4C-fix перевёл generate_share_link на настройку,
-# но саму настройку в settings.py не добавил -> AttributeError/500.
-# Значение прежней константы SHARE_LINK_TTL: 365 дней.
-SHARE_LINK_TTL_DAYS = int(os.environ.get('DJANGO_SHARE_LINK_TTL_DAYS', '365'))
 
 
 # Application definition

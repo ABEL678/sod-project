@@ -2510,6 +2510,11 @@ class DocumentDownloadView(View):
             ).first()
             if version is None:
                 raise Http404
+            # Аудит 6.0: share-ссылка публикует согласованную версию —
+            # токен действует только на текущую версию документа, иначе
+            # по ссылке утекали WIP-версии (/download/<любой version_id>/).
+            if version.document.current_version_id != version.pk:
+                raise Http404
             expires_at = version.document.public_link_expires_at
             if expires_at is None or expires_at <= timezone.now():
                 return HttpResponseGone('Срок действия ссылки истек')

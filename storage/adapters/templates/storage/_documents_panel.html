@@ -214,6 +214,14 @@
     </div>
 
     <div class="doc-table-wrap{% if not table.paginated_rows %} is-empty{% endif %}" id="documentsTableWrap">
+        {% if not table.paginated_rows %}
+            {# Аудит 6.0: пустое состояние с CTA вместо пустого <tbody> #}
+            <div class="empty-state py-5 my-3" data-role="documents-empty-state">
+                <i class="bi bi-inbox" aria-hidden="true"></i>
+                <span class="fw-semibold">Документов не найдено</span>
+                <span>Измените фильтры или загрузите первый документ.</span>
+            </div>
+        {% endif %}
         <form id="bulkForm" method="post" action="{% url 'storage:document_bulk_action' project.pk %}">
             {% csrf_token %}
             {% render_table table %}

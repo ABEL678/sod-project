@@ -171,8 +171,19 @@
 
         const markup = document.getElementById('detailMarkup');
         if (issue.crop_image_url) {
-            markup.innerHTML = '<a href="' + issue.crop_image_url + '" target="_blank">'
-                + '<img src="' + issue.crop_image_url + '" class="issue-crop-thumb" alt="Маркап"></a>';
+            /* Аудит 6.0: URL вставляется через DOM API (href/src присвоением),
+             * а не конкатенацией в innerHTML — кавычка/скобка в имени файла
+             * или javascript:-схема больше не могут сломать разметку. */
+            const markupLink = document.createElement('a');
+            markupLink.href = issue.crop_image_url;
+            markupLink.target = '_blank';
+            const markupImg = document.createElement('img');
+            markupImg.src = issue.crop_image_url;
+            markupImg.className = 'issue-crop-thumb';
+            markupImg.alt = 'Маркап';
+            markupLink.appendChild(markupImg);
+            markup.textContent = '';
+            markup.appendChild(markupLink);
         } else if (issue.page_number) {
             markup.textContent = 'Страница ' + issue.page_number;
         } else {
@@ -181,8 +192,17 @@
 
         const crop = document.getElementById('issueCrop');
         if (issue.crop_image_url) {
-            crop.innerHTML = '<a href="' + issue.crop_image_url + '" target="_blank">'
-                + '<img src="' + issue.crop_image_url + '" class="img-fluid border rounded" alt="Фрагмент"></a>';
+            /* Аудит 6.0: DOM API вместо innerHTML — см. detailMarkup выше. */
+            const cropLink = document.createElement('a');
+            cropLink.href = issue.crop_image_url;
+            cropLink.target = '_blank';
+            const cropImg = document.createElement('img');
+            cropImg.src = issue.crop_image_url;
+            cropImg.className = 'img-fluid border rounded';
+            cropImg.alt = 'Фрагмент';
+            cropLink.appendChild(cropImg);
+            crop.textContent = '';
+            crop.appendChild(cropLink);
         } else {
             crop.textContent = 'Вложение отсутствует.';
         }
@@ -1333,8 +1353,32 @@
             if (token !== pane.renderToken) {
                 return;
             }
+            /* Спринт 8, задача 8: в «Шторке»/«Наложении» верхний слой
+               (открытая версия) подгоняется под геометрию НИЖНЕГО листа —
+               размеры листов версии могут отличаться (при входе проверяется
+               только страница 1). Фактор = baseW/ownW; при одинаковой
+               геометрии фактор = 1, рендер идёт как раньше. */
+            const alignTop = comparison.mode !== 'side'
+                && pane === comparison.selected
+                && comparison.current
+                && comparison.current.pdfDocument;
+            const alignPromise = alignTop
+                ? comparison.current.pdfDocument.getPage(target).then(
+                    function (basePage) {
+                        const ownWidth = page.getViewport({
+                            scale: 1, rotation: comparison.rotation,
+                        }).width;
+                        const baseWidth = basePage.getViewport({
+                            scale: 1, rotation: comparison.rotation,
+                        }).width;
+                        return ownWidth > 0 ? baseWidth / ownWidth : 1;
+                    }).catch(function () {
+                        return 1;
+                    })
+                : Promise.resolve(1);
+            return alignPromise.then(function (alignFactor) {
             const viewport = page.getViewport({
-                scale: comparison.scale,
+                scale: comparison.scale * alignFactor,
                 rotation: comparison.rotation,
             });
             pane.viewport = {
@@ -1386,6 +1430,7 @@
                     drawMarksInto(pane.pageMap, target);
                 }
             }).catch(function () {});
+            });
         });
     }
 
@@ -1640,17 +1685,24 @@
                 }
                 const selectedViewport = pages[0].getViewport({scale: 1});
                 const currentViewport = pages[1].getViewport({scale: 1});
-                if (
-                    Math.abs(selectedViewport.width - currentViewport.width) >= 1
-                    || Math.abs(selectedViewport.height - currentViewport.height) >= 1
-                ) {
+                /* Спринт 8, задача 8: листы реэкспортов отличаются на 1-5px —
+                   раньше это блокировало шторку/наложение целиком. Теперь
+                   достаточно близких ПРОПОРЦИЙ (≤2%): масштаб верхнего слоя
+                   нормализуется по нижнему в renderComparisonPane. Отказ —
+                   только при несовместимой ориентации/формате. */
+                const widthRatio = currentViewport.width / selectedViewport.width;
+                const heightRatio =
+                    currentViewport.height / selectedViewport.height;
+                const aspectOk = widthRatio > 0.8 && widthRatio < 1.25
+                    && Math.abs(widthRatio - heightRatio) <= 0.02;
+                if (!aspectOk) {
                     comparison.geometryMismatch = true;
                     comparison.loading = false;
                     updateCompareMenu();
                     viewerNotify(
                         mode === 'overlay'
-                            ? 'Наложение доступно только для листов с одинаковой геометрией. Используйте режим «Рядом».'
-                            : 'Шторка доступна только для листов с одинаковой геометрией. Используйте режим «Рядом».'
+                            ? 'Наложение доступно только для листов с близкими пропорциями. Используйте режим «Рядом».'
+                            : 'Шторка доступна только для листов с близкими пропорциями. Используйте режим «Рядом».'
                     );
                     return null;
                 }

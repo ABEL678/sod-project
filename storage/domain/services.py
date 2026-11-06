@@ -194,6 +194,7 @@ def attach_user_to_company(
         raise ValueError('Неизвестная роль пользователя')
 
     actor = actor if actor is not None else user
+    _clear_profile_cache(actor)
     actor_profile = getattr(actor, 'userprofile', None)
     allowed = actor.is_superuser or (
         actor_profile is not None
@@ -211,7 +212,23 @@ def attach_user_to_company(
         profile.company = company
         profile.role = role
         profile.save()
+    _clear_profile_cache(user)
     return profile
+
+
+def _clear_profile_cache(user: User) -> None:
+    """Сбрасывает кэш обратной связи user.userprofile.
+
+    Любой запрос ``UserProfile.objects.filter(user=...)`` через механизм
+    known_related_objects кэширует профиль на инстансе пользователя.
+    После update_or_create/save кэш устаревает, и проверки ролей
+    (_is_company_admin, get_user_company, can_transition) начинают видеть
+    прежние значения роли/компании — например, обновлённый в Панели
+    управления админ ещё воспринимался как viewer до конца запроса.
+    """
+    cache = getattr(getattr(user, '_state', None), 'fields_cache', None)
+    if cache is not None:
+        cache.pop('userprofile', None)
 
 
 def _check_company_access(user: User, company_id: int) -> bool:
@@ -3927,6 +3944,9 @@ def get_company_members(company: Company):
 def _is_company_admin(actor: User) -> bool:
     if actor.is_superuser:
         return True
+    # Сброс кэша user.userprofile: к этому моменту роль актёра могла быть
+    # изменена (update_or_create в Панели управления кэширует старый профиль).
+    _clear_profile_cache(actor)
     profile = getattr(actor, 'userprofile', None)
     return profile is not None and profile.role == 'admin'
 
@@ -3942,6 +3962,22 @@ def add_company_member(
     valid_roles = {code for code, _ in UserProfile.ROLE_CHOICES}
     if role not in valid_roles:
         raise ValueError('Неверная роль пользователя')
+
+    # Сброс кэша user.userprofile у актёра: роль могла быть обновлена
+    # через queryset, который закэшировал устаревший профиль.
+    _clear_profile_cache(actor)
+
+    # Хардендинг: админ ЭТОЙ компании, а не любой (superuser — вне
+    # ограничений). Вьюхи это проверяют, сервис — защищает от прямых вызовов.
+    if not actor.is_superuser:
+        actor_profile = getattr(actor, 'userprofile', None)
+        if (
+            actor_profile is None
+            or actor_profile.company_id != company.pk
+        ):
+            raise PermissionDenied(
+                'Управлять участниками можно только своей компании'
+            )
 
     if role == 'admin' and not _is_company_admin(actor):
         raise PermissionDenied(
@@ -3983,24 +4019,37 @@ def add_company_member(
     else:
         section_ids = None
 
-    if profile is None:
-        profile = UserProfile(user=user)
+    with transaction.atomic():
+        if profile is None:
+            profile = UserProfile(user=user)
 
-    profile.company = company
-    profile.role = role
-    profile.save()
+        profile.company = company
+        profile.role = role
+        profile.save()
 
-    if section_ids is not None:
-        if role in ('developer', 'contractor'):
-            profile.allowed_sections.set(section_ids)
-        else:
-            profile.allowed_sections.clear()
+        if section_ids is not None:
+            if role in ('developer', 'contractor'):
+                profile.allowed_sections.set(section_ids)
+            else:
+                profile.allowed_sections.clear()
 
+    _clear_profile_cache(user)
     return profile
 
 
 def remove_company_member(actor: User, company: Company, user: User) -> None:
     """Убирает пользователя из компании, сохраняя его профиль."""
+    _clear_profile_cache(actor)
+    if not actor.is_superuser:
+        actor_profile = getattr(actor, 'userprofile', None)
+        if (
+            actor_profile is None
+            or actor_profile.company_id != company.pk
+        ):
+            raise PermissionDenied(
+                'Управлять участниками можно только своей компании'
+            )
+
     target_profile = UserProfile.objects.filter(
         company=company, user=user
     ).first()
@@ -4014,6 +4063,7 @@ def remove_company_member(actor: User, company: Company, user: User) -> None:
 
     target_profile.company = None
     target_profile.save(update_fields=['company'])
+    _clear_profile_cache(user)
 
 
 def update_company_info(

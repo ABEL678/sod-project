@@ -115,6 +115,9 @@ class DocumentTable(tables.Table):
 
     class Meta:
         model = Document
+        # Аудит 6.0: пустое состояние рендерит шаблон панели
+        # (doc-table-wrap.is-empty -> .empty-state с CTA); empty_text не
+        # задаём, чтобы не дублировать сообщение в <tbody>.
         attrs = {
             'class': 'table table-hover table-bordered align-middle mb-0 doc-table',
             'id': 'documentsTable',
