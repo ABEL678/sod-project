@@ -1,14 +1,156 @@
 """Модели ИИ-контура (Этап 19, ARCHITECTURE.md 3.2).
 
 Только добавление: существующие модели storage/issues не изменяются.
-Ф0.1 добавляет LLMCallLog и CheckRun (CheckRun — обязательная FK-цель
-для LLMCallLog.check_run; остальные модели ИИ-контура — в фазах Ф0.2/Ф1).
+Ф0.1: LLMCallLog и CheckRun (CheckRun — обязательная FK-цель для
+LLMCallLog.check_run). Ф0.2: InternalDocument и InternalChunk
+(источники знаний, tenant_scope по 8.2). Остальные модели — в Ф1.
 """
 
 from __future__ import annotations
 
 from django.conf import settings
 from django.db import models
+from pgvector.django import VectorField
+
+
+class InternalDocument(models.Model):
+    """Источник знаний ИИ-контура (ARCHITECTURE.md 3.2, 8.2).
+
+    tenant_scope задаёт видимость (8.2): global — всем, company — одной
+    компании, project — одному проекту (company наследуется от проекта).
+    """
+
+    class TenantScope(models.TextChoices):
+        GLOBAL = 'global', 'Глобальный'
+        COMPANY = 'company', 'Компания'
+        PROJECT = 'project', 'Проект'
+
+    class DocType(models.TextChoices):
+        CUSTOMER_REQ = 'customer_req', 'Требования заказчика'
+        PAST_ISSUES = 'past_issues', 'Прошлые замечания'
+        INTERNAL_STANDARD = 'internal_standard', 'Внутренний стандарт'
+        OTHER = 'other', 'Другое'
+
+    tenant_scope = models.CharField(
+        max_length=10,
+        choices=TenantScope.choices,
+        default=TenantScope.COMPANY,
+        verbose_name='Уровень видимости',
+    )
+    company = models.ForeignKey(
+        'storage.Company',
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name='internal_docs',
+        verbose_name='Компания',
+    )
+    project = models.ForeignKey(
+        'storage.Project',
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name='internal_docs',
+        verbose_name='Проект',
+    )
+    source_document = models.ForeignKey(
+        'storage.Document',
+        on_delete=models.CASCADE,
+        related_name='internal_docs',
+        verbose_name='Исходный документ',
+    )
+    doc_type = models.CharField(
+        max_length=30,
+        choices=DocType.choices,
+        verbose_name='Тип источника',
+    )
+    title = models.CharField(max_length=255, verbose_name='Название')
+    is_active = models.BooleanField(
+        default=True, verbose_name='Включать в индекс',
+    )
+    embedding_model = models.CharField(
+        max_length=100,
+        blank=True,
+        verbose_name='Модель эмбеддингов',
+    )
+    indexed_at = models.DateTimeField(
+        null=True, blank=True, verbose_name='Проиндексирован',
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='internal_docs',
+        verbose_name='Создал',
+    )
+    created_at = models.DateTimeField(
+        auto_now_add=True, verbose_name='Создан',
+    )
+    updated_at = models.DateTimeField(
+        auto_now=True, verbose_name='Обновлён',
+    )
+
+    class Meta:
+        verbose_name = 'Внутренний документ'
+        verbose_name_plural = 'Внутренние документы'
+        ordering = ['-created_at']
+        constraints = [
+            # ARCHITECTURE.md 8.2: обязательные поля по tenant_scope.
+            models.CheckConstraint(
+                condition=(
+                    models.Q(tenant_scope='global')
+                    & models.Q(company__isnull=True)
+                    & models.Q(project__isnull=True)
+                ) | (
+                    models.Q(tenant_scope='company')
+                    & models.Q(company__isnull=False)
+                ) | (
+                    models.Q(tenant_scope='project')
+                    & models.Q(project__isnull=False)
+                ),
+                name='ai_internal_doc_tenant_scope',
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f'{self.title} ({self.get_tenant_scope_display()})'
+
+
+class InternalChunk(models.Model):
+    """Фрагмент источника знаний с вектором bge-m3 (ARCHITECTURE.md 3.2)."""
+
+    document = models.ForeignKey(
+        InternalDocument,
+        on_delete=models.CASCADE,
+        related_name='chunks',
+        verbose_name='Внутренний документ',
+    )
+    seq = models.PositiveIntegerField(verbose_name='Порядок фрагмента')
+    text = models.TextField(verbose_name='Текст фрагмента')
+    page_from = models.PositiveIntegerField(
+        null=True, blank=True, verbose_name='Страница с',
+    )
+    page_to = models.PositiveIntegerField(
+        null=True, blank=True, verbose_name='Страница по',
+    )
+    embedding = VectorField(
+        dimensions=1024, verbose_name='Вектор (bge-m3 dense)',
+    )
+
+    class Meta:
+        verbose_name = 'Фрагмент внутреннего документа'
+        verbose_name_plural = 'Фрагменты внутренних документов'
+        ordering = ['document', 'seq']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['document', 'seq'],
+                name='ai_internal_chunk_doc_seq',
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f'{self.document_id} #{self.seq}'
 
 
 class CheckRun(models.Model):
