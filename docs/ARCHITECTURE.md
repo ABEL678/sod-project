@@ -406,6 +406,9 @@ def update_feedback_status(user, feedback, new_status, admin_comment="") -> Feed
 def create_api_token(user, company, name, scopes, expires_at=None) -> tuple[ApiToken, str]: ... (admin компании / superuser; валидные scopes; возвращает сырой токен один раз)
 def revoke_api_token(user, token) -> None: ... (admin компании токена / superuser; is_active=False)
 def list_api_tokens(user, company) -> QuerySet[ApiToken]: ... (admin компании / superuser; только токены своей компании)
+def _clear_profile_cache(user) -> None: ... (внутренний хелпер: сбрасывает кэш обратной связи user.userprofile после смены роли/компании, чтобы проверки прав не «залипали»)
+
+**Management-команда:** `python manage.py backfill_profiles [--company ID] [--dry-run]` — создаёт `UserProfile` существующим пользователям без профиля (сигнал `create_user_profile` покрывает только новых), опционально привязывает к компании; роли не перезаписывает, идемпотентна.
 
 **Правило:** upload_document() — единственная точка создания версий.
 
