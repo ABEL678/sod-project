@@ -7,6 +7,10 @@
 Подготовка к бете: Шаги 1–2 закрыты (404/500 + демо-данные, кнопка «Сообщить об ошибке»).
 Система развернута в production: **https://stream-cad.ru/**
 
+**Корректировка плана RAG + LLM (06.11.2026):** решение владельца продукта — RAG по нормам для SaaS отложен (это не тупик, а смена фокуса): легального API с актуальными ГОСТ/СП нет (ЦБС — платно и без публичной документации; Техэксперт — юридический риск; данные Минстроя — реестр требований; Цифровой Стандарт — платно). RAG по нормам — on-premise опция (ручная загрузка 5–10 ГОСТ/СП), не SaaS. В MVP RAG работает по внутренним документам (требования заказчика, прошлые замечания, внутренние стандарты) с мультитенантностью tenant_scope = global | company | project. Docker в локальной среде подтвержден → отказ от стабов NullVectorBackend и sqlite-vec; dev = prod через docker-compose.dev.yml (pgvector/pgvector:pg16 + redis:7-alpine). Ф3 (VLM-проверка) — в бэклоге до накопления эталона 30–50 размеченных листов. Документация синхронизирована: ARCHITECTURE.md 1.5 → 1.6 (раздел 8 «ИИ-контур (ai_checks)»), MASTER_SPEC.md 1.5 → 1.6 (Этап 19, фазы Ф0–Ф4 + пост-MVP).
+
+**Следующий шаг по ИИ-контуру: Ф0.1** — инфраструктура и абстракции: docker-compose.dev.yml, приложение ai_checks, порты LLMProvider / EmbeddingService / VectorBackend (PgVectorBackend — единственная реализация), фича-флаг AI_CHECKS_ENABLED, модель LLMCallLog. Зависимости в requirements.txt и детальное ТЗ Кодеру — отдельным документом на Ф0.1. Параллельная задача владельца — замер на PostgreSQL и деплой (P0 Аудита 5.0 #2).
+
 ## Аудит 4.0 (Спринты 5–6 и Бэклог)
 
 ### Спринт 5 — Безопасность и логика
@@ -56,6 +60,15 @@
 - [x] **Документация:** ARCHITECTURE.md, MASTER_SPEC.md, CONTEXT.md, PROGRESS.md обновлены.
 
 ## Журнал (Changelog)
+
+### 06.11.2026 — Корректировка плана RAG + LLM: Этап 19 «ИИ-контур» (документация)
+
+- Зафиксировано решение по нормативной базе (смена фокуса, не тупик): RAG по нормам для SaaS отложен, on-premise опция — ручная загрузка 5–10 ГОСТ/СП; RAG MVP — по внутренним документам с tenant_scope = global | company | project (модели InternalDocument / InternalChunk).
+- Инфраструктура: Docker подтвержден; отказ от стабов NullVectorBackend и sqlite-vec; docker-compose.dev.yml (pgvector/pgvector:pg16 + redis:7-alpine); прод — существующий PostgreSQL + CREATE EXTENSION vector; один кодовый путь dev = prod; PgVectorBackend — единственная реализация VectorBackend.
+- Ф3 (VLM-проверка) перенесена в бэклог до накопления эталона 30–50 размеченных листов; до этого — RuleEngine (Ф1) + RAG по внутренним документам (Ф2, урезанная).
+- Спроектированы новые модели (только в ai_checks, существующие не меняются): InternalDocument, InternalChunk, RuleDefinition, CheckRun, PendingCheckResult, LLMCallLog; порты LLMProvider, EmbeddingService, VectorBackend.
+- ARCHITECTURE.md 1.5 → 1.6 (раздел 8 «ИИ-контур», модели 3.2, порты 5.3–5.5), MASTER_SPEC.md 1.5 → 1.6 (Этап 19 с фазами Ф0–Ф4 и пост-MVP; уточнены ограничения раздела 5; блок T67 перенумерован в 18.10).
+- Следующий шаг: Ф0.1 (инфраструктура + абстракции + LLMCallLog). Зависимости в requirements.txt — в ТЗ Кодеру на Ф0.1.
 
 ### 06.11.2026 — Аудит 6.0 (v2) + задачи 8–11b (UI/UX, безопасность)
 
@@ -280,6 +293,12 @@
 Нет.
 
 ## Бэклог (Что делать дальше)
+
+### ИИ-контур (Этап 19)
+
+- [ ] **Ф0.1 (следующий):** инфраструктура и абстракции — docker-compose.dev.yml, приложение ai_checks, порты LLMProvider/EmbeddingService/VectorBackend (PgVectorBackend — единственная реализация), фича-флаг AI_CHECKS_ENABLED, модель LLMCallLog.
+- [ ] **Ф3 (бэклог до эталона):** VLM-проверка — после накопления 30–50 размеченных листов, бенчмарк GLM-5.3-Flash vs Qwen3-VL-Plus vs DeepSeek Vision.
+- [ ] **RAG по нормам (пост-MVP):** on-premise опция — ручная загрузка 5–10 ГОСТ/СП, не SaaS.
 
 ### Аудит 6.0 (v2) — бэклог
 

@@ -1,8 +1,8 @@
 # ARCHITECTURE.md — СОД для проектной компании
 
-**Версия:** 1.5
-**Дата:** 2026-11-04
-**Статус:** Принято, обязательно к соблюдению при генерации кода
+**Версия:** 1.6
+**Дата:** 2026-11-06
+**Статус:** Принято, обязательно к соблюдению при генерации кода. 1.6 — скорректированный план RAG + LLM по решению владельца продукта от 06.11.2026: новый раздел 8 «ИИ-контур (ai_checks)».
 
 ## 1. Контекст
 
@@ -34,7 +34,8 @@ sod_project/
 ├── automation/            # автосоздание структуры папок по шаблону
 ├── issues/                # замечания и исходные данные
 ├── mail_integration/      # IMAP, правила сортировки, выгрузка вложений
-├── ai_assistant/          # MCP-сервер, семантический поиск
+├── ai_assistant/          # MCP-сервер, семантический поиск (вне MVP Этапа 19)
+├── ai_checks/             # ИИ-контур (Этап 19, версия 1.6): правила, внутренние знания, прогоны проверок
 ├── external_api/          # REST API для экосистемы (ГИП-Ассистент, ВОР-билдер и др.)
 └── media/                 # файловое хранилище
 
@@ -49,7 +50,7 @@ sod_project/
 ### 2.3. Что НЕ делаем на старте
 
 - Не проектируем все порты заранее. Порт создается, когда появляется вторая реализация.
-- Не вводим Celery, Redis, pgvector, пока нет реальной нагрузки.
+- Не вводим Celery, Redis, pgvector, пока нет реальной нагрузки (исключение с 1.6: ИИ-контур, Этап 19 — раздел 8; вне ИИ-контура правило сохраняется).
 - Не пишем MCP-сервер, пока ядро не стабильно.
 - Не усложняем права до уровня отдельных документов — только разделы, папки и проекты.
 
@@ -366,6 +367,99 @@ sod_project/
 **Сортировка:** `-created_at`.
 **Правило:** сырой токен (`secrets.token_urlsafe(48)`) показывается один раз при создании; в БД хранятся только `token_prefix` и `token_hash`.
 
+Модели ИИ-контура (Этап 19, версия 1.6) добавляются только приложением `ai_checks` и только добавлением — существующие модели выше не изменяются:
+
+#### InternalDocument (ИИ-контур)
+| Поле | Тип | Описание |
+|---|---|---|
+| id | PK | |
+| tenant_scope | CharField(10), choices | global, company, project (по умолчанию company) |
+| company | FK → Company, null=True, on_delete=CASCADE | Обязательна для scope=company |
+| project | FK → Project, null=True, on_delete=CASCADE | Обязателен для scope=project; company наследуется от проекта |
+| source_document | FK → Document, on_delete=CASCADE, related_name='internal_docs' | Исходный PDF из документооборота |
+| doc_type | CharField(30), choices | customer_req, past_issues, internal_standard, other |
+| title | CharField(255) | Название |
+| is_active | BooleanField | Исключить из индекса без удаления |
+| embedding_model | CharField(100), blank | Версия модели эмбеддингов на момент индексации |
+| indexed_at | DateTimeField, null=True | Время последней успешной индексации |
+| created_by / created_at / updated_at | — | Аудит |
+
+#### InternalChunk (ИИ-контур)
+| Поле | Тип | Описание |
+|---|---|---|
+| id | PK | |
+| document | FK → InternalDocument, on_delete=CASCADE, related_name='chunks' | Родитель; tenant наследуется |
+| seq | PositiveIntegerField | Порядок фрагмента; UniqueConstraint (document, seq) |
+| text | TextField | Текст фрагмента |
+| page_from / page_to | PositiveIntegerField, null=True | Привязка к страницам PDF (PyMuPDF) |
+| embedding | VectorField(1024) | bge-m3 dense; индекс HNSW (cosine_ops) |
+
+#### RuleDefinition (ИИ-контур)
+| Поле | Тип | Описание |
+|---|---|---|
+| id | PK | |
+| code | CharField(100), unique | Машиночитаемый код, «SPDS.STAMP.HEIGHT» |
+| title | CharField(255) | Краткое название |
+| body | TextField | Формулировка правила |
+| rule_kind | CharField(10), choices | regex, keyword, manual |
+| pattern | JSONField, null=True | Regex или ключевые слова |
+| category | CharField(50), blank | Группа (рамка, штамп, шрифты, …) |
+| severity | CharField(10), choices | blocker, major, minor, info |
+| is_active / version | BooleanField / PositiveIntegerField | Актуальность и версия формулировки |
+| tenant_scope / company / project | как у InternalDocument, по умолчанию global | В MVP правила глобальные; поля заложены сразу |
+| created_by / created_at / updated_at | — | Аудит |
+
+#### CheckRun (ИИ-контур)
+| Поле | Тип | Описание |
+|---|---|---|
+| id | PK | |
+| document_version | FK → DocumentVersion, on_delete=PROTECT, related_name='check_runs' | Объект проверки |
+| initiated_by | FK → User, on_delete=PROTECT | Инициатор |
+| status | CharField(10), choices | queued, running, done, failed, canceled |
+| engine_version | CharField(50) | Версия набора правил и промптов («rules@2026.11.1») |
+| rules_total / findings_total | PositiveIntegerField, default 0 | Статистика прогона |
+| meta | JSONField, default=dict | Параметры прогона (включенные правила и пр.) |
+| started_at / finished_at / created_at | DateTimeField | Тайминги |
+
+**Мультитенантность прогона:** company/project наследуются от document_version → document → project; собственных tenant-полей у CheckRun нет.
+
+#### PendingCheckResult (ИИ-контур)
+| Поле | Тип | Описание |
+|---|---|---|
+| id | PK | |
+| check_run | FK → CheckRun, on_delete=CASCADE, related_name='results' | Прогон |
+| rule | FK → RuleDefinition, on_delete=PROTECT, null=True | Правило-источник; NULL — для находок LLM (Ф3+) |
+| status | CharField(10), choices | pending, confirmed, rejected, edited |
+| severity | CharField(10), choices | Снимок критичности на момент прогона |
+| confidence | DecimalField(3,2), null=True | Уверенность (LLM-этапы; для Ф1 — NULL) |
+| page | PositiveIntegerField, null=True | Страница листа |
+| bbox | JSONField, null=True | Координаты [x0, y0, x1, y1] (PyMuPDF) |
+| message | TextField | Что найдено |
+| evidence | TextField, blank | Цитата-основание |
+| model_name / prompt_version | CharField(100), blank | Модель и версия промпта, породившие находку |
+| llm_call | FK → LLMCallLog, null=True, on_delete=SET_NULL | Связь с журналом вызова |
+| reviewed_by | FK → User, null=True, on_delete=SET_NULL | Кто провалидировал |
+| reviewed_at | DateTimeField, null=True | Когда провалидировал |
+
+#### LLMCallLog (ИИ-контур)
+| Поле | Тип | Описание |
+|---|---|---|
+| id | PK | |
+| provider | CharField(50) | Провайдер («openrouter») |
+| model | CharField(100) | Модель («glm-5.3-flash») |
+| purpose | CharField(30) | check_explain, rag_answer, gip_report |
+| prompt_tokens / completion_tokens | PositiveIntegerField, default 0 | Расход токенов |
+| cost_est | DecimalField(10,4), null=True | Оценка стоимости, USD |
+| latency_ms | PositiveIntegerField, null=True | Задержка |
+| status | CharField(10), choices | ok, error |
+| error_message | TextField, blank | Текст ошибки |
+| prompt_version | CharField(50), blank | Версия промпта |
+| check_run | FK → CheckRun, null=True, on_delete=SET_NULL | Привязка к прогону |
+| user | FK → User, null=True, on_delete=SET_NULL | Инициатор |
+| created_at | DateTimeField | |
+
+**Правило:** тексты промптов и ответов в БД не хранятся (приватность компаний) — только метаданные; детальные логи — в лог-файле приложения.
+
 ### 3.3. Связи
 
 User 1─1 UserProfile
@@ -376,6 +470,10 @@ Section 1─N Folder
 Folder 1─N Folder (parent)
 Folder 1─N Document
 Document 1─N DocumentVersion
+Document 1─N InternalDocument (source_document, ИИ-контур)
+InternalDocument 1─N InternalChunk
+DocumentVersion 1─N CheckRun
+CheckRun 1─N PendingCheckResult
 и т.д.
 
 ## 4. Контракты сервисов ядра
@@ -422,6 +520,30 @@ class FileStorage(Protocol):
 
 ### 5.2. ExternalIntegrationPort
 Интерфейс для общения с внешними системами (ГИП-Ассистент, ВОР-билдер, Витро-трекер).
+
+### 5.3. LLMProvider (ai_checks/ports/llm.py, Этап 19)
+class LLMProvider(Protocol):
+    def complete(self, messages: list[dict], *, model: str | None = None,
+                 json_mode: bool = False) -> LLMResponse: ...
+
+Реализация MVP: OpenRouterHTTPProvider (httpx, без SDK; retry ×3, таймаут 60 с).
+
+### 5.4. EmbeddingService (ai_checks/ports/embedding.py, Этап 19)
+class EmbeddingService(Protocol):
+    def embed_texts(self, texts: list[str]) -> list[list[float]]: ...
+    @property
+    def dim(self) -> int: ...            # 1024 (bge-m3 dense)
+    @property
+    def model_version(self) -> str: ...
+
+Реализация MVP: BgeM3OnnxEmbedding (ONNX int8, CPU, локально); внешние embedding-API не используются.
+
+### 5.5. VectorBackend (ai_checks/ports/vector.py, Этап 19)
+class VectorBackend(Protocol):
+    def upsert(self, chunks) -> None: ...
+    def search(self, vector, filters, top_k: int) -> list: ...
+
+**Единственная реализация:** PgVectorBackend (PostgreSQL + pgvector, HNSW/cosine). Стабы NullVectorBackend и sqlite-vec не реализуются (решение 06.11.2026: Docker в локальной среде подтвержден).
 
 ## 6. Экосистема и интеграция
 
@@ -495,7 +617,7 @@ class FileStorage(Protocol):
 1. Следовать структуре из раздела 2.1.
 2. Бизнес-логику писать только в domain/services.py.
 3. Использовать upload_document() как единственную точку создания версий.
-4. Не добавлять Celery, Redis, pgvector, MCP-сервер, пока явно не попросят.
+4. Не добавлять Celery, Redis, pgvector, MCP-сервер, пока явно не попросят (ИИ-контур — Этап 19, раздел 8 — явное разрешение на Celery, Redis и pgvector; MCP-сервер в MVP не входит).
 5. Не менять модели из раздела 3.2 без обновления этого файла.
 6. Не предлагать микросервисы и альтернативные фреймворки.
 7. Не создавать API-эндпоинты напрямую во views — только через сервисы и порты.
@@ -511,3 +633,56 @@ class FileStorage(Protocol):
 **Правило:** Если нужно изменить цвет статуса — меняется только `tokens.json`, и это разъезжается по всем средам одним коммитом.
 
 **Стек:** Bootstrap 5 + ванильный JS + HTMX. Никаких SPA.
+
+## 8. ИИ-контур (ai_checks) — введено в 1.6
+
+Отдельное Django-приложение `ai_checks` (см. 2.1), изолированное от ядра storage: существующие модели (Document, DocumentVersion, Issue, Notification и др.) не изменяются — контур читает их через сервисный слой и добавляет только свои модели (раздел 3.2) и порты (разделы 5.3–5.5). Включается фича-флагом.
+
+### 8.1. Фича-флаг
+
+| Флаг | По умолчанию | Действие |
+|---|---|---|
+| `AI_CHECKS_ENABLED` | `False` | Включает URL, сервисы и Celery-задачи `ai_checks`. Миграции применяются независимо от флага (пустые таблицы не влияют на основной путь работы системы). |
+
+### 8.2. Мультитенантность знаний
+
+Существующая мультитенантность СОД (Project.company + UserProfile.company, раздел 3.1) дополняется уровнями видимости источников знаний:
+
+| tenant_scope | Видимость | Обязательные поля |
+|---|---|---|
+| global | всем компаниям (системная база знаний) | company = NULL, project = NULL |
+| company | одной компании | company (FK), project = NULL |
+| project | одному проекту | project (FK); company наследуется от проекта |
+
+Правило выборки в сервисном слое: `(tenant_scope = 'global') OR (company = текущая компания) OR (project = текущий проект)`. Изоляция — фильтрами queryset (RLS на уровне PostgreSQL в MVP не применяется). У CheckRun / PendingCheckResult / LLMCallLog собственных tenant-полей нет — company/project наследуются от document_version → document → project.
+
+### 8.3. Инфраструктура: один кодовый путь dev = prod
+
+- Векторное хранилище — PostgreSQL + pgvector в обоих окружениях.
+- Локально: `docker-compose.dev.yml` (образы `pgvector/pgvector:pg16` и `redis:7-alpine`).
+- Прод: существующий PostgreSQL, расширение подключается миграцией (`CREATE EXTENSION vector`; обратная операция — `DROP EXTENSION`).
+- Стабы `NullVectorBackend` и `sqlite-vec` не реализуются (решение 06.11.2026: Docker в локальной среде подтвержден); `PgVectorBackend` — единственная реализация `VectorBackend` (5.5).
+- Зависимости (`pgvector`, `onnxruntime`, `httpx` и др.) добавляются в `requirements.txt` отдельным ТЗ Кодеру на шаге Ф0.1 — документация текст требований не меняет.
+
+### 8.4. Конвейер проверок (MVP)
+
+1. Celery-задача берет `DocumentVersion`; PyMuPDF извлекает текст и координаты (PyMuPDF уже используется в СОД — экспорт PDF с маркапами, наложение версий).
+2. Ф1: RuleEngine прогоняет активные `RuleDefinition` → `PendingCheckResult(status=pending)`.
+3. Ф2: по запросу пользователя — поиск по `InternalChunk` с фильтром `tenant_scope`; ответ с цитатами и ссылками на источник.
+4. Автор подтверждает/отклоняет находки (`reviewed_by`, `reviewed_at`).
+5. Каждый внешний вызов модели фиксируется в `LLMCallLog`.
+
+### 8.5. User Flow (проектный; детализируется в ТЗ фаз Ф1–Ф2)
+
+- Запуск: карточка документа/версии → кнопка «Проверить» (видна при `AI_CHECKS_ENABLED=True`) → статус прогона отображается в карточке.
+- Результат: список находок (серьезность, страница, bbox, обоснование) со ссылками на место в PDF-вьювере; у каждой находки кнопки «Подтвердить»/«Отклонить».
+- RAG: поле вопроса в контексте проекта → ответ с цитатами из внутренних документов (с указанием источника и tenant-уровня).
+- НЕТ UI — НЕТ ФИЧИ (HANDOFF №8): каждая фаза сдается вместе с работающим интерфейсом.
+
+### 8.6. RAG по нормам — отложен (важно)
+
+Готового легального API с актуальными текстами ГОСТ/СП не существует: ЦБС — платно и без публичной документации; Техэксперт — юридический риск для SaaS; данные Минстроя — реестр требований, а не библиотека текстов; Цифровой Стандарт — платно. Решение владельца (06.11.2026): RAG по нормативам для SaaS отложен; это on-premise опция (ручная загрузка 5–10 ГОСТ/СП силами организации), не часть SaaS. В MVP RAG работает по внутренним документам (требования заказчика, прошлые замечания, внутренние стандарты) — см. 8.2 и модели InternalDocument / InternalChunk.
+
+### 8.7. VLM-проверка (Ф3) — в бэклоге
+
+VLM-проверка запускается только после накопления эталона 30–50 размеченных листов; до этого — RuleEngine (Ф1) + RAG по внутренним документам (Ф2, урезанная). Кандидаты VLM (GLM-5.3-Flash, Qwen3-VL-Plus, DeepSeek Vision) сравниваются на эталоне; итоговый выбор — по результатам бенчмарка. Генерация отчетов для ГИПа — DeepSeek (Ф4 Этапа 19 в MASTER_SPEC.md).
