@@ -40,7 +40,8 @@ if settings.AI_CHECKS_ENABLED:
                     continue
                 try:
                     count = index_document(internal_doc, version.file.path)
-                except (OSError, ValueError) as exc:
+                except (OSError, RuntimeError, ValueError) as exc:
+                    # RuntimeError — битый PDF (pymupdf.FileDataError).
                     self.message_user(
                         request,
                         f'«{internal_doc.title}»: ошибка индексации — {exc}',

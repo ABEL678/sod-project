@@ -90,7 +90,7 @@ class InternalDocumentIndexingTests(TestCase):
         self.internal_doc = InternalDocument.objects.create(
             tenant_scope=InternalDocument.TenantScope.COMPANY,
             company=self.company,
-            project=self.project,
+            project=None,  # 8.2: для company-scope project = NULL
             source_document=self.document,
             doc_type=InternalDocument.DocType.INTERNAL_STANDARD,
             title='Внутренний стандарт',

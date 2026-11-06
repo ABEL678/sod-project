@@ -97,6 +97,9 @@ class InternalDocument(models.Model):
         ordering = ['-created_at']
         constraints = [
             # ARCHITECTURE.md 8.2: обязательные поля по tenant_scope.
+            # global  ⇒ company/project NULL;
+            # company ⇒ company NOT NULL И project NULL;
+            # project ⇒ project NOT NULL (company наследуется от проекта).
             models.CheckConstraint(
                 condition=(
                     models.Q(tenant_scope='global')
@@ -105,6 +108,7 @@ class InternalDocument(models.Model):
                 ) | (
                     models.Q(tenant_scope='company')
                     & models.Q(company__isnull=False)
+                    & models.Q(project__isnull=True)
                 ) | (
                     models.Q(tenant_scope='project')
                     & models.Q(project__isnull=False)
