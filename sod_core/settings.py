@@ -110,6 +110,16 @@ INSTALLED_APPS = [
 # контур неактивен (URL/сервисы/задачи), таблицы существуют пустыми.
 AI_CHECKS_ENABLED = env_bool('AI_CHECKS_ENABLED', False)
 
+# Celery (Этап 19, Ф1): брокер Redis из docker-compose.dev.yml.
+# В dev/тестах по умолчанию ALWAYS_EAGER=True — задачи выполняются
+# синхронно, брокер не нужен; прод: CELERY_TASK_ALWAYS_EAGER=false.
+CELERY_BROKER_URL = os.environ.get(
+    'CELERY_BROKER_URL', 'redis://localhost:6379/0',
+)
+CELERY_TASK_ALWAYS_EAGER = env_bool('CELERY_TASK_ALWAYS_EAGER', True)
+CELERY_TASK_EAGER_PROPAGATES = True
+CELERY_TASK_IGNORE_RESULT = True
+
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
         'external_api.authentication.ApiTokenAuthentication',
@@ -163,6 +173,8 @@ TEMPLATES = [
                 'django.contrib.auth.context_processors.auth',
                 'django.contrib.messages.context_processors.messages',
                 'issues.context_processors.notifications_badges',
+                # Этап 19: флаг для UI ИИ-контура (панель «Проверить»)
+                'ai_checks.context_processors.ai_checks',
             ],
         },
     },

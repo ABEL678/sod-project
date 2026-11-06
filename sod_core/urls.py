@@ -28,6 +28,9 @@ urlpatterns = [
     path('', include('storage.adapters.urls')),
     path('', include('external_api.ui_urls')),
     path('api/v1/', include('external_api.urls')),
+    # Этап 19 (Ф1): UI ИИ-контура. Вьюхи сами отдают 404 при
+    # AI_CHECKS_ENABLED=False (ARCHITECTURE.md 8.1).
+    path('ai/', include('ai_checks.urls')),
 ] + static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
 
 handler404 = 'django.views.defaults.page_not_found'

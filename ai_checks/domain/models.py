@@ -157,6 +157,195 @@ class InternalChunk(models.Model):
         return f'{self.document_id} #{self.seq}'
 
 
+class RuleDefinition(models.Model):
+    """Правило проверки (ARCHITECTURE.md 3.2, этап Ф1).
+
+    В MVP правила глобальные (tenant_scope=global); tenant-поля заложены
+    сразу по 8.2. Structural-правила (PyMuPDF: рамка/штамп/шрифт)
+    исполняются движком по коду из ai_checks/domain/rules.py; rule_kind
+    хранит спековую классификацию источника правила (regex/keyword/manual).
+    """
+
+    class RuleKind(models.TextChoices):
+        REGEX = 'regex', 'Регулярное выражение'
+        KEYWORD = 'keyword', 'Ключевые слова'
+        MANUAL = 'manual', 'Ручное/структурное'
+
+    class Severity(models.TextChoices):
+        BLOCKER = 'blocker', 'Блокирующее'
+        MAJOR = 'major', 'Значительное'
+        MINOR = 'minor', 'Незначительное'
+        INFO = 'info', 'Информация'
+
+    code = models.CharField(
+        max_length=100, unique=True, verbose_name='Код правила',
+    )
+    title = models.CharField(max_length=255, verbose_name='Название')
+    body = models.TextField(verbose_name='Формулировка правила')
+    rule_kind = models.CharField(
+        max_length=10, choices=RuleKind.choices, verbose_name='Вид правила',
+    )
+    pattern = models.JSONField(
+        null=True, blank=True, verbose_name='Regex/ключевые слова',
+    )
+    category = models.CharField(
+        max_length=50, blank=True, verbose_name='Группа',
+    )
+    severity = models.CharField(
+        max_length=10, choices=Severity.choices, verbose_name='Критичность',
+    )
+    is_active = models.BooleanField(default=True, verbose_name='Активно')
+    version = models.PositiveIntegerField(
+        default=1, verbose_name='Версия формулировки',
+    )
+    tenant_scope = models.CharField(
+        max_length=10,
+        choices=InternalDocument.TenantScope.choices,
+        default=InternalDocument.TenantScope.GLOBAL,
+        verbose_name='Уровень видимости',
+    )
+    company = models.ForeignKey(
+        'storage.Company',
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name='ai_rule_definitions',
+        verbose_name='Компания',
+    )
+    project = models.ForeignKey(
+        'storage.Project',
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name='ai_rule_definitions',
+        verbose_name='Проект',
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='ai_rule_definitions',
+        verbose_name='Создал',
+    )
+    created_at = models.DateTimeField(
+        auto_now_add=True, verbose_name='Создан',
+    )
+    updated_at = models.DateTimeField(
+        auto_now=True, verbose_name='Обновлён',
+    )
+
+    class Meta:
+        verbose_name = 'Правило проверки'
+        verbose_name_plural = 'Правила проверки'
+        ordering = ['code']
+        constraints = [
+            # Как у InternalDocument (8.2): обязательные поля по tenant_scope.
+            models.CheckConstraint(
+                condition=(
+                    models.Q(tenant_scope='global')
+                    & models.Q(company__isnull=True)
+                    & models.Q(project__isnull=True)
+                ) | (
+                    models.Q(tenant_scope='company')
+                    & models.Q(company__isnull=False)
+                    & models.Q(project__isnull=True)
+                ) | (
+                    models.Q(tenant_scope='project')
+                    & models.Q(project__isnull=False)
+                ),
+                name='ai_rule_definition_tenant_scope',
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f'{self.code} — {self.title}'
+
+
+class PendingCheckResult(models.Model):
+    """Находка прогона проверки (ARCHITECTURE.md 3.2, этап Ф1)."""
+
+    class Status(models.TextChoices):
+        PENDING = 'pending', 'На проверке'
+        CONFIRMED = 'confirmed', 'Подтверждена'
+        REJECTED = 'rejected', 'Отклонена'
+        EDITED = 'edited', 'Отредактирована'
+
+    check_run = models.ForeignKey(
+        'CheckRun',
+        on_delete=models.CASCADE,
+        related_name='results',
+        verbose_name='Прогон',
+    )
+    rule = models.ForeignKey(
+        RuleDefinition,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name='pending_results',
+        verbose_name='Правило',
+    )
+    status = models.CharField(
+        max_length=10,
+        choices=Status.choices,
+        default=Status.PENDING,
+        verbose_name='Статус',
+    )
+    severity = models.CharField(
+        max_length=10,
+        choices=RuleDefinition.Severity.choices,
+        verbose_name='Критичность (снимок)',
+    )
+    confidence = models.DecimalField(
+        max_digits=3,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        verbose_name='Уверенность',
+    )
+    page = models.PositiveIntegerField(
+        null=True, blank=True, verbose_name='Страница',
+    )
+    bbox = models.JSONField(
+        null=True, blank=True, verbose_name='Координаты [x0, y0, x1, y1]',
+    )
+    message = models.TextField(verbose_name='Что найдено')
+    evidence = models.TextField(blank=True, verbose_name='Цитата-основание')
+    model_name = models.CharField(
+        max_length=100, blank=True, verbose_name='Модель',
+    )
+    prompt_version = models.CharField(
+        max_length=100, blank=True, verbose_name='Версия промпта',
+    )
+    llm_call = models.ForeignKey(
+        'LLMCallLog',
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='pending_results',
+        verbose_name='Вызов LLM',
+    )
+    reviewed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='reviewed_check_results',
+        verbose_name='Провалидировал',
+    )
+    reviewed_at = models.DateTimeField(
+        null=True, blank=True, verbose_name='Когда провалидировал',
+    )
+
+    class Meta:
+        verbose_name = 'Находка проверки'
+        verbose_name_plural = 'Находки проверки'
+        ordering = ['check_run', 'id']
+
+    def __str__(self) -> str:
+        return f'Находка #{self.pk} ({self.get_status_display()})'
+
+
 class CheckRun(models.Model):
     """Прогон проверки версии документа (ARCHITECTURE.md 3.2, Ф1).
 

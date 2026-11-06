@@ -15,6 +15,7 @@ from ai_checks.domain.services import (
     index_document,
     split_into_chunks,
 )
+from ai_checks.tests.base import MediaIsolationMixin
 from ai_checks.tests.mocks import MockEmbeddingService
 from storage.domain.models import (
     Company,
@@ -43,7 +44,7 @@ def make_pdf(pages_text: list[str]) -> bytes:
     return data
 
 
-class InternalDocumentIndexingTests(TestCase):
+class InternalDocumentIndexingTests(MediaIsolationMixin, TestCase):
     """index_document: чанки, векторы, страницы, идемпотентность."""
 
     def setUp(self):

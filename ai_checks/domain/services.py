@@ -7,14 +7,28 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 
 import pymupdf
 from django.db import transaction
 from django.utils import timezone
 
-from ai_checks.domain.models import InternalChunk, InternalDocument
+from ai_checks.domain.models import (
+    CheckRun,
+    InternalChunk,
+    InternalDocument,
+    PendingCheckResult,
+    RuleDefinition,
+)
+from ai_checks.domain.rules import RULE_CHECKS
 from ai_checks.ports.embedding import EmbeddingService
+from storage.domain.models import DocumentVersion
+
+logger = logging.getLogger(__name__)
+
+# Версия набора правил/промптов прогона (CheckRun.engine_version).
+ENGINE_VERSION = 'rules@2026.11.1'
 
 # Размер чанка и перекрытие (ТЗ Ф0.2: ~1000 символов, перекрытие 200).
 CHUNK_SIZE = 1000
@@ -141,3 +155,72 @@ def index_document(
         internal_doc.indexed_at = timezone.now()
         internal_doc.save(update_fields=['embedding_model', 'indexed_at'])
     return len(chunks)
+
+
+def run_rules_check(
+    document_version: DocumentVersion,
+    initiated_by,
+) -> CheckRun:
+    """Прогон детерминированных правил по PDF версии (Ф1, без LLM).
+
+    Создаёт CheckRun (queued → running → done/failed), прогоняет активные
+    RuleDefinition на каждой странице через RULE_CHECKS и сохраняет
+    PendingCheckResult (status=pending) для каждой находки.
+    Записи находок и финальный статус — в transaction.atomic(); при сбое
+    (битый PDF и т.п.) прогон помечается failed с текстом ошибки в meta.
+    """
+    check_run = CheckRun.objects.create(
+        document_version=document_version,
+        initiated_by=initiated_by,
+        status=CheckRun.Status.QUEUED,
+        engine_version=ENGINE_VERSION,
+        started_at=timezone.now(),
+    )
+    try:
+        file_path = document_version.file.path
+        rules = list(
+            RuleDefinition.objects.filter(is_active=True).order_by('code')
+        )
+        executable = [rule for rule in rules if rule.code in RULE_CHECKS]
+
+        findings: list[tuple[RuleDefinition, dict]] = []
+        with transaction.atomic():
+            with pymupdf.open(file_path) as pdf:
+                for page in pdf:
+                    for rule in executable:
+                        checker = RULE_CHECKS[rule.code]
+                        for finding in checker(page):
+                            findings.append((rule, finding))
+
+            PendingCheckResult.objects.bulk_create([
+                PendingCheckResult(
+                    check_run=check_run,
+                    rule=rule,
+                    status=PendingCheckResult.Status.PENDING,
+                    severity=rule.severity,
+                    page=finding['page'],
+                    bbox=finding['bbox'],
+                    message=finding['message'],
+                    evidence=finding['evidence'],
+                )
+                for rule, finding in findings
+            ])
+            check_run.status = CheckRun.Status.DONE
+            check_run.rules_total = len(executable)
+            check_run.findings_total = len(findings)
+            check_run.finished_at = timezone.now()
+            check_run.save(update_fields=[
+                'status', 'rules_total', 'findings_total', 'finished_at',
+            ])
+    except Exception as exc:  # noqa: BLE001 — статус прогона важнее трейса
+        logger.exception(
+            'AI-проверка версии %s упала: %s', document_version.pk, exc,
+        )
+        check_run.status = CheckRun.Status.FAILED
+        check_run.findings_total = 0
+        check_run.meta = {'error': str(exc)}
+        check_run.finished_at = timezone.now()
+        check_run.save(update_fields=[
+            'status', 'findings_total', 'meta', 'finished_at',
+        ])
+    return check_run
