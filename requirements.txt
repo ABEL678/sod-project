@@ -27,3 +27,5 @@ sqlparse==0.6.0
 tablib==3.10.0
 tabulate==0.10.0
 tzdata==2026.5
+httpx==0.28.1
+pgvector==0.5.1

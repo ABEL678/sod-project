@@ -101,7 +101,14 @@ INSTALLED_APPS = [
     'storage',
     'issues',
     'external_api',
+    # Этап 19 (v1.6): ИИ-контур. Включается флагом AI_CHECKS_ENABLED;
+    # миграции применяются независимо от флага (ARCHITECTURE.md 8.1).
+    'ai_checks',
 ]
+
+# Этап 19: фича-флаг ИИ-контура. По умолчанию выключен — при False
+# контур неактивен (URL/сервисы/задачи), таблицы существуют пустыми.
+AI_CHECKS_ENABLED = env_bool('AI_CHECKS_ENABLED', False)
 
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [

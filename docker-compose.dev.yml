@@ -1,0 +1,40 @@
+# Stream-CAD (СОД) — dev-инфраструктура ИИ-контура (Этап 19, Ф0.1).
+# Единый кодовый путь dev = prod (ARCHITECTURE.md 8.3):
+#   PostgreSQL + pgvector (векторное хранилище) и Redis (брокер Celery).
+# Запуск: docker compose -f docker-compose.dev.yml up -d
+# Прод: существующий PostgreSQL + `CREATE EXTENSION vector` миграцией.
+
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: sod-db-dev
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-sod}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-sod_dev_password}
+      POSTGRES_DB: ${POSTGRES_DB:-sod}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: sod-redis-dev
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  pgdata:
+  redisdata:
