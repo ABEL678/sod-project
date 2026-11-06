@@ -31,23 +31,19 @@ class IssueSecurityTests(TestCase):
         self.other_company = Company.objects.create(name='Компания Б')
 
         self.gip_a = User.objects.create_user('gip_a', password='pass')
-        UserProfile.objects.create(
-            user=self.gip_a, role='gip', company=self.company
-        )
+        UserProfile.objects.update_or_create(user=self.gip_a, defaults={'role': 'gip', 'company': self.company
+        })[0]
         self.viewer_a = User.objects.create_user('viewer_a', password='pass')
-        UserProfile.objects.create(
-            user=self.viewer_a, role='viewer', company=self.company
-        )
+        UserProfile.objects.update_or_create(user=self.viewer_a, defaults={'role': 'viewer', 'company': self.company
+        })[0]
         self.developer_a = User.objects.create_user(
             'developer_a', password='pass'
         )
-        UserProfile.objects.create(
-            user=self.developer_a, role='developer', company=self.company
-        )
+        UserProfile.objects.update_or_create(user=self.developer_a, defaults={'role': 'developer', 'company': self.company
+        })[0]
         self.admin_b = User.objects.create_user('admin_b', password='pass')
-        UserProfile.objects.create(
-            user=self.admin_b, role='admin', company=self.other_company
-        )
+        UserProfile.objects.update_or_create(user=self.admin_b, defaults={'role': 'admin', 'company': self.other_company
+        })[0]
 
         self.project = Project.objects.create(
             company=self.company,

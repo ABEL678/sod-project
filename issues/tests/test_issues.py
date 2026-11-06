@@ -38,10 +38,10 @@ class IssueTests(TestCase):
         self.company = Company.objects.create(name='Компания 1')
 
         self.user_gip = User.objects.create_user('gip', password='pass')
-        UserProfile.objects.create(user=self.user_gip, role='gip', company=self.company)
+        UserProfile.objects.update_or_create(user=self.user_gip, defaults={'role': 'gip', 'company': self.company})[0]
 
         self.user_viewer = User.objects.create_user('viewer', password='pass')
-        UserProfile.objects.create(user=self.user_viewer, role='viewer', company=self.company)
+        UserProfile.objects.update_or_create(user=self.user_viewer, defaults={'role': 'viewer', 'company': self.company})[0]
 
         self.project = Project.objects.create(
             company=self.company,
@@ -99,7 +99,7 @@ class IssueTests(TestCase):
 
     def test_create_issue_requires_read_permission(self):
         contractor = User.objects.create_user('contractor', password='pass')
-        UserProfile.objects.create(user=contractor, role='contractor', company=self.company)
+        UserProfile.objects.update_or_create(user=contractor, defaults={'role': 'contractor', 'company': self.company})[0]
         self.client.force_login(contractor)
         response = self.client.post(
             reverse('issues:issue_create', args=[self.document.pk]),
@@ -125,11 +125,8 @@ class IssueTests(TestCase):
             created_by=self.user_gip,
         )
         contractor = User.objects.create_user('contractor2', password='pass')
-        profile = UserProfile.objects.create(
-            user=contractor,
-            role='contractor',
-            company=self.company,
-        )
+        profile = UserProfile.objects.update_or_create(user=contractor, defaults={'role': 'contractor', 'company': self.company,
+        })[0]
         profile.allowed_sections.add(self.section)
         self.client.force_login(contractor)
 
@@ -211,11 +208,8 @@ class IssueTests(TestCase):
             description='Замечание в чужом разделе',
         )
         contractor = User.objects.create_user('contractor3', password='pass')
-        profile = UserProfile.objects.create(
-            user=contractor,
-            role='contractor',
-            company=self.company,
-        )
+        profile = UserProfile.objects.update_or_create(user=contractor, defaults={'role': 'contractor', 'company': self.company,
+        })[0]
         profile.allowed_sections.add(self.section)
         self.client.force_login(contractor)
 
@@ -388,7 +382,7 @@ class IssueStatusMatrixTests(TestCase):
 
     def _user(self, username, role):
         user = User.objects.create_user(username, password='pass')
-        UserProfile.objects.create(user=user, role=role, company=self.company)
+        UserProfile.objects.update_or_create(user=user, defaults={'role': role, 'company': self.company})[0]
         return user
 
     def _issue(self):

@@ -10,6 +10,7 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/6.1/ref/settings/
 """
 
+import logging
 import os
 from dotenv import load_dotenv
 load_dotenv()
@@ -17,6 +18,8 @@ from pathlib import Path
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+logger = logging.getLogger(__name__)
 
 
 def env_bool(name: str, default: bool = False) -> bool:
@@ -109,6 +112,14 @@ REST_FRAMEWORK = {
     'DEFAULT_RENDERER_CLASSES': ['rest_framework.renderers.JSONRenderer'],
     'DEFAULT_PARSER_CLASSES': ['rest_framework.parsers.JSONParser'],
     'EXCEPTION_HANDLER': 'external_api.exceptions.api_exception_handler',
+    'DEFAULT_THROTTLE_CLASSES': [
+        'rest_framework.throttling.AnonRateThrottle',
+        'rest_framework.throttling.UserRateThrottle',
+    ],
+    'DEFAULT_THROTTLE_RATES': {
+        'anon': '20/min',
+        'user': '60/min',
+    },
 }
 
 CRISPY_ALLOWED_TEMPLATE_PACKS = 'bootstrap5'
@@ -250,6 +261,36 @@ CSRF_COOKIE_SECURE = SESSION_COOKIE_SECURE
 # На VPS включите DJANGO_SECURE_SSL_REDIRECT=True.
 # По умолчанию выключено, чтобы не ломать локальный HTTP и тесты.
 SECURE_SSL_REDIRECT = env_bool('DJANGO_SECURE_SSL_REDIRECT', False)
+
+
+# Срок действия публичных share-ссылок (дней).
+# Некорректное или неположительное значение мягко заменяется на 30.
+try:
+    SHARE_LINK_TTL_DAYS = int(os.getenv('SHARE_LINK_TTL_DAYS', '30'))
+except (TypeError, ValueError):
+    logger.warning(
+        'SHARE_LINK_TTL_DAYS has invalid value %r; falling back to 30',
+        os.getenv('SHARE_LINK_TTL_DAYS'),
+    )
+    SHARE_LINK_TTL_DAYS = 30
+
+if SHARE_LINK_TTL_DAYS <= 0:
+    logger.warning(
+        'SHARE_LINK_TTL_DAYS must be positive (got %s); falling back to 30',
+        SHARE_LINK_TTL_DAYS,
+    )
+    SHARE_LINK_TTL_DAYS = 30
+
+
+# Общий кэш для всех воркеров Gunicorn: raw-токены API и throttle-счётчики.
+# FileBasedCache не требует внешних сервисов и миграций; на одном VPS
+# все воркеры видят одни и те же файлы.
+CACHES = {
+    'default': {
+        'BACKEND': 'django.core.cache.backends.filebased.FileBasedCache',
+        'LOCATION': BASE_DIR / '.cache',
+    },
+}
 
 
 # Логирование (Спринт 7). Раньше LOGGING отсутствовал: ошибки 500 в проде

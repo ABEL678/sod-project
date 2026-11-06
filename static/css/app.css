@@ -945,7 +945,11 @@ body.app-body {
 }
 
 .doc-table {
-    width: 100%;
+    /* Спринт 8 (правка): ширина по контенту (width: auto), но не уже
+       контейнера (min-width: 100%). Раньше width: 100% растягивал пустые
+       колонки на всю ширину даже без документов. */
+    width: auto;
+    min-width: 100%;
     margin: 0;
     border-collapse: separate;
     border-spacing: 0;
@@ -1162,11 +1166,29 @@ body.app-body {
     white-space: normal;
 }
 
+/* Спринт 8 (правка 2): пустое состояние таблицы — ЖЁСТКОЕ центрирование.
+   django_tables2 рендерит <tr><td colspan="N"> без подписи .table-empty*,
+   поэтому старые правила не совпадали, а .doc-table tbody td продавливал
+   nowrap/выравнивание — кнопка «Загрузить первый документ» уезжала вправо.
+   !important перекрывает любые конкурирующие правила. white-space: normal
+   оставить обязательно: иначе блок наследует nowrap и режется на узких. */
+.doc-table td[colspan] {
+    text-align: center !important;
+    vertical-align: middle !important;
+    padding: 0 !important;
+    white-space: normal !important;
+}
+
 .doc-empty {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: center !important;
+    justify-content: center !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    box-sizing: border-box !important;
+    padding: 24px 16px !important;
+    margin: 0 auto !important;
     gap: 6px;
 }
 
@@ -1188,9 +1210,15 @@ body.app-body {
 }
 
 .doc-empty .btn {
-    height: 34px;
+    /* Спринт 8 (правка): кнопка «Загрузить первый документ» сжимается
+       и переносит текст на узких экранах, не уезжая за край ячейки. */
+    height: auto;
+    min-height: 34px;
+    max-width: 100% !important;
     margin-top: 8px;
-    padding: 0 14px;
+    padding: 8px 16px;
+    white-space: normal !important;
+    word-break: break-word !important;
     border-color: var(--c-accent, #3D5A98);
     border-radius: 6px;
     background: var(--c-accent, #3D5A98);
@@ -1541,9 +1569,13 @@ body.modal-open {
 
     .topbar {
         gap: 6px;
-        height: 52px;
+        /* Спринт 8 (правка): на мобильном переносим элементы (аватар/«Выйти»),
+           иначе топбар переполняет body (замер: body 474px при 375px). */
+        flex-wrap: wrap;
+        height: auto;
         min-height: 52px;
-        padding: 0 8px;
+        row-gap: 4px;
+        padding: 4px 8px;
     }
 
     .topbar-left {

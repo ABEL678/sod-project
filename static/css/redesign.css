@@ -861,9 +861,9 @@ tr.doc-row-flash > td { animation: wf-row-flash 1.5s ease; }
 
 .filter-bar__reset:hover,
 .filter-bar__reset:focus-visible {
-  color: var(--s-attention, #B42318);
-  border-color: var(--s-attention, #B42318);
-  background: var(--c-bg-surface);
+    color: var(--s-attention-on);
+    border-color: var(--s-attention-on);
+    background: var(--c-bg-surface);
 }
 
 .filter-chips {
@@ -992,8 +992,26 @@ tr.doc-row-flash > td { animation: wf-row-flash 1.5s ease; }
     width: 100%;
 }
 
-/* Водяной знак Stream-CAD скрыт совсем: он декоративный и наезжает на
-   кнопки шапки («Замечания проекта», «Мои замечания») и поиск — замер
-   показал пересечение уже на 1280px, а состав кнопок шапки меняется.
-   Разметка .brand-watermark остаётся в шаблонах, элемент не рендерится. */
-.brand-watermark { display: none; }
+/* Водяной знак Stream-CAD: возвращён, но сдвинут влево, полупрозрачный,
+   не перехватывает клики и не наезжает на кнопки. */
+.brand-watermark {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 0;
+    max-width: 42%;
+    overflow: hidden;
+    text-align: center;
+    opacity: 0.3; /* заметнее, но всё ещё не мешает */
+    pointer-events: none; /* клики проходят сквозь */
+    user-select: none;
+    white-space: nowrap;
+}
+
+/* На узких экранах (мобильный) скрываем, чтобы не мешал */
+@media (max-width: 820px) {
+    .brand-watermark {
+        display: none !important;
+    }
+}

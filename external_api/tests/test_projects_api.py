@@ -3,9 +3,12 @@ import json
 import secrets
 
 from django.contrib.auth import get_user_model
-from django.test import TestCase
+from django.core.cache import cache
+from django.test import TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
+
+from rest_framework.throttling import UserRateThrottle
 
 from external_api.models import ApiToken
 from storage.domain.models import Company, Project, UserProfile
@@ -23,9 +26,8 @@ class ApiTokenServiceTests(TestCase):
     def setUp(self):
         self.company = Company.objects.create(name="Компания A")
         self.admin = User.objects.create_user("admin-a", password="pass")
-        UserProfile.objects.create(
-            user=self.admin, company=self.company, role="admin"
-        )
+        UserProfile.objects.update_or_create(user=self.admin, defaults={'role': "admin"
+        , 'company': self.company})[0]
 
     def test_create_api_token_returns_raw_and_stores_only_hash(self):
         token, raw = create_api_token(
@@ -87,9 +89,8 @@ class ApiTokenServiceTests(TestCase):
     def test_list_api_tokens_scoped_to_company(self):
         other_company = Company.objects.create(name="Компания B")
         other_admin = User.objects.create_user("admin-b", password="pass")
-        UserProfile.objects.create(
-            user=other_admin, company=other_company, role="admin"
-        )
+        UserProfile.objects.update_or_create(user=other_admin, defaults={'role': "admin"
+        , 'company': other_company})[0]
 
         own_token, _ = create_api_token(
             self.admin,
@@ -116,13 +117,11 @@ class ProjectsApiTests(TestCase):
         self.company_b = Company.objects.create(name="Компания B")
 
         self.admin_a = User.objects.create_user("admin-a", password="pass")
-        UserProfile.objects.create(
-            user=self.admin_a, company=self.company_a, role="admin"
-        )
+        UserProfile.objects.update_or_create(user=self.admin_a, defaults={'role': "admin"
+        , 'company': self.company_a})[0]
         self.admin_b = User.objects.create_user("admin-b", password="pass")
-        UserProfile.objects.create(
-            user=self.admin_b, company=self.company_b, role="admin"
-        )
+        UserProfile.objects.update_or_create(user=self.admin_b, defaults={'role': "admin"
+        , 'company': self.company_b})[0]
 
         self.url = "/api/v1/projects/"
 
@@ -256,6 +255,55 @@ class ProjectsApiTests(TestCase):
 
         self.assertEqual(response.status_code, 401)
 
+    @override_settings(
+        REST_FRAMEWORK={
+            'DEFAULT_THROTTLE_RATES': {
+                'user': '2/min',
+                'anon': '2/min',
+            },
+        }
+    )
+    def test_project_create_is_throttled(self):
+        old_rates = UserRateThrottle.THROTTLE_RATES
+        try:
+            with override_settings(
+                REST_FRAMEWORK={
+                    'DEFAULT_THROTTLE_RATES': {
+                        'user': '2/min',
+                        'anon': '2/min',
+                    },
+                }
+            ):
+                # DRF кэширует ставки в class attribute при импорте.
+                UserRateThrottle.THROTTLE_RATES = {
+                    'user': '2/min',
+                    'anon': '2/min',
+                }
+                cache.clear()
+                _token, raw = self._make_token(
+                    self.company_a,
+                    [ApiToken.Scope.PROJECTS_CREATE],
+                )
+
+                for index in range(2):
+                    response = self._post(
+                        {
+                            "code": f"THROTTLE-{index}",
+                            "name": f"Throttle {index}",
+                        },
+                        raw=raw,
+                    )
+                    self.assertEqual(response.status_code, 201)
+
+                response = self._post(
+                    {"code": "THROTTLE-3", "name": "Throttle 3"},
+                    raw=raw,
+                )
+                self.assertEqual(response.status_code, 429)
+        finally:
+            UserRateThrottle.THROTTLE_RATES = old_rates
+            cache.clear()
+
     def test_authentication_updates_last_used_at(self):
         token, raw = self._make_token(
             self.company_a,
@@ -279,17 +327,14 @@ class ApiTokenUiTests(TestCase):
         self.company_b = Company.objects.create(name="Компания B")
 
         self.admin_a = User.objects.create_user("admin-a", password="pass")
-        UserProfile.objects.create(
-            user=self.admin_a, company=self.company_a, role="admin"
-        )
+        UserProfile.objects.update_or_create(user=self.admin_a, defaults={'role': "admin"
+        , 'company': self.company_a})[0]
         self.admin_b = User.objects.create_user("admin-b", password="pass")
-        UserProfile.objects.create(
-            user=self.admin_b, company=self.company_b, role="admin"
-        )
+        UserProfile.objects.update_or_create(user=self.admin_b, defaults={'role': "admin"
+        , 'company': self.company_b})[0]
         self.gip_a = User.objects.create_user("gip-a", password="pass")
-        UserProfile.objects.create(
-            user=self.gip_a, company=self.company_a, role="gip"
-        )
+        UserProfile.objects.update_or_create(user=self.gip_a, defaults={'role': "gip"
+        , 'company': self.company_a})[0]
 
     def test_admin_sees_only_own_company_tokens(self):
         own_token, _ = create_api_token(
@@ -332,10 +377,13 @@ class ApiTokenUiTests(TestCase):
 
         self.assertEqual(response.status_code, 302)
         token = ApiToken.objects.get(name="ГИП-Ассистент")
+        self.assertNotIn("api_token_raw_once", self.client.session)
+        self.assertIn("api_token_raw_cache_key", self.client.session)
 
         response = self.client.get(reverse("external_api:api_token_list"))
         self.assertEqual(response.status_code, 200)
         shown_token = response.context["created_token"]["token"]
+        self.assertIn("no-store", response["Cache-Control"])
 
         self.assertIn(shown_token, response.content.decode())
         self.assertEqual(
@@ -345,6 +393,33 @@ class ApiTokenUiTests(TestCase):
 
         response = self.client.get(reverse("external_api:api_token_list"))
         self.assertNotIn(shown_token, response.content.decode())
+
+    @override_settings(
+        CACHES={
+            'default': {
+                'BACKEND': (
+                    'django.core.cache.backends.dummy.DummyCache'
+                ),
+            },
+        }
+    )
+    def test_create_token_returns_raw_directly_without_cache(self):
+        self.client.force_login(self.admin_a)
+
+        response = self.client.post(
+            reverse("external_api:api_token_create"),
+            {
+                "name": "Без кэша",
+                "scopes": [ApiToken.Scope.PROJECTS_CREATE],
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        created = response.context["created_token"]
+        self.assertIsNotNone(created)
+        self.assertIn(created["token"], response.content.decode())
+        self.assertIn("no-store", response["Cache-Control"])
+        self.assertNotIn("api_token_raw_cache_key", self.client.session)
 
     def test_revoke_token_from_ui(self):
         token, _ = create_api_token(

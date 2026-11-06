@@ -28,11 +28,7 @@ class Api4CTests(TestCase):
     def setUp(self):
         self.company = Company.objects.create(name="Компания 4C")
         self.admin = User.objects.create_user("api-4c-admin", password="pass")
-        UserProfile.objects.create(
-            user=self.admin,
-            company=self.company,
-            role="admin",
-        )
+        UserProfile.objects.update_or_create(user=self.admin, defaults={'role': "admin", 'company': self.company})[0]
         self.project = Project.objects.create(
             company=self.company,
             code="PROJECT-4C",

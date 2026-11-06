@@ -42,24 +42,21 @@ class Sprint3SecurityTests(TestCase):
         self.other_company = Company.objects.create(name='Чужая С3')
 
         self.gip = User.objects.create_user('gip_s3', password='pass')
-        UserProfile.objects.create(user=self.gip, role='gip', company=self.company)
+        UserProfile.objects.update_or_create(user=self.gip, defaults={'role': 'gip', 'company': self.company})[0]
 
         # проверяющий компании, НЕ состоящий в проекте (scope-фикс)
         self.checker = User.objects.create_user('checker_s3', password='pass')
-        UserProfile.objects.create(
-            user=self.checker, role='checker', company=self.company,
-        )
+        UserProfile.objects.update_or_create(user=self.checker, defaults={'role': 'checker', 'company': self.company,
+        })[0]
 
         # подрядчик, допущенный только к разделу АР (фикс прав реестра/палитры)
         self.contractor = User.objects.create_user('contractor_s3', password='pass')
-        self.contractor_profile = UserProfile.objects.create(
-            user=self.contractor, role='contractor', company=self.company,
-        )
+        self.contractor_profile = UserProfile.objects.update_or_create(user=self.contractor, defaults={'role': 'contractor', 'company': self.company,
+        })[0]
 
         self.admin_other = User.objects.create_user('admin_other_s3', password='pass')
-        UserProfile.objects.create(
-            user=self.admin_other, role='admin', company=self.other_company,
-        )
+        UserProfile.objects.update_or_create(user=self.admin_other, defaults={'role': 'admin', 'company': self.other_company,
+        })[0]
 
         self.project = Project.objects.create(
             company=self.company,
