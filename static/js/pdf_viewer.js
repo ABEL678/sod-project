@@ -1262,15 +1262,23 @@
                      : comparison.mode === 'slider' ? 'шторка' : 'наложение')
                 : 'Сравнить';
         }
-        // Спринт 8-фикс: disabled-кнопка без объяснения выглядит как
-        // сломанный dropdown («не реагирует»). Объясняем, почему сравнение
-        // недоступно, и возвращаем рабочую подсказку, когда цель есть.
-        button.disabled = !hasCompareTarget();
-        button.title = button.disabled
-            ? (pdfUrl
-                ? 'Нечего сравнивать: у документа только одна версия'
-                : 'Сравнение недоступно: нет версий документа')
-            : 'Сравнение версий: рядом, шторка, наложение';
+        // Hotfix (Аудит 7): кнопка «Сравнить» больше не блокируется целиком,
+        // когда сравнивать не с чем (у документа одна версия или у текущей
+        // версии нет PDF) — раньше это выглядело как «кнопка не реагирует».
+        // Теперь меню всегда открывается, а недоступные пункты режимов
+        // блокируются с подсказкой compareNoTargetHint.
+        const noTarget = !hasCompareTarget();
+        button.disabled = false;
+        document.querySelectorAll(
+            '.compare-menu-dropdown [data-compare-mode]',
+        ).forEach(function (item) {
+            item.disabled = noTarget;
+            item.classList.toggle('disabled', noTarget);
+        });
+        const noTargetHint = document.getElementById('compareNoTargetHint');
+        if (noTargetHint) {
+            noTargetHint.classList.toggle('d-none', !noTarget);
+        }
         if (closeItem) {
             closeItem.classList.toggle('d-none', !comparison.active);
         }

@@ -121,6 +121,10 @@
         <span id="compareMenuLabel">Сравнить</span>
       </button>
       <div class="dropdown-menu compare-menu-dropdown p-2" aria-labelledby="compareMenuBtn">
+        {# Hotfix (Аудит 7): подсказка для документов без второй версии #}
+        <div id="compareNoTargetHint" class="d-none small text-muted px-1 pb-1">
+          Сравнение недоступно: нет других версий у этого документа.
+        </div>
         <label class="form-label small fw-semibold mb-1" for="compareVersionSelect">С чем сравнить</label>
         <select class="form-select form-select-sm mb-2" id="compareVersionSelect">
           {% for v in versions %}
@@ -450,11 +454,13 @@
   <button type="button" class="context-item" data-action="download">Скачать вложение</button>
 </div>
 
+{# Hotfix (Аудит 7): шаблон вьювера автономный (не наследует base.html),
+   поэтому bootstrap.bundle подключается ЗДЕСЬ — это не дубль #}
 <script src="{% static 'js/vendor/bootstrap.bundle.min.js' %}"></script>
 <script src="{% static 'js/pdfjs/pdf.min.js' %}"></script>
 <script src="{% static 'js/design-tokens.js' %}?v=20261109-h6"></script>
 <script src="{% static 'js/sync.js' %}?v=20261109-h6"></script>
-<script src="{% static 'js/pdf_viewer.js' %}?v=20261109-cmp3"></script>
+<script src="{% static 'js/pdf_viewer.js' %}?v=20261109-h7"></script>
 <script src="{% static 'js/splitter.js' %}?v=20261109-h6"></script>
 <script src="{% static 'js/palette.js' %}?v=20261109-h6" defer></script>
 {% include 'storage/_palette.html' %}
