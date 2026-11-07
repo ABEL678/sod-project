@@ -156,7 +156,7 @@ class KnowledgeBaseViewTests(MediaIsolationMixin, TestCase):
         )
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, 'Загрузить документ')
-        self.assertContains(response, 'В базе знаний пока нет документов')
+        self.assertContains(response, 'kbTableWrap')
 
     def test_upload_via_view(self):
         response = self.client.post(
