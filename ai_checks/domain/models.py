@@ -76,6 +76,20 @@ class InternalDocument(models.Model):
     indexed_at = models.DateTimeField(
         null=True, blank=True, verbose_name='Проиндексирован',
     )
+    index_status = models.CharField(
+        max_length=10,
+        choices=[
+            ('queued', 'В очереди'),
+            ('running', 'Индексируется'),
+            ('done', 'Готово'),
+            ('failed', 'Ошибка'),
+        ],
+        default='queued',
+        verbose_name='Статус индексации',
+    )
+    index_error = models.TextField(
+        blank=True, verbose_name='Ошибка индексации',
+    )
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         null=True,

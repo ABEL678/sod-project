@@ -1,0 +1,73 @@
+{% comment %}
+stage2: вкладка «База знаний» проекта — список документов и загрузка PDF.
+{% endcomment %}
+<div class="toolbar" data-role="ai-kb-toolbar">
+  <span class="fw-semibold">
+    <i class="bi bi-database me-1" aria-hidden="true"></i>
+    База знаний: на основе этих документов ИИ отвечает на вопросы
+  </span>
+  <span class="toolbar-spacer"></span>
+  <button type="button" class="btn btn-sm btn-primary text-nowrap"
+          data-bs-toggle="modal" data-bs-target="#kbUploadModal">
+    <i class="bi bi-upload me-1" aria-hidden="true"></i>Загрузить документ
+  </button>
+</div>
+
+{# stage2: таблица грузится собственным фрагментом (избегаем коллизии
+   переменной documents с таблицей документов страницы проекта). #}
+<div id="kbTableWrap" class="px-2 pt-2"
+     hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
+     hx-get="{% url 'ai_checks:kb_table' project.pk %}"
+     hx-trigger="load" hx-swap="innerHTML">
+  <div class="text-muted small p-2">Загрузка…</div>
+</div>
+
+<div class="modal fade" id="kbUploadModal" tabindex="-1"
+     aria-labelledby="kbUploadModalLabel" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <form hx-post="{% url 'ai_checks:kb_upload' project.pk %}"
+            hx-target="#kbTableWrap" hx-swap="innerHTML"
+            hx-encoding="multipart/form-data"
+            hx-on::after-request="if (event.detail.successful) { bootstrap.Modal.getInstance(document.getElementById('kbUploadModal')).hide(); this.reset(); }">
+        {% csrf_token %}
+        <div class="modal-header">
+          <h5 class="modal-title" id="kbUploadModalLabel">Загрузить документ в базу знаний</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрыть"></button>
+        </div>
+        <div class="modal-body">
+          <div class="mb-3">
+            <label class="form-label small" for="kbFile">Файл (PDF)</label>
+            <input type="file" class="form-control form-control-sm"
+                   id="kbFile" name="file" accept=".pdf,application/pdf" required>
+          </div>
+          <div class="mb-3">
+            <label class="form-label small" for="kbTitle">Название (необязательно)</label>
+            <input type="text" class="form-control form-control-sm"
+                   id="kbTitle" name="title" maxlength="255">
+          </div>
+          <div class="mb-3">
+            <label class="form-label small" for="kbDocType">Тип</label>
+            <select class="form-select form-select-sm" id="kbDocType" name="doc_type">
+              <option value="customer_req">Требования заказчика</option>
+              <option value="internal_standard" selected>Внутренний стандарт</option>
+              <option value="past_issues">Прошлые замечания</option>
+            </select>
+          </div>
+          <div class="mb-0">
+            <label class="form-label small" for="kbScope">Область видимости</label>
+            <select class="form-select form-select-sm" id="kbScope" name="tenant_scope">
+              <option value="project" selected>Проект</option>
+              <option value="company">Компания</option>
+            </select>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-sm btn-outline-secondary"
+                  data-bs-dismiss="modal">Отмена</button>
+          <button type="submit" class="btn btn-sm btn-primary">Загрузить и проиндексировать</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>

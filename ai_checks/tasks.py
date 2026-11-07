@@ -33,3 +33,11 @@ def check_reminders_task() -> int:
     from ai_checks.domain.services import send_pending_reminders
 
     return send_pending_reminders()
+
+
+@shared_task(ignore_result=True, name='ai_checks.index_knowledge_document')
+def index_knowledge_document_task(internal_document_id: int) -> int:
+    """Индексация документа базы знаний (статусы queued→running→done/failed)."""
+    from ai_checks.domain.services import index_internal_document
+
+    return index_internal_document(internal_document_id)

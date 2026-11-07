@@ -1,28 +1,49 @@
 {% comment %}
-Ф4: результат генерации отчёта ГИПу — сводка и скачивание JSON.
+Ф4/stage2: результат генерации отчёта ГИПу — сводка по ЗАМЕЧАНИЯМ
+и скачивание PDF / Word.
 {% endcomment %}
 {% if error %}
   <div class="alert alert-warning py-1 px-2 small mb-2">{{ error }}</div>
 {% elif report %}
   <div class="border rounded p-3 bg-white" id="aiReport-{{ report.pk }}">
-    <div class="d-flex justify-content-between align-items-baseline mb-2">
+    <div class="d-flex justify-content-between align-items-baseline mb-2 flex-wrap gap-2">
       <span class="fw-semibold">
-        Отчёт за период {{ report.period }}
+        {# UX-аудит P0-3: period_label — человекочитаемые даты из вьюхи #}
+        Отчёт за период {{ period_label }}
+        <span class="text-muted small fw-normal ms-2">сгенерирован {{ report.created_at|date:"d.m.Y H:i" }}</span>
       </span>
-      <a class="btn btn-sm btn-outline-secondary text-nowrap"
-         href="{% url 'ai_checks:report_json' report.pk %}">
-        <i class="bi bi-download me-1" aria-hidden="true"></i>Скачать JSON
-      </a>
+      <span class="d-flex gap-1">
+        <a class="btn btn-sm btn-outline-secondary text-nowrap"
+           href="{% url 'ai_checks:report_pdf' report.pk %}">
+          <i class="bi bi-file-earmark-pdf me-1" aria-hidden="true"></i>Скачать PDF
+        </a>
+        <a class="btn btn-sm btn-outline-secondary text-nowrap"
+           href="{% url 'ai_checks:report_docx' report.pk %}">
+          <i class="bi bi-file-earmark-word me-1" aria-hidden="true"></i>Скачать Word
+        </a>
+      </span>
     </div>
 
     <div class="small mb-2">
-      <span class="me-3">Всего находок: <b>{{ report.payload.total }}</b></span>
-      {% if report.payload.by_severity %}
-        {% for severity, count in report.payload.by_severity.items %}
-          <span class="badge text-bg-light border me-1">{{ severity }}: {{ count }}</span>
+      <span class="me-3">Всего замечаний: <b>{{ report.payload.total_issues }}</b></span>
+      <span class="me-3">Просрочено: <b class="text-danger">{{ report.payload.overdue_count }}</b></span>
+      {% if report.payload.by_status %}
+        {% for group, count in report.payload.by_status.items %}
+          <span class="badge text-bg-light border me-1">
+            {% if group == 'open' %}Открыто{% elif group == 'progress' %}В работе{% elif group == 'review' %}На проверке{% else %}Закрыто{% endif %}: {{ count }}
+          </span>
         {% endfor %}
       {% endif %}
     </div>
+
+    {% if report.payload.by_assignee %}
+      <div class="small mb-2">
+        <span class="text-muted">По ответственным:</span>
+        {% for name, count in report.payload.by_assignee.items %}
+          <span class="badge text-bg-light border me-1">{{ name }}: {{ count }}</span>
+        {% endfor %}
+      </div>
+    {% endif %}
 
     {% if report.payload.by_document %}
       <div class="small mb-2">
@@ -35,12 +56,12 @@
 
     {% if report.payload.top_issues %}
       <div class="small mb-2">
-        <div class="text-muted mb-1">Ключевые находки:</div>
+        <div class="text-muted mb-1">Основные проблемы:</div>
         <ul class="mb-0 ps-3">
           {% for issue in report.payload.top_issues %}
             <li>
-              {% if issue.page %}лист {{ issue.page }} · {% endif %}
-              {{ issue.document }} — {{ issue.message|truncatechars:160 }}
+              {{ issue.document }} · {{ issue.status }}{% if issue.due_date %} · срок {{ issue.due_date }}{% endif %}
+              — {{ issue.message|truncatechars:160 }}
             </li>
           {% endfor %}
         </ul>

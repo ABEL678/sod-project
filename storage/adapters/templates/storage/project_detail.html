@@ -214,55 +214,85 @@
             {% endif %}
 
             {% if can_manage_participants %}
-                <nav class="app-tabs" aria-label="Разделы проекта">
-                    <a class="app-tab {% if active_tab == 'documents' %}active{% endif %}"
-                       href="{% url 'storage:project_detail' project.pk %}{% if selected_view %}?view={{ selected_view.pk }}{% endif %}">
-                        <i class="bi bi-table" aria-hidden="true"></i>
-                        Документы
-                        <span class="badge text-bg-light border">{{ documents|length }}</span>
-                    </a>
-                    <a class="app-tab {% if active_tab == 'participants' %}active{% endif %}"
-                       href="{% url 'storage:project_detail' project.pk %}?tab=participants">
-                        <i class="bi bi-people" aria-hidden="true"></i>
-                        Участники
-                    </a>
-                    <a class="app-tab {% if active_tab == 'trash' %}active{% endif %}"
-                       href="{% url 'storage:project_detail' project.pk %}?tab=trash">
-                        <i class="bi bi-trash3" aria-hidden="true"></i>
-                        Корзина
-                    </a>
-                    {% if ai_checks_enabled %}
-                        {# Этап 19 (Ф2): вкладка ИИ-поиска (HTMX-панель) #}
-                        <a class="app-tab" href="#" id="aiSearchTab"
-                           hx-get="{% url 'ai_checks:rag_panel' project.pk %}"
-                           hx-target="#aiRagPane" hx-swap="innerHTML"
-                           onclick="document.querySelectorAll('.app-tab').forEach(function (t) { t.classList.remove('active'); }); this.classList.add('active'); return false;">
-                            <i class="bi bi-robot" aria-hidden="true"></i>
-                            ИИ-поиск
+                {# UX-аудит P0-1/P0-2: вкладки — обычная навигация с состоянием #}
+                {# в URL (?tab=…), панели взаимоисключающие. #mainTabs — цель #}
+                {# htmx-переключения: из ответа вырезается и подставляется целиком. #}
+                <div id="mainTabs" class="app-tabs-wrap">
+                    <nav class="app-tabs" role="tablist" aria-label="Разделы проекта">
+                        <a class="app-tab {% if active_tab == 'documents' %}active{% endif %}"
+                           href="{% url 'storage:project_detail' project.pk %}{% if selected_view %}?view={{ selected_view.pk }}{% endif %}"
+                           role="tab"
+                           aria-selected="{% if active_tab == 'documents' %}true{% else %}false{% endif %}">
+                            <i class="bi bi-table" aria-hidden="true"></i>
+                            Документы
+                            <span class="badge text-bg-light border">{{ documents|length }}</span>
                         </a>
-                    {% endif %}
-                    {% if ai_report_allowed %}
-                        {# Этап 19 (Ф4): вкладка «Отчёт ГИПу» (ГИП/админ) #}
-                        <a class="app-tab" href="#" id="aiReportTab"
-                           hx-get="{% url 'ai_checks:report_panel' project.pk %}"
-                           hx-target="#aiReportPane" hx-swap="innerHTML"
-                           onclick="document.querySelectorAll('.app-tab').forEach(function (t) { t.classList.remove('active'); }); this.classList.add('active'); return false;">
-                            <i class="bi bi-file-earmark-bar-graph" aria-hidden="true"></i>
-                            Отчёт ГИПу
+                        <a class="app-tab {% if active_tab == 'participants' %}active{% endif %}"
+                           href="{% url 'storage:project_detail' project.pk %}?tab=participants"
+                           role="tab"
+                           aria-selected="{% if active_tab == 'participants' %}true{% else %}false{% endif %}">
+                            <i class="bi bi-people" aria-hidden="true"></i>
+                            Участники
                         </a>
-                    {% endif %}
-                </nav>
-                {% if ai_checks_enabled %}
-                    {# Этап 19 (Ф2): контейнер панели ИИ-поиска #}
-                    <div id="aiRagPane" class="mt-2"></div>
-                {% endif %}
-                {% if ai_report_allowed %}
-                    {# Этап 19 (Ф4): контейнер панели отчёта ГИПу #}
-                    <div id="aiReportPane" class="mt-2"></div>
-                {% endif %}
-            {% endif %}
+                        <a class="app-tab {% if active_tab == 'trash' %}active{% endif %}"
+                           href="{% url 'storage:project_detail' project.pk %}?tab=trash"
+                           role="tab"
+                           aria-selected="{% if active_tab == 'trash' %}true{% else %}false{% endif %}">
+                            <i class="bi bi-trash3" aria-hidden="true"></i>
+                            Корзина
+                        </a>
+                        {% if ai_checks_enabled %}
+                            {# Этап 19 (Ф2): вкладка ИИ-поиска (состояние в URL) #}
+                            <a class="app-tab {% if active_tab == 'ai-search' %}active{% endif %}"
+                               id="aiSearchTab"
+                               href="{% url 'storage:project_detail' project.pk %}?tab=ai-search"
+                               hx-get="{% url 'storage:project_detail' project.pk %}?tab=ai-search"
+                               hx-target="#mainTabs" hx-select="#mainTabs"
+                               hx-swap="outerHTML show:window:top"
+                               hx-push-url="true" hx-indicator="#mainTabs"
+                               role="tab"
+                               aria-selected="{% if active_tab == 'ai-search' %}true{% else %}false{% endif %}">
+                                <i class="bi bi-robot" aria-hidden="true"></i>
+                                ИИ-поиск
+                            </a>
+                        {% endif %}
+                        {% if ai_report_allowed %}
+                            {# Этап 19 (Ф4): вкладка «Отчёт ГИПу» (ГИП/админ) #}
+                            <a class="app-tab {% if active_tab == 'ai-report' %}active{% endif %}"
+                               id="aiReportTab"
+                               href="{% url 'storage:project_detail' project.pk %}?tab=ai-report"
+                               hx-get="{% url 'storage:project_detail' project.pk %}?tab=ai-report"
+                               hx-target="#mainTabs" hx-select="#mainTabs"
+                               hx-swap="outerHTML show:window:top"
+                               hx-push-url="true" hx-indicator="#mainTabs"
+                               role="tab"
+                               aria-selected="{% if active_tab == 'ai-report' %}true{% else %}false{% endif %}">
+                                <i class="bi bi-file-earmark-bar-graph" aria-hidden="true"></i>
+                                Отчёт ГИПу
+                            </a>
+                        {% endif %}
+                        {% if ai_knowledge_allowed %}
+                            {# stage2: вкладка «База знаний» (ГИП/админ) #}
+                            <a class="app-tab {% if active_tab == 'ai-kb' %}active{% endif %}"
+                               id="aiKbTab"
+                               href="{% url 'storage:project_detail' project.pk %}?tab=ai-kb"
+                               hx-get="{% url 'storage:project_detail' project.pk %}?tab=ai-kb"
+                               hx-target="#mainTabs" hx-select="#mainTabs"
+                               hx-swap="outerHTML show:window:top"
+                               hx-push-url="true" hx-indicator="#mainTabs"
+                               role="tab"
+                               aria-selected="{% if active_tab == 'ai-kb' %}true{% else %}false{% endif %}">
+                                <i class="bi bi-database" aria-hidden="true"></i>
+                                База знаний
+                            </a>
+                        {% endif %}
+                    </nav>
 
-            {% if active_tab == 'participants' and can_manage_participants %}
+                    {# P0-1: единственная панель вкладки — колонка с собственной #}
+                    {# прокруткой (.ai-tabpane), контент замещается, а не #}
+                    {# вставляется между вкладкой и таблицей документов. #}
+                    <div id="mainTabContent" class="ai-tabpane">
+                        {% if active_tab == 'participants' and can_manage_participants %}
                 <div class="toolbar" data-role="participants-toolbar">
                     <span class="fw-semibold">Участники проекта</span>
                     <span class="badge text-bg-light border">{{ participants|length }}</span>
@@ -413,8 +443,25 @@
                         </table>
                     </div>
                 </div>
+                {# UX-аудит P0-1/P0-2: панели ИИ-вкладок — взаимоисключающие #}
+                {# ветки той же цепочки: рендерится только активная вкладка. #}
+                {% elif active_tab == 'ai-search' and ai_checks_enabled %}
+                    <div class="ai-tabpane__scroll">
+                        {% include 'ai_checks/_rag.html' %}
+                    </div>
+                {% elif active_tab == 'ai-report' and ai_report_allowed %}
+                    <div class="ai-tabpane__scroll">
+                        {% include 'ai_checks/_report.html' %}
+                    </div>
+                {% elif active_tab == 'ai-kb' and ai_knowledge_allowed %}
+                    <div class="ai-tabpane__scroll">
+                        {% include 'ai_checks/_kb.html' %}
+                    </div>
             {% else %}
                 {% include 'storage/_documents_panel.html' %}
+            {% endif %}
+                    </div>{# /#mainTabContent #}
+                </div>{# /#mainTabs #}
             {% endif %}
         </main>
     </div>

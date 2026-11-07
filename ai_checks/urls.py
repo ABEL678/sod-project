@@ -33,5 +33,31 @@ urlpatterns = [
         'project/<int:project_id>/report/generate/',
         views.report_generate, name='report_generate',
     ),
-    path('report/<int:pk>/json/', views.report_json, name='report_json'),
+    path('report/<int:pk>/pdf/', views.report_pdf, name='report_pdf'),
+    path('report/<int:pk>/docx/', views.report_docx, name='report_docx'),
+    # База знаний проекта (UX-аудит stage 2).
+    path(
+        'project/<int:project_id>/kb/',
+        views.kb_panel, name='kb_panel',
+    ),
+    path(
+        'project/<int:project_id>/kb/table/',
+        views.kb_table, name='kb_table',
+    ),
+    path(
+        'project/<int:project_id>/kb/upload/',
+        views.kb_upload, name='kb_upload',
+    ),
+    path(
+        'project/<int:project_id>/kb/<int:pk>/reindex/',
+        views.kb_reindex, name='kb_reindex',
+    ),
+    path(
+        'project/<int:project_id>/kb/<int:pk>/remove/',
+        views.kb_disable, name='kb_disable',
+    ),
+    path(
+        'project/<int:project_id>/kb/<int:pk>/chunks/',
+        views.kb_chunks, name='kb_chunks',
+    ),
 ]

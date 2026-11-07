@@ -1,0 +1,75 @@
+{% comment %}
+stage2: таблица документов базы знаний (переиспользуется при swap после
+загрузки / переиндексации / удаления).
+{% endcomment %}
+{% if documents %}
+  <div class="table-responsive">
+    <table class="table table-sm align-middle mb-0" id="kbTable">
+      <thead>
+        <tr class="small text-muted">
+          <th>Название</th>
+          <th>Тип</th>
+          <th>Область</th>
+          <th>Дата загрузки</th>
+          <th>Индексация</th>
+          <th class="text-end">Чанки</th>
+          <th class="text-end">Действия</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for doc in documents %}
+          <tr>
+            <td class="small">{{ doc.title }}</td>
+            <td class="small">{{ doc.get_doc_type_display }}</td>
+            <td class="small">
+              {% if doc.tenant_scope == 'project' %}Проект{% else %}Компания{% endif %}
+            </td>
+            <td class="small text-muted">{{ doc.created_at|date:"d.m.Y H:i" }}</td>
+            <td>
+              {% if doc.index_status == 'done' %}
+                <span class="badge text-bg-success">Готово</span>
+              {% elif doc.index_status == 'running' %}
+                <span class="badge text-bg-info">Индексируется</span>
+              {% elif doc.index_status == 'failed' %}
+                <span class="badge text-bg-danger" title="{{ doc.index_error }}">Ошибка</span>
+              {% else %}
+                <span class="badge text-bg-secondary">В очереди</span>
+              {% endif %}
+            </td>
+            <td class="text-end num small">
+              {{ doc.chunk_count }}
+              {% if doc.chunk_count %}
+                <button type="button" class="btn btn-link btn-sm p-0 ms-1"
+                        hx-get="{% url 'ai_checks:kb_chunks' project.pk doc.pk %}"
+                        hx-target="#kb-chunks-{{ doc.pk }} td"
+                        hx-swap="innerHTML"
+                        hx-on::after-request="document.getElementById('kb-chunks-{{ doc.pk }}').classList.remove('d-none')">
+                  показать
+                </button>
+              {% endif %}
+            </td>
+            <td class="text-end text-nowrap">
+              <button type="button" class="btn btn-sm btn-outline-secondary"
+                      hx-post="{% url 'ai_checks:kb_reindex' project.pk doc.pk %}"
+                      hx-target="#kbTableWrap" hx-swap="innerHTML"
+                      title="Переиндексировать">Переиндексировать</button>
+              <button type="button" class="btn btn-sm btn-outline-danger"
+                      hx-post="{% url 'ai_checks:kb_disable' project.pk doc.pk %}"
+                      hx-target="#kbTableWrap" hx-swap="innerHTML"
+                      hx-confirm="Удалить «{{ doc.title }}» из базы знаний?"
+                      title="Удалить из базы знаний">Удалить</button>
+            </td>
+          </tr>
+          <tr id="kb-chunks-{{ doc.pk }}" class="d-none">
+            <td colspan="7" class="small bg-light"></td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+{% else %}
+  <div class="alert alert-light border py-2 px-3 small mb-0">
+    В базе знаний пока нет документов. Загрузите PDF (требования,
+    стандарты, прошлые замечания) — ИИ будет отвечать с опорой на них.
+  </div>
+{% endif %}

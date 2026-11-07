@@ -22,13 +22,23 @@ from django.views.decorators.http import require_GET, require_POST
 
 from ai_checks.domain.models import CheckRun, GeneratedReport, PendingCheckResult
 from ai_checks.domain.services import (
+    KNOWLEDGE_DOC_TYPES,
     bbox_ratios_for_rotation,
     crop_finding_image,
     generate_gip_report,
+    gip_report_docx,
+    gip_report_pdf,
+    index_internal_document,
+    knowledge_documents,
     rag_answer,
+    remove_knowledge_document,
+    upload_knowledge_document,
 )
 from storage.domain.services import get_accessible_projects
-from ai_checks.tasks import check_document_version_task
+from ai_checks.tasks import (
+    check_document_version_task,
+    index_knowledge_document_task,
+)
 from storage.domain.models import Document
 from storage.domain.services import check_issue_permission, create_issue
 
@@ -366,35 +376,166 @@ def report_generate(request, project_id: int):
         except ValueError as exc:
             error = str(exc)
 
+    # UX-аудит P0-3: человекочитаемый период формируется во вьюхе.
+    # Раньше шаблон выводил report.period (ISO 'YYYY-MM-DD..YYYY-MM-DD'
+    # из модели) — без дат в привычном формате; ключа payload.period
+    # в payload вообще не существует.
     return render(request, 'ai_checks/_report_result.html', {
         'project': project,
         'report': report,
         'error': error,
+        'period_label': (
+            f'{period_start:%d.%m.%Y} — {period_end:%d.%m.%Y}'
+            if report else ''
+        ),
+    })
+
+
+def _report_for_download(request, pk: int):
+    _ensure_enabled()
+    report = get_object_or_404(
+        GeneratedReport.objects.select_related('project'), pk=pk,
+    )
+    get_object_or_404(
+        get_accessible_projects(request.user), pk=report.project_id,
+    )
+    if not _report_allowed(request.user):
+        raise Http404('Отчёт ГИПу доступен только ГИП/администратору')
+    return report
+
+
+@login_required
+@require_GET
+def report_pdf(request, pk: int):
+    """Скачивание отчёта ГИПа в PDF (PyMuPDF)."""
+    report = _report_for_download(request, pk)
+    response = HttpResponse(
+        gip_report_pdf(report), content_type='application/pdf',
+    )
+    response['Content-Disposition'] = (
+        f'attachment; filename="gip_report_{report.pk}.pdf"'
+    )
+    return response
+
+
+@login_required
+@require_GET
+def report_docx(request, pk: int):
+    """Скачивание отчёта ГИПа в Word (python-docx)."""
+    report = _report_for_download(request, pk)
+    response = HttpResponse(
+        gip_report_docx(report),
+        content_type=(
+            'application/vnd.openxmlformats-officedocument'
+            '.wordprocessingml.document'
+        ),
+    )
+    response['Content-Disposition'] = (
+        f'attachment; filename="gip_report_{report.pk}.docx"'
+    )
+    return response
+
+
+# ---------- База знаний: UI проекта ----------
+
+def _knowledge_allowed(user) -> bool:
+    return _report_allowed(user)
+
+
+def _kb_project(request, project_id: int):
+    if not _knowledge_allowed(request.user):
+        raise Http404('База знаний доступна только ГИП/администратору')
+    return get_object_or_404(
+        get_accessible_projects(request.user), pk=project_id,
+    )
+
+
+def _kb_document(request, project_id: int, pk: int):
+    project = _kb_project(request, project_id)
+    document = knowledge_documents(project).filter(pk=pk).first()
+    if document is None:
+        raise Http404('Документ базы знаний не найден')
+    return project, document
+
+
+def _render_kb_table(request, project):
+    return render(request, 'ai_checks/_kb_table.html', {
+        'project': project,
+        'documents': knowledge_documents(project),
     })
 
 
 @login_required
 @require_GET
-def report_json(request, pk: int):
-    """Скачивание JSON-сводки отчёта."""
-    _ensure_enabled()
-    report = get_object_or_404(
-        GeneratedReport.objects.select_related('project'), pk=pk,
-    )
-    get_object_or_404(get_accessible_projects(request.user), pk=report.project_id)
-    if not _report_allowed(request.user):
-        raise Http404('Отчёт ГИПу доступен только ГИП/администратору')
-    payload = {
-        'project': {'id': report.project_id, 'code': report.project.code},
-        'period': report.period,
-        'created_at': report.created_at.isoformat(),
-        'payload': report.payload,
-    }
-    response = HttpResponse(
-        json.dumps(payload, ensure_ascii=False, indent=2),
-        content_type='application/json; charset=utf-8',
-    )
-    response['Content-Disposition'] = (
-        f'attachment; filename="gip_report_{report.pk}.json"'
-    )
-    return response
+def kb_panel(request, project_id: int):
+    """Вкладка «База знаний»: список документов и модалка загрузки."""
+    project = _kb_project(request, project_id)
+    return render(request, 'ai_checks/_kb.html', {
+        'project': project,
+        'documents': knowledge_documents(project),
+        'doc_types': [
+            ('customer_req', 'Требования заказчика'),
+            ('internal_standard', 'Внутренний стандарт'),
+            ('past_issues', 'Прошлые замечания'),
+        ],
+    })
+
+
+@login_required
+@require_GET
+def kb_table(request, project_id: int):
+    """HTMX-фрагмент: таблица документов базы знаний."""
+    project = _kb_project(request, project_id)
+    return _render_kb_table(request, project)
+
+
+@login_required
+@require_POST
+def kb_upload(request, project_id: int):
+    """Загрузка PDF в базу знаний + постановка индексации в Celery."""
+    project = _kb_project(request, project_id)
+    uploaded = request.FILES.get('file')
+    if uploaded is None or not uploaded.name.lower().endswith('.pdf'):
+        return _render_kb_table(request, project)
+    doc_type = (request.POST.get('doc_type') or '').strip()
+    tenant_scope = (request.POST.get('tenant_scope') or 'project').strip()
+    title = (request.POST.get('title') or '').strip()[:255]
+    try:
+        internal = upload_knowledge_document(
+            request.user, project, uploaded, title, doc_type, tenant_scope,
+        )
+    except ValueError:
+        return _render_kb_table(request, project)
+    index_knowledge_document_task.delay(internal.pk)
+    return _render_kb_table(request, project)
+
+
+@login_required
+@require_POST
+def kb_reindex(request, project_id: int, pk: int):
+    """Переиндексация документа базы знаний."""
+    project, document = _kb_document(request, project_id, pk)
+    document.index_status = 'queued'
+    document.save(update_fields=['index_status'])
+    index_knowledge_document_task.delay(document.pk)
+    return _render_kb_table(request, project)
+
+
+@login_required
+@require_POST
+def kb_disable(request, project_id: int, pk: int):
+    """Мягкое удаление из базы знаний (is_active=False)."""
+    project, document = _kb_document(request, project_id, pk)
+    remove_knowledge_document(document)
+    return _render_kb_table(request, project)
+
+
+@login_required
+@require_GET
+def kb_chunks(request, project_id: int, pk: int):
+    """Фрагмент: текст чанков документа базы знаний (первые 20)."""
+    _project, document = _kb_document(request, project_id, pk)
+    return render(request, 'ai_checks/_kb_chunks.html', {
+        'document': document,
+        'chunks': list(document.chunks.order_by('seq')[:20]),
+    })

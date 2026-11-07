@@ -738,6 +738,12 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
 
     def get_template_names(self):
         if getattr(self.request, 'htmx', False):
+            # UX-аудит P0-1/P0-2: запрос смены вкладки («ИИ-поиск»,
+            # «Отчёт ГИПу») возвращает полную страницу — htmx вырезает
+            # из неё #mainTabs (hx-select). Остальные htmx-запросы
+            # (фильтры/сортировка/зоны) получают только панель документов.
+            if self.request.GET.get('tab') in ('ai-search', 'ai-report', 'ai-kb'):
+                return [self.template_name]
             return ['storage/_documents_panel.html']
         return [self.template_name]
 
@@ -769,8 +775,26 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
         can_manage_participants = can_manage_project_participants(user, project)
         active_tab = 'documents'
         requested_tab = self.request.GET.get('tab')
-        if can_manage_participants and requested_tab in ('participants', 'trash'):
+        # UX-аудит P0-2: вкладки ИИ-контура живут в URL наравне с остальными
+        # (видимость самих вкладок по-прежнему регулируют ai_checks_enabled /
+        # ai_report_allowed в шаблоне; при выключенном контуре вкладка
+        # мягко откатывается на «Документы»).
+        if can_manage_participants and requested_tab in (
+                'participants', 'trash', 'ai-search', 'ai-report', 'ai-kb',
+        ):
             active_tab = requested_tab
+
+        # UX-аудит P0 (интеграция): панели ИИ-вкладок рендерятся серверно,
+        # поэтому дефолтный период отчёта задаётся здесь (раньше его
+        # отдавал htmx-фрагмент report_panel).
+        if active_tab in ('ai-search', 'ai-report'):
+            from datetime import date as _date, timedelta as _timedelta
+
+            _today = _date.today()
+            context['default_start'] = (
+                _today - _timedelta(days=30)
+            ).isoformat()
+            context['default_end'] = _today.isoformat()
 
         sections = list(get_sections_with_counts(user, project))
         all_roots = list(get_folder_tree(user, project))

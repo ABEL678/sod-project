@@ -1,0 +1,12 @@
+{% comment %}stage2: текст чанков документа базы знаний (первые 20).{% endcomment %}
+<strong class="small">Фрагменты «{{ document.title }}»:</strong>
+<ul class="mb-0 ps-3 mt-1">
+  {% for chunk in chunks %}
+    <li>
+      <span class="text-muted">#{{ chunk.seq }}{% if chunk.page_from %} · стр. {{ chunk.page_from }}{% if chunk.page_to and chunk.page_to != chunk.page_from %}—{{ chunk.page_to }}{% endif %}{% endif %}:</span>
+      {{ chunk.text|truncatechars:300 }}
+    </li>
+  {% empty %}
+    <li class="text-muted">Фрагментов нет.</li>
+  {% endfor %}
+</ul>

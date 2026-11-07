@@ -652,6 +652,47 @@ body.app-body {
     font-weight: 600;
 }
 
+/* ---------- UX-аудит (P0-1, P0-2): панель вкладки ---------- */
+
+/* Обёртка «вкладки + панель» (#mainTabs): цель htmx-переключения
+   вкладок (hx-target="#mainTabs"), продолжает flex-колонку .app-main. */
+.app-tabs-wrap {
+    flex: 1 1 auto;
+    min-height: 0;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+/* Панель вкладки — колонка с ВНУТРЕННЕЙ прокруткой: контент вкладки
+   замещает друг друга и больше не наезжает на таблицу документов
+   и не обрезается на мобильных (.app-main { overflow: hidden }). */
+.ai-tabpane {
+    flex: 1 1 auto;
+    min-height: 0;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.ai-tabpane__scroll {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 0 10px 12px;   /* сетка тулбара: 10 px */
+}
+
+/* Пустые контейнеры не занимают места и не дают отступ. */
+.ai-tabpane:empty { display: none; }
+
+/* Подсказка о загрузке при переключении вкладки (hx-indicator). */
+.app-tabs-wrap.htmx-request {
+    opacity: .55;
+    transition: opacity .15s ease;
+    pointer-events: none;
+}
+
 /* ---------- Toolbar ---------- */
 
 .toolbar {

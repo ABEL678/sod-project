@@ -169,4 +169,4 @@ class AiChecksUiTests(MediaIsolationMixin, TestCase):
         response = self.client.post(
             reverse('ai_checks:start', args=[self.document.pk]),
         )
-        self.assertContains(response, 'Находок нет')
+        self.assertContains(response, 'Замечаний нет')

@@ -18,7 +18,7 @@
   {% if finding.bbox %}
     <img class="ai-finding__preview"
          src="{% url 'ai_checks:preview' finding.pk %}"
-         alt="Подсветка находки на листе {{ finding.page }}" loading="lazy">
+         alt="Подсветка замечания на листе {{ finding.page }}" loading="lazy">
   {% endif %}
 
   <div class="small">{{ finding.message }}</div>

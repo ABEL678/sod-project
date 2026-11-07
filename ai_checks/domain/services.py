@@ -355,36 +355,87 @@ def rag_answer(
     return {'answer': answer, 'sources': sources}
 
 
-GIP_REPORT_PROMPT_VERSION = 'gip-report@1'
+GIP_REPORT_PROMPT_VERSION = 'gip-report@2'
 RAG_PROMPT_VERSION = 'rag-answer@1'
-SEVERITY_ORDER = ('blocker', 'major', 'minor', 'info')
-SEVERITY_LABELS = {
-    'blocker': 'Блокирующие',
-    'major': 'Значительные',
-    'minor': 'Незначительные',
-    'info': 'Информационные',
+
+# Группировка статусов замечаний (Issue) для отчёта ГИПу.
+ISSUE_STATUS_GROUPS = {
+    'NEW': 'open',
+    'REJECTED': 'open',
+    'IN_PROGRESS': 'progress',
+    'DISCUSSION': 'progress',
+    'DONE': 'review',
+    'CLOSED': 'closed',
+    'CANCELLED': 'closed',
 }
+ISSUE_GROUP_ORDER = ('open', 'progress', 'review', 'closed')
+ISSUE_GROUP_LABELS = {
+    'open': 'Открыто',
+    'progress': 'В работе',
+    'review': 'На проверке',
+    'closed': 'Закрыто',
+}
+ISSUE_STATUS_LABELS = {
+    'NEW': 'Новое',
+    'IN_PROGRESS': 'Принято в работу',
+    'REJECTED': 'Не принято',
+    'DISCUSSION': 'К обсуждению',
+    'DONE': 'Выполнено',
+    'CLOSED': 'Закрыто',
+    'CANCELLED': 'Аннулировано',
+}
+LLM_ERROR_SUMMARY = 'Резюме недоступно (ошибка LLM)'
+
+
+def _issue_group(status: str) -> str:
+    return ISSUE_STATUS_GROUPS.get(status, 'open')
+
+
+def _user_label(user) -> str:
+    if user is None:
+        return 'Без ответственного'
+    return user.get_full_name() or user.username
+
+
+def _report_issues(project, period_start, period_end) -> list:
+    """Замечания проекта (Issue) за период — основа отчёта ГИПу."""
+    from issues.models import Issue
+
+    return list(
+        Issue.objects
+        .filter(
+            document__project=project,
+            document__is_deleted=False,
+            created_at__date__gte=period_start,
+            created_at__date__lte=period_end,
+        )
+        .select_related('document', 'assignee')
+        .order_by('created_at', 'pk')
+    )
 
 
 def _gip_report_context(project, period_start, period_end, aggregates) -> str:
     lines = [
         f'Проект: {project.name} ({project.code})',
         f'Период: {period_start.isoformat()} — {period_end.isoformat()}',
-        f'Всего подтверждённых находок: {aggregates["total"]}',
-        'По критичности:',
+        f'Всего замечаний: {aggregates["total_issues"]}',
+        f'Просрочено: {aggregates["overdue_count"]}',
+        'По статусам:',
     ]
-    for severity in SEVERITY_ORDER:
-        count = aggregates['by_severity'].get(severity, 0)
+    for group in ISSUE_GROUP_ORDER:
+        count = aggregates['by_status'].get(group, 0)
         if count:
-            lines.append(f'- {SEVERITY_LABELS[severity]}: {count}')
-    lines.append('По документам:')
-    for code, count in list(aggregates['by_document'].items())[:15]:
-        lines.append(f'- {code}: {count}')
+            lines.append(f'- {ISSUE_GROUP_LABELS[group]}: {count}')
+    if aggregates['by_assignee']:
+        lines.append('По ответственным:')
+        for name, count in list(aggregates['by_assignee'].items())[:15]:
+            lines.append(f'- {name}: {count}')
     if aggregates['top_issues']:
-        lines.append('Ключевые находки:')
+        lines.append('Основные проблемы:')
         for issue in aggregates['top_issues']:
             lines.append(
-                f'- [{issue["document"]}, лист {issue["page"] or "?"}] '
+                f'- [{issue["document"]}; {issue["status"]}'
+                f'{"; срок " + issue["due_date"] if issue["due_date"] else ""}] '
                 f'{issue["message"][:200]}'
             )
     return '\n'.join(lines)
@@ -398,57 +449,66 @@ def generate_gip_report(
     llm_provider=None,
     model: str | None = None,
 ) -> GeneratedReport:
-    """Сводка замечаний для ГИПа за период (Ф4, DeepSeek/заглушка).
+    """Сводка ЗАМЕЧАНИЙ проекта для ГИПа за период (Issue, не находки ИИ).
 
-    Берёт ТОЛЬКО подтверждённые находки (status=confirmed) проекта,
-    подтверждённые в периоде (reviewed_at). payload:
-    {total, by_severity, by_document, top_issues, summary}.
-    Вызов LLM (или заглушки) фиксируется в LLMCallLog.
+    payload: {total_issues, by_status (open/progress/review/closed),
+    overdue_count, by_assignee, by_document, top_issues, summary}.
+    Резюме — LLM по агрегатам; при сбое — «Резюме недоступно (ошибка LLM)».
     """
     if period_start > period_end:
         raise ValueError('Начало периода позже конца')
 
-    findings = list(
-        PendingCheckResult.objects
-        .filter(
-            status=PendingCheckResult.Status.CONFIRMED,
-            reviewed_at__date__gte=period_start,
-            reviewed_at__date__lte=period_end,
-            check_run__document_version__document__project=project,
-        )
-        .select_related(
-            'rule', 'check_run__document_version__document',
-        )
-    )
+    issues = _report_issues(project, period_start, period_end)
+    today = timezone.localdate()
 
-    by_severity: dict[str, int] = {}
+    by_status = {group: 0 for group in ISSUE_GROUP_ORDER}
+    by_assignee: dict[str, int] = {}
     by_document: dict[str, int] = {}
-    ordered = sorted(
-        findings,
-        key=lambda f: (
-            SEVERITY_ORDER.index(f.severity)
-            if f.severity in SEVERITY_ORDER else len(SEVERITY_ORDER),
-            f.page or 0,
-            f.pk,
-        ),
-    )
-    top_issues = []
-    for finding in ordered:
-        by_severity[finding.severity] = by_severity.get(finding.severity, 0) + 1
-        document = finding.check_run.document_version.document
-        document_code = document.code or document.name
+    overdue_count = 0
+    prioritized = []
+    for issue in issues:
+        group = _issue_group(issue.status)
+        by_status[group] += 1
+        assignee_label = _user_label(issue.assignee)
+        by_assignee[assignee_label] = by_assignee.get(assignee_label, 0) + 1
+        document_code = issue.document.code or issue.document.name
         by_document[document_code] = by_document.get(document_code, 0) + 1
-        if len(top_issues) < 5:
-            top_issues.append({
-                'message': finding.message,
-                'page': finding.page,
-                'document': document_code,
-                'severity': finding.severity,
-            })
+        is_overdue = bool(
+            issue.due_date
+            and issue.due_date < today
+            and issue.status not in ('CLOSED', 'CANCELLED')
+        )
+        if is_overdue:
+            overdue_count += 1
+        prioritized.append((
+            0 if is_overdue else 1,
+            ISSUE_GROUP_ORDER.index(group),
+            issue.due_date or today.replace(year=today.year + 100),
+            issue.pk,
+            issue,
+        ))
+    prioritized.sort(key=lambda item: item[:4])
+
+    top_issues = []
+    for _overdue, _group, _due, _pk, issue in prioritized[:7]:
+        top_issues.append({
+            'message': issue.description,
+            'document': issue.document.code or issue.document.name,
+            'status': ISSUE_STATUS_LABELS.get(
+                issue.status, issue.status,
+            ),
+            'due_date': (
+                issue.due_date.isoformat() if issue.due_date else ''
+            ),
+            'assignee': _user_label(issue.assignee),
+            'page': issue.page_number,
+        })
 
     aggregates = {
-        'total': len(findings),
-        'by_severity': by_severity,
+        'total_issues': len(issues),
+        'by_status': by_status,
+        'overdue_count': overdue_count,
+        'by_assignee': by_assignee,
         'by_document': by_document,
         'top_issues': top_issues,
     }
@@ -462,15 +522,17 @@ def generate_gip_report(
         project, period_start, period_end, aggregates,
     )
     llm_call = None
-    summary = ''
+    summary = LLM_ERROR_SUMMARY
     try:
         response = llm_provider.complete([
             {
                 'role': 'system',
                 'content': (
-                    'Ты — помощник ГИПа. Составь краткое деловое резюме '
-                    'по подтверждённым замечаниям проверки, без выдумок, '
-                    'только по переданным данным.'
+                    'Ты — помощник ГИПа. Составь краткое деловое резюме для '
+                    'ГИПа по замечаниям проекта за период, используя только '
+                    'переданные данные. Начни со строк: «Всего замечаний: X. '
+                    'Просрочено: Y. В работе: Z.» и перечисли основные '
+                    'проблемы. Без выдумок.'
                 ),
             },
             {'role': 'user', 'content': context_text},
@@ -489,7 +551,6 @@ def generate_gip_report(
         )
     except Exception as exc:  # noqa: BLE001 — отчёт важнее сбоя LLM
         logger.exception('LLM для отчёта ГИПа упал: %s', exc)
-        summary = context_text
         llm_call = LLMCallLog.objects.create(
             provider=getattr(llm_provider, 'name', 'unknown'),
             model=getattr(llm_provider, 'model', 'unknown'),
@@ -509,6 +570,203 @@ def generate_gip_report(
         llm_call=llm_call,
         created_by=user,
     )
+
+
+def _report_period(report) -> tuple:
+    start_text, end_text = report.period.split('..')
+    from datetime import date as _date
+
+    return _date.fromisoformat(start_text), _date.fromisoformat(end_text)
+
+
+def _report_rows(report) -> list[list[str]]:
+    """Строки таблицы отчёта: №, документ, статус, срок, ответственный."""
+    period_start, period_end = _report_period(report)
+    rows = []
+    for index, issue in enumerate(
+        _report_issues(report.project, period_start, period_end), start=1,
+    ):
+        rows.append([
+            str(index),
+            issue.document.code or issue.document.name,
+            ISSUE_STATUS_LABELS.get(issue.status, issue.status),
+            issue.due_date.strftime('%d.%m.%Y') if issue.due_date else '—',
+            _user_label(issue.assignee),
+        ])
+    return rows
+
+
+def _report_title(report) -> str:
+    period_start, period_end = _report_period(report)
+    return (
+        f'Отчет ГИПа по проекту {report.project.name} '
+        f'({report.project.code}) за период '
+        f'{period_start.strftime("%d.%m.%Y")} — '
+        f'{period_end.strftime("%d.%m.%Y")}'
+    )
+
+
+def _report_summary_text(report) -> str:
+    payload = report.payload or {}
+    lines = [
+        f'Всего замечаний: {payload.get("total_issues", 0)}',
+        f'Просрочено: {payload.get("overdue_count", 0)}',
+        'По статусам: ' + ', '.join(
+            f'{ISSUE_GROUP_LABELS[group]}: '
+            f'{payload.get("by_status", {}).get(group, 0)}'
+            for group in ISSUE_GROUP_ORDER
+        ),
+        f'Резюме: {payload.get("summary", "")}',
+    ]
+    return '\n'.join(lines)
+
+
+def gip_report_pdf(report) -> bytes:
+    """PDF отчёта ГИПа (PyMuPDF, встроенный CJK-шрифт с кириллицей)."""
+    fontname = 'china-s'
+    doc = pymupdf.open()
+    page = doc.new_page(width=595, height=842)
+    margin = 42
+    width = page.rect.width - 2 * margin
+    y = margin
+
+    def add_page_if_needed(needed: float) -> None:
+        nonlocal page, y
+        if y + needed > page.rect.height - margin:
+            page = doc.new_page(width=595, height=842)
+            y = margin
+
+    def write(text: str, size: float = 11, gap: float = 6) -> None:
+        nonlocal y
+        add_page_if_needed(size * 1.6)
+        page.insert_text(
+            (margin, y + size), text, fontname=fontname, fontsize=size,
+        )
+        y += size * 1.6 + gap
+
+    def write_wrapped(text: str, size: float = 10) -> None:
+        """Перенос по словам с ручной разбивкой на строки."""
+        nonlocal y
+        max_chars = int(width / (size * 0.52)) or 60
+        words = str(text).split()
+        line = ''
+        for word in words:
+            candidate = (line + ' ' + word).strip()
+            if len(candidate) > max_chars and line:
+                write(line, size=size, gap=0)
+                line = word
+            else:
+                line = candidate
+        if line:
+            write(line, size=size, gap=0)
+
+    write(_report_title(report), size=15, gap=14)
+
+    payload = report.payload or {}
+    summary_head = (
+        f'Всего замечаний: {payload.get("total_issues", 0)}. '
+        f'Просрочено: {payload.get("overdue_count", 0)}. '
+        f'Число замечаний в работе: '
+        f'{payload.get("by_status", {}).get("progress", 0)}.'
+    )
+    write(summary_head, size=11, gap=2)
+    write(
+        'По статусам: ' + ', '.join(
+            f'{ISSUE_GROUP_LABELS[group]} — '
+            f'{payload.get("by_status", {}).get(group, 0)}'
+            for group in ISSUE_GROUP_ORDER
+        ),
+        size=10, gap=12,
+    )
+
+    rows = _report_rows(report)
+    columns = (30, 200, 105, 85, 95)
+    line_height = 16
+    write('Замечания:', size=12, gap=4)
+    add_page_if_needed(line_height * 2)
+
+    headers = ('№', 'Документ', 'Статус', 'Срок', 'Ответственный')
+    x = margin
+    for header, col_width in zip(headers, columns):
+        page.insert_text(
+            (x + 2, y + 11), header, fontname=fontname, fontsize=9,
+        )
+        x += col_width
+    y += line_height
+
+    for row in rows:
+        add_page_if_needed(line_height)
+        x = margin
+        for value, col_width in zip(row, columns):
+            page.draw_rect(
+                pymupdf.Rect(x, y, x + col_width, y + line_height),
+                color=(0.75, 0.75, 0.75), width=0.4,
+            )
+            clip = pymupdf.Rect(x + 2, y + 3, x + col_width - 2, y + line_height)
+            page.insert_textbox(
+                clip, str(value), fontname=fontname, fontsize=8.5,
+            )
+            x += col_width
+        y += line_height
+
+    y += 12
+    write('Резюме (LLM):', size=12, gap=2)
+    write_wrapped(str(payload.get('summary', '')), size=10)
+
+    return doc.tobytes()
+
+
+def gip_report_docx(report) -> bytes:
+    """Word-отчёт ГИПа (python-docx)."""
+    import io
+
+    from docx import Document as DocxDocument
+    from docx.shared import Pt
+
+    document = DocxDocument()
+    document.add_heading(_report_title(report), level=1)
+
+    payload = report.payload or {}
+    summary = document.add_paragraph(
+        f'Всего замечаний: {payload.get("total_issues", 0)}. '
+        f'Просрочено: {payload.get("overdue_count", 0)}. '
+        f'В работе: {payload.get("by_status", {}).get("progress", 0)}.'
+    )
+    summary.runs[0].font.size = Pt(12)
+
+    statuses = ', '.join(
+        f'{ISSUE_GROUP_LABELS[group]} — '
+        f'{payload.get("by_status", {}).get(group, 0)}'
+        for group in ISSUE_GROUP_ORDER
+    )
+    document.add_paragraph(f'По статусам: {statuses}')
+    if payload.get('by_assignee'):
+        document.add_paragraph(
+            'По ответственным: ' + ', '.join(
+                f'{name} — {count}'
+                for name, count in payload['by_assignee'].items()
+            )
+        )
+
+    rows = _report_rows(report)
+    table = document.add_table(rows=1, cols=5)
+    table.style = 'Table Grid'
+    for cell, header in zip(
+        table.rows[0].cells,
+        ('№', 'Документ', 'Статус', 'Срок', 'Ответственный'),
+    ):
+        cell.text = header
+    for row in rows:
+        cells = table.add_row().cells
+        for cell, value in zip(cells, row):
+            cell.text = str(value)
+
+    document.add_heading('Резюме (LLM)', level=2)
+    document.add_paragraph(str(payload.get('summary', '')))
+
+    buffer = io.BytesIO()
+    document.save(buffer)
+    return buffer.getvalue()
 
 
 def _reminder_recipients(project, audience: str):
@@ -689,3 +947,114 @@ def crop_finding_image(
         )
         data = pixmap.tobytes('jpeg')
     return base64.b64encode(data).decode('ascii')
+
+
+# ---------- База знаний (UX-аудит stage 2) ----------
+
+KNOWLEDGE_DOC_TYPES = ('customer_req', 'internal_standard', 'past_issues')
+
+
+def upload_knowledge_document(
+    user,
+    project,
+    uploaded_file,
+    title: str,
+    doc_type: str,
+    tenant_scope: str,
+) -> InternalDocument:
+    """Загрузка документа в базу знаний (файл — через storage/FileField).
+
+    Создаёт storage.Document + версию сервисом upload_document (единый
+    FileStorage-путь проекта), затем InternalDocument с tenant_scope.
+    Индексация запускается отдельно (Celery-задача).
+    """
+    from uuid import uuid4
+
+    from storage.domain.models import Section
+    from storage.domain.services import upload_document
+
+    if doc_type not in KNOWLEDGE_DOC_TYPES:
+        raise ValueError('Неизвестный тип документа базы знаний')
+    if tenant_scope not in ('project', 'company'):
+        raise ValueError('Область видимости: только проект или компания')
+
+    section = (
+        Section.objects.filter(project=project).order_by('order', 'pk').first()
+    )
+    if section is None:
+        raise ValueError(
+            'В проекте нет разделов — нельзя сохранить файл базы знаний',
+        )
+
+    version = upload_document(
+        user=user,
+        project=project,
+        section=section,
+        code=f'KB-{uuid4().hex[:10].upper()}',
+        name=title or uploaded_file.name,
+        doc_type='report',
+        file=uploaded_file,
+    )
+    document = version.document if hasattr(version, 'document') else version
+
+    return InternalDocument.objects.create(
+        tenant_scope=tenant_scope,
+        company=project.company if tenant_scope == 'company' else None,
+        project=project if tenant_scope == 'project' else None,
+        source_document=document,
+        doc_type=doc_type,
+        title=title or uploaded_file.name,
+        created_by=user,
+        index_status='queued',
+    )
+
+
+def index_internal_document(internal_document_id: int) -> int:
+    """Индексация InternalDocument со статусами (queued→running→done/failed)."""
+    try:
+        internal = InternalDocument.objects.select_related(
+            'source_document',
+        ).get(pk=internal_document_id)
+    except InternalDocument.DoesNotExist:
+        return 0
+
+    internal.index_status = 'running'
+    internal.save(update_fields=['index_status'])
+    try:
+        version = internal.source_document.current_version
+        if version is None:
+            raise ValueError('У исходного документа нет текущей версии')
+        count = index_document(internal, version.file.path)
+        internal.index_status = 'done'
+        internal.index_error = ''
+        internal.save(update_fields=['index_status', 'index_error'])
+        return count
+    except Exception as exc:  # noqa: BLE001 — статус важнее трейса
+        logger.exception('Индексация базы знаний #%s упала: %s', internal.pk, exc)
+        internal.index_status = 'failed'
+        internal.index_error = str(exc)[:1000]
+        internal.save(update_fields=['index_status', 'index_error'])
+        return 0
+
+
+def remove_knowledge_document(internal_document) -> None:
+    """Мягкое удаление из базы знаний (is_active=False)."""
+    internal_document.is_active = False
+    internal_document.save(update_fields=['is_active'])
+
+
+def knowledge_documents(project):
+    """Документы базы знаний проекта: проектные + компанейские (активные)."""
+    from django.db.models import Count, Q
+
+    return (
+        InternalDocument.objects
+        .filter(is_active=True)
+        .filter(
+            Q(tenant_scope='project', project=project)
+            | Q(tenant_scope='company', company=project.company)
+        )
+        .select_related('source_document')
+        .annotate(chunk_count=Count('chunks'))
+        .order_by('-created_at', '-pk')
+    )

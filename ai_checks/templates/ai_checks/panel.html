@@ -43,7 +43,7 @@
 {% else %}
   <div class="small text-muted mb-2">
     Версия {{ version.version_number }} · правил: {{ run.rules_total }} ·
-    находок: {{ run.findings_total }}
+    замечаний: {{ run.findings_total }}
     <button type="button" class="btn btn-link btn-sm p-0 ms-1"
             hx-post="{% url 'ai_checks:start' document.pk %}"
             hx-target="#aiChecksBody" hx-swap="innerHTML">
@@ -54,7 +54,7 @@
     {% include 'ai_checks/_finding_row.html' with finding=finding %}
   {% empty %}
     <div class="alert alert-success py-1 px-2 small mb-0">
-      Находок нет — лист прошёл проверку правилами СПДС.
+      Замечаний нет — лист прошёл проверку правилами СПДС.
     </div>
   {% endfor %}
 {% endif %}

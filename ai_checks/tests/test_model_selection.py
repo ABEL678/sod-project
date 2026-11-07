@@ -71,18 +71,14 @@ class ModelSelectionServiceTests(TestCase):
         )
 
     def test_gip_report_passes_model_to_llm(self):
-        check_run = CheckRun.objects.create(
-            document_version=self.version, initiated_by=self.user,
-            status=CheckRun.Status.DONE,
-        )
-        rule = RuleDefinition.objects.get(code='SPDS.RAME')
-        now = timezone.now()
-        PendingCheckResult.objects.create(
-            check_run=check_run, rule=rule, status='confirmed',
-            severity='major', page=1, message='Находка',
-            reviewed_at=now,
+        from issues.models import Issue
+
+        Issue.objects.create(
+            document=self.document, author=self.user,
+            description='Замечание', status='NEW',
         )
         spy = SpyLLMProvider()
+        now = timezone.now()
         report = generate_gip_report(
             self.project, (now - timedelta(days=1)).date(), now.date(),
             self.user,

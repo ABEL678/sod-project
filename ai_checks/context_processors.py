@@ -18,5 +18,6 @@ def ai_checks(request):
     return {
         'ai_checks_enabled': enabled,
         'ai_report_allowed': enabled and _report_allowed(request.user),
+        'ai_knowledge_allowed': enabled and _report_allowed(request.user),
         'ai_available_models': getattr(settings, 'AI_AVAILABLE_MODELS', []),
     }
