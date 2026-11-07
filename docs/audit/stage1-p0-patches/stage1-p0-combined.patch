@@ -1,0 +1,406 @@
+diff --git a/ai_checks/templates/ai_checks/_panel.html b/ai_checks/templates/ai_checks/_panel.html
+index 2534a3c..933aa96 100644
+--- a/ai_checks/templates/ai_checks/_panel.html
++++ b/ai_checks/templates/ai_checks/_panel.html
+@@ -5,7 +5,8 @@
+ {% endcomment %}
+ <div class="ai-checks" id="aiChecksPanel">
+   <button type="button" class="ai-checks__fab" id="aiChecksToggle"
+-          title="ИИ-проверка листа (детерминированные правила)">
++          title="ИИ-проверка листа (детерминированные правила)"
++          aria-controls="aiChecksBody" aria-expanded="false">
+     <i class="bi bi-robot" aria-hidden="true"></i> Проверить
+   </button>
+   <button type="button" class="ai-checks__close" id="aiChecksClose"
+@@ -13,6 +14,7 @@
+     <i class="bi bi-x-lg" aria-hidden="true"></i>
+   </button>
+   <div class="ai-checks__body d-none" id="aiChecksBody"
++       role="dialog" aria-label="Панель ИИ-проверки"
+        hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'>
+     <div class="text-muted small p-2">Загрузка…</div>
+   </div>
+@@ -27,13 +29,18 @@
+     box-shadow: 0 2px 8px rgba(0, 0, 0, .25);
+   }
+   .ai-checks__fab:hover { filter: brightness(1.07); }
++  /* UX-аудит P0-4: крестик виден только у ОТКРЫТОЙ панели — раньше он
++     висел всегда и маскировал чертёж; кнопка «Проверить» больше не
++     прячется целиком после закрытия. */
+   .ai-checks__close {
+     position: absolute; top: -14px; right: 0;
+     width: 28px; height: 28px; border-radius: 50%;
+     border: 1px solid #d4d4ce; background: #fff; color: #333;
+     font-size: 12px; cursor: pointer; line-height: 1;
+     box-shadow: 0 2px 6px rgba(0, 0, 0, .18);
++    display: none;
+   }
++  .ai-checks.is-open .ai-checks__close { display: block; }
+   .ai-checks__close:hover { background: #f1f3f6; }
+   .ai-checks__body {
+     position: absolute; right: 0; bottom: 46px;
+@@ -57,21 +64,18 @@
+ </style>
+ <script>
+ (function () {
++  var root = document.getElementById('aiChecksPanel');
+   var toggle = document.getElementById('aiChecksToggle');
++  var closeBtn = document.getElementById('aiChecksClose');
+   var body = document.getElementById('aiChecksBody');
+-  if (!toggle || !body) { return; }
++  if (!root || !toggle || !closeBtn || !body) { return; }
+ 
+   // Кнопка «Проверить» скрыта, если нет документа или открыта
+   // карточка «Детали» (правая панель перекрывает нижний правый угол).
+-  var root = document.getElementById('aiChecksPanel');
+-  var hiddenByUser = false;
+-
++  // UX-аудит P0-4: скрытие по кнопке (hiddenByUser) удалено — после
++  // закрытия панели крестиком FAB остаётся на месте, логика стала
++  // предсказуемой: FAB = «есть документ и закрыты Детали».
+   function updateFabVisibility() {
+-    if (!root) { return; }
+-    if (hiddenByUser) {
+-      root.classList.add('d-none');
+-      return;
+-    }
+     var viewer = document.getElementById('pdfViewer');
+     var hasDocument = !!(viewer && viewer.dataset.pdfUrl);
+     var detail = document.getElementById('detail');
+@@ -80,36 +84,45 @@
+     root.classList.toggle('d-none', !hasDocument || detailsOpen);
+   }
+ 
+-  // Крестик: скрывает панель и FAB целиком (чистый вид). Кнопка вернётся
+-  // при следующем клике по листу (не мешает чтению чертежа).
+-  // Слушатель на КОРНЕ: крестик — сосед #aiChecksBody, не его потомок.
+-  root.addEventListener('click', function (event) {
+-    if (!event.target.closest('#aiChecksClose')) {
+-      return;
++  // Явные open/close (P0-4): одно состояние — класс is-open на корне,
++  // крестик и Esc всегда ведут себя одинаково.
++  function openPanel() {
++    root.classList.add('is-open');
++    body.classList.remove('d-none');
++    toggle.setAttribute('aria-expanded', 'true');
++    // Открытие всегда обновляет содержимое (свежий статус прогона).
++    if (window.htmx) {
++      window.htmx.ajax('GET', '{% url "ai_checks:panel" document.pk %}', {
++        target: body, swap: 'innerHTML'
++      });
+     }
+-    hiddenByUser = true;
++  }
++
++  function closePanel() {
++    root.classList.remove('is-open');
+     body.classList.add('d-none');
+-    updateFabVisibility();
+-    var stage = document.getElementById('pdf-panel')
+-      || document.querySelector('.stage');
+-    if (stage) {
+-      stage.addEventListener('click', function restoreFab() {
+-        stage.removeEventListener('click', restoreFab);
+-        hiddenByUser = false;
+-        updateFabVisibility();
+-      });
++    toggle.setAttribute('aria-expanded', 'false');
++  }
++
++  toggle.addEventListener('click', function () {
++    if (root.classList.contains('is-open')) {
++      closePanel();
++    } else {
++      openPanel();
+     }
+   });
+ 
+-  // Toggle: открытие всегда обновляет содержимое (свежий статус прогона),
+-  // повторное нажатие при открытом панели — закрывает её.
+-  toggle.addEventListener('click', function () {
+-    var hidden = body.classList.toggle('d-none');
+-    if (hidden) { return; }
+-    if (window.htmx) {
+-      window.htmx.ajax('GET', '{% url "ai_checks:panel" document.pk %}', {
+-        target: body, swap: 'innerHTML'
+-      });
++  // Крестик: закрывает ТОЛЬКО панель, FAB остаётся видимым.
++  closeBtn.addEventListener('click', function () {
++    closePanel();
++    toggle.focus();
++  });
++
++  // Esc — стандартный способ закрыть всплывающую панель.
++  document.addEventListener('keydown', function (event) {
++    if (event.key === 'Escape' && root.classList.contains('is-open')) {
++      closePanel();
++      toggle.focus();
+     }
+   });
+ 
+diff --git a/ai_checks/templates/ai_checks/_report_result.html b/ai_checks/templates/ai_checks/_report_result.html
+index 7516d38..db58c6e 100644
+--- a/ai_checks/templates/ai_checks/_report_result.html
++++ b/ai_checks/templates/ai_checks/_report_result.html
+@@ -7,7 +7,10 @@
+   <div class="border rounded p-3 bg-white" id="aiReport-{{ report.pk }}">
+     <div class="d-flex justify-content-between align-items-baseline mb-2">
+       <span class="fw-semibold">
+-        Отчёт за период {{ report.period }}
++        {# UX-аудит P0-3: period_label — человекочитаемые даты из вьюхи #}
++        {# (report.period — это ISO 'start..end' из модели, а не метка). #}
++        Отчёт за период {{ period_label }}
++        <span class="text-muted small fw-normal ms-2">сгенерирован {{ report.created_at|date:"d.m.Y H:i" }}</span>
+       </span>
+       <a class="btn btn-sm btn-outline-secondary text-nowrap"
+          href="{% url 'ai_checks:report_json' report.pk %}">
+diff --git a/ai_checks/views.py b/ai_checks/views.py
+index 755fe37..9aa19bd 100644
+--- a/ai_checks/views.py
++++ b/ai_checks/views.py
+@@ -366,10 +366,18 @@ def report_generate(request, project_id: int):
+         except ValueError as exc:
+             error = str(exc)
+ 
++    # UX-аудит P0-3: человекочитаемый период формируется во вьюхе.
++    # Раньше шаблон выводил report.period (ISO 'YYYY-MM-DD..YYYY-MM-DD'
++    # из модели) — без дат в привычном формате; ключа payload.period
++    # в payload вообще не существует.
+     return render(request, 'ai_checks/_report_result.html', {
+         'project': project,
+         'report': report,
+         'error': error,
++        'period_label': (
++            f'{period_start:%d.%m.%Y} — {period_end:%d.%m.%Y}'
++            if report else ''
++        ),
+     })
+ 
+ 
+diff --git a/static/css/app.css b/static/css/app.css
+index a1da9a8..6990569 100644
+--- a/static/css/app.css
++++ b/static/css/app.css
+@@ -652,6 +652,47 @@ body.app-body {
+     font-weight: 600;
+ }
+ 
++/* ---------- UX-аудит (P0-1, P0-2): панель вкладки ---------- */
++
++/* Обёртка «вкладки + панель» (#mainTabs): цель htmx-переключения
++   вкладок (hx-target="#mainTabs"), продолжает flex-колонку .app-main. */
++.app-tabs-wrap {
++    flex: 1 1 auto;
++    min-height: 0;
++    min-width: 0;
++    display: flex;
++    flex-direction: column;
++}
++
++/* Панель вкладки — колонка с ВНУТРЕННЕЙ прокруткой: контент вкладки
++   замещает друг друга и больше не наезжает на таблицу документов
++   и не обрезается на мобильных (.app-main { overflow: hidden }). */
++.ai-tabpane {
++    flex: 1 1 auto;
++    min-height: 0;
++    min-width: 0;
++    display: flex;
++    flex-direction: column;
++    overflow: hidden;
++}
++
++.ai-tabpane__scroll {
++    flex: 1 1 auto;
++    min-height: 0;
++    overflow-y: auto;
++    padding: 0 10px 12px;   /* сетка тулбара: 10 px */
++}
++
++/* Пустые контейнеры не занимают места и не дают отступ. */
++.ai-tabpane:empty { display: none; }
++
++/* Подсказка о загрузке при переключении вкладки (hx-indicator). */
++.app-tabs-wrap.htmx-request {
++    opacity: .55;
++    transition: opacity .15s ease;
++    pointer-events: none;
++}
++
+ /* ---------- Toolbar ---------- */
+ 
+ .toolbar {
+diff --git a/storage/adapters/templates/storage/project_detail.html b/storage/adapters/templates/storage/project_detail.html
+index 2d6fb1a..b76d436 100644
+--- a/storage/adapters/templates/storage/project_detail.html
++++ b/storage/adapters/templates/storage/project_detail.html
+@@ -214,55 +214,70 @@
+             {% endif %}
+ 
+             {% if can_manage_participants %}
+-                <nav class="app-tabs" aria-label="Разделы проекта">
+-                    <a class="app-tab {% if active_tab == 'documents' %}active{% endif %}"
+-                       href="{% url 'storage:project_detail' project.pk %}{% if selected_view %}?view={{ selected_view.pk }}{% endif %}">
+-                        <i class="bi bi-table" aria-hidden="true"></i>
+-                        Документы
+-                        <span class="badge text-bg-light border">{{ documents|length }}</span>
+-                    </a>
+-                    <a class="app-tab {% if active_tab == 'participants' %}active{% endif %}"
+-                       href="{% url 'storage:project_detail' project.pk %}?tab=participants">
+-                        <i class="bi bi-people" aria-hidden="true"></i>
+-                        Участники
+-                    </a>
+-                    <a class="app-tab {% if active_tab == 'trash' %}active{% endif %}"
+-                       href="{% url 'storage:project_detail' project.pk %}?tab=trash">
+-                        <i class="bi bi-trash3" aria-hidden="true"></i>
+-                        Корзина
+-                    </a>
+-                    {% if ai_checks_enabled %}
+-                        {# Этап 19 (Ф2): вкладка ИИ-поиска (HTMX-панель) #}
+-                        <a class="app-tab" href="#" id="aiSearchTab"
+-                           hx-get="{% url 'ai_checks:rag_panel' project.pk %}"
+-                           hx-target="#aiRagPane" hx-swap="innerHTML"
+-                           onclick="document.querySelectorAll('.app-tab').forEach(function (t) { t.classList.remove('active'); }); this.classList.add('active'); return false;">
+-                            <i class="bi bi-robot" aria-hidden="true"></i>
+-                            ИИ-поиск
++                {# UX-аудит P0-1/P0-2: вкладки — обычная навигация с состоянием #}
++                {# в URL (?tab=…), панели взаимоисключающие. #mainTabs — цель #}
++                {# htmx-переключения: из ответа вырезается и подставляется целиком. #}
++                <div id="mainTabs" class="app-tabs-wrap">
++                    <nav class="app-tabs" role="tablist" aria-label="Разделы проекта">
++                        <a class="app-tab {% if active_tab == 'documents' %}active{% endif %}"
++                           href="{% url 'storage:project_detail' project.pk %}{% if selected_view %}?view={{ selected_view.pk }}{% endif %}"
++                           role="tab"
++                           aria-selected="{% if active_tab == 'documents' %}true{% else %}false{% endif %}">
++                            <i class="bi bi-table" aria-hidden="true"></i>
++                            Документы
++                            <span class="badge text-bg-light border">{{ documents|length }}</span>
+                         </a>
+-                    {% endif %}
+-                    {% if ai_report_allowed %}
+-                        {# Этап 19 (Ф4): вкладка «Отчёт ГИПу» (ГИП/админ) #}
+-                        <a class="app-tab" href="#" id="aiReportTab"
+-                           hx-get="{% url 'ai_checks:report_panel' project.pk %}"
+-                           hx-target="#aiReportPane" hx-swap="innerHTML"
+-                           onclick="document.querySelectorAll('.app-tab').forEach(function (t) { t.classList.remove('active'); }); this.classList.add('active'); return false;">
+-                            <i class="bi bi-file-earmark-bar-graph" aria-hidden="true"></i>
+-                            Отчёт ГИПу
++                        <a class="app-tab {% if active_tab == 'participants' %}active{% endif %}"
++                           href="{% url 'storage:project_detail' project.pk %}?tab=participants"
++                           role="tab"
++                           aria-selected="{% if active_tab == 'participants' %}true{% else %}false{% endif %}">
++                            <i class="bi bi-people" aria-hidden="true"></i>
++                            Участники
+                         </a>
+-                    {% endif %}
+-                </nav>
+-                {% if ai_checks_enabled %}
+-                    {# Этап 19 (Ф2): контейнер панели ИИ-поиска #}
+-                    <div id="aiRagPane" class="mt-2"></div>
+-                {% endif %}
+-                {% if ai_report_allowed %}
+-                    {# Этап 19 (Ф4): контейнер панели отчёта ГИПу #}
+-                    <div id="aiReportPane" class="mt-2"></div>
+-                {% endif %}
+-            {% endif %}
++                        <a class="app-tab {% if active_tab == 'trash' %}active{% endif %}"
++                           href="{% url 'storage:project_detail' project.pk %}?tab=trash"
++                           role="tab"
++                           aria-selected="{% if active_tab == 'trash' %}true{% else %}false{% endif %}">
++                            <i class="bi bi-trash3" aria-hidden="true"></i>
++                            Корзина
++                        </a>
++                        {% if ai_checks_enabled %}
++                            {# Этап 19 (Ф2): вкладка ИИ-поиска (состояние в URL) #}
++                            <a class="app-tab {% if active_tab == 'ai-search' %}active{% endif %}"
++                               id="aiSearchTab"
++                               href="{% url 'storage:project_detail' project.pk %}?tab=ai-search"
++                               hx-get="{% url 'storage:project_detail' project.pk %}?tab=ai-search"
++                               hx-target="#mainTabs" hx-select="#mainTabs"
++                               hx-swap="outerHTML show:window:top"
++                               hx-push-url="true" hx-indicator="#mainTabs"
++                               role="tab"
++                               aria-selected="{% if active_tab == 'ai-search' %}true{% else %}false{% endif %}">
++                                <i class="bi bi-robot" aria-hidden="true"></i>
++                                ИИ-поиск
++                            </a>
++                        {% endif %}
++                        {% if ai_report_allowed %}
++                            {# Этап 19 (Ф4): вкладка «Отчёт ГИПу» (ГИП/админ) #}
++                            <a class="app-tab {% if active_tab == 'ai-report' %}active{% endif %}"
++                               id="aiReportTab"
++                               href="{% url 'storage:project_detail' project.pk %}?tab=ai-report"
++                               hx-get="{% url 'storage:project_detail' project.pk %}?tab=ai-report"
++                               hx-target="#mainTabs" hx-select="#mainTabs"
++                               hx-swap="outerHTML show:window:top"
++                               hx-push-url="true" hx-indicator="#mainTabs"
++                               role="tab"
++                               aria-selected="{% if active_tab == 'ai-report' %}true{% else %}false{% endif %}">
++                                <i class="bi bi-file-earmark-bar-graph" aria-hidden="true"></i>
++                                Отчёт ГИПу
++                            </a>
++                        {% endif %}
++                    </nav>
+ 
+-            {% if active_tab == 'participants' and can_manage_participants %}
++                    {# P0-1: единственная панель вкладки — колонка с собственной #}
++                    {# прокруткой (.ai-tabpane), контент замещается, а не #}
++                    {# вставляется между вкладкой и таблицей документов. #}
++                    <div id="mainTabContent" class="ai-tabpane">
++                        {% if active_tab == 'participants' and can_manage_participants %}
+                 <div class="toolbar" data-role="participants-toolbar">
+                     <span class="fw-semibold">Участники проекта</span>
+                     <span class="badge text-bg-light border">{{ participants|length }}</span>
+@@ -413,8 +428,21 @@
+                         </table>
+                     </div>
+                 </div>
++                {# UX-аудит P0-1/P0-2: панели ИИ-вкладок — взаимоисключающие #}
++                {# ветки той же цепочки: рендерится только активная вкладка. #}
++                {% elif active_tab == 'ai-search' and ai_checks_enabled %}
++                    <div class="ai-tabpane__scroll">
++                        {% include 'ai_checks/_rag.html' %}
++                    </div>
++                {% elif active_tab == 'ai-report' and ai_report_allowed %}
++                    <div class="ai-tabpane__scroll">
++                        {% include 'ai_checks/_report.html' %}
++                    </div>
+             {% else %}
+                 {% include 'storage/_documents_panel.html' %}
++            {% endif %}
++                    </div>{# /#mainTabContent #}
++                </div>{# /#mainTabs #}
+             {% endif %}
+         </main>
+     </div>
+diff --git a/storage/adapters/views.py b/storage/adapters/views.py
+index 4a6920f..23909f3 100644
+--- a/storage/adapters/views.py
++++ b/storage/adapters/views.py
+@@ -738,6 +738,12 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
+ 
+     def get_template_names(self):
+         if getattr(self.request, 'htmx', False):
++            # UX-аудит P0-1/P0-2: запрос смены вкладки («ИИ-поиск»,
++            # «Отчёт ГИПу») возвращает полную страницу — htmx вырезает
++            # из неё #mainTabs (hx-select). Остальные htmx-запросы
++            # (фильтры/сортировка/зоны) получают только панель документов.
++            if self.request.GET.get('tab') in ('ai-search', 'ai-report'):
++                return [self.template_name]
+             return ['storage/_documents_panel.html']
+         return [self.template_name]
+ 
+@@ -769,7 +775,13 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
+         can_manage_participants = can_manage_project_participants(user, project)
+         active_tab = 'documents'
+         requested_tab = self.request.GET.get('tab')
+-        if can_manage_participants and requested_tab in ('participants', 'trash'):
++        # UX-аудит P0-2: вкладки ИИ-контура живут в URL наравне с остальными
++        # (видимость самих вкладок по-прежнему регулируют ai_checks_enabled /
++        # ai_report_allowed в шаблоне; при выключенном контуре вкладка
++        # мягко откатывается на «Документы»).
++        if can_manage_participants and requested_tab in (
++                'participants', 'trash', 'ai-search', 'ai-report',
++        ):
+             active_tab = requested_tab
+ 
+         sections = list(get_sections_with_counts(user, project))

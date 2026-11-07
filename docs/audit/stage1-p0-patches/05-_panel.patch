@@ -1,0 +1,140 @@
+diff --git a/ai_checks/templates/ai_checks/_panel.html b/ai_checks/templates/ai_checks/_panel.html
+index 2534a3c..933aa96 100644
+--- a/ai_checks/templates/ai_checks/_panel.html
++++ b/ai_checks/templates/ai_checks/_panel.html
+@@ -5,7 +5,8 @@
+ {% endcomment %}
+ <div class="ai-checks" id="aiChecksPanel">
+   <button type="button" class="ai-checks__fab" id="aiChecksToggle"
+-          title="ИИ-проверка листа (детерминированные правила)">
++          title="ИИ-проверка листа (детерминированные правила)"
++          aria-controls="aiChecksBody" aria-expanded="false">
+     <i class="bi bi-robot" aria-hidden="true"></i> Проверить
+   </button>
+   <button type="button" class="ai-checks__close" id="aiChecksClose"
+@@ -13,6 +14,7 @@
+     <i class="bi bi-x-lg" aria-hidden="true"></i>
+   </button>
+   <div class="ai-checks__body d-none" id="aiChecksBody"
++       role="dialog" aria-label="Панель ИИ-проверки"
+        hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'>
+     <div class="text-muted small p-2">Загрузка…</div>
+   </div>
+@@ -27,13 +29,18 @@
+     box-shadow: 0 2px 8px rgba(0, 0, 0, .25);
+   }
+   .ai-checks__fab:hover { filter: brightness(1.07); }
++  /* UX-аудит P0-4: крестик виден только у ОТКРЫТОЙ панели — раньше он
++     висел всегда и маскировал чертёж; кнопка «Проверить» больше не
++     прячется целиком после закрытия. */
+   .ai-checks__close {
+     position: absolute; top: -14px; right: 0;
+     width: 28px; height: 28px; border-radius: 50%;
+     border: 1px solid #d4d4ce; background: #fff; color: #333;
+     font-size: 12px; cursor: pointer; line-height: 1;
+     box-shadow: 0 2px 6px rgba(0, 0, 0, .18);
++    display: none;
+   }
++  .ai-checks.is-open .ai-checks__close { display: block; }
+   .ai-checks__close:hover { background: #f1f3f6; }
+   .ai-checks__body {
+     position: absolute; right: 0; bottom: 46px;
+@@ -57,21 +64,18 @@
+ </style>
+ <script>
+ (function () {
++  var root = document.getElementById('aiChecksPanel');
+   var toggle = document.getElementById('aiChecksToggle');
++  var closeBtn = document.getElementById('aiChecksClose');
+   var body = document.getElementById('aiChecksBody');
+-  if (!toggle || !body) { return; }
++  if (!root || !toggle || !closeBtn || !body) { return; }
+ 
+   // Кнопка «Проверить» скрыта, если нет документа или открыта
+   // карточка «Детали» (правая панель перекрывает нижний правый угол).
+-  var root = document.getElementById('aiChecksPanel');
+-  var hiddenByUser = false;
+-
++  // UX-аудит P0-4: скрытие по кнопке (hiddenByUser) удалено — после
++  // закрытия панели крестиком FAB остаётся на месте, логика стала
++  // предсказуемой: FAB = «есть документ и закрыты Детали».
+   function updateFabVisibility() {
+-    if (!root) { return; }
+-    if (hiddenByUser) {
+-      root.classList.add('d-none');
+-      return;
+-    }
+     var viewer = document.getElementById('pdfViewer');
+     var hasDocument = !!(viewer && viewer.dataset.pdfUrl);
+     var detail = document.getElementById('detail');
+@@ -80,36 +84,45 @@
+     root.classList.toggle('d-none', !hasDocument || detailsOpen);
+   }
+ 
+-  // Крестик: скрывает панель и FAB целиком (чистый вид). Кнопка вернётся
+-  // при следующем клике по листу (не мешает чтению чертежа).
+-  // Слушатель на КОРНЕ: крестик — сосед #aiChecksBody, не его потомок.
+-  root.addEventListener('click', function (event) {
+-    if (!event.target.closest('#aiChecksClose')) {
+-      return;
++  // Явные open/close (P0-4): одно состояние — класс is-open на корне,
++  // крестик и Esc всегда ведут себя одинаково.
++  function openPanel() {
++    root.classList.add('is-open');
++    body.classList.remove('d-none');
++    toggle.setAttribute('aria-expanded', 'true');
++    // Открытие всегда обновляет содержимое (свежий статус прогона).
++    if (window.htmx) {
++      window.htmx.ajax('GET', '{% url "ai_checks:panel" document.pk %}', {
++        target: body, swap: 'innerHTML'
++      });
+     }
+-    hiddenByUser = true;
++  }
++
++  function closePanel() {
++    root.classList.remove('is-open');
+     body.classList.add('d-none');
+-    updateFabVisibility();
+-    var stage = document.getElementById('pdf-panel')
+-      || document.querySelector('.stage');
+-    if (stage) {
+-      stage.addEventListener('click', function restoreFab() {
+-        stage.removeEventListener('click', restoreFab);
+-        hiddenByUser = false;
+-        updateFabVisibility();
+-      });
++    toggle.setAttribute('aria-expanded', 'false');
++  }
++
++  toggle.addEventListener('click', function () {
++    if (root.classList.contains('is-open')) {
++      closePanel();
++    } else {
++      openPanel();
+     }
+   });
+ 
+-  // Toggle: открытие всегда обновляет содержимое (свежий статус прогона),
+-  // повторное нажатие при открытом панели — закрывает её.
+-  toggle.addEventListener('click', function () {
+-    var hidden = body.classList.toggle('d-none');
+-    if (hidden) { return; }
+-    if (window.htmx) {
+-      window.htmx.ajax('GET', '{% url "ai_checks:panel" document.pk %}', {
+-        target: body, swap: 'innerHTML'
+-      });
++  // Крестик: закрывает ТОЛЬКО панель, FAB остаётся видимым.
++  closeBtn.addEventListener('click', function () {
++    closePanel();
++    toggle.focus();
++  });
++
++  // Esc — стандартный способ закрыть всплывающую панель.
++  document.addEventListener('keydown', function (event) {
++    if (event.key === 'Escape' && root.classList.contains('is-open')) {
++      closePanel();
++      toggle.focus();
+     }
+   });
+ 

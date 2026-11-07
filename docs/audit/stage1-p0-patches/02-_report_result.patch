@@ -1,0 +1,16 @@
+diff --git a/ai_checks/templates/ai_checks/_report_result.html b/ai_checks/templates/ai_checks/_report_result.html
+index 7516d38..db58c6e 100644
+--- a/ai_checks/templates/ai_checks/_report_result.html
++++ b/ai_checks/templates/ai_checks/_report_result.html
+@@ -7,7 +7,10 @@
+   <div class="border rounded p-3 bg-white" id="aiReport-{{ report.pk }}">
+     <div class="d-flex justify-content-between align-items-baseline mb-2">
+       <span class="fw-semibold">
+-        Отчёт за период {{ report.period }}
++        {# UX-аудит P0-3: period_label — человекочитаемые даты из вьюхи #}
++        {# (report.period — это ISO 'start..end' из модели, а не метка). #}
++        Отчёт за период {{ period_label }}
++        <span class="text-muted small fw-normal ms-2">сгенерирован {{ report.created_at|date:"d.m.Y H:i" }}</span>
+       </span>
+       <a class="btn btn-sm btn-outline-secondary text-nowrap"
+          href="{% url 'ai_checks:report_json' report.pk %}">

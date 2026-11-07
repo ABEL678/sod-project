@@ -1,0 +1,23 @@
+diff --git a/ai_checks/views.py b/ai_checks/views.py
+index 755fe37..9aa19bd 100644
+--- a/ai_checks/views.py
++++ b/ai_checks/views.py
+@@ -366,10 +366,18 @@ def report_generate(request, project_id: int):
+         except ValueError as exc:
+             error = str(exc)
+ 
++    # UX-аудит P0-3: человекочитаемый период формируется во вьюхе.
++    # Раньше шаблон выводил report.period (ISO 'YYYY-MM-DD..YYYY-MM-DD'
++    # из модели) — без дат в привычном формате; ключа payload.period
++    # в payload вообще не существует.
+     return render(request, 'ai_checks/_report_result.html', {
+         'project': project,
+         'report': report,
+         'error': error,
++        'period_label': (
++            f'{period_start:%d.%m.%Y} — {period_end:%d.%m.%Y}'
++            if report else ''
++        ),
+     })
+ 
+ 
