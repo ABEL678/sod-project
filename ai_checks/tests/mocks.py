@@ -89,3 +89,55 @@ class MockEmbeddingService:
             byte = seed[index % len(seed)]
             values.append(round((byte / 127.5) - 1.0, 6))
         return values
+
+
+class MockVectorBackend:
+    """Двойник VectorBackend для тестов на SQLite (без pgvector).
+
+    Повторяет контракт PgVectorBackend.search: применяет то же правило
+    видимости 8.2 (visibility_filter) и считает косинус на Python.
+    Используется только в тестах; в проде — PgVectorBackend.
+    """
+
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    def search(self, vector, filters, top_k: int) -> list:
+        from ai_checks.adapters.vector_pg import visibility_filter
+        from ai_checks.domain.models import InternalChunk
+
+        self.calls.append({'filters': dict(filters or {}), 'top_k': top_k})
+        queryset = InternalChunk.objects.filter(
+            document__is_active=True,
+        ).filter(visibility_filter(filters))
+        scope = (filters or {}).get('tenant_scope')
+        if scope:
+            queryset = queryset.filter(document__tenant_scope=scope)
+
+        scored = []
+        for chunk in queryset.select_related('document'):
+            scored.append({
+                'id': chunk.pk,
+                'text': chunk.text,
+                'document_id': chunk.document_id,
+                'score': self._cosine(vector, chunk.embedding),
+                'page_from': chunk.page_from,
+                'page_to': chunk.page_to,
+            })
+        scored.sort(key=lambda hit: hit['score'], reverse=True)
+        return scored[:max(1, int(top_k or 1))]
+
+    @staticmethod
+    def _cosine(left, right) -> float:
+        import math
+
+        left = [float(value) for value in left]
+        right = [float(value) for value in right]
+        if len(left) != len(right) or not left:
+            return 0.0
+        dot = sum(a * b for a, b in zip(left, right))
+        norm_left = math.sqrt(sum(a * a for a in left))
+        norm_right = math.sqrt(sum(b * b for b in right))
+        if norm_left == 0 or norm_right == 0:
+            return 0.0
+        return dot / (norm_left * norm_right)

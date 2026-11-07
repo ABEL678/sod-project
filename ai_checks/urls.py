@@ -18,4 +18,10 @@ urlpatterns = [
     path('finding/<int:pk>/confirm/', views.confirm_finding, name='confirm'),
     path('finding/<int:pk>/reject/', views.reject_finding, name='reject'),
     path('finding/<int:pk>/preview/', views.finding_preview, name='preview'),
+    # Ф2: RAG по внутренним документам (вкладка «ИИ-поиск»).
+    path('project/<int:project_id>/rag/', views.rag_panel, name='rag_panel'),
+    path(
+        'project/<int:project_id>/rag/search/',
+        views.rag_search, name='rag_search',
+    ),
 ]

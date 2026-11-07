@@ -1,0 +1,41 @@
+{% comment %}
+Ф2: результаты RAG — источники с цитатами, сгруппированные по tenant_scope
+(Проект → Компания → Общие знания).
+{% endcomment %}
+{% if error %}
+  <div class="alert alert-warning py-1 px-2 small mb-2">{{ error }}</div>
+{% elif not sources %}
+  <div class="alert alert-light border py-2 px-3 small mb-0">
+    Ничего не найдено
+  </div>
+{% else %}
+  <div class="small text-muted mb-2">
+    Вопрос: «{{ question }}» · источников: {{ sources|length }}
+  </div>
+
+  {% for scope, label, items in groups %}
+    <div class="mb-3">
+      <div class="fw-semibold small mb-1">
+        {% if scope == 'project' %}
+          <i class="bi bi-folder2-open me-1" aria-hidden="true"></i>
+        {% elif scope == 'company' %}
+          <i class="bi bi-building me-1" aria-hidden="true"></i>
+        {% else %}
+          <i class="bi bi-globe2 me-1" aria-hidden="true"></i>
+        {% endif %}
+        {{ label }}
+      </div>
+      {% for source in items %}
+        <div class="border rounded p-2 mb-1 bg-white" id="rag-source-{{ source.chunk_id }}">
+          <div class="d-flex justify-content-between align-items-baseline small">
+            <span class="fw-semibold">{{ source.document_title }}</span>
+            <span class="text-muted num">
+              score {{ source.score|floatformat:3 }}
+            </span>
+          </div>
+          <div class="small text-muted mt-1">{{ source.text|truncatechars:280 }}</div>
+        </div>
+      {% endfor %}
+    </div>
+  {% endfor %}
+{% endif %}

@@ -224,3 +224,73 @@ def run_rules_check(
             'status', 'findings_total', 'meta', 'finished_at',
         ])
     return check_run
+
+
+def rag_answer(
+    question: str,
+    company_id: int,
+    project_id: int | None = None,
+    top_k: int = 5,
+    embedding_service: EmbeddingService | None = None,
+    vector_backend=None,
+) -> dict:
+    """RAG-ответ по внутренней базе знаний (Ф2, без LLM).
+
+    Вопрос → эмбеддинг → PgVectorBackend.search с tenant-фильтрами (8.2) →
+    контекст из чанков. Тексты ответов/промптов не логируются (приватность).
+    Возвращает {answer, sources}; при отсутствии чанков — «Ничего не найдено».
+    answer — заглушка-дайджест (LLM-синтез — следующая фаза).
+    """
+    question = (question or '').strip()
+    if not question:
+        raise ValueError('Пустой вопрос')
+
+    if embedding_service is None:
+        # Ленивый импорт: домен не зависит от конкретного адаптера.
+        from ai_checks.adapters.embedding_onnx import BgeM3OnnxEmbedding
+
+        embedding_service = BgeM3OnnxEmbedding()
+    if vector_backend is None:
+        from ai_checks.adapters.vector_pg import PgVectorBackend
+
+        vector_backend = PgVectorBackend(dimension=embedding_service.dim)
+
+    vectors = embedding_service.embed_texts([question])
+    if not vectors:
+        raise ValueError('EmbeddingService не вернул вектор вопроса')
+
+    filters = {
+        'company_id': company_id,
+        'project_id': project_id,
+    }
+    hits = vector_backend.search(vectors[0], filters, top_k)
+    if not hits:
+        return {'answer': 'Ничего не найдено', 'sources': []}
+
+    chunk_by_id = {
+        chunk.pk: chunk
+        for chunk in InternalChunk.objects
+        .select_related('document')
+        .filter(pk__in=[hit['id'] for hit in hits])
+    }
+
+    sources = []
+    for hit in hits:
+        chunk = chunk_by_id.get(hit['id'])
+        if chunk is None:
+            continue
+        sources.append({
+            'chunk_id': chunk.pk,
+            'document_title': chunk.document.title,
+            'text': chunk.text,
+            'score': hit.get('score'),
+            'tenant_scope': chunk.document.tenant_scope,
+        })
+    if not sources:
+        return {'answer': 'Ничего не найдено', 'sources': []}
+
+    digest = '\n\n'.join(
+        f'[{source["document_title"]}] {source["text"][:300]}'
+        for source in sources[:3]
+    )
+    return {'answer': digest, 'sources': sources}

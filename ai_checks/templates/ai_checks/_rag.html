@@ -1,0 +1,28 @@
+{% comment %}
+Ф2: вкладка «ИИ-поиск» — форма вопроса, результаты подгружаются в
+#aiRagResults через HTMX (фрагмент _rag_results.html).
+{% endcomment %}
+<div class="toolbar" data-role="ai-rag-toolbar">
+  <span class="fw-semibold">
+    <i class="bi bi-robot me-1" aria-hidden="true"></i>ИИ-поиск по базе знаний
+  </span>
+  <span class="toolbar-spacer"></span>
+  <span class="text-muted small">
+    Только по доступным источникам компании и проекта
+  </span>
+</div>
+
+<form class="d-flex gap-2 px-2 pt-2"
+      hx-post="{% url 'ai_checks:rag_search' project.pk %}"
+      hx-target="#aiRagResults"
+      hx-swap="innerHTML">
+  {% csrf_token %}
+  <input type="text" name="question" class="form-control form-control-sm"
+         placeholder="Задайте вопрос по документам проекта…"
+         aria-label="Вопрос к базе знаний" required>
+  <button type="submit" class="btn btn-sm btn-primary text-nowrap">
+    <i class="bi bi-search me-1" aria-hidden="true"></i>Найти
+  </button>
+</form>
+
+<div id="aiRagResults" class="px-2 pt-2"></div>

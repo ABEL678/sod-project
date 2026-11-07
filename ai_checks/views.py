@@ -18,6 +18,8 @@ from django.utils import timezone
 from django.views.decorators.http import require_GET, require_POST
 
 from ai_checks.domain.models import CheckRun, PendingCheckResult
+from ai_checks.domain.services import rag_answer
+from storage.domain.services import get_accessible_projects
 from ai_checks.tasks import check_document_version_task
 from storage.domain.models import Document
 from storage.domain.services import check_issue_permission, create_issue
@@ -234,3 +236,69 @@ def finding_preview(request, pk: int):
         pixmap = page.get_pixmap(clip=clip, matrix=pymupdf.Matrix(2, 2))
 
     return HttpResponse(pixmap.tobytes('png'), content_type='image/png')
+
+
+def _rag_groups(sources: list[dict]) -> list[tuple[str, str, list[dict]]]:
+    """Группирует источники по tenant_scope: проект → компания → общие."""
+    order = ('project', 'company', 'global')
+    labels = {
+        'project': 'Проект',
+        'company': 'Компания',
+        'global': 'Общие знания',
+    }
+    groups = []
+    for scope in order:
+        items = [source for source in sources if source['tenant_scope'] == scope]
+        if items:
+            groups.append((scope, labels[scope], items))
+    return groups
+
+
+@login_required
+@require_GET
+def rag_panel(request, project_id: int):
+    """HTMX-фрагмент вкладки «ИИ-поиск»: форма вопроса."""
+    _ensure_enabled()
+    project = get_object_or_404(
+        get_accessible_projects(request.user), pk=project_id,
+    )
+    return render(request, 'ai_checks/_rag.html', {'project': project})
+
+
+@login_required
+@require_POST
+def rag_search(request, project_id: int):
+    """HTMX-фрагмент: ответ и источники с цитатами (сгруппированы)."""
+    _ensure_enabled()
+    project = get_object_or_404(
+        get_accessible_projects(request.user), pk=project_id,
+    )
+    question = (request.POST.get('question') or '').strip()
+    error = ''
+    result = {'answer': '', 'sources': []}
+    if not question:
+        error = 'Введите вопрос.'
+    else:
+        try:
+            result = rag_answer(
+                question,
+                company_id=project.company_id,
+                project_id=project.pk,
+            )
+        except ValueError as exc:
+            error = str(exc)
+        except NotImplementedError:
+            # SQLite-режим (dev без Docker): векторный поиск только на PG.
+            error = (
+                'Векторный поиск доступен только на PostgreSQL. '
+                'Поднимите dev-стек: docker compose -f docker-compose.dev.yml up -d.'
+            )
+
+    return render(request, 'ai_checks/_rag_results.html', {
+        'project': project,
+        'question': question,
+        'answer': result['answer'],
+        'sources': result['sources'],
+        'groups': _rag_groups(result['sources']),
+        'error': error,
+    })
