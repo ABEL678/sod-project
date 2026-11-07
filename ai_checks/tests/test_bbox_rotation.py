@@ -1,14 +1,15 @@
 """Синхронизация bbox ИИ-находок с поворотом листа (баг владельца).
 
-PyMuPDF отдаёт координаты в неповёрнутой системе; вьювер отображает лист
-с поворотом (кнопка «Повернуть»). bbox_ratios_for_rotation переводит
-координаты в ratios пространства отображения.
+PyMuPDF заменён на pypdfium2: координаты bbox — неповёрнутая система
+(эмуляция в pdfium_tools); вьювер отображает лист с поворотом
+(кнопка «Повернуть»). bbox_ratios_for_rotation переводит координаты
+в ratios пространства отображения.
 """
 
-import pymupdf
 from django.test import SimpleTestCase
 
 from ai_checks.domain.services import bbox_ratios_for_rotation, crop_finding_image
+from ai_checks.tests.pdfgen import make_pdf_bytes
 
 
 PAGE_W, PAGE_H = 200, 300
@@ -23,11 +24,11 @@ def setUpModule():
     handle, PDF_PATH = tempfile.mkstemp(suffix='.pdf')
     import os as _os
     _os.close(handle)  # Windows: освободить дескриптор до save
-    pdf = pymupdf.open()
-    page = pdf.new_page(width=PAGE_W, height=PAGE_H)
-    page.insert_text((20, 40), 'Kilo', fontsize=10)
-    pdf.save(PDF_PATH)
-    pdf.close()
+    with open(PDF_PATH, 'wb') as fh:
+        fh.write(make_pdf_bytes(
+            width=PAGE_W, height=PAGE_H,
+            texts=[('Kilo', 10, (20, 40))],
+        ))
 
 
 def tearDownModule():

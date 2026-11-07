@@ -9,10 +9,11 @@
 
 from __future__ import annotations
 
+import io
 import json
 from datetime import date, timedelta
 
-import pymupdf
+from PIL import ImageDraw
 from django.conf import settings
 from django.contrib.auth.decorators import login_required
 from django.http import Http404, HttpResponse
@@ -20,6 +21,7 @@ from django.shortcuts import get_object_or_404, render
 from django.utils import timezone
 from django.views.decorators.http import require_GET, require_POST
 
+from ai_checks import pdfium_tools
 from ai_checks.domain.models import CheckRun, GeneratedReport, PendingCheckResult
 from ai_checks.domain.services import (
     KNOWLEDGE_DOC_TYPES,
@@ -43,6 +45,8 @@ from storage.domain.models import Document
 from storage.domain.services import check_issue_permission, create_issue
 
 BBOX_MARGIN_PT = 12
+PREVIEW_SCALE = 2  # был pymupdf.Matrix(2, 2)
+BBOX_STROKE_PT = 1.2  # была толщина draw_rect в PyMuPDF
 
 
 def _ensure_enabled() -> None:
@@ -211,35 +215,51 @@ def finding_preview(request, pk: int):
     _document_for(request.user, document.pk)
 
     version = finding.check_run.document_version
-    with pymupdf.open(version.file.path) as pdf:
-        if finding.page is None or not (1 <= finding.page <= pdf.page_count):
-            page = pdf[0]
+    with pdfium_tools.open_pdf(version.file.path) as pdf:
+        if finding.page is None or not (1 <= finding.page <= len(pdf)):
+            view = pdfium_tools.PdfPageView(pdf, 0)
         else:
-            page = pdf[finding.page - 1]
+            view = pdfium_tools.PdfPageView(pdf, finding.page - 1)
 
-        page_rect = page.rect
+        page_rect = view.rect
         bbox = finding.bbox or [
             page_rect.x0, page_rect.y0, page_rect.x1, page_rect.y1,
         ]
-        clip = pymupdf.Rect(
+        clip = pdfium_tools.Rect(
             max(page_rect.x0, bbox[0] - BBOX_MARGIN_PT),
             max(page_rect.y0, bbox[1] - BBOX_MARGIN_PT),
             min(page_rect.x1, bbox[2] + BBOX_MARGIN_PT),
             min(page_rect.y1, bbox[3] + BBOX_MARGIN_PT),
         )
         if clip.is_empty or clip.width < 1 or clip.height < 1:
-            clip = pymupdf.Rect(
+            clip = pdfium_tools.Rect(
                 page_rect.x0, page_rect.y0,
                 min(page_rect.x1, page_rect.x0 + 200),
                 min(page_rect.y1, page_rect.y0 + 160),
             )
-        # Подсветка: рисуем рамку в памяти документа (файл не сохраняется).
-        page.draw_rect(
-            pymupdf.Rect(bbox), color=(0.85, 0.10, 0.10), width=1.2,
-        )
-        pixmap = page.get_pixmap(clip=clip, matrix=pymupdf.Matrix(2, 2))
+        try:
+            image = view.render_clip(clip, scale=PREVIEW_SCALE)
+        finally:
+            view.close()
 
-    return HttpResponse(pixmap.tobytes('png'), content_type='image/png')
+    draw = ImageDraw.Draw(image)
+    box_px = [
+        (bbox[0] - clip.x0) * PREVIEW_SCALE,
+        (bbox[1] - clip.y0) * PREVIEW_SCALE,
+        (bbox[2] - clip.x0) * PREVIEW_SCALE,
+        (bbox[3] - clip.y0) * PREVIEW_SCALE,
+    ]
+    draw.rectangle(
+        box_px,
+        outline=(217, 26, 26),
+        width=max(1, round(BBOX_STROKE_PT * PREVIEW_SCALE)),
+    )
+
+    buffer = io.BytesIO()
+    image.save(buffer, format='PNG')
+    return HttpResponse(
+        buffer.getvalue(), content_type='image/png',
+    )
 
 
 def _rag_groups(sources: list[dict]) -> list[tuple[str, str, list[dict]]]:

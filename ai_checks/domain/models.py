@@ -175,7 +175,7 @@ class RuleDefinition(models.Model):
     """Правило проверки (ARCHITECTURE.md 3.2, этап Ф1).
 
     В MVP правила глобальные (tenant_scope=global); tenant-поля заложены
-    сразу по 8.2. Structural-правила (PyMuPDF: рамка/штамп/шрифт)
+    сразу по 8.2. Structural-правила (pypdfium2: рамка/штамп/шрифт)
     исполняются движком по коду из ai_checks/domain/rules.py; rule_kind
     хранит спековую классификацию источника правила (regex/keyword/manual).
     """

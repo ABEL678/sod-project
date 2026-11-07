@@ -18,9 +18,9 @@ packaging==26.3
 pillow==13.0.0
 protobuf==7.36.2
 psutil==7.2.2
-pymupdf==2.0
-pymupdf4llm==2.0
-pymupdf_layout==2.0
+pypdfium2==5.7.0
+reportlab==4.4.9
+pypdf==6.6.0
 python-dotenv==1.2.4
 PyYAML==6.0.3
 sqlparse==0.6.0

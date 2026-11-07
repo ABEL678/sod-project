@@ -1,6 +1,6 @@
 """Домен ИИ-контура: бизнес-логика Ф0.2 — индексация источников знаний.
 
-Контракт (ARCHITECTURE.md 8.4): PyMuPDF извлекает текст и страницы,
+Контракт (ARCHITECTURE.md 8.4): pypdfium2 извлекает текст и страницы,
 текст режется на чанки с перекрытием, векторы пишутся в InternalChunk.
 Сервис не знает про HTTP/UI/Celery — только домен и ORM.
 """
@@ -11,10 +11,10 @@ import logging
 from dataclasses import dataclass
 from datetime import timedelta
 
-import pymupdf
 from django.db import transaction
 from django.utils import timezone
 
+from ai_checks import pdfium_tools
 from ai_checks.domain.models import (
     CheckRun,
     GeneratedReport,
@@ -49,9 +49,16 @@ class TextChunk:
 
 
 def extract_pages(file_path: str) -> list[str]:
-    """Извлекает текст постранично из PDF (PyMuPDF)."""
-    with pymupdf.open(file_path) as pdf:
-        return [page.get_text() for page in pdf]
+    """Извлекает текст постранично из PDF (pypdfium2)."""
+    with pdfium_tools.open_pdf(file_path) as pdf:
+        pages: list[str] = []
+        for index in range(len(pdf)):
+            view = pdfium_tools.PdfPageView(pdf, index)
+            try:
+                pages.append(view.get_text())
+            finally:
+                view.close()
+        return pages
 
 
 def split_into_chunks(
@@ -189,12 +196,16 @@ def run_rules_check(
 
         findings: list[tuple[RuleDefinition, dict]] = []
         with transaction.atomic():
-            with pymupdf.open(file_path) as pdf:
-                for page in pdf:
-                    for rule in executable:
-                        checker = RULE_CHECKS[rule.code]
-                        for finding in checker(page):
-                            findings.append((rule, finding))
+            with pdfium_tools.open_pdf(file_path) as pdf:
+                for index in range(len(pdf)):
+                    view = pdfium_tools.PdfPageView(pdf, index)
+                    try:
+                        for rule in executable:
+                            checker = RULE_CHECKS[rule.code]
+                            for finding in checker(view):
+                                findings.append((rule, finding))
+                    finally:
+                        view.close()
 
             PendingCheckResult.objects.bulk_create([
                 PendingCheckResult(
@@ -858,25 +869,26 @@ def bbox_ratios_for_rotation(
 ) -> dict:
     """Ratios bbox с учётом поворота листа (vьювер/PDF).
 
-    PyMuPDF отдаёт координаты в неповёрнутой системе; вьювер рисует лист
-    с поворотом (viewer_rotation — текущий поворот вьювера; если не задан,
-    берётся page.rotation из PDF). Возвращает x1/y1/x2/y2/x/y в долях 0..1
-    или {} (если данных нет).
+    Координаты bbox — неповёрнутая система (как в PyMuPDF); вьювер рисует
+    лист с поворотом (viewer_rotation — текущий поворот вьювера; если не
+    задан, берётся page.rotation из PDF). Возвращает x1/y1/x2/y2/x/y
+    в долях 0..1 или {} (если данных нет).
     """
     if bbox is None or page_number is None:
         return {}
-    with pymupdf.open(file_path) as pdf:
-        if not (1 <= int(page_number) <= pdf.page_count):
+    with pdfium_tools.open_pdf(file_path) as pdf:
+        if not (1 <= int(page_number) <= len(pdf)):
             return {}
-        page = pdf[int(page_number) - 1]
+        view = pdfium_tools.PdfPageView(pdf, int(page_number) - 1)
         rotation = (
             int(viewer_rotation)
             if viewer_rotation is not None and str(viewer_rotation) != ''
-            else int(page.rotation or 0)
+            else int(view.rotation or 0)
         ) % 360
 
-        width = float(page.mediabox.width)
-        height = float(page.mediabox.height)
+        width = float(view.mediabox.width)
+        height = float(view.mediabox.height)
+        view.close()
         x0, y0, x1, y1 = (float(v) for v in bbox)
         x0, x1 = min(x0, x1), max(x0, x1)
         y0, y1 = min(y0, y1), max(y0, y1)
@@ -929,23 +941,24 @@ def crop_finding_image(
     """
     if bbox is None or page_number is None:
         return None
-    with pymupdf.open(file_path) as pdf:
-        if not (1 <= int(page_number) <= pdf.page_count):
+    with pdfium_tools.open_pdf(file_path) as pdf:
+        if not (1 <= int(page_number) <= len(pdf)):
             return None
-        page = pdf[int(page_number) - 1]
-        page_rect = page.mediabox
-        clip = pymupdf.Rect(
+        view = pdfium_tools.PdfPageView(pdf, int(page_number) - 1)
+        page_rect = view.mediabox
+        clip = pdfium_tools.Rect(
             max(page_rect.x0, float(bbox[0]) - margin),
             max(page_rect.y0, float(bbox[1]) - margin),
             min(page_rect.x1, float(bbox[2]) + margin),
             min(page_rect.y1, float(bbox[3]) + margin),
         )
         if clip.is_empty or clip.width < 1 or clip.height < 1:
+            view.close()
             return None
-        pixmap = page.get_pixmap(
-            clip=clip, matrix=pymupdf.Matrix(zoom, zoom),
-        )
-        data = pixmap.tobytes('jpeg')
+        try:
+            data = view.render_jpeg_clip(clip, scale=zoom)
+        finally:
+            view.close()
     return base64.b64encode(data).decode('ascii')
 
 

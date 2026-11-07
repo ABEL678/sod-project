@@ -1,0 +1,1579 @@
+diff --git a/ai_checks/admin.py b/ai_checks/admin.py
+index bcd5ba9537a0cc32b053d83d33256d27960e12a0..3cfd18cadfdce9c025452c3083cb920214ca8cc5 100644
+--- a/ai_checks/admin.py
++++ b/ai_checks/admin.py
+@@ -41,7 +41,8 @@ if settings.AI_CHECKS_ENABLED:
+                 try:
+                     count = index_document(internal_doc, version.file.path)
+                 except (OSError, RuntimeError, ValueError) as exc:
+-                    # RuntimeError — битый PDF (pymupdf.FileDataError).
++                    # RuntimeError — битый PDF (PdfiumError из ai_checks.pdfium_tools
++                    # наследует RuntimeError).
+                     self.message_user(
+                         request,
+                         f'«{internal_doc.title}»: ошибка индексации — {exc}',
+diff --git a/ai_checks/domain/models.py b/ai_checks/domain/models.py
+index cfe922a943e2253d96238f76d21b255c3802c9b3..fb0674d2b6ed86ee0df9437e3773dacd307d2f57 100644
+--- a/ai_checks/domain/models.py
++++ b/ai_checks/domain/models.py
+@@ -161,7 +161,7 @@ class RuleDefinition(models.Model):
+     """Правило проверки (ARCHITECTURE.md 3.2, этап Ф1).
+ 
+     В MVP правила глобальные (tenant_scope=global); tenant-поля заложены
+-    сразу по 8.2. Structural-правила (PyMuPDF: рамка/штамп/шрифт)
++    сразу по 8.2. Structural-правила (pypdfium2: рамка/штамп/шрифт)
+     исполняются движком по коду из ai_checks/domain/rules.py; rule_kind
+     хранит спековую классификацию источника правила (regex/keyword/manual).
+     """
+diff --git a/ai_checks/domain/rules.py b/ai_checks/domain/rules.py
+index 0c358214cac1b9e5df5c74af384f7c6699b9bb78..126f91ee2e2abcf68c931768cda46d234a54a554 100644
+--- a/ai_checks/domain/rules.py
++++ b/ai_checks/domain/rules.py
+@@ -1,8 +1,10 @@
+ """Детерминированные правила проверки листов (этап Ф1, без LLM).
+ 
+-Каждое правило — функция от страницы PyMuPDF, возвращающая список
++Каждое правило — функция от обёртки страницы pypdfium2
++(ai_checks.pdfium_tools.PdfPageView), возвращающая список
+ находок-словарей: {page, bbox, message, severity, evidence}.
+-bbox — координаты PyMuPDF в пунктах [x0, y0, x1, y1] по ARCHITECTURE 3.2.
++bbox — координаты в пунктах [x0, y0, x1, y1] по ARCHITECTURE 3.2
++(неповёрнутая система, TL-начало — как в PyMuPDF, ради вьювера).
+ 
+ Движок (services.run_rules_check) сопоставляет RuleDefinition.code →
+ функция из RULE_CHECKS. Structural-правила (рамка/штамп/шрифт) — код;
+@@ -13,6 +15,8 @@ from __future__ import annotations
+ 
+ from typing import Callable
+ 
++from ai_checks.pdfium_tools import Rect
++
+ # 2.5 мм в пунктах (1 pt = 25.4 / 72 мм).
+ MIN_FONT_MM = 2.5
+ MIN_FONT_PT = MIN_FONT_MM * 72.0 / 25.4  # ≈ 7.087 pt
+@@ -39,21 +43,6 @@ def _page_finding(page, bbox, message, severity, evidence='') -> dict:
+     }
+ 
+ 
+-def _iter_segments(page):
+-    """Линейные сегменты (горизонтальные/вертикальные) из drawings."""
+-    for drawing in page.get_drawings():
+-        for item in drawing['items']:
+-            if item[0] == 'l':
+-                point_a, point_b = item[1], item[2]
+-                yield (point_a.x, point_a.y, point_b.x, point_b.y)
+-            elif item[0] == 're':
+-                rect = item[1]
+-                yield (rect.x0, rect.y0, rect.x1, rect.y0)
+-                yield (rect.x0, rect.y1, rect.x1, rect.y1)
+-                yield (rect.x0, rect.y0, rect.x0, rect.y1)
+-                yield (rect.x1, rect.y0, rect.x1, rect.y1)
+-
+-
+ def check_frame(page) -> list[dict]:
+     """SPDS.RAME: наличие внешней рамки листа.
+ 
+@@ -69,7 +58,7 @@ def check_frame(page) -> list[dict]:
+     min_vertical = height * 0.8
+ 
+     top = bottom = left = right = False
+-    for x0, y0, x1, y1 in _iter_segments(page):
++    for x0, y0, x1, y1 in page.iter_line_segments():
+         if abs(y1 - y0) <= LINE_TOLERANCE_PT and abs(x1 - x0) >= min_horizontal:
+             edge = (y0 + y1) / 2.0
+             if edge <= rect.y0 + edge_y:
+@@ -147,15 +136,15 @@ def check_stamp(page) -> list[dict]:
+     4) рамка штампа, примыкающая к правому нижнему углу листа.
+     """
+     rect = page.rect
+-    zone = pymupdf_rect(
++    zone = Rect(
+         rect.x0 + rect.width * STAMP_ZONE_X,
+         rect.y0 + rect.height * STAMP_ZONE_Y,
+         rect.x1,
+         rect.y1,
+     )
+ 
+-    text = page.get_text('text', clip=zone) or ''
+-    # PyMuPDF может отдавать неразрывные пробелы (\xa0) — нормализуем.
++    text = page.get_text(clip=zone) or ''
++    # pdfium может отдавать неразрывные пробелы (\xa0) — нормализуем.
+     normalized = ' '.join(text.replace('\xa0', ' ').split()).casefold()
+     if 'основная надпись' in normalized:
+         return []
+@@ -171,34 +160,22 @@ def check_stamp(page) -> list[dict]:
+     max_box_height = rect.height * 0.35
+     edge_tolerance = rect.width * 0.05
+ 
+-    for drawing in page.get_drawings():
+-        for item in drawing['items']:
+-            segments = []
+-            if item[0] == 're':
+-                box = item[1]
+-                segments = [
+-                    (box.x0, box.y0, box.x1, box.y0),
+-                    (box.x0, box.y1, box.x1, box.y1),
+-                    (box.x0, box.y0, box.x0, box.y1),
+-                    (box.x1, box.y0, box.x1, box.y1),
+-                ]
+-                if (
+-                    box.width >= min_box_width
+-                    and min_box_height <= box.height <= max_box_height
+-                    and box.x1 >= rect.x1 - edge_tolerance
+-                    and box.y1 >= rect.y1 - edge_tolerance
+-                ):
+-                    attached_box = True
+-            elif item[0] == 'l':
+-                point_a, point_b = item[1], item[2]
+-                segments = [(point_a.x, point_a.y, point_b.x, point_b.y)]
+-            for x0, y0, x1, y1 in segments:
+-                if not _segment_hits_zone(x0, y0, x1, y1, zone):
+-                    continue
+-                if abs(y1 - y0) <= LINE_TOLERANCE_PT and abs(x1 - x0) >= 20:
+-                    horizontal += 1
+-                elif abs(x1 - x0) <= LINE_TOLERANCE_PT and abs(y1 - y0) >= 20:
+-                    vertical += 1
++    for x0, y0, x1, y1 in page.iter_line_segments():
++        if not _segment_hits_zone(x0, y0, x1, y1, zone):
++            continue
++        if abs(y1 - y0) <= LINE_TOLERANCE_PT and abs(x1 - x0) >= 20:
++            horizontal += 1
++        elif abs(x1 - x0) <= LINE_TOLERANCE_PT and abs(y1 - y0) >= 20:
++            vertical += 1
++
++    for box in page.iter_rects():
++        if (
++            box.width >= min_box_width
++            and min_box_height <= box.height <= max_box_height
++            and box.x1 >= rect.x1 - edge_tolerance
++            and box.y1 >= rect.y1 - edge_tolerance
++        ):
++            attached_box = True
+ 
+     if horizontal >= STAMP_MIN_H_LINES and vertical >= STAMP_MIN_V_LINES:
+         return []
+@@ -229,39 +206,27 @@ def check_font(page) -> list[dict]:
+     stamp_y0 = rect.y0 + rect.height * STAMP_ZONE_Y
+ 
+     findings: list[dict] = []
+-    data = page.get_text('dict') or {}
+-    for block in data.get('blocks', []):
+-        if block.get('type', 0) != 0:
++    for run in page.iter_text_runs():
++        text = (run['text'] or '').strip()
++        if not text:
+             continue
+-        for line in block.get('lines', []):
+-            for span in line.get('spans', []):
+-                text = (span.get('text') or '').strip()
+-                if not text:
+-                    continue
+-                x0, y0, x1, y1 = span['bbox']
+-                if x0 >= stamp_x0 and y0 >= stamp_y0:
+-                    continue
+-                size = float(span.get('size') or 0.0)
+-                if size and size < MIN_FONT_PT - 0.01:
+-                    millimeters = size * 25.4 / 72.0
+-                    findings.append(_page_finding(
+-                        page,
+-                        [x0, y0, x1, y1],
+-                        f'Высота шрифта {millimeters:.1f} мм меньше '
+-                        f'{MIN_FONT_MM} мм (СПДС)',
+-                        'minor',
+-                        evidence=text[:120],
+-                    ))
++        x0, y0, x1, y1 = run['bbox']
++        if x0 >= stamp_x0 and y0 >= stamp_y0:
++            continue
++        size = float(run['size'] or 0.0)
++        if size and size < MIN_FONT_PT - 0.01:
++            millimeters = size * 25.4 / 72.0
++            findings.append(_page_finding(
++                page,
++                [x0, y0, x1, y1],
++                f'Высота шрифта {millimeters:.1f} мм меньше '
++                f'{MIN_FONT_MM} мм (СПДС)',
++                'minor',
++                evidence=text[:120],
++            ))
+     return findings
+ 
+ 
+-def pymupdf_rect(x0, y0, x1, y1):
+-    """Локальная обёртка над pymupdf.Rect (импорт по требованию)."""
+-    import pymupdf
+-
+-    return pymupdf.Rect(x0, y0, x1, y1)
+-
+-
+ # Реестр правил: RuleDefinition.code → проверка страницы.
+ RULE_CHECKS: dict[str, Callable] = {
+     'SPDS.RAME': check_frame,
+diff --git a/ai_checks/domain/services.py b/ai_checks/domain/services.py
+index 3333d26e713359c0206069794744755dae67a89d..b8ed8a0d3150a9f5c0b68a992810073958b67d17 100644
+--- a/ai_checks/domain/services.py
++++ b/ai_checks/domain/services.py
+@@ -1,6 +1,6 @@
+ """Домен ИИ-контура: бизнес-логика Ф0.2 — индексация источников знаний.
+ 
+-Контракт (ARCHITECTURE.md 8.4): PyMuPDF извлекает текст и страницы,
++Контракт (ARCHITECTURE.md 8.4): pypdfium2 извлекает текст и страницы,
+ текст режется на чанки с перекрытием, векторы пишутся в InternalChunk.
+ Сервис не знает про HTTP/UI/Celery — только домен и ORM.
+ """
+@@ -11,10 +11,10 @@ import logging
+ from dataclasses import dataclass
+ from datetime import timedelta
+ 
+-import pymupdf
+ from django.db import transaction
+ from django.utils import timezone
+ 
++from ai_checks import pdfium_tools
+ from ai_checks.domain.models import (
+     CheckRun,
+     GeneratedReport,
+@@ -49,9 +49,16 @@ class TextChunk:
+ 
+ 
+ def extract_pages(file_path: str) -> list[str]:
+-    """Извлекает текст постранично из PDF (PyMuPDF)."""
+-    with pymupdf.open(file_path) as pdf:
+-        return [page.get_text() for page in pdf]
++    """Извлекает текст постранично из PDF (pypdfium2)."""
++    with pdfium_tools.open_pdf(file_path) as pdf:
++        pages: list[str] = []
++        for index in range(len(pdf)):
++            view = pdfium_tools.PdfPageView(pdf, index)
++            try:
++                pages.append(view.get_text())
++            finally:
++                view.close()
++        return pages
+ 
+ 
+ def split_into_chunks(
+@@ -189,12 +196,16 @@ def run_rules_check(
+ 
+         findings: list[tuple[RuleDefinition, dict]] = []
+         with transaction.atomic():
+-            with pymupdf.open(file_path) as pdf:
+-                for page in pdf:
+-                    for rule in executable:
+-                        checker = RULE_CHECKS[rule.code]
+-                        for finding in checker(page):
+-                            findings.append((rule, finding))
++            with pdfium_tools.open_pdf(file_path) as pdf:
++                for index in range(len(pdf)):
++                    view = pdfium_tools.PdfPageView(pdf, index)
++                    try:
++                        for rule in executable:
++                            checker = RULE_CHECKS[rule.code]
++                            for finding in checker(view):
++                                findings.append((rule, finding))
++                    finally:
++                        view.close()
+ 
+             PendingCheckResult.objects.bulk_create([
+                 PendingCheckResult(
+@@ -600,25 +611,26 @@ def bbox_ratios_for_rotation(
+ ) -> dict:
+     """Ratios bbox с учётом поворота листа (vьювер/PDF).
+ 
+-    PyMuPDF отдаёт координаты в неповёрнутой системе; вьювер рисует лист
+-    с поворотом (viewer_rotation — текущий поворот вьювера; если не задан,
+-    берётся page.rotation из PDF). Возвращает x1/y1/x2/y2/x/y в долях 0..1
+-    или {} (если данных нет).
++    Координаты bbox — неповёрнутая система (как в PyMuPDF); вьювер рисует
++    лист с поворотом (viewer_rotation — текущий поворот вьювера; если не
++    задан, берётся page.rotation из PDF). Возвращает x1/y1/x2/y2/x/y
++    в долях 0..1 или {} (если данных нет).
+     """
+     if bbox is None or page_number is None:
+         return {}
+-    with pymupdf.open(file_path) as pdf:
+-        if not (1 <= int(page_number) <= pdf.page_count):
++    with pdfium_tools.open_pdf(file_path) as pdf:
++        if not (1 <= int(page_number) <= len(pdf)):
+             return {}
+-        page = pdf[int(page_number) - 1]
++        view = pdfium_tools.PdfPageView(pdf, int(page_number) - 1)
+         rotation = (
+             int(viewer_rotation)
+             if viewer_rotation is not None and str(viewer_rotation) != ''
+-            else int(page.rotation or 0)
++            else int(view.rotation or 0)
+         ) % 360
+ 
+-        width = float(page.mediabox.width)
+-        height = float(page.mediabox.height)
++        width = float(view.mediabox.width)
++        height = float(view.mediabox.height)
++        view.close()
+         x0, y0, x1, y1 = (float(v) for v in bbox)
+         x0, x1 = min(x0, x1), max(x0, x1)
+         y0, y1 = min(y0, y1), max(y0, y1)
+@@ -671,21 +683,22 @@ def crop_finding_image(
+     """
+     if bbox is None or page_number is None:
+         return None
+-    with pymupdf.open(file_path) as pdf:
+-        if not (1 <= int(page_number) <= pdf.page_count):
++    with pdfium_tools.open_pdf(file_path) as pdf:
++        if not (1 <= int(page_number) <= len(pdf)):
+             return None
+-        page = pdf[int(page_number) - 1]
+-        page_rect = page.mediabox
+-        clip = pymupdf.Rect(
++        view = pdfium_tools.PdfPageView(pdf, int(page_number) - 1)
++        page_rect = view.mediabox
++        clip = pdfium_tools.Rect(
+             max(page_rect.x0, float(bbox[0]) - margin),
+             max(page_rect.y0, float(bbox[1]) - margin),
+             min(page_rect.x1, float(bbox[2]) + margin),
+             min(page_rect.y1, float(bbox[3]) + margin),
+         )
+         if clip.is_empty or clip.width < 1 or clip.height < 1:
++            view.close()
+             return None
+-        pixmap = page.get_pixmap(
+-            clip=clip, matrix=pymupdf.Matrix(zoom, zoom),
+-        )
+-        data = pixmap.tobytes('jpeg')
++        try:
++            data = view.render_jpeg_clip(clip, scale=zoom)
++        finally:
++            view.close()
+     return base64.b64encode(data).decode('ascii')
+diff --git a/ai_checks/pdfium_tools.py b/ai_checks/pdfium_tools.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..5c5a78500aca37eaea6bf7b4120a7a21a113fc39
+--- /dev/null
++++ b/ai_checks/pdfium_tools.py
+@@ -0,0 +1,379 @@
++"""pypdfium2-обёртка для ai_checks (замена PyMuPDF, лицензия BSD).
++
++Модуль изолирует единственную зависимость от pypdfium2 и эмулирует те
++части API PyMuPDF, которые использует ИИ-контур: координаты страницы,
++векторные сегменты/прямоугольники, текст с кеглем и координатами,
++рендер области в изображение.
++
++Координатные системы (проверено зондами на rot 0/90/180/270 и сдвинутом
++MediaBox):
++- PyMuPDF ``page.rect``          — отображаемая система (с /Rotate), TL;
++- PyMuPDF get_drawings/get_text  — неповёрнутая система, TL (y вниз),
++  координаты относительно CropBox;
++- pdfium объекты/текст           — неповёрнутое пользовательское
++  пространство, BL (y вверх), абсолютные координаты;
++- pypdfium2 ``render(rotation=0)`` — рендер КАК ОТОБРАЖАЕМОЙ страницы
++  (/Rotate применяется всегда); crop — отступы (left, bottom, right, top)
++  в пунктах финального изображения.
++
++Преобразование неповёрнутых координат (поворот страницы не влияет):
++``x_mu = x_user - cropbox.x0; y_mu = cropbox.y1 - y_user``.
++"""
++
++from __future__ import annotations
++
++import io
++from ctypes import byref, c_double, c_float, c_int, c_ubyte
++
++import pypdfium2 as pdfium
++import pypdfium2.raw as pdfium_raw
++
++__all__ = [
++    'PdfiumError',
++    'Rect',
++    'PdfDocument',
++    'PdfPageView',
++    'open_pdf',
++]
++
++_SEG_MOVETO = pdfium_raw.FPDF_SEGMENT_MOVETO
++_SEG_LINETO = pdfium_raw.FPDF_SEGMENT_LINETO
++_PAGEOBJ_PATH = pdfium_raw.FPDF_PAGEOBJ_PATH
++
++_FONT_INFO_BUFFER = 4096
++# общий буфер для имён шрифтов (выделение на каждый символ дорого)
++_FONT_INFO_BUF = (c_ubyte * _FONT_INFO_BUFFER)()
++
++
++class PdfiumError(RuntimeError):
++    """Ошибка разбора/открытия PDF (подкласс RuntimeError — как у PyMuPDF)."""
++
++
++class Rect:
++    """Прямоугольник с интерфейсом pymupdf.Rect (x0/y0/x1/y1, width/height)."""
++
++    __slots__ = ('x0', 'y0', 'x1', 'y1')
++
++    def __init__(self, x0, y0, x1, y1):
++        self.x0, self.y0, self.x1, self.y1 = (
++            float(x0), float(y0), float(x1), float(y1),
++        )
++
++    @property
++    def width(self) -> float:
++        return self.x1 - self.x0
++
++    @property
++    def height(self) -> float:
++        return self.y1 - self.y0
++
++    @property
++    def is_empty(self) -> bool:
++        return self.x1 <= self.x0 or self.y1 <= self.y0
++
++    def __repr__(self):
++        return (f'Rect({self.x0:.2f}, {self.y0:.2f}, '
++                f'{self.x1:.2f}, {self.y1:.2f})')
++
++
++def open_pdf(source) -> pdfium.PdfDocument:
++    """Открывает PDF (путь/bytes/файл); битый файл -> PdfiumError."""
++    try:
++        return pdfium.PdfDocument(source)
++    except Exception as exc:  # pypdfium2.PdfiumError, OSError
++        raise PdfiumError(f'Не удалось открыть PDF: {exc}') from exc
++
++
++class PdfPageView:
++    """Обёртка страницы pdfium с интерфейсом, необходимым правилам и рендеру.
++
++    Экземпляр привязан к открытому PdfDocument; закрывается через close()
++    (текстовая страница освобождается раньше документа).
++    """
++
++    def __init__(self, doc: pdfium.PdfDocument, index: int):
++        self._doc = doc
++        self._index = index
++        self._page = doc[index]
++        self._cropbox = self._page.get_cropbox()  # (l, b, r, t)
++        self._textpage = None
++
++    @property
++    def number(self) -> int:
++        """Индекс страницы с 0 (как page.number в PyMuPDF)."""
++        return self._index
++
++    @property
++    def rect(self) -> Rect:
++        """Отображаемый прямоугольник (как page.rect PyMuPDF), с /Rotate."""
++        return Rect(0, 0, self._page.get_width(), self._page.get_height())
++
++    @property
++    def rotation(self) -> int:
++        return self._page.get_rotation()
++
++    @property
++    def mediabox(self) -> Rect:
++        """MediaBox (как page.mediabox PyMuPDF): неповёрнутый, BL-система."""
++        left, bottom, right, top = self._page.get_mediabox()
++        return Rect(left, bottom, right, top)
++
++    def close(self):
++        if self._textpage is not None:
++            self._textpage.close()
++            self._textpage = None
++        self._page.close()
++
++    # --- координаты ---------------------------------------------------------
++
++    def _to_mu(self, x_user: float, y_user: float) -> tuple[float, float]:
++        """pdfium user (BL) -> pymupdf unrotated TL (cropbox-relative)."""
++        return (x_user - self._cropbox[0], self._cropbox[3] - y_user)
++
++    def _clip_to_user(self, clip: Rect) -> tuple[float, float, float, float]:
++        """Прямоугольник в MU-координатах -> (left, bottom, right, top) user."""
++        return (
++            clip.x0 + self._cropbox[0],
++            self._cropbox[3] - clip.y1,
++            clip.x1 + self._cropbox[0],
++            self._cropbox[3] - clip.y0,
++        )
++
++    # --- векторная геометрия --------------------------------------------------
++
++    def iter_line_segments(self):
++        """Линейные сегменты страницы в координатах PyMuPDF (TL, неповёрнутые).
++
++        Аналог обхода page.get_drawings() с разбором items 'l'/'re':
++        пути pdfium раскрываются в рёбра через moveto/lineto/close,
++        прямоугольник 're' даёт те же 4 ребра.
++        """
++        for obj in self._page.get_objects(filter=[_PAGEOBJ_PATH], max_depth=15):
++            count = pdfium_raw.FPDFPath_CountSegments(obj)
++            current: tuple[float, float] | None = None
++            for i in range(count):
++                seg = pdfium_raw.FPDFPath_GetPathSegment(obj, i)
++                x, y = c_float(), c_float()
++                pdfium_raw.FPDFPathSegment_GetPoint(seg, x, y)
++                seg_type = pdfium_raw.FPDFPathSegment_GetType(seg)
++                is_close = pdfium_raw.FPDFPathSegment_GetClose(seg)
++                point = (x.value, y.value)
++                if current is not None:
++                    yield self._segment_mu(current, point)
++                if seg_type == _SEG_MOVETO and not is_close:
++                    current = None if is_close else point
++                else:
++                    current = point
++            obj.close()
++
++    def iter_rects(self):
++        """Оси-выровненные прямоугольники страницы (аналог items 're').
++
++        Замкнутая подфигурация из 4 углов с горизонтальными/вертикальными
++        рёбрами распознаётся как прямоугольник (оператор 're' в PDF).
++        """
++        for obj in self._page.get_objects(filter=[_PAGEOBJ_PATH], max_depth=15):
++            count = pdfium_raw.FPDFPath_CountSegments(obj)
++            points: list[tuple[float, float]] = []
++            closed = False
++            for i in range(count):
++                seg = pdfium_raw.FPDFPath_GetPathSegment(obj, i)
++                x, y = c_float(), c_float()
++                pdfium_raw.FPDFPathSegment_GetPoint(seg, x, y)
++                seg_type = pdfium_raw.FPDFPathSegment_GetType(seg)
++                is_close = pdfium_raw.FPDFPathSegment_GetClose(seg)
++                if seg_type == _SEG_MOVETO and not is_close and points:
++                    rect = _closed_rect(points, closed)
++                    if rect is not None:
++                        yield rect
++                    points = []
++                    closed = False
++                points.append(self._to_mu(x.value, y.value))
++                if is_close:
++                    closed = True
++                    rect = _closed_rect(points, closed)
++                    if rect is not None:
++                        yield rect
++                    points = []
++                    closed = False
++            if points:
++                rect = _closed_rect(points, closed)
++                if rect is not None:
++                    yield rect
++            obj.close()
++
++    def _segment_mu(self, a, b):
++        x0, y0 = self._to_mu(*a)
++        x1, y1 = self._to_mu(*b)
++        return (x0, y0, x1, y1)
++
++    # --- текст ------------------------------------------------------------------
++
++    def _ensure_textpage(self):
++        if self._textpage is None:
++            self._textpage = self._page.get_textpage()
++        return self._textpage
++
++    def get_text(self, *, clip: Rect | None = None) -> str:
++        """Текст страницы (аналог page.get_text('text') PyMuPDF).
++
++        clip — прямоугольник в MU-координатах: отдаётся текст, попавший
++        в область (нативный FPDFText_GetBoundedText, с переносами строк).
++        """
++        tp = self._ensure_textpage()
++        if clip is None:
++            return _normalize_text(tp.get_text_range())
++        left, bottom, right, top = self._clip_to_user(clip)
++        return _normalize_text(
++            tp.get_text_bounded(left=left, bottom=bottom, right=right, top=top),
++        )
++
++    def iter_text_chars(self):
++        """Символы страницы: (index, char, size, box_mu, origin_mu).
++
++        box_mu — loose box (с выносными, как bbox спана PyMuPDF),
++        origin_mu — базовая линия (лево, baseline) в координатах PyMuPDF.
++        """
++        tp = self._ensure_textpage()
++        count = tp.count_chars()
++        for i in range(count):
++            code = pdfium_raw.FPDFText_GetUnicode(tp, i)
++            char = chr(code) if code else ''
++            size = float(pdfium_raw.FPDFText_GetFontSize(tp, i))
++            rectf = pdfium_raw.FS_RECTF()
++            if not pdfium_raw.FPDFText_GetLooseCharBox(tp, i, byref(rectf)):
++                continue
++            ox, oy = c_double(), c_double()
++            if not pdfium_raw.FPDFText_GetCharOrigin(tp, i, ox, oy):
++                continue
++            x0, y1 = self._to_mu(rectf.left, rectf.bottom)
++            x1, y0 = self._to_mu(rectf.right, rectf.top)
++            ox_mu, oy_mu = self._to_mu(ox.value, oy.value)
++            yield (i, char, size, (x0, y0, x1, y1), (ox_mu, oy_mu))
++
++    def iter_text_runs(self):
++        """«Спаны» PyMuPDF-подобного вида из последовательных символов.
++
++        Последовательные символы с одинаковой базовой линией, кеглем и
++        шрифтом образуют спан: {text, size, bbox, origin} — как элементы
++        span в get_text('dict') PyMuPDF.
++        """
++        runs: list[dict] = []
++        state: dict | None = None
++        tp = self._ensure_textpage()
++        for i, char, size, box, origin in self.iter_text_chars():
++            if char == '' or ord(char) in (0x000A, 0x000D):
++                if state is not None:
++                    runs.append(_finish_run(state))
++                    state = None
++                continue
++            key = (
++                round(origin[1], 1),      # базовая линия строки
++                round(size, 2),           # кегль
++                _char_font_name(tp, i),   # шрифт
++            )
++            if state is not None and state['key'] != key:
++                runs.append(_finish_run(state))
++                state = None
++            if state is None:
++                state = {
++                    'key': key,
++                    'text': [],
++                    'size': size,
++                    'origin': origin,
++                    'x0': box[0], 'y0': box[1], 'x1': box[2], 'y1': box[3],
++                }
++            state['text'].append(char)
++            state['x0'] = min(state['x0'], box[0])
++            state['y0'] = min(state['y0'], box[1])
++            state['x1'] = max(state['x1'], box[2])
++            state['y1'] = max(state['y1'], box[3])
++        if state is not None:
++            runs.append(_finish_run(state))
++        return runs
++
++    # --- рендер ---------------------------------------------------------------
++
++    def render_clip(self, clip: Rect, scale: float = 2.0):
++        """Рендер области clip в PIL.Image (RGB).
++
++        Эквивалент page.get_pixmap(clip=clip, matrix=Matrix(scale, scale)):
++        clip задаётся в координатах page.rect (отображаемая система),
++        /Rotate применяется рендерером автоматически.
++        """
++        rect = self.rect
++        crop = (
++            max(0.0, clip.x0 - rect.x0),
++            max(0.0, rect.y1 - clip.y1),
++            max(0.0, rect.x1 - clip.x1),
++            max(0.0, clip.y0 - rect.y0),
++        )
++        bitmap = self._page.render(scale=scale, rotation=0, crop=crop)
++        image = bitmap.to_pil()
++        bitmap.close()
++        if image.mode != 'RGB':
++            image = image.convert('RGB')
++        return image
++
++    def render_jpeg_clip(self, clip: Rect, scale: float = 2.0,
++                         quality: int = 95) -> bytes:
++        """JPEG-байты области clip (эквивалент pixmap.tobytes('jpeg'))."""
++        image = self.render_clip(clip, scale=scale)
++        buffer = io.BytesIO()
++        image.save(buffer, format='JPEG', quality=quality)
++        return buffer.getvalue()
++
++
++def _finish_run(state: dict) -> dict:
++    return {
++        'text': ''.join(state['text']),
++        'size': state['size'],
++        'bbox': (state['x0'], state['y0'], state['x1'], state['y1']),
++        'origin': state['origin'],
++    }
++
++
++def _closed_rect(points, closed):
++    """Замкнутая подфигурация из 4 углов с осями-выровненными рёбрами -> Rect.
++
++    points — вершины подфигурации в MU-координатах (после _to_mu).
++    """
++    if not closed or len(points) < 5:
++        return None
++    # уникальные вершины: убираем последовательные повторы и замыкающий
++    corners = [points[0]]
++    for point in points[1:]:
++        if (abs(point[0] - corners[-1][0]) > 0.01
++                or abs(point[1] - corners[-1][1]) > 0.01):
++            corners.append(point)
++    if (len(corners) > 1
++            and abs(corners[0][0] - corners[-1][0]) <= 0.01
++            and abs(corners[0][1] - corners[-1][1]) <= 0.01):
++        corners.pop()
++    if len(corners) != 4:
++        return None
++    xs = sorted({round(point[0], 2) for point in corners})
++    ys = sorted({round(point[1], 2) for point in corners})
++    if len(xs) != 2 or len(ys) != 2:
++        return None
++    return Rect(xs[0], ys[0], xs[1], ys[1])
++
++
++def _char_font_name(tp, index: int) -> str:
++    """Имя шрифта символа (FPDFText_GetFontInfo)."""
++    flags = c_int()
++    length = pdfium_raw.FPDFText_GetFontInfo(
++        tp, index, _FONT_INFO_BUF, _FONT_INFO_BUFFER, byref(flags),
++    )
++    if length <= 0:
++        return ''
++    raw_bytes = bytes(_FONT_INFO_BUF[:length - 1]) if length > 1 else b''
++    return raw_bytes.decode('latin-1', errors='replace')
++
++
++def _normalize_text(text: str) -> str:
++    """\\r\\n -> \\n; непустая страница PyMuPDF завершается \\n."""
++    text = text.replace('\r\n', '\n').replace('\r', '\n')
++    if text and not text.endswith('\n'):
++        text += '\n'
++    return text
+diff --git a/ai_checks/tests/base.py b/ai_checks/tests/base.py
+index e81de9f13eae930e237a99d77ea075419d8cbad0..0b8cd36a737131968bd7903e7821c14f9753d619 100644
+--- a/ai_checks/tests/base.py
++++ b/ai_checks/tests/base.py
+@@ -6,8 +6,8 @@ import tempfile
+ 
+ from django.test import override_settings
+ 
+-# Шрифт с кириллицей для генерации PDF в тестах (PyMuPDF base14 её не
+-# поддерживает: «Мелкий текст» превращается в мусор). Берём первый
++# Шрифт с кириллицей для генерации PDF в тестах (base14 Helvetica её
++# не поддерживает: «Мелкий текст» превращается в мусор). Берём первый
+ # доступный; если нет — тесты, которым нужен текст, скипаются.
+ CYRILLIC_FONT_PATHS = (
+     r'C:\Windows\Fonts\arial.ttf',
+diff --git a/ai_checks/tests/pdfgen.py b/ai_checks/tests/pdfgen.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..9280b7afa407d767e224f2123a4235390bd4e2e7
+--- /dev/null
++++ b/ai_checks/tests/pdfgen.py
+@@ -0,0 +1,84 @@
++"""Генерация тестовых PDF через reportlab (замена PyMuPDF-фикстур).
++
++Функции принимают координаты в системе PyMuPDF (TL-начало, y вниз от
++верхнего края) и конвертируют в BL-систему reportlab — так фикстуры
++сохраняют прежние координаты и правила проверяют те же места листа.
++"""
++
++from __future__ import annotations
++
++from io import BytesIO
++
++from reportlab.lib.utils import simpleSplit
++from reportlab.pdfbase import pdfmetrics
++from reportlab.pdfbase.ttfonts import TTFont
++from reportlab.pdfgen import canvas as rl_canvas
++
++from ai_checks.tests.base import find_cyrillic_font
++
++_REGISTERED_FONT: str | None = None
++
++
++def cyr_font() -> str:
++    """TTF-шрифт с кириллицей (если найден) или Helvetica base14."""
++    global _REGISTERED_FONT
++    if _REGISTERED_FONT is None:
++        path = find_cyrillic_font()
++        if path:
++            pdfmetrics.registerFont(TTFont('TestCyr', path))
++            _REGISTERED_FONT = 'TestCyr'
++        else:
++            _REGISTERED_FONT = 'Helvetica'
++    return _REGISTERED_FONT
++
++
++def make_pdf_bytes(
++    *,
++    width: float = 595,
++    height: float = 842,
++    rects=(),
++    lines=(),
++    texts=(),
++) -> bytes:
++    """Собирает одностраничный PDF с элементами в TL-координатах PyMuPDF.
++
++    rects: (x0, y0, x1, y1) — рамки/штампы;
++    lines: (x0, y0, x1, y1) — линии;
++    texts: (text, fontsize, (x, y_baseline)).
++    """
++    return make_pdf_pages(
++        width=width,
++        height=height,
++        page_items=[{'rects': rects, 'lines': lines, 'texts': texts}],
++    )
++
++
++def make_pdf_pages(
++    *,
++    width: float = 595,
++    height: float = 842,
++    page_items: list[dict],
++) -> bytes:
++    """Многостраничный PDF: page_items — набор элементов на каждую страницу."""
++    font = cyr_font()
++    buffer = BytesIO()
++    canvas = rl_canvas.Canvas(buffer, pagesize=(width, height))
++    for items in page_items:
++        for x0, y0, x1, y1 in items.get('rects', ()):
++            canvas.rect(x0, height - y1, x1 - x0, y1 - y0, stroke=1, fill=0)
++        for x0, y0, x1, y1 in items.get('lines', ()):
++            canvas.line(x0, height - y0, x1, height - y1)
++        for text, size, point in items.get('texts', ()):
++            canvas.setFont(font, size)
++            canvas.drawString(point[0], height - point[1], text)
++        for text, size, box in items.get('wrapped_texts', ()):
++            canvas.setFont(font, size)
++            baseline = box[1] + size  # первая базовая линия (TL)
++            for line in simpleSplit(text, font, size, box[2] - box[0]):
++                if baseline > box[3]:
++                    break
++                canvas.drawString(box[0], height - baseline, line)
++                baseline += size * 1.2
++        canvas.showPage()
++    canvas.save()
++    return buffer.getvalue()
+diff --git a/ai_checks/tests/test_bbox_rotation.py b/ai_checks/tests/test_bbox_rotation.py
+index 5a843cb6aba572c4998b52cfd3251a26adadf404..88787647cba625270d17eb902d928a02da1b973c 100644
+--- a/ai_checks/tests/test_bbox_rotation.py
++++ b/ai_checks/tests/test_bbox_rotation.py
+@@ -1,14 +1,15 @@
+ """Синхронизация bbox ИИ-находок с поворотом листа (баг владельца).
+ 
+-PyMuPDF отдаёт координаты в неповёрнутой системе; вьювер отображает лист
+-с поворотом (кнопка «Повернуть»). bbox_ratios_for_rotation переводит
+-координаты в ratios пространства отображения.
++PyMuPDF заменён на pypdfium2: координаты bbox — неповёрнутая система
++(эмуляция в pdfium_tools); вьювер отображает лист с поворотом
++(кнопка «Повернуть»). bbox_ratios_for_rotation переводит координаты
++в ratios пространства отображения.
+ """
+ 
+-import pymupdf
+ from django.test import SimpleTestCase
+ 
+ from ai_checks.domain.services import bbox_ratios_for_rotation, crop_finding_image
++from ai_checks.tests.pdfgen import make_pdf_bytes
+ 
+ 
+ PAGE_W, PAGE_H = 200, 300
+@@ -23,11 +24,11 @@ def setUpModule():
+     handle, PDF_PATH = tempfile.mkstemp(suffix='.pdf')
+     import os as _os
+     _os.close(handle)  # Windows: освободить дескриптор до save
+-    pdf = pymupdf.open()
+-    page = pdf.new_page(width=PAGE_W, height=PAGE_H)
+-    page.insert_text((20, 40), 'Kilo', fontsize=10)
+-    pdf.save(PDF_PATH)
+-    pdf.close()
++    with open(PDF_PATH, 'wb') as fh:
++        fh.write(make_pdf_bytes(
++            width=PAGE_W, height=PAGE_H,
++            texts=[('Kilo', 10, (20, 40))],
++        ))
+ 
+ 
+ def tearDownModule():
+diff --git a/ai_checks/tests/test_indexing.py b/ai_checks/tests/test_indexing.py
+index 108a80c5629701c95f1f024beb6f88fb513d1560..b4a916bbbb34407786b2316a72d976dbd3865527 100644
+--- a/ai_checks/tests/test_indexing.py
++++ b/ai_checks/tests/test_indexing.py
+@@ -1,11 +1,13 @@
+-"""Ф0.2: точечные тесты индексации InternalDocument (PyMuPDF + эмбеддинги)."""
++"""Ф0.2: точечные тесты индексации InternalDocument (pypdfium2 + эмбеддинги)."""
++
++from io import BytesIO
+ 
+ from django.contrib.auth.models import User
+ from django.core.files.base import ContentFile
+ from django.db import IntegrityError, transaction
+ from django.test import TestCase, override_settings
+-
+-import pymupdf
++from reportlab.lib.utils import simpleSplit
++from reportlab.pdfgen import canvas as rl_canvas
+ 
+ from ai_checks.adapters.embedding_onnx import BgeM3OnnxEmbedding
+ from ai_checks.domain.models import InternalChunk, InternalDocument
+@@ -16,6 +18,7 @@ from ai_checks.domain.services import (
+     split_into_chunks,
+ )
+ from ai_checks.tests.base import MediaIsolationMixin
++from ai_checks.tests.pdfgen import cyr_font
+ from ai_checks.tests.mocks import MockEmbeddingService
+ from storage.domain.models import (
+     Company,
+@@ -27,21 +30,26 @@ from storage.domain.models import (
+ 
+ 
+ def make_pdf(pages_text: list[str]) -> bytes:
+-    """Генерирует PDF через PyMuPDF: по одному тексту на страницу.
++    """Генерирует PDF через reportlab: по одному тексту на страницу.
+ 
+-    insert_textbox переносит строки внутри рамки (insert_text обрезал бы
+-    длинный текст краем страницы).
++    Текст переносится внутри рамки (50, 50)-(545, 800) — как прежний
++    insert_textbox PyMuPDF (длинный текст обрезался бы краем страницы).
+     """
+-    pdf = pymupdf.open()
++    font = cyr_font()
++    buffer = BytesIO()
++    canvas = rl_canvas.Canvas(buffer, pagesize=(595, 842))
+     for text in pages_text:
+-        page = pdf.new_page()
+         if text:
+-            page.insert_textbox(
+-                pymupdf.Rect(50, 50, 545, 800), text, fontsize=9,
+-            )
+-    data = pdf.tobytes()
+-    pdf.close()
+-    return data
++            canvas.setFont(font, 9)
++            baseline = 50 + 9
++            for line in simpleSplit(text, font, 9, 545 - 50):
++                if baseline > 800:
++                    break
++                canvas.drawString(50, 842 - baseline, line)
++                baseline += 9 * 1.2
++        canvas.showPage()
++    canvas.save()
++    return buffer.getvalue()
+ 
+ 
+ class InternalDocumentIndexingTests(MediaIsolationMixin, TestCase):
+diff --git a/ai_checks/tests/test_rules.py b/ai_checks/tests/test_rules.py
+index 684a972b4563274ff6b2e94ef391213db3fcd68c..c3060d97a9025d135a12fca17a7f1afaf828e744 100644
+--- a/ai_checks/tests/test_rules.py
++++ b/ai_checks/tests/test_rules.py
+@@ -1,11 +1,12 @@
+ """Ф1: точечные тесты детерминированных правил (domain/rules.py)."""
+ 
+-import pymupdf
+ from unittest import skipUnless
+ 
+ from django.test import SimpleTestCase
+ 
++from ai_checks import pdfium_tools
+ from ai_checks.tests.base import find_cyrillic_font
++from ai_checks.tests.pdfgen import make_pdf_bytes
+ 
+ CYRILLIC_FONT = find_cyrillic_font()
+ 
+@@ -20,35 +21,25 @@ from ai_checks.domain.rules import (
+ PAGE_W, PAGE_H = 595, 842  # A4 portrait, пункты
+ 
+ 
+-def make_page(draw=None, texts=None):
+-    """Создаёт PDF из одной страницы и отдаёт объект page (doc живёт в тесте)."""
+-    pdf = pymupdf.open()
+-    page = pdf.new_page(width=PAGE_W, height=PAGE_H)
+-    if draw:
+-        draw(page)
+-    if CYRILLIC_FONT:
+-        page.insert_font(fontname='cyr', fontfile=CYRILLIC_FONT)
+-    for text, size, point in texts or []:
+-        page.insert_text(
+-            point, text, fontsize=size,
+-            fontname='cyr' if CYRILLIC_FONT else 'helv',
+-        )
+-    return pdf, page
++def make_page(rects=(), lines=(), texts=()):
++    """Создаёт PDF из одной страницы и отдаёт (doc, view) для правил.
++
++    Элементы задаются в TL-координатах PyMuPDF (см. tests/pdfgen.py);
++    doc закрывается вызывающим тестом (doc.close()).
++    """
++    data = make_pdf_bytes(rects=rects, lines=lines, texts=texts)
++    doc = pdfium_tools.open_pdf(data)
++    return doc, pdfium_tools.PdfPageView(doc, 0)
+ 
+ 
+ class FrameRuleTests(SimpleTestCase):
+     def test_frame_present_no_findings(self):
+-        pdf, page = make_page(
+-            draw=lambda p: p.draw_rect(
+-                pymupdf.Rect(20, 20, PAGE_W - 20, PAGE_H - 20),
+-                color=(0, 0, 0), width=1,
+-            ),
+-        )
++        doc, page = make_page(rects=[(20, 20, PAGE_W - 20, PAGE_H - 20)])
+         self.assertEqual(check_frame(page), [])
+-        pdf.close()
++        doc.close()
+ 
+     def test_frame_missing_finding(self):
+-        pdf, page = make_page()
++        doc, page = make_page()
+         findings = check_frame(page)
+         self.assertEqual(len(findings), 1)
+         finding = findings[0]
+@@ -57,85 +48,80 @@ class FrameRuleTests(SimpleTestCase):
+         self.assertIn('рамка', finding['message'])
+         # bbox = None: не выделяем красным весь лист (замечание владельца).
+         self.assertIsNone(finding['bbox'])
+-        pdf.close()
++        doc.close()
+ 
+ 
+ class StampRuleTests(SimpleTestCase):
+     @skipUnless(CYRILLIC_FONT, 'Нужен шрифт с кириллицей для PDF')
+     def test_stamp_by_legacy_text_no_findings(self):
+-        pdf, page = make_page(texts=[
+-            ('Основная надпись', 8, (400, 720)),
+-        ])
++        doc, page = make_page(
++            texts=[('Основная надпись', 8, (400, 720))],
++        )
+         self.assertEqual(check_stamp(page), [])
+-        pdf.close()
++        doc.close()
+ 
+     @skipUnless(CYRILLIC_FONT, 'Нужен шрифт с кириллицей для PDF')
+     def test_stamp_by_gost_labels_no_findings(self):
+         # Реальный ГОСТ-штамп: «Основной надписи» в тексте нет — есть поля.
+-        pdf, page = make_page(texts=[
+-            ('Стадия Лист Листов', 8, (400, 720)),
+-        ])
++        doc, page = make_page(
++            texts=[('Стадия Лист Листов', 8, (400, 720))],
++        )
+         self.assertEqual(check_stamp(page), [])
+-        pdf.close()
++        doc.close()
+ 
+     def test_stamp_by_table_lines_no_findings(self):
+-        def draw_table(p):
+-            for index in range(6):
+-                y = 600 + index * 12
+-                p.draw_line((370, y), (580, y), color=(0, 0, 0), width=0.5)
+-            for index in range(5):
+-                x = 380 + index * 40
+-                p.draw_line((x, 595), (x, 700), color=(0, 0, 0), width=0.5)
+-
+-        pdf, page = make_page(draw=draw_table)
++        lines = [
++            (370, 600 + index * 12, 580, 600 + index * 12)
++            for index in range(6)
++        ] + [
++            (380 + index * 40, 595, 380 + index * 40, 700)
++            for index in range(5)
++        ]
++
++        doc, page = make_page(lines=lines)
+         self.assertEqual(check_stamp(page), [])
+-        pdf.close()
++        doc.close()
+ 
+     def test_stamp_box_at_corner_no_findings(self):
+-        pdf, page = make_page(
+-            draw=lambda p: p.draw_rect(
+-                pymupdf.Rect(400, 780, 575, 825),
+-                color=(0, 0, 0), width=1,
+-            ),
+-        )
++        doc, page = make_page(rects=[(400, 780, 575, 825)])
+         self.assertEqual(check_stamp(page), [])
+-        pdf.close()
++        doc.close()
+ 
+     def test_stamp_missing_finding(self):
+-        pdf, page = make_page()
++        doc, page = make_page()
+         findings = check_stamp(page)
+         self.assertEqual(len(findings), 1)
+         self.assertEqual(findings[0]['severity'], 'major')
+         self.assertIn('основная надпись', findings[0]['message'].casefold())
+-        pdf.close()
++        doc.close()
+ 
+ 
+ class FontRuleTests(SimpleTestCase):
+     def test_normal_font_no_findings(self):
+-        pdf, page = make_page(texts=[('Текст 10 pt', 10, (72, 100))])
++        doc, page = make_page(texts=[('Текст 10 pt', 10, (72, 100))])
+         self.assertEqual(check_font(page), [])
+-        pdf.close()
++        doc.close()
+ 
+     @skipUnless(CYRILLIC_FONT, 'Нужен шрифт с кириллицей для PDF')
+     def test_small_font_finding(self):
+-        pdf, page = make_page(texts=[('Мелкий текст', 5, (72, 100))])
++        doc, page = make_page(texts=[('Мелкий текст', 5, (72, 100))])
+         findings = check_font(page)
+         self.assertEqual(len(findings), 1)
+         finding = findings[0]
+         self.assertEqual(finding['severity'], 'minor')
+         self.assertIn('Высота шрифта', finding['message'])
+         self.assertIn('Мелкий', finding['evidence'].replace('\xa0', ' '))
+-        pdf.close()
++        doc.close()
+ 
+     def test_threshold_between_5pt_and_10pt(self):
+         self.assertGreater(MIN_FONT_PT, 7.0)
+         self.assertLess(MIN_FONT_PT, 7.2)
+-        pdf, page = make_page(texts=[('Ровно 7 pt', 7, (72, 100))])
++        doc, page = make_page(texts=[('Ровно 7 pt', 7, (72, 100))])
+         self.assertEqual(len(check_font(page)), 1)
+-        pdf.close()
++        doc.close()
+ 
+     def test_stamp_zone_text_is_ignored(self):
+         # Мелкий текст в зоне штампа правилом шрифта не проверяется.
+-        pdf, page = make_page(texts=[('штамп 5pt', 5, (400, 720))])
++        doc, page = make_page(texts=[('штамп 5pt', 5, (400, 720))])
+         self.assertEqual(check_font(page), [])
+-        pdf.close()
++        doc.close()
+diff --git a/ai_checks/tests/test_run_rules.py b/ai_checks/tests/test_run_rules.py
+index e2e7b13eac8e949272e49dcd27564e7da3b574a9..5939020293f671b53a032695f6e415fbe6193e74 100644
+--- a/ai_checks/tests/test_run_rules.py
++++ b/ai_checks/tests/test_run_rules.py
+@@ -1,6 +1,5 @@
+ """Ф1: точечные тесты run_rules_check (CheckRun + PendingCheckResult)."""
+ 
+-import pymupdf
+ from django.contrib.auth.models import User
+ from django.core.files.base import ContentFile
+ from django.test import TestCase
+@@ -12,6 +11,7 @@ from ai_checks.domain.models import (
+ )
+ from ai_checks.domain.services import ENGINE_VERSION, run_rules_check
+ from ai_checks.tests.base import MediaIsolationMixin
++from ai_checks.tests.pdfgen import make_pdf_bytes
+ from storage.domain.models import (
+     Company,
+     Document,
+@@ -22,19 +22,16 @@ from storage.domain.models import (
+ 
+ 
+ def make_pdf(*, with_frame=False, with_stamp=False, font_size=10) -> bytes:
+-    pdf = pymupdf.open()
+-    page = pdf.new_page(width=595, height=842)
++    rects = []
+     if with_frame:
+-        page.draw_rect(pymupdf.Rect(20, 20, 575, 822), color=(0, 0, 0), width=1)
++        rects.append((20, 20, 575, 822))
+     if with_stamp:
+         # Штамп, примыкающий к правому нижнему углу листа (новое правило).
+-        page.draw_rect(
+-            pymupdf.Rect(400, 780, 575, 825), color=(0, 0, 0), width=1,
+-        )
+-    page.insert_text((72, 100), 'Текст листа', fontsize=font_size)
+-    data = pdf.tobytes()
+-    pdf.close()
+-    return data
++        rects.append((400, 780, 575, 825))
++    return make_pdf_bytes(
++        rects=rects,
++        texts=[('Текст листа', font_size, (72, 100))],
++    )
+ 
+ 
+ class RunRulesCheckTests(MediaIsolationMixin, TestCase):
+diff --git a/ai_checks/tests/test_views.py b/ai_checks/tests/test_views.py
+index 8dcd714d623943a4fbbe2f801bee9694e7e69d3d..9a88e4a3925fd75afc27b9d1ebbcf692e4b61d87 100644
+--- a/ai_checks/tests/test_views.py
++++ b/ai_checks/tests/test_views.py
+@@ -1,6 +1,5 @@
+ """Ф1: тесты UI ИИ-контура (флаг, запуск, подтверждение/отклонение)."""
+ 
+-import pymupdf
+ from django.contrib.auth.models import User
+ from django.core.files.base import ContentFile
+ from django.test import TestCase, override_settings
+@@ -9,6 +8,7 @@ from django.urls import reverse
+ from ai_checks.domain.models import CheckRun, PendingCheckResult
+ from ai_checks.domain.services import run_rules_check
+ from ai_checks.tests.base import MediaIsolationMixin
++from ai_checks.tests.pdfgen import make_pdf_bytes
+ from issues.models import Issue
+ from storage.domain.models import (
+     Company,
+@@ -20,24 +20,14 @@ from storage.domain.models import (
+ 
+ 
+ def make_bad_pdf() -> bytes:
+-    pdf = pymupdf.open()
+-    page = pdf.new_page(width=595, height=842)
+-    page.insert_text((72, 100), 'Текст', fontsize=5)
+-    data = pdf.tobytes()
+-    pdf.close()
+-    return data
++    return make_pdf_bytes(texts=[('Текст', 5, (72, 100))])
+ 
+ 
+ def make_clean_pdf() -> bytes:
+-    pdf = pymupdf.open()
+-    page = pdf.new_page(width=595, height=842)
+-    page.draw_rect(pymupdf.Rect(20, 20, 575, 822), color=(0, 0, 0), width=1)
+-    # Штамп, примыкающий к правому нижнему углу листа (новое правило).
+-    page.draw_rect(pymupdf.Rect(400, 780, 575, 825), color=(0, 0, 0), width=1)
+-    page.insert_text((72, 100), 'Текст', fontsize=10)
+-    data = pdf.tobytes()
+-    pdf.close()
+-    return data
++    return make_pdf_bytes(
++        rects=[(20, 20, 575, 822), (400, 780, 575, 825)],
++        texts=[('Текст', 10, (72, 100))],
++    )
+ 
+ 
+ class AiChecksUiTests(MediaIsolationMixin, TestCase):
+diff --git a/ai_checks/views.py b/ai_checks/views.py
+index 755fe379906c2ba273112476d8155f5b35940178..475aac16feb34ded11c9766eb4b89a18c80124a6 100644
+--- a/ai_checks/views.py
++++ b/ai_checks/views.py
+@@ -9,10 +9,11 @@
+ 
+ from __future__ import annotations
+ 
++import io
+ import json
+ from datetime import date, timedelta
+ 
+-import pymupdf
++from PIL import ImageDraw
+ from django.conf import settings
+ from django.contrib.auth.decorators import login_required
+ from django.http import Http404, HttpResponse
+@@ -20,6 +21,7 @@ from django.shortcuts import get_object_or_404, render
+ from django.utils import timezone
+ from django.views.decorators.http import require_GET, require_POST
+ 
++from ai_checks import pdfium_tools
+ from ai_checks.domain.models import CheckRun, GeneratedReport, PendingCheckResult
+ from ai_checks.domain.services import (
+     bbox_ratios_for_rotation,
+@@ -33,6 +35,8 @@ from storage.domain.models import Document
+ from storage.domain.services import check_issue_permission, create_issue
+ 
+ BBOX_MARGIN_PT = 12
++PREVIEW_SCALE = 2  # был pymupdf.Matrix(2, 2)
++BBOX_STROKE_PT = 1.2  # была толщина draw_rect в PyMuPDF
+ 
+ 
+ def _ensure_enabled() -> None:
+@@ -201,35 +205,55 @@ def finding_preview(request, pk: int):
+     _document_for(request.user, document.pk)
+ 
+     version = finding.check_run.document_version
+-    with pymupdf.open(version.file.path) as pdf:
+-        if finding.page is None or not (1 <= finding.page <= pdf.page_count):
+-            page = pdf[0]
++    with pdfium_tools.open_pdf(version.file.path) as pdf:
++        if finding.page is None or not (1 <= finding.page <= len(pdf)):
++            view = pdfium_tools.PdfPageView(pdf, 0)
+         else:
+-            page = pdf[finding.page - 1]
++            view = pdfium_tools.PdfPageView(pdf, finding.page - 1)
+ 
+-        page_rect = page.rect
++        page_rect = view.rect
+         bbox = finding.bbox or [
+             page_rect.x0, page_rect.y0, page_rect.x1, page_rect.y1,
+         ]
+-        clip = pymupdf.Rect(
++        clip = pdfium_tools.Rect(
+             max(page_rect.x0, bbox[0] - BBOX_MARGIN_PT),
+             max(page_rect.y0, bbox[1] - BBOX_MARGIN_PT),
+             min(page_rect.x1, bbox[2] + BBOX_MARGIN_PT),
+             min(page_rect.y1, bbox[3] + BBOX_MARGIN_PT),
+         )
+         if clip.is_empty or clip.width < 1 or clip.height < 1:
+-            clip = pymupdf.Rect(
++            clip = pdfium_tools.Rect(
+                 page_rect.x0, page_rect.y0,
+                 min(page_rect.x1, page_rect.x0 + 200),
+                 min(page_rect.y1, page_rect.y0 + 160),
+             )
+-        # Подсветка: рисуем рамку в памяти документа (файл не сохраняется).
+-        page.draw_rect(
+-            pymupdf.Rect(bbox), color=(0.85, 0.10, 0.10), width=1.2,
+-        )
+-        pixmap = page.get_pixmap(clip=clip, matrix=pymupdf.Matrix(2, 2))
++        try:
++            # Рендер кропа; подсветка рисуется поверх растра (в PyMuPDF
++            # рамка рисовалась в PDF перед рендером — визуально эквивалентно).
++            image = view.render_clip(clip, scale=PREVIEW_SCALE)
++        finally:
++            view.close()
++
++    draw = ImageDraw.Draw(image)
++    # bbox в пикселях изображения (clip в координатах page.rect)
++    box_px = [
++        (bbox[0] - clip.x0) * PREVIEW_SCALE,
++        (bbox[1] - clip.y0) * PREVIEW_SCALE,
++        (bbox[2] - clip.x0) * PREVIEW_SCALE,
++        (bbox[3] - clip.y0) * PREVIEW_SCALE,
++    ]
++    # (0.85, 0.10, 0.10) RGB 0..1 -> 217, 26, 26; толщина 1.2pt * scale
++    draw.rectangle(
++        box_px,
++        outline=(217, 26, 26),
++        width=max(1, round(BBOX_STROKE_PT * PREVIEW_SCALE)),
++    )
+ 
+-    return HttpResponse(pixmap.tobytes('png'), content_type='image/png')
++    buffer = io.BytesIO()
++    image.save(buffer, format='PNG')
++    return HttpResponse(
++        buffer.getvalue(), content_type='image/png',
++    )
+ 
+ 
+ def _rag_groups(sources: list[dict]) -> list[tuple[str, str, list[dict]]]:
+diff --git a/requirements.txt b/requirements.txt
+index f275f8f74f6c4d6e3b854888ea75b8bb5c8e855f..817422ff6509e6d438236446e6afec6562cd5132 100644
+--- a/requirements.txt
++++ b/requirements.txt
+@@ -18,9 +18,9 @@ packaging==26.3
+ pillow==13.0.0
+ protobuf==7.36.2
+ psutil==7.2.2
+-pymupdf==2.0
+-pymupdf4llm==2.0
+-pymupdf_layout==2.0
++pypdfium2==5.7.0
++reportlab==4.4.9
++pypdf==6.6.0
+ python-dotenv==1.2.4
+ PyYAML==6.0.3
+ sqlparse==0.6.0
+diff --git a/static/js/pdf_viewer.js b/static/js/pdf_viewer.js
+index f1b20e397a76a0ab569ca68b97da0fc9950c6dde..1e6037d04c0bb805a892f6b874d2ccb3317e804c 100644
+--- a/static/js/pdf_viewer.js
++++ b/static/js/pdf_viewer.js
+@@ -2657,7 +2657,7 @@
+     };
+ 
+     // Текущий угол поворота листа во вьювере (для синхронизации координат
+-    // ИИ-находок при создании Issue: bbox PyMuPDF — неповёрнутая система).
++    // ИИ-находок при создании Issue: bbox — неповёрнутая система PDF).
+     window.getPdfViewerRotation = function () {
+         return currentRotation;
+     };
+diff --git a/storage/domain/services.py b/storage/domain/services.py
+index 0e1481fecac5f38f798c7ac0d107a5642a4908e6..4cd7dd41f0c7d825fd4d64a70961fdd05a40da6d 100644
+--- a/storage/domain/services.py
++++ b/storage/domain/services.py
+@@ -7,7 +7,6 @@ import io
+ from django.conf import settings
+ import uuid
+ 
+-import fitz
+ from PIL import Image, UnidentifiedImageError
+ 
+ from django.core.exceptions import PermissionDenied, ValidationError
+@@ -3757,7 +3756,20 @@ def delete_issue(user: User, issue: Issue) -> None:
+ 
+ 
+ def export_pdf_with_issues(user: User, document: Document) -> bytes:
+-    """Возвращает PDF текущей версии с наложенными маркапами замечаний."""
++    """Возвращает PDF текущей версии с наложенными маркапами замечаний.
++
++    Реализация (замена PyMuPDF, лицензия AGPL): оверлей reportlab (BSD)
++    с рамками/подписями замечаний + слияние на страницы pypdf (BSD).
++    Координаты маркапов — неповёрнутая система PyMuPDF (TL-начало,
++    как page.rect/get_drawings); в пользовательское пространство PDF
++    конвертируются без учёта /Rotate — ровно как рисовало PyMuPDF
++    (проверено зондом: draw_rect/insert_text пишут контент в потоке
++    неповёрнутым даже на повернутых листах).
++    """
++    from pypdf import PdfReader, PdfWriter
++    from reportlab.lib.colors import Color
++    from reportlab.pdfgen import canvas as rl_canvas
++
+     if not check_read_permission(user, document):
+         raise PermissionDenied('Нет прав на скачивание документа')
+ 
+@@ -3768,48 +3780,110 @@ def export_pdf_with_issues(user: User, document: Document) -> bytes:
+         raise ValueError('Файл текущей версии не найден')
+ 
+     issues = document.issues.filter(page_number__isnull=False).order_by('pk')
+-    pdf = fitz.open(version.file.path)
+-    try:
++
++    with open(version.file.path, 'rb') as source_handle:
++        reader = PdfReader(source_handle)
++        writer = PdfWriter(clone_from=reader)
++
++        markers: dict[int, list[Issue]] = {}
+         for issue in issues:
+             page_index = issue.page_number - 1
+-            if page_index < 0 or page_index >= pdf.page_count:
++            if page_index < 0 or page_index >= len(reader.pages):
+                 continue
+-            page = pdf[page_index]
+-            page_rect = page.rect
+-            color = PDF_ISSUE_COLORS.get(issue.status, PDF_ISSUE_COLORS['NEW'])
++            markers.setdefault(page_index, []).append(issue)
+ 
+-            if (
+-                issue.x1_ratio is not None and issue.y1_ratio is not None
+-                and issue.x2_ratio is not None and issue.y2_ratio is not None
+-            ):
+-                x1 = page_rect.x0 + page_rect.width * min(issue.x1_ratio, issue.x2_ratio)
+-                y1 = page_rect.y0 + page_rect.height * min(issue.y1_ratio, issue.y2_ratio)
+-                x2 = page_rect.x0 + page_rect.width * max(issue.x1_ratio, issue.x2_ratio)
+-                y2 = page_rect.y0 + page_rect.height * max(issue.y1_ratio, issue.y2_ratio)
+-                rect = fitz.Rect(x1, y1, x2, y2)
+-                page.draw_rect(rect, color=color, width=2)
+-                page.insert_text(
+-                    fitz.Point(rect.x0 + 3, max(rect.y0 - 3, 8)),
+-                    f'#{issue.pk}',
+-                    fontsize=8,
+-                    color=color,
+-                )
+-            elif issue.x_ratio is not None and issue.y_ratio is not None:
+-                x = page_rect.x0 + page_rect.width * issue.x_ratio
+-                y = page_rect.y0 + page_rect.height * issue.y_ratio
+-                page.draw_circle(fitz.Point(x, y), 9, color=color, width=2)
+-                page.insert_text(
+-                    fitz.Point(x + 12, max(y - 12, 8)),
+-                    f'#{issue.pk}',
+-                    fontsize=8,
+-                    color=color,
++        buffer = io.BytesIO()
++        if markers:
++            # Оверлей: страница на каждую страницу исходника — сохраняем
++            # соответствие индексов при слиянии.
++            overlay_buffer = io.BytesIO()
++            canvas = rl_canvas.Canvas(overlay_buffer)
++            for page_index, base_page in enumerate(reader.pages):
++                cropbox = base_page.cropbox
++                width = float(cropbox.width)
++                height = float(cropbox.height)
++                canvas.setPageSize((width, height))
++                # Размеры «display» — как page.rect в PyMuPDF (с учётом
++                # /Rotate); сами маркапы при этом рисуются в неповёрнутом
++                # потоке (семантика PyMuPDF, проверена зондом).
++                rotation = int(base_page.get('/Rotate', 0) or 0) % 360
++                if rotation in (90, 270):
++                    display_w, display_h = height, width
++                else:
++                    display_w, display_h = width, height
++                for issue in markers.get(page_index, []):
++                    color = PDF_ISSUE_COLORS.get(
++                        issue.status, PDF_ISSUE_COLORS['NEW'],
++                    )
++                    _draw_issue_marker(
++                        rl_canvas, canvas,
++                        float(cropbox.left), float(cropbox.bottom),
++                        float(cropbox.right), float(cropbox.top),
++                        issue, Color(*color), display_w, display_h,
++                    )
++                canvas.showPage()
++            canvas.save()
++
++            overlay_buffer.seek(0)
++            overlay_reader = PdfReader(overlay_buffer)
++            for page_index in markers:
++                writer.pages[page_index].merge_page(
++                    overlay_reader.pages[page_index],
+                 )
+ 
+-        buffer = io.BytesIO()
+-        pdf.save(buffer)
++        writer.write(buffer)
+         return buffer.getvalue()
+-    finally:
+-        pdf.close()
++
++
++def _display_to_user(left, bottom, right, top, x_tl, y_tl):
++    """Точка в неповёрнутой TL-системе PyMuPDF -> пользовательское (BL).
++
++    Поворот листа (/Rotate) НЕ учитывается — PyMuPDF пишет контент
++    в поток неповёрнутым (проверено зондом на rot 90/180/270).
++    """
++    return left + x_tl, top - y_tl
++
++
++def _draw_issue_marker(
++    rl_canvas, canvas, left, bottom, right, top,
++    issue: Issue, color, display_width, display_height,
++):
++    """Рисует маркап замечания на оверлей-странице reportlab.
++
++    Эквивалент прежней PyMuPDF-отрисовки: draw_rect/draw_circle +
++    insert_text подписи '#<pk>' (шрифт Helvetica 8, как base14 'helv').
++    """
++    canvas.setStrokeColor(color)
++    canvas.setFillColor(color)
++    canvas.setLineWidth(2)
++
++    def to_user(x_d, y_d):
++        return _display_to_user(left, bottom, right, top, x_d, y_d)
++
++    if (
++        issue.x1_ratio is not None and issue.y1_ratio is not None
++        and issue.x2_ratio is not None and issue.y2_ratio is not None
++    ):
++        x1_d = display_width * min(issue.x1_ratio, issue.x2_ratio)
++        y1_d = display_height * min(issue.y1_ratio, issue.y2_ratio)
++        x2_d = display_width * max(issue.x1_ratio, issue.x2_ratio)
++        y2_d = display_height * max(issue.y1_ratio, issue.y2_ratio)
++        ux1, uy1 = to_user(x1_d, y1_d)
++        ux2, uy2 = to_user(x2_d, y2_d)
++        canvas.rect(min(ux1, ux2), min(uy1, uy2),
++                    abs(ux2 - ux1), abs(uy2 - uy1), stroke=1, fill=0)
++        label_x, label_y = to_user(x1_d + 3, max(y1_d - 3, 8))
++    elif issue.x_ratio is not None and issue.y_ratio is not None:
++        cx_d = display_width * issue.x_ratio
++        cy_d = display_height * issue.y_ratio
++        cx, cy = to_user(cx_d, cy_d)
++        canvas.circle(cx, cy, 9, stroke=1, fill=0)
++        label_x, label_y = to_user(cx_d + 12, max(cy_d - 12, 8))
++    else:
++        return
++
++    canvas.setFont('Helvetica', 8)
++    canvas.drawString(label_x, label_y, f'#{issue.pk}')
+ 
+ 
+ def add_issue_comment(user: User, issue: Issue, text: str):
+diff --git a/storage/management/commands/create_demo_project.py b/storage/management/commands/create_demo_project.py
+index a00178f88a23293faf837127ceeb95d37df97f44..3baf1e2963868a5b5dfeba14bbb60145f3419b94 100644
+--- a/storage/management/commands/create_demo_project.py
++++ b/storage/management/commands/create_demo_project.py
+@@ -12,9 +12,9 @@
+ from __future__ import annotations
+ 
+ from datetime import timedelta
++from io import BytesIO
+ from urllib.parse import urlencode
+ 
+-import fitz
+ from django.conf import settings
+ from django.contrib.auth import get_user_model
+ from django.core.exceptions import PermissionDenied
+@@ -676,14 +676,19 @@ class Command(BaseCommand):
+ 
+     @staticmethod
+     def _pdf(filename: str, text: str) -> SimpleUploadedFile:
+-        """Минимальный валидный PDF A4 через уже установленный PyMuPDF."""
+-        document = fitz.open()
+-        try:
+-            page = document.new_page(width=595, height=842)
+-            page.insert_text((72, 72), text, fontsize=14)
+-            payload = document.tobytes()
+-        finally:
+-            document.close()
++        """Минимальный валидный PDF A4 через reportlab (замена PyMuPDF)."""
++        from reportlab.pdfgen import canvas as rl_canvas
++
++        buffer = BytesIO()
++        canvas = rl_canvas.Canvas(buffer, pagesize=(595, 842))
++        # точка вставки (72, 72) в PyMuPDF — TL-система; в reportlab — BL:
++        # y = 842 - 72. Текст без встроенной кириллицы (base14 Helvetica),
++        # как и раньше (PyMuPDF 'helv').
++        canvas.setFont('Helvetica', 14)
++        canvas.drawString(72, 842 - 72, text)
++        canvas.showPage()
++        canvas.save()
++        payload = buffer.getvalue()
+         return SimpleUploadedFile(
+             filename,
+             payload,

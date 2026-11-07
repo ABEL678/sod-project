@@ -41,7 +41,8 @@ if settings.AI_CHECKS_ENABLED:
                 try:
                     count = index_document(internal_doc, version.file.path)
                 except (OSError, RuntimeError, ValueError) as exc:
-                    # RuntimeError — битый PDF (pymupdf.FileDataError).
+                    # RuntimeError — битый PDF (PdfiumError из ai_checks.pdfium_tools
+                    # наследует RuntimeError).
                     self.message_user(
                         request,
                         f'«{internal_doc.title}»: ошибка индексации — {exc}',

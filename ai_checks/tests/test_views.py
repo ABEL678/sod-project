@@ -1,6 +1,5 @@
 """Ф1: тесты UI ИИ-контура (флаг, запуск, подтверждение/отклонение)."""
 
-import pymupdf
 from django.contrib.auth.models import User
 from django.core.files.base import ContentFile
 from django.test import TestCase, override_settings
@@ -9,6 +8,7 @@ from django.urls import reverse
 from ai_checks.domain.models import CheckRun, PendingCheckResult
 from ai_checks.domain.services import run_rules_check
 from ai_checks.tests.base import MediaIsolationMixin
+from ai_checks.tests.pdfgen import make_pdf_bytes
 from issues.models import Issue
 from storage.domain.models import (
     Company,
@@ -20,24 +20,14 @@ from storage.domain.models import (
 
 
 def make_bad_pdf() -> bytes:
-    pdf = pymupdf.open()
-    page = pdf.new_page(width=595, height=842)
-    page.insert_text((72, 100), 'Текст', fontsize=5)
-    data = pdf.tobytes()
-    pdf.close()
-    return data
+    return make_pdf_bytes(texts=[('Текст', 5, (72, 100))])
 
 
 def make_clean_pdf() -> bytes:
-    pdf = pymupdf.open()
-    page = pdf.new_page(width=595, height=842)
-    page.draw_rect(pymupdf.Rect(20, 20, 575, 822), color=(0, 0, 0), width=1)
-    # Штамп, примыкающий к правому нижнему углу листа (новое правило).
-    page.draw_rect(pymupdf.Rect(400, 780, 575, 825), color=(0, 0, 0), width=1)
-    page.insert_text((72, 100), 'Текст', fontsize=10)
-    data = pdf.tobytes()
-    pdf.close()
-    return data
+    return make_pdf_bytes(
+        rects=[(20, 20, 575, 822), (400, 780, 575, 825)],
+        texts=[('Текст', 10, (72, 100))],
+    )
 
 
 class AiChecksUiTests(MediaIsolationMixin, TestCase):

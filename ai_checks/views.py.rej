@@ -1,0 +1,9 @@
+diff a/ai_checks/views.py b/ai_checks/views.py	(rejected hunks)
+@@ -20,6 +21,7 @@ from django.shortcuts import get_object_or_404, render
+ from django.utils import timezone
+ from django.views.decorators.http import require_GET, require_POST
+ 
++from ai_checks import pdfium_tools
+ from ai_checks.domain.models import CheckRun, GeneratedReport, PendingCheckResult
+ from ai_checks.domain.services import (
+     bbox_ratios_for_rotation,

@@ -12,9 +12,9 @@
 from __future__ import annotations
 
 from datetime import timedelta
+from io import BytesIO
 from urllib.parse import urlencode
 
-import fitz
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied
@@ -676,14 +676,19 @@ class Command(BaseCommand):
 
     @staticmethod
     def _pdf(filename: str, text: str) -> SimpleUploadedFile:
-        """Минимальный валидный PDF A4 через уже установленный PyMuPDF."""
-        document = fitz.open()
-        try:
-            page = document.new_page(width=595, height=842)
-            page.insert_text((72, 72), text, fontsize=14)
-            payload = document.tobytes()
-        finally:
-            document.close()
+        """Минимальный валидный PDF A4 через reportlab (замена PyMuPDF)."""
+        from reportlab.pdfgen import canvas as rl_canvas
+
+        buffer = BytesIO()
+        canvas = rl_canvas.Canvas(buffer, pagesize=(595, 842))
+        # точка вставки (72, 72) в PyMuPDF — TL-система; в reportlab — BL:
+        # y = 842 - 72. Текст без встроенной кириллицы (base14 Helvetica),
+        # как и раньше (PyMuPDF 'helv').
+        canvas.setFont('Helvetica', 14)
+        canvas.drawString(72, 842 - 72, text)
+        canvas.showPage()
+        canvas.save()
+        payload = buffer.getvalue()
         return SimpleUploadedFile(
             filename,
             payload,

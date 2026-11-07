@@ -1,6 +1,5 @@
 """Ф1: точечные тесты run_rules_check (CheckRun + PendingCheckResult)."""
 
-import pymupdf
 from django.contrib.auth.models import User
 from django.core.files.base import ContentFile
 from django.test import TestCase
@@ -12,6 +11,7 @@ from ai_checks.domain.models import (
 )
 from ai_checks.domain.services import ENGINE_VERSION, run_rules_check
 from ai_checks.tests.base import MediaIsolationMixin
+from ai_checks.tests.pdfgen import make_pdf_bytes
 from storage.domain.models import (
     Company,
     Document,
@@ -22,19 +22,16 @@ from storage.domain.models import (
 
 
 def make_pdf(*, with_frame=False, with_stamp=False, font_size=10) -> bytes:
-    pdf = pymupdf.open()
-    page = pdf.new_page(width=595, height=842)
+    rects = []
     if with_frame:
-        page.draw_rect(pymupdf.Rect(20, 20, 575, 822), color=(0, 0, 0), width=1)
+        rects.append((20, 20, 575, 822))
     if with_stamp:
         # Штамп, примыкающий к правому нижнему углу листа (новое правило).
-        page.draw_rect(
-            pymupdf.Rect(400, 780, 575, 825), color=(0, 0, 0), width=1,
-        )
-    page.insert_text((72, 100), 'Текст листа', fontsize=font_size)
-    data = pdf.tobytes()
-    pdf.close()
-    return data
+        rects.append((400, 780, 575, 825))
+    return make_pdf_bytes(
+        rects=rects,
+        texts=[('Текст листа', font_size, (72, 100))],
+    )
 
 
 class RunRulesCheckTests(MediaIsolationMixin, TestCase):

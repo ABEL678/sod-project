@@ -1,11 +1,13 @@
-"""Ф0.2: точечные тесты индексации InternalDocument (PyMuPDF + эмбеддинги)."""
+"""Ф0.2: точечные тесты индексации InternalDocument (pypdfium2 + эмбеддинги)."""
+
+from io import BytesIO
 
 from django.contrib.auth.models import User
 from django.core.files.base import ContentFile
 from django.db import IntegrityError, transaction
 from django.test import TestCase, override_settings
-
-import pymupdf
+from reportlab.lib.utils import simpleSplit
+from reportlab.pdfgen import canvas as rl_canvas
 
 from ai_checks.adapters.embedding_onnx import BgeM3OnnxEmbedding
 from ai_checks.domain.models import InternalChunk, InternalDocument
@@ -16,6 +18,7 @@ from ai_checks.domain.services import (
     split_into_chunks,
 )
 from ai_checks.tests.base import MediaIsolationMixin
+from ai_checks.tests.pdfgen import cyr_font
 from ai_checks.tests.mocks import MockEmbeddingService
 from storage.domain.models import (
     Company,
@@ -27,21 +30,26 @@ from storage.domain.models import (
 
 
 def make_pdf(pages_text: list[str]) -> bytes:
-    """Генерирует PDF через PyMuPDF: по одному тексту на страницу.
+    """Генерирует PDF через reportlab: по одному тексту на страницу.
 
-    insert_textbox переносит строки внутри рамки (insert_text обрезал бы
-    длинный текст краем страницы).
+    Текст переносится внутри рамки (50, 50)-(545, 800) — как прежний
+    insert_textbox PyMuPDF (длинный текст обрезался бы краем страницы).
     """
-    pdf = pymupdf.open()
+    font = cyr_font()
+    buffer = BytesIO()
+    canvas = rl_canvas.Canvas(buffer, pagesize=(595, 842))
     for text in pages_text:
-        page = pdf.new_page()
         if text:
-            page.insert_textbox(
-                pymupdf.Rect(50, 50, 545, 800), text, fontsize=9,
-            )
-    data = pdf.tobytes()
-    pdf.close()
-    return data
+            canvas.setFont(font, 9)
+            baseline = 50 + 9
+            for line in simpleSplit(text, font, 9, 545 - 50):
+                if baseline > 800:
+                    break
+                canvas.drawString(50, 842 - baseline, line)
+                baseline += 9 * 1.2
+        canvas.showPage()
+    canvas.save()
+    return buffer.getvalue()
 
 
 class InternalDocumentIndexingTests(MediaIsolationMixin, TestCase):

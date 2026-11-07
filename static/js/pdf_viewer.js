@@ -2657,7 +2657,7 @@
     };
 
     // Текущий угол поворота листа во вьювере (для синхронизации координат
-    // ИИ-находок при создании Issue: bbox PyMuPDF — неповёрнутая система).
+    // ИИ-находок при создании Issue: bbox — неповёрнутая система PDF).
     window.getPdfViewerRotation = function () {
         return currentRotation;
     };

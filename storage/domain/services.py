@@ -7,7 +7,6 @@ import io
 from django.conf import settings
 import uuid
 
-import fitz
 from PIL import Image, UnidentifiedImageError
 
 from django.core.exceptions import PermissionDenied, ValidationError
@@ -3757,7 +3756,20 @@ def delete_issue(user: User, issue: Issue) -> None:
 
 
 def export_pdf_with_issues(user: User, document: Document) -> bytes:
-    """Возвращает PDF текущей версии с наложенными маркапами замечаний."""
+    """Возвращает PDF текущей версии с наложенными маркапами замечаний.
+
+    Реализация (замена PyMuPDF, лицензия AGPL): оверлей reportlab (BSD)
+    с рамками/подписями замечаний + слияние на страницы pypdf (BSD).
+    Координаты маркапов — неповёрнутая система PyMuPDF (TL-начало,
+    как page.rect/get_drawings); в пользовательское пространство PDF
+    конвертируются без учёта /Rotate — ровно как рисовало PyMuPDF
+    (проверено зондом: draw_rect/insert_text пишут контент в потоке
+    неповёрнутым даже на повернутых листах).
+    """
+    from pypdf import PdfReader, PdfWriter
+    from reportlab.lib.colors import Color
+    from reportlab.pdfgen import canvas as rl_canvas
+
     if not check_read_permission(user, document):
         raise PermissionDenied('Нет прав на скачивание документа')
 
@@ -3768,48 +3780,110 @@ def export_pdf_with_issues(user: User, document: Document) -> bytes:
         raise ValueError('Файл текущей версии не найден')
 
     issues = document.issues.filter(page_number__isnull=False).order_by('pk')
-    pdf = fitz.open(version.file.path)
-    try:
+
+    with open(version.file.path, 'rb') as source_handle:
+        reader = PdfReader(source_handle)
+        writer = PdfWriter(clone_from=reader)
+
+        markers: dict[int, list[Issue]] = {}
         for issue in issues:
             page_index = issue.page_number - 1
-            if page_index < 0 or page_index >= pdf.page_count:
+            if page_index < 0 or page_index >= len(reader.pages):
                 continue
-            page = pdf[page_index]
-            page_rect = page.rect
-            color = PDF_ISSUE_COLORS.get(issue.status, PDF_ISSUE_COLORS['NEW'])
-
-            if (
-                issue.x1_ratio is not None and issue.y1_ratio is not None
-                and issue.x2_ratio is not None and issue.y2_ratio is not None
-            ):
-                x1 = page_rect.x0 + page_rect.width * min(issue.x1_ratio, issue.x2_ratio)
-                y1 = page_rect.y0 + page_rect.height * min(issue.y1_ratio, issue.y2_ratio)
-                x2 = page_rect.x0 + page_rect.width * max(issue.x1_ratio, issue.x2_ratio)
-                y2 = page_rect.y0 + page_rect.height * max(issue.y1_ratio, issue.y2_ratio)
-                rect = fitz.Rect(x1, y1, x2, y2)
-                page.draw_rect(rect, color=color, width=2)
-                page.insert_text(
-                    fitz.Point(rect.x0 + 3, max(rect.y0 - 3, 8)),
-                    f'#{issue.pk}',
-                    fontsize=8,
-                    color=color,
-                )
-            elif issue.x_ratio is not None and issue.y_ratio is not None:
-                x = page_rect.x0 + page_rect.width * issue.x_ratio
-                y = page_rect.y0 + page_rect.height * issue.y_ratio
-                page.draw_circle(fitz.Point(x, y), 9, color=color, width=2)
-                page.insert_text(
-                    fitz.Point(x + 12, max(y - 12, 8)),
-                    f'#{issue.pk}',
-                    fontsize=8,
-                    color=color,
-                )
+            markers.setdefault(page_index, []).append(issue)
 
         buffer = io.BytesIO()
-        pdf.save(buffer)
+        if markers:
+            # Оверлей: страница на каждую страницу исходника — сохраняем
+            # соответствие индексов при слиянии.
+            overlay_buffer = io.BytesIO()
+            canvas = rl_canvas.Canvas(overlay_buffer)
+            for page_index, base_page in enumerate(reader.pages):
+                cropbox = base_page.cropbox
+                width = float(cropbox.width)
+                height = float(cropbox.height)
+                canvas.setPageSize((width, height))
+                # Размеры «display» — как page.rect в PyMuPDF (с учётом
+                # /Rotate); сами маркапы при этом рисуются в неповёрнутом
+                # потоке (семантика PyMuPDF, проверена зондом).
+                rotation = int(base_page.get('/Rotate', 0) or 0) % 360
+                if rotation in (90, 270):
+                    display_w, display_h = height, width
+                else:
+                    display_w, display_h = width, height
+                for issue in markers.get(page_index, []):
+                    color = PDF_ISSUE_COLORS.get(
+                        issue.status, PDF_ISSUE_COLORS['NEW'],
+                    )
+                    _draw_issue_marker(
+                        rl_canvas, canvas,
+                        float(cropbox.left), float(cropbox.bottom),
+                        float(cropbox.right), float(cropbox.top),
+                        issue, Color(*color), display_w, display_h,
+                    )
+                canvas.showPage()
+            canvas.save()
+
+            overlay_buffer.seek(0)
+            overlay_reader = PdfReader(overlay_buffer)
+            for page_index in markers:
+                writer.pages[page_index].merge_page(
+                    overlay_reader.pages[page_index],
+                )
+
+        writer.write(buffer)
         return buffer.getvalue()
-    finally:
-        pdf.close()
+
+
+def _display_to_user(left, bottom, right, top, x_tl, y_tl):
+    """Точка в неповёрнутой TL-системе PyMuPDF -> пользовательское (BL).
+
+    Поворот листа (/Rotate) НЕ учитывается — PyMuPDF пишет контент
+    в поток неповёрнутым (проверено зондом на rot 90/180/270).
+    """
+    return left + x_tl, top - y_tl
+
+
+def _draw_issue_marker(
+    rl_canvas, canvas, left, bottom, right, top,
+    issue: Issue, color, display_width, display_height,
+):
+    """Рисует маркап замечания на оверлей-странице reportlab.
+
+    Эквивалент прежней PyMuPDF-отрисовки: draw_rect/draw_circle +
+    insert_text подписи '#<pk>' (шрифт Helvetica 8, как base14 'helv').
+    """
+    canvas.setStrokeColor(color)
+    canvas.setFillColor(color)
+    canvas.setLineWidth(2)
+
+    def to_user(x_d, y_d):
+        return _display_to_user(left, bottom, right, top, x_d, y_d)
+
+    if (
+        issue.x1_ratio is not None and issue.y1_ratio is not None
+        and issue.x2_ratio is not None and issue.y2_ratio is not None
+    ):
+        x1_d = display_width * min(issue.x1_ratio, issue.x2_ratio)
+        y1_d = display_height * min(issue.y1_ratio, issue.y2_ratio)
+        x2_d = display_width * max(issue.x1_ratio, issue.x2_ratio)
+        y2_d = display_height * max(issue.y1_ratio, issue.y2_ratio)
+        ux1, uy1 = to_user(x1_d, y1_d)
+        ux2, uy2 = to_user(x2_d, y2_d)
+        canvas.rect(min(ux1, ux2), min(uy1, uy2),
+                    abs(ux2 - ux1), abs(uy2 - uy1), stroke=1, fill=0)
+        label_x, label_y = to_user(x1_d + 3, max(y1_d - 3, 8))
+    elif issue.x_ratio is not None and issue.y_ratio is not None:
+        cx_d = display_width * issue.x_ratio
+        cy_d = display_height * issue.y_ratio
+        cx, cy = to_user(cx_d, cy_d)
+        canvas.circle(cx, cy, 9, stroke=1, fill=0)
+        label_x, label_y = to_user(cx_d + 12, max(cy_d - 12, 8))
+    else:
+        return
+
+    canvas.setFont('Helvetica', 8)
+    canvas.drawString(label_x, label_y, f'#{issue.pk}')
 
 
 def add_issue_comment(user: User, issue: Issue, text: str):

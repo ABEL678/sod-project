@@ -1,8 +1,10 @@
 """Детерминированные правила проверки листов (этап Ф1, без LLM).
 
-Каждое правило — функция от страницы PyMuPDF, возвращающая список
+Каждое правило — функция от обёртки страницы pypdfium2
+(ai_checks.pdfium_tools.PdfPageView), возвращающая список
 находок-словарей: {page, bbox, message, severity, evidence}.
-bbox — координаты PyMuPDF в пунктах [x0, y0, x1, y1] по ARCHITECTURE 3.2.
+bbox — координаты в пунктах [x0, y0, x1, y1] по ARCHITECTURE 3.2
+(неповёрнутая система, TL-начало — как в PyMuPDF, ради вьювера).
 
 Движок (services.run_rules_check) сопоставляет RuleDefinition.code →
 функция из RULE_CHECKS. Structural-правила (рамка/штамп/шрифт) — код;
@@ -12,6 +14,8 @@ rule_kind в БД хранит спековую классификацию (rege
 from __future__ import annotations
 
 from typing import Callable
+
+from ai_checks.pdfium_tools import Rect
 
 # 2.5 мм в пунктах (1 pt = 25.4 / 72 мм).
 MIN_FONT_MM = 2.5
@@ -39,21 +43,6 @@ def _page_finding(page, bbox, message, severity, evidence='') -> dict:
     }
 
 
-def _iter_segments(page):
-    """Линейные сегменты (горизонтальные/вертикальные) из drawings."""
-    for drawing in page.get_drawings():
-        for item in drawing['items']:
-            if item[0] == 'l':
-                point_a, point_b = item[1], item[2]
-                yield (point_a.x, point_a.y, point_b.x, point_b.y)
-            elif item[0] == 're':
-                rect = item[1]
-                yield (rect.x0, rect.y0, rect.x1, rect.y0)
-                yield (rect.x0, rect.y1, rect.x1, rect.y1)
-                yield (rect.x0, rect.y0, rect.x0, rect.y1)
-                yield (rect.x1, rect.y0, rect.x1, rect.y1)
-
-
 def check_frame(page) -> list[dict]:
     """SPDS.RAME: наличие внешней рамки листа.
 
@@ -69,7 +58,7 @@ def check_frame(page) -> list[dict]:
     min_vertical = height * 0.8
 
     top = bottom = left = right = False
-    for x0, y0, x1, y1 in _iter_segments(page):
+    for x0, y0, x1, y1 in page.iter_line_segments():
         if abs(y1 - y0) <= LINE_TOLERANCE_PT and abs(x1 - x0) >= min_horizontal:
             edge = (y0 + y1) / 2.0
             if edge <= rect.y0 + edge_y:
@@ -147,15 +136,15 @@ def check_stamp(page) -> list[dict]:
     4) рамка штампа, примыкающая к правому нижнему углу листа.
     """
     rect = page.rect
-    zone = pymupdf_rect(
+    zone = Rect(
         rect.x0 + rect.width * STAMP_ZONE_X,
         rect.y0 + rect.height * STAMP_ZONE_Y,
         rect.x1,
         rect.y1,
     )
 
-    text = page.get_text('text', clip=zone) or ''
-    # PyMuPDF может отдавать неразрывные пробелы (\xa0) — нормализуем.
+    text = page.get_text(clip=zone) or ''
+    # pdfium может отдавать неразрывные пробелы (\xa0) — нормализуем.
     normalized = ' '.join(text.replace('\xa0', ' ').split()).casefold()
     if 'основная надпись' in normalized:
         return []
@@ -171,34 +160,22 @@ def check_stamp(page) -> list[dict]:
     max_box_height = rect.height * 0.35
     edge_tolerance = rect.width * 0.05
 
-    for drawing in page.get_drawings():
-        for item in drawing['items']:
-            segments = []
-            if item[0] == 're':
-                box = item[1]
-                segments = [
-                    (box.x0, box.y0, box.x1, box.y0),
-                    (box.x0, box.y1, box.x1, box.y1),
-                    (box.x0, box.y0, box.x0, box.y1),
-                    (box.x1, box.y0, box.x1, box.y1),
-                ]
-                if (
-                    box.width >= min_box_width
-                    and min_box_height <= box.height <= max_box_height
-                    and box.x1 >= rect.x1 - edge_tolerance
-                    and box.y1 >= rect.y1 - edge_tolerance
-                ):
-                    attached_box = True
-            elif item[0] == 'l':
-                point_a, point_b = item[1], item[2]
-                segments = [(point_a.x, point_a.y, point_b.x, point_b.y)]
-            for x0, y0, x1, y1 in segments:
-                if not _segment_hits_zone(x0, y0, x1, y1, zone):
-                    continue
-                if abs(y1 - y0) <= LINE_TOLERANCE_PT and abs(x1 - x0) >= 20:
-                    horizontal += 1
-                elif abs(x1 - x0) <= LINE_TOLERANCE_PT and abs(y1 - y0) >= 20:
-                    vertical += 1
+    for x0, y0, x1, y1 in page.iter_line_segments():
+        if not _segment_hits_zone(x0, y0, x1, y1, zone):
+            continue
+        if abs(y1 - y0) <= LINE_TOLERANCE_PT and abs(x1 - x0) >= 20:
+            horizontal += 1
+        elif abs(x1 - x0) <= LINE_TOLERANCE_PT and abs(y1 - y0) >= 20:
+            vertical += 1
+
+    for box in page.iter_rects():
+        if (
+            box.width >= min_box_width
+            and min_box_height <= box.height <= max_box_height
+            and box.x1 >= rect.x1 - edge_tolerance
+            and box.y1 >= rect.y1 - edge_tolerance
+        ):
+            attached_box = True
 
     if horizontal >= STAMP_MIN_H_LINES and vertical >= STAMP_MIN_V_LINES:
         return []
@@ -229,37 +206,25 @@ def check_font(page) -> list[dict]:
     stamp_y0 = rect.y0 + rect.height * STAMP_ZONE_Y
 
     findings: list[dict] = []
-    data = page.get_text('dict') or {}
-    for block in data.get('blocks', []):
-        if block.get('type', 0) != 0:
+    for run in page.iter_text_runs():
+        text = (run['text'] or '').strip()
+        if not text:
             continue
-        for line in block.get('lines', []):
-            for span in line.get('spans', []):
-                text = (span.get('text') or '').strip()
-                if not text:
-                    continue
-                x0, y0, x1, y1 = span['bbox']
-                if x0 >= stamp_x0 and y0 >= stamp_y0:
-                    continue
-                size = float(span.get('size') or 0.0)
-                if size and size < MIN_FONT_PT - 0.01:
-                    millimeters = size * 25.4 / 72.0
-                    findings.append(_page_finding(
-                        page,
-                        [x0, y0, x1, y1],
-                        f'Высота шрифта {millimeters:.1f} мм меньше '
-                        f'{MIN_FONT_MM} мм (СПДС)',
-                        'minor',
-                        evidence=text[:120],
-                    ))
+        x0, y0, x1, y1 = run['bbox']
+        if x0 >= stamp_x0 and y0 >= stamp_y0:
+            continue
+        size = float(run['size'] or 0.0)
+        if size and size < MIN_FONT_PT - 0.01:
+            millimeters = size * 25.4 / 72.0
+            findings.append(_page_finding(
+                page,
+                [x0, y0, x1, y1],
+                f'Высота шрифта {millimeters:.1f} мм меньше '
+                f'{MIN_FONT_MM} мм (СПДС)',
+                'minor',
+                evidence=text[:120],
+            ))
     return findings
-
-
-def pymupdf_rect(x0, y0, x1, y1):
-    """Локальная обёртка над pymupdf.Rect (импорт по требованию)."""
-    import pymupdf
-
-    return pymupdf.Rect(x0, y0, x1, y1)
 
 
 # Реестр правил: RuleDefinition.code → проверка страницы.
