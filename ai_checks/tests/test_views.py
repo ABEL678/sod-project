@@ -70,9 +70,11 @@ class AiChecksUiTests(MediaIsolationMixin, TestCase):
         self.client.force_login(self.user)
 
     def test_flag_off_returns_404(self):
-        response = self.client.get(
-            reverse('ai_checks:panel', args=[self.document.pk]),
-        )
+        # Явно выключаем: дефолт может быть перекрыт .env на машине.
+        with override_settings(AI_CHECKS_ENABLED=False):
+            response = self.client.get(
+                reverse('ai_checks:panel', args=[self.document.pk]),
+            )
         self.assertEqual(response.status_code, 404)
 
     @override_settings(AI_CHECKS_ENABLED=True)

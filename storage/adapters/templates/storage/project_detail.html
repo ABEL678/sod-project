@@ -241,10 +241,24 @@
                             ИИ-поиск
                         </a>
                     {% endif %}
+                    {% if ai_report_allowed %}
+                        {# Этап 19 (Ф4): вкладка «Отчёт ГИПу» (ГИП/админ) #}
+                        <a class="app-tab" href="#" id="aiReportTab"
+                           hx-get="{% url 'ai_checks:report_panel' project.pk %}"
+                           hx-target="#aiReportPane" hx-swap="innerHTML"
+                           onclick="document.querySelectorAll('.app-tab').forEach(function (t) { t.classList.remove('active'); }); this.classList.add('active'); return false;">
+                            <i class="bi bi-file-earmark-bar-graph" aria-hidden="true"></i>
+                            Отчёт ГИПу
+                        </a>
+                    {% endif %}
                 </nav>
                 {% if ai_checks_enabled %}
                     {# Этап 19 (Ф2): контейнер панели ИИ-поиска #}
                     <div id="aiRagPane" class="mt-2"></div>
+                {% endif %}
+                {% if ai_report_allowed %}
+                    {# Этап 19 (Ф4): контейнер панели отчёта ГИПу #}
+                    <div id="aiReportPane" class="mt-2"></div>
                 {% endif %}
             {% endif %}
 

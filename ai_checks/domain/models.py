@@ -346,6 +346,85 @@ class PendingCheckResult(models.Model):
         return f'Находка #{self.pk} ({self.get_status_display()})'
 
 
+class GeneratedReport(models.Model):
+    """Сгенерированный отчёт для ГИПа (ARCHITECTURE.md, дополнение к 7).
+
+    payload — сводка: total/by_severity/by_document/top_issues + текст
+    резюме. period — ISO-диапазон 'YYYY-MM-DD..YYYY-MM-DD'.
+    Тексты промптов/ответов не хранятся (приватность), только метаданные.
+    """
+
+    project = models.ForeignKey(
+        'storage.Project',
+        on_delete=models.CASCADE,
+        related_name='ai_reports',
+        verbose_name='Проект',
+    )
+    period = models.CharField(
+        max_length=64, verbose_name='Период (ISO: start..end)',
+    )
+    payload = models.JSONField(
+        default=dict, verbose_name='Сводка',
+    )
+    llm_call = models.ForeignKey(
+        'LLMCallLog',
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='reports',
+        verbose_name='Вызов LLM',
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='ai_reports',
+        verbose_name='Создал',
+    )
+    created_at = models.DateTimeField(
+        auto_now_add=True, verbose_name='Создан',
+    )
+
+    class Meta:
+        verbose_name = 'Отчёт ГИПу'
+        verbose_name_plural = 'Отчёты ГИПу'
+        ordering = ['-created_at']
+
+    def __str__(self) -> str:
+        return f'Отчёт #{self.pk} ({self.period})'
+
+
+class ReminderRule(models.Model):
+    """Правило напоминаний по незавершённым находкам (дополнение к 7)."""
+
+    class Audience(models.TextChoices):
+        GIP = 'gip', 'ГИП проекта'
+        ADMIN = 'admin', 'Администратор компании'
+
+    code = models.CharField(
+        max_length=100, unique=True, verbose_name='Код правила',
+    )
+    offset_days = models.PositiveIntegerField(
+        default=7, verbose_name='Через сколько дней напоминать',
+    )
+    audience = models.CharField(
+        max_length=10,
+        choices=Audience.choices,
+        default=Audience.GIP,
+        verbose_name='Кому',
+    )
+    is_active = models.BooleanField(default=True, verbose_name='Активно')
+
+    class Meta:
+        verbose_name = 'Правило напоминаний'
+        verbose_name_plural = 'Правила напоминаний'
+        ordering = ['code']
+
+    def __str__(self) -> str:
+        return f'{self.code} (+{self.offset_days} дн.)'
+
+
 class CheckRun(models.Model):
     """Прогон проверки версии документа (ARCHITECTURE.md 3.2, Ф1).
 

@@ -1,0 +1,55 @@
+{% comment %}
+Ф4: результат генерации отчёта ГИПу — сводка и скачивание JSON.
+{% endcomment %}
+{% if error %}
+  <div class="alert alert-warning py-1 px-2 small mb-2">{{ error }}</div>
+{% elif report %}
+  <div class="border rounded p-3 bg-white" id="aiReport-{{ report.pk }}">
+    <div class="d-flex justify-content-between align-items-baseline mb-2">
+      <span class="fw-semibold">
+        Отчёт за период {{ report.period }}
+      </span>
+      <a class="btn btn-sm btn-outline-secondary text-nowrap"
+         href="{% url 'ai_checks:report_json' report.pk %}">
+        <i class="bi bi-download me-1" aria-hidden="true"></i>Скачать JSON
+      </a>
+    </div>
+
+    <div class="small mb-2">
+      <span class="me-3">Всего находок: <b>{{ report.payload.total }}</b></span>
+      {% if report.payload.by_severity %}
+        {% for severity, count in report.payload.by_severity.items %}
+          <span class="badge text-bg-light border me-1">{{ severity }}: {{ count }}</span>
+        {% endfor %}
+      {% endif %}
+    </div>
+
+    {% if report.payload.by_document %}
+      <div class="small mb-2">
+        <span class="text-muted">По документам:</span>
+        {% for code, count in report.payload.by_document.items %}
+          <span class="badge text-bg-light border me-1">{{ code }}: {{ count }}</span>
+        {% endfor %}
+      </div>
+    {% endif %}
+
+    {% if report.payload.top_issues %}
+      <div class="small mb-2">
+        <div class="text-muted mb-1">Ключевые находки:</div>
+        <ul class="mb-0 ps-3">
+          {% for issue in report.payload.top_issues %}
+            <li>
+              {% if issue.page %}лист {{ issue.page }} · {% endif %}
+              {{ issue.document }} — {{ issue.message|truncatechars:160 }}
+            </li>
+          {% endfor %}
+        </ul>
+      </div>
+    {% endif %}
+
+    <div class="small">
+      <div class="text-muted mb-1">Резюме:</div>
+      <div class="border rounded p-2 bg-light" style="white-space: pre-wrap;">{{ report.payload.summary }}</div>
+    </div>
+  </div>
+{% endif %}

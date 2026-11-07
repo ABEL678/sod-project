@@ -24,4 +24,14 @@ urlpatterns = [
         'project/<int:project_id>/rag/search/',
         views.rag_search, name='rag_search',
     ),
+    # Ф4: отчёт ГИПу.
+    path(
+        'project/<int:project_id>/report/',
+        views.report_panel, name='report_panel',
+    ),
+    path(
+        'project/<int:project_id>/report/generate/',
+        views.report_generate, name='report_generate',
+    ),
+    path('report/<int:pk>/json/', views.report_json, name='report_json'),
 ]

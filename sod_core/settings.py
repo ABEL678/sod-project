@@ -120,6 +120,28 @@ CELERY_TASK_ALWAYS_EAGER = env_bool('CELERY_TASK_ALWAYS_EAGER', True)
 CELERY_TASK_EAGER_PROPAGATES = True
 CELERY_TASK_IGNORE_RESULT = True
 
+# Этап 19 (Ф4): LLM для отчётов ГИПа (DeepSeek/OpenRouter, OpenAI-совместимый).
+# Без ключа используется заглушка (StubLLMProvider) — контур работает локально.
+AI_LLM_API_KEY = os.environ.get('AI_LLM_API_KEY', '')
+AI_LLM_BASE_URL = os.environ.get('AI_LLM_BASE_URL', 'https://api.deepseek.com/v1')
+AI_LLM_MODEL = os.environ.get('AI_LLM_MODEL', 'deepseek-chat')
+AI_LLM_TIMEOUT = int(os.environ.get('AI_LLM_TIMEOUT', '60'))
+
+# Этап 19 (Ф4): ежедневные напоминания по незавершённым проверкам.
+# django-celery-beat несовместим с Django 6.1 (требует Django<6.1), поэтому
+# расписание — статическое (встроенный beat). Запуск воркера/beat:
+#   celery -A sod_core worker -l info
+#   celery -A sod_core beat -l info
+from celery.schedules import crontab
+
+CELERY_BEAT_SCHEDULE = {
+    'ai-checks-reminders-daily': {
+        'task': 'ai_checks.check_reminders',
+        'schedule': crontab(hour=8, minute=0),
+    },
+}
+
+
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
         'external_api.authentication.ApiTokenAuthentication',

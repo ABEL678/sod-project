@@ -9,6 +9,9 @@
 
 from __future__ import annotations
 
+import json
+from datetime import date, timedelta
+
 import pymupdf
 from django.conf import settings
 from django.contrib.auth.decorators import login_required
@@ -17,8 +20,8 @@ from django.shortcuts import get_object_or_404, render
 from django.utils import timezone
 from django.views.decorators.http import require_GET, require_POST
 
-from ai_checks.domain.models import CheckRun, PendingCheckResult
-from ai_checks.domain.services import rag_answer
+from ai_checks.domain.models import CheckRun, GeneratedReport, PendingCheckResult
+from ai_checks.domain.services import generate_gip_report, rag_answer
 from storage.domain.services import get_accessible_projects
 from ai_checks.tasks import check_document_version_task
 from storage.domain.models import Document
@@ -302,3 +305,94 @@ def rag_search(request, project_id: int):
         'groups': _rag_groups(result['sources']),
         'error': error,
     })
+
+
+def _report_allowed(user) -> bool:
+    if not getattr(user, 'is_authenticated', False):
+        return False
+    if user.is_superuser:
+        return True
+    profile = getattr(user, 'userprofile', None)
+    return profile is not None and profile.role in ('gip', 'admin')
+
+
+def _report_project(request, project_id: int):
+    project = get_object_or_404(
+        get_accessible_projects(request.user), pk=project_id,
+    )
+    if not _report_allowed(request.user):
+        raise Http404('Отчёт ГИПу доступен только ГИП/администратору')
+    return project
+
+
+@login_required
+@require_GET
+def report_panel(request, project_id: int):
+    """HTMX-фрагмент вкладки «Отчёт ГИПу»: форма периода."""
+    _ensure_enabled()
+    project = _report_project(request, project_id)
+    today = timezone.localdate()
+    return render(request, 'ai_checks/_report.html', {
+        'project': project,
+        'default_start': (today - timedelta(days=30)).isoformat(),
+        'default_end': today.isoformat(),
+    })
+
+
+@login_required
+@require_POST
+def report_generate(request, project_id: int):
+    """HTMX-фрагмент: сводка отчёта + ссылка на скачивание JSON."""
+    _ensure_enabled()
+    project = _report_project(request, project_id)
+    error = ''
+    report = None
+    try:
+        period_start = date.fromisoformat(
+            (request.POST.get('period_start') or '').strip(),
+        )
+        period_end = date.fromisoformat(
+            (request.POST.get('period_end') or '').strip(),
+        )
+    except ValueError:
+        error = 'Укажите корректные даты периода.'
+    else:
+        try:
+            report = generate_gip_report(
+                project, period_start, period_end, request.user,
+            )
+        except ValueError as exc:
+            error = str(exc)
+
+    return render(request, 'ai_checks/_report_result.html', {
+        'project': project,
+        'report': report,
+        'error': error,
+    })
+
+
+@login_required
+@require_GET
+def report_json(request, pk: int):
+    """Скачивание JSON-сводки отчёта."""
+    _ensure_enabled()
+    report = get_object_or_404(
+        GeneratedReport.objects.select_related('project'), pk=pk,
+    )
+    get_object_or_404(get_accessible_projects(request.user), pk=report.project_id)
+    if not _report_allowed(request.user):
+        raise Http404('Отчёт ГИПу доступен только ГИП/администратору')
+    payload = {
+        'project': {'id': report.project_id, 'code': report.project.code},
+        'period': report.period,
+        'created_at': report.created_at.isoformat(),
+        'payload': report.payload,
+    }
+    response = HttpResponse(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        content_type='application/json; charset=utf-8',
+    )
+    response['Content-Disposition'] = (
+        f'attachment; filename="gip_report_{report.pk}.json"'
+    )
+    return response

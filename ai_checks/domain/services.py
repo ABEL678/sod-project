@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from datetime import timedelta
 
 import pymupdf
 from django.db import transaction
@@ -16,9 +17,12 @@ from django.utils import timezone
 
 from ai_checks.domain.models import (
     CheckRun,
+    GeneratedReport,
     InternalChunk,
     InternalDocument,
+    LLMCallLog,
     PendingCheckResult,
+    ReminderRule,
     RuleDefinition,
 )
 from ai_checks.domain.rules import RULE_CHECKS
@@ -294,3 +298,235 @@ def rag_answer(
         for source in sources[:3]
     )
     return {'answer': digest, 'sources': sources}
+
+
+GIP_REPORT_PROMPT_VERSION = 'gip-report@1'
+SEVERITY_ORDER = ('blocker', 'major', 'minor', 'info')
+SEVERITY_LABELS = {
+    'blocker': 'Блокирующие',
+    'major': 'Значительные',
+    'minor': 'Незначительные',
+    'info': 'Информационные',
+}
+
+
+def _gip_report_context(project, period_start, period_end, aggregates) -> str:
+    lines = [
+        f'Проект: {project.name} ({project.code})',
+        f'Период: {period_start.isoformat()} — {period_end.isoformat()}',
+        f'Всего подтверждённых находок: {aggregates["total"]}',
+        'По критичности:',
+    ]
+    for severity in SEVERITY_ORDER:
+        count = aggregates['by_severity'].get(severity, 0)
+        if count:
+            lines.append(f'- {SEVERITY_LABELS[severity]}: {count}')
+    lines.append('По документам:')
+    for code, count in list(aggregates['by_document'].items())[:15]:
+        lines.append(f'- {code}: {count}')
+    if aggregates['top_issues']:
+        lines.append('Ключевые находки:')
+        for issue in aggregates['top_issues']:
+            lines.append(
+                f'- [{issue["document"]}, лист {issue["page"] or "?"}] '
+                f'{issue["message"][:200]}'
+            )
+    return '\n'.join(lines)
+
+
+def generate_gip_report(
+    project,
+    period_start,
+    period_end,
+    user,
+    llm_provider=None,
+) -> GeneratedReport:
+    """Сводка замечаний для ГИПа за период (Ф4, DeepSeek/заглушка).
+
+    Берёт ТОЛЬКО подтверждённые находки (status=confirmed) проекта,
+    подтверждённые в периоде (reviewed_at). payload:
+    {total, by_severity, by_document, top_issues, summary}.
+    Вызов LLM (или заглушки) фиксируется в LLMCallLog.
+    """
+    if period_start > period_end:
+        raise ValueError('Начало периода позже конца')
+
+    findings = list(
+        PendingCheckResult.objects
+        .filter(
+            status=PendingCheckResult.Status.CONFIRMED,
+            reviewed_at__date__gte=period_start,
+            reviewed_at__date__lte=period_end,
+            check_run__document_version__document__project=project,
+        )
+        .select_related(
+            'rule', 'check_run__document_version__document',
+        )
+    )
+
+    by_severity: dict[str, int] = {}
+    by_document: dict[str, int] = {}
+    ordered = sorted(
+        findings,
+        key=lambda f: (
+            SEVERITY_ORDER.index(f.severity)
+            if f.severity in SEVERITY_ORDER else len(SEVERITY_ORDER),
+            f.page or 0,
+            f.pk,
+        ),
+    )
+    top_issues = []
+    for finding in ordered:
+        by_severity[finding.severity] = by_severity.get(finding.severity, 0) + 1
+        document = finding.check_run.document_version.document
+        document_code = document.code or document.name
+        by_document[document_code] = by_document.get(document_code, 0) + 1
+        if len(top_issues) < 5:
+            top_issues.append({
+                'message': finding.message,
+                'page': finding.page,
+                'document': document_code,
+                'severity': finding.severity,
+            })
+
+    aggregates = {
+        'total': len(findings),
+        'by_severity': by_severity,
+        'by_document': by_document,
+        'top_issues': top_issues,
+    }
+
+    if llm_provider is None:
+        from ai_checks.adapters.llm_http import get_llm_provider
+
+        llm_provider = get_llm_provider()
+
+    context_text = _gip_report_context(
+        project, period_start, period_end, aggregates,
+    )
+    llm_call = None
+    summary = ''
+    try:
+        response = llm_provider.complete([
+            {
+                'role': 'system',
+                'content': (
+                    'Ты — помощник ГИПа. Составь краткое деловое резюме '
+                    'по подтверждённым замечаниям проверки, без выдумок, '
+                    'только по переданным данным.'
+                ),
+            },
+            {'role': 'user', 'content': context_text},
+        ])
+        summary = response.text
+        llm_call = LLMCallLog.objects.create(
+            provider=getattr(llm_provider, 'name', 'unknown'),
+            model=response.model or 'unknown',
+            purpose=LLMCallLog.Purpose.GIP_REPORT,
+            prompt_tokens=response.prompt_tokens,
+            completion_tokens=response.completion_tokens,
+            latency_ms=response.latency_ms,
+            status=LLMCallLog.Status.OK,
+            prompt_version=GIP_REPORT_PROMPT_VERSION,
+            user=user,
+        )
+    except Exception as exc:  # noqa: BLE001 — отчёт важнее сбоя LLM
+        logger.exception('LLM для отчёта ГИПа упал: %s', exc)
+        summary = context_text
+        llm_call = LLMCallLog.objects.create(
+            provider=getattr(llm_provider, 'name', 'unknown'),
+            model=getattr(llm_provider, 'model', 'unknown'),
+            purpose=LLMCallLog.Purpose.GIP_REPORT,
+            status=LLMCallLog.Status.ERROR,
+            error_message=str(exc)[:1000],
+            prompt_version=GIP_REPORT_PROMPT_VERSION,
+            user=user,
+        )
+
+    payload = dict(aggregates)
+    payload['summary'] = summary
+    return GeneratedReport.objects.create(
+        project=project,
+        period=f'{period_start.isoformat()}..{period_end.isoformat()}',
+        payload=payload,
+        llm_call=llm_call,
+        created_by=user,
+    )
+
+
+def _reminder_recipients(project, audience: str):
+    """Получатели напоминаний: ГИП проекта или админы компании."""
+    from django.contrib.auth.models import User
+
+    recipients: dict[int, User] = {}
+    if audience == ReminderRule.Audience.ADMIN:
+        from storage.domain.models import UserProfile
+
+        for profile in UserProfile.objects.filter(
+            company=project.company, role='admin',
+        ).select_related('user'):
+            recipients[profile.user_id] = profile.user
+        return list(recipients.values())
+
+    if project.gip_id is not None:
+        recipients[project.gip_id] = project.gip
+    for membership in project.memberships.filter(
+        role_in_project='gip',
+    ).select_related('user'):
+        recipients[membership.user_id] = membership.user
+    return list(recipients.values())
+
+
+def send_pending_reminders(now=None) -> int:
+    """Напоминания по незавершённым находкам (Ф4, без LLM).
+
+    Для каждого активного ReminderRule: pending-находки, у которых
+    прогон старше offset_days и нет reviewed_at → уведомление получателю
+    (ГИП проекта / админ компании). Дубли отсекаются по url. Возвращает
+    число созданных уведомлений.
+    """
+    from django.urls import reverse
+    from issues.models import Notification
+    from issues.notify import create_notification
+
+    now = now or timezone.now()
+    created = 0
+    pending = (
+        PendingCheckResult.objects
+        .filter(
+            status=PendingCheckResult.Status.PENDING,
+            reviewed_at__isnull=True,
+        )
+        .select_related('check_run__document_version__document__project')
+    )
+
+    for rule in ReminderRule.objects.filter(is_active=True):
+        threshold = now - timedelta(days=rule.offset_days)
+        for finding in pending.filter(check_run__created_at__lte=threshold):
+            check_run = finding.check_run
+            document = check_run.document_version.document
+            project = document.project
+            url = reverse(
+                'storage:document_detail', args=[document.pk],
+            ) + f'#ai-finding-{finding.pk}'
+            message = (
+                f'Незавершённая ИИ-проверка: «{finding.message}» '
+                f'({document.code})'
+            )[:300]
+            for recipient in _reminder_recipients(project, rule.audience):
+                if Notification.objects.filter(
+                    recipient=recipient, url=url,
+                ).exists():
+                    continue
+                notification = create_notification(
+                    recipient=recipient,
+                    actor=None,
+                    verb='ai_reminder',
+                    document=document,
+                    project=project,
+                    message=message,
+                    url=url,
+                )
+                if notification is not None:
+                    created += 1
+    return created
