@@ -127,6 +127,16 @@ AI_LLM_BASE_URL = os.environ.get('AI_LLM_BASE_URL', 'https://api.deepseek.com/v1
 AI_LLM_MODEL = os.environ.get('AI_LLM_MODEL', 'deepseek-chat')
 AI_LLM_TIMEOUT = int(os.environ.get('AI_LLM_TIMEOUT', '60'))
 
+# GigaChat (Сбер, работа из РФ): AI_LLM_PROVIDER=gigachat включает
+# GigaChatProvider (Authorization Key → OAuth-токен → OpenAI-совместимый API).
+AI_LLM_PROVIDER = os.environ.get('AI_LLM_PROVIDER', '')
+AI_GIGACHAT_AUTH_KEY = os.environ.get('AI_GIGACHAT_AUTH_KEY', '')
+AI_GIGACHAT_MODEL = os.environ.get('AI_GIGACHAT_MODEL', 'GigaChat-2')
+AI_GIGACHAT_TIMEOUT = int(os.environ.get('AI_GIGACHAT_TIMEOUT', '60'))
+# TLS: корневые сертификаты НУЦ Минцифры; если не установлены —
+# AI_GIGACHAT_VERIFY_SSL=false (осознанно, для dev).
+AI_GIGACHAT_VERIFY_SSL = env_bool('AI_GIGACHAT_VERIFY_SSL', True)
+
 # Этап 19 (Ф4): ежедневные напоминания по незавершённым проверкам.
 # django-celery-beat несовместим с Django 6.1 (требует Django<6.1), поэтому
 # расписание — статическое (встроенный beat). Запуск воркера/beat:

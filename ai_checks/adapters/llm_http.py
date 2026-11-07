@@ -7,7 +7,9 @@
 
 from __future__ import annotations
 
+import threading
 import time
+import uuid
 
 import httpx
 from django.conf import settings
@@ -113,7 +115,28 @@ class StubLLMProvider:
 
 
 def get_llm_provider():
-    """Фабрика: HTTP-провайдер при заданном ключе, иначе — заглушка."""
+    """Фабрика: GigaChat / OpenAI-совместимый HTTP / заглушка.
+
+    AI_LLM_PROVIDER=gigachat → GigaChatProvider (ключ AI_GIGACHAT_AUTH_KEY);
+    иначе при AI_LLM_API_KEY → HttpLLMProvider; без ключей — заглушка.
+    """
+    provider = (getattr(settings, 'AI_LLM_PROVIDER', '') or '').strip().lower()
+
+    if provider == 'gigachat':
+        auth_key = (
+            getattr(settings, 'AI_GIGACHAT_AUTH_KEY', '') or ''
+        ).strip()
+        if not auth_key:
+            return StubLLMProvider()
+        return GigaChatProvider(
+            auth_key,
+            model=getattr(settings, 'AI_GIGACHAT_MODEL', 'GigaChat-2'),
+            timeout=float(getattr(settings, 'AI_GIGACHAT_TIMEOUT', 60)),
+            verify_ssl=bool(
+                getattr(settings, 'AI_GIGACHAT_VERIFY_SSL', True),
+            ),
+        )
+
     api_key = (getattr(settings, 'AI_LLM_API_KEY', '') or '').strip()
     if not api_key:
         return StubLLMProvider()
@@ -125,3 +148,120 @@ def get_llm_provider():
         model=getattr(settings, 'AI_LLM_MODEL', 'deepseek-chat'),
         timeout=float(getattr(settings, 'AI_LLM_TIMEOUT', 60)),
     )
+
+
+class GigaChatProvider:
+    """GigaChat (Сбер) из РФ: Authorization Key → OAuth-токен → API.
+
+    Двухэтапная авторизация: POST на OAuth-эндпоинт с Authorization Key
+    (Base64) и RqUID, затем OpenAI-совместимый chat/completions с
+    Bearer-токеном. Токен живёт ~30 мин — кэшируем в памяти 25 мин
+    (в БД не храним). Документация:
+    https://developers.sber.ru/docs/ru/gigachat/guides/compatible-openai
+    """
+
+    name = 'gigachat'
+    OAUTH_URL = 'https://ngw.devices.sberbank.ru:9443/api/v2/oauth'
+    API_BASE_URL = 'https://api.giga.chat/v1'
+    TOKEN_TTL_SECONDS = 25 * 60
+
+    def __init__(
+        self,
+        authorization_key: str,
+        model: str = 'GigaChat-2',
+        timeout: float = 60.0,
+        retries: int = 3,
+        verify_ssl: bool = True,
+    ) -> None:
+        self.authorization_key = authorization_key
+        self.model = model
+        self.timeout = timeout
+        self.retries = retries
+        self.verify_ssl = verify_ssl
+        self._access_token: str | None = None
+        self._token_expires_at: float = 0.0
+        self._token_lock = threading.Lock()
+
+    def _get_token(self) -> str:
+        """OAuth-токен: из кэша (25 мин) или новый запрос."""
+        with self._token_lock:
+            now = time.monotonic()
+            if self._access_token and now < self._token_expires_at:
+                return self._access_token
+
+            response = httpx.post(
+                self.OAUTH_URL,
+                headers={
+                    'Authorization': f'Bearer {self.authorization_key}',
+                    'RqUID': str(uuid.uuid4()),
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                },
+                data={'scope': 'GIGACHAT_API_PERS'},
+                timeout=self.timeout,
+                verify=self.verify_ssl,
+            )
+            response.raise_for_status()
+            token = response.json()['access_token']
+            self._access_token = token
+            self._token_expires_at = now + self.TOKEN_TTL_SECONDS
+            return token
+
+    def _invalidate_token(self) -> None:
+        with self._token_lock:
+            self._access_token = None
+            self._token_expires_at = 0.0
+
+    def complete(
+        self,
+        messages: list[dict],
+        *,
+        model: str | None = None,
+        json_mode: bool = False,
+    ) -> LLMResponse:
+        payload = {
+            'model': model or self.model,
+            'messages': messages,
+        }
+        if json_mode:
+            payload['response_format'] = {'type': 'json_object'}
+
+        last_error: Exception | None = None
+        for attempt in range(self.retries):
+            started = time.monotonic()
+            try:
+                token = self._get_token()
+                with httpx.Client(
+                    timeout=self.timeout, verify=self.verify_ssl,
+                ) as client:
+                    response = client.post(
+                        f'{self.API_BASE_URL}/chat/completions',
+                        headers={
+                            'Authorization': f'Bearer {token}',
+                            'Content-Type': 'application/json',
+                        },
+                        json=payload,
+                    )
+                    if response.status_code == 401:
+                        # Токен отозван/истёк раньше — сбрасываем кэш.
+                        self._invalidate_token()
+                        response.raise_for_status()
+                    response.raise_for_status()
+                    data = response.json()
+                latency_ms = int((time.monotonic() - started) * 1000)
+                content = data['choices'][0]['message']['content']
+                usage = data.get('usage') or {}
+                return LLMResponse(
+                    text=content,
+                    model=data.get('model') or payload['model'],
+                    prompt_tokens=int(usage.get('prompt_tokens') or 0),
+                    completion_tokens=int(
+                        usage.get('completion_tokens') or 0
+                    ),
+                    latency_ms=latency_ms,
+                    raw={'id': data.get('id')},
+                )
+            except (httpx.HTTPError, KeyError, ValueError, TypeError) as exc:
+                last_error = exc
+                if attempt < self.retries - 1:
+                    time.sleep(0.5 * (attempt + 1))
+        raise RuntimeError(f'GigaChat-запрос не удался: {last_error}')
