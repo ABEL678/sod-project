@@ -1,0 +1,385 @@
+diff --git a/ai_checks/domain/services.py b/ai_checks/domain/services.py
+index 36b01cd..731eebb 100644
+--- a/ai_checks/domain/services.py
++++ b/ai_checks/domain/services.py
+@@ -633,37 +633,56 @@ def _report_summary_text(report) -> str:
+ 
+ 
+ def gip_report_pdf(report) -> bytes:
+-    """PDF отчёта ГИПа (PyMuPDF, встроенный CJK-шрифт с кириллицей)."""
+-    fontname = 'china-s'
+-    doc = pymupdf.open()
+-    page = doc.new_page(width=595, height=842)
++    """PDF отчёта ГИПа (reportlab, BSD — замена PyMuPDF).
++
++    Кириллица через встроенный CID-шрифт STSong-Light (Adobe-GB1 содержит
++    кириллицу) — прямой аналог 'china-s' в PyMuPDF: шрифт не встраивается,
++    вьювер подставляет свой (как и раньше).
++    """
++    import io
++
++    from reportlab.pdfbase import pdfmetrics
++    from reportlab.pdfbase.cidfonts import UnicodeCIDFont
++    from reportlab.pdfgen import canvas as rl_canvas
++
++    fontname = 'STSong-Light'
++    pdfmetrics.registerFont(UnicodeCIDFont(fontname))
++
++    page_width, page_height = 595, 842
+     margin = 42
+-    width = page.rect.width - 2 * margin
+-    y = margin
++    width = page_width - 2 * margin
++    buffer = io.BytesIO()
++    canvas = rl_canvas.Canvas(buffer, pagesize=(page_width, page_height))
++    y = margin  # курсор от верхнего края (TL-система, как в PyMuPDF)
+ 
+     def add_page_if_needed(needed: float) -> None:
+-        nonlocal page, y
+-        if y + needed > page.rect.height - margin:
+-            page = doc.new_page(width=595, height=842)
++        nonlocal y
++        if y + needed > page_height - margin:
++            canvas.showPage()  # сбрасывает состояние — шрифт задаём заново
++            canvas.setFont(fontname, 10)
+             y = margin
+ 
+     def write(text: str, size: float = 11, gap: float = 6) -> None:
+         nonlocal y
+         add_page_if_needed(size * 1.6)
+-        page.insert_text(
+-            (margin, y + size), text, fontname=fontname, fontsize=size,
+-        )
++        canvas.setFont(fontname, size)
++        # курсор y (TL) -> базовая линия в BL-системе reportlab
++        canvas.drawString(margin, page_height - y - size, text)
+         y += size * 1.6 + gap
+ 
+     def write_wrapped(text: str, size: float = 10) -> None:
+-        """Перенос по словам с ручной разбивкой на строки."""
++        """Перенос по словам с точным измерением ширины строки."""
+         nonlocal y
+-        max_chars = int(width / (size * 0.52)) or 60
+         words = str(text).split()
+         line = ''
+         for word in words:
+             candidate = (line + ' ' + word).strip()
+-            if len(candidate) > max_chars and line:
++            if (
++                line
++                and pdfmetrics.stringWidth(
++                    candidate, fontname, size,
++                ) > width
++            ):
+                 write(line, size=size, gap=0)
+                 line = word
+             else:
+@@ -671,6 +690,15 @@ def gip_report_pdf(report) -> bytes:
+         if line:
+             write(line, size=size, gap=0)
+ 
++    def fit_text(text, max_width: float, size: float) -> str:
++        """Обрезка текста по ширине ячейки (аналог insert_textbox clip)."""
++        text = str(text)
++        while text and pdfmetrics.stringWidth(
++            text, fontname, size,
++        ) > max_width:
++            text = text[:-1]
++        return text
++
+     write(_report_title(report), size=15, gap=14)
+ 
+     payload = report.payload or {}
+@@ -699,9 +727,8 @@ def gip_report_pdf(report) -> bytes:
+     headers = ('№', 'Документ', 'Статус', 'Срок', 'Ответственный')
+     x = margin
+     for header, col_width in zip(headers, columns):
+-        page.insert_text(
+-            (x + 2, y + 11), header, fontname=fontname, fontsize=9,
+-        )
++        canvas.setFont(fontname, 9)
++        canvas.drawString(x + 2, page_height - y - 11, header)
+         x += col_width
+     y += line_height
+ 
+@@ -709,13 +736,17 @@ def gip_report_pdf(report) -> bytes:
+         add_page_if_needed(line_height)
+         x = margin
+         for value, col_width in zip(row, columns):
+-            page.draw_rect(
+-                pymupdf.Rect(x, y, x + col_width, y + line_height),
+-                color=(0.75, 0.75, 0.75), width=0.4,
++            canvas.setStrokeColor((0.75, 0.75, 0.75))
++            canvas.setLineWidth(0.4)
++            canvas.rect(
++                x, page_height - y - line_height,
++                col_width, line_height, stroke=1, fill=0,
+             )
+-            clip = pymupdf.Rect(x + 2, y + 3, x + col_width - 2, y + line_height)
+-            page.insert_textbox(
+-                clip, str(value), fontname=fontname, fontsize=8.5,
++            canvas.setFont(fontname, 8.5)
++            canvas.drawString(
++                x + 2,
++                page_height - y - 3 - 8.5,
++                fit_text(value, col_width - 4, 8.5),
+             )
+             x += col_width
+         y += line_height
+@@ -724,7 +755,8 @@ def gip_report_pdf(report) -> bytes:
+     write('Резюме (LLM):', size=12, gap=2)
+     write_wrapped(str(payload.get('summary', '')), size=10)
+ 
+-    return doc.tobytes()
++    canvas.save()
++    return buffer.getvalue()
+ 
+ 
+ def gip_report_docx(report) -> bytes:
+diff --git a/ai_checks/tests/test_knowledge.py b/ai_checks/tests/test_knowledge.py
+index e6c5127..c222d40 100644
+--- a/ai_checks/tests/test_knowledge.py
++++ b/ai_checks/tests/test_knowledge.py
+@@ -1,6 +1,5 @@
+ """База знаний: загрузка (UI-сервис), индексация, просмотр, удаление."""
+ 
+-import pymupdf
+ from django.contrib.auth.models import User
+ from django.core.files.uploadedfile import SimpleUploadedFile
+ from django.test import TestCase, override_settings
+@@ -20,18 +19,15 @@ from storage.domain.models import (
+     Project,
+     Section,
+ )
++from ai_checks.tests import pdfgen
+ from ai_checks.tests.base import MediaIsolationMixin
+ 
+ 
+ def make_pdf_bytes(text='Smoke sheet', font_size=10) -> bytes:
+-    pdf = pymupdf.open()
+-    page = pdf.new_page(width=595, height=842)
+-    page.insert_textbox(
+-        pymupdf.Rect(50, 50, 545, 800), text, fontsize=font_size,
+-    )
+-    data = pdf.tobytes()
+-    pdf.close()
+-    return data
++    """Одностраничный PDF с переносимым текстом (reportlab, как pdfgen)."""
++    return pdfgen.make_pdf_pages(page_items=[{
++        'wrapped_texts': [(text, font_size, (50, 50, 545, 800))],
++    }])
+ 
+ 
+ @override_settings(AI_LLM_PROVIDER='', AI_LLM_API_KEY='', AI_GIGACHAT_AUTH_KEY='')
+diff --git a/ai_checks/tests/test_reports.py b/ai_checks/tests/test_reports.py
+index 8e79da4..87f6345 100644
+--- a/ai_checks/tests/test_reports.py
++++ b/ai_checks/tests/test_reports.py
+@@ -1,12 +1,13 @@
+ """Отчёт ГИПу из замечаний (Issue) + экспорт PDF/Word."""
+ 
++import io
+ from datetime import timedelta
+ 
+-import pymupdf
+ from django.contrib.auth.models import User
+ from django.test import TestCase
+ from django.utils import timezone
+ 
++from ai_checks import pdfium_tools
+ from ai_checks.adapters.llm_http import StubLLMProvider
+ from ai_checks.domain.models import GeneratedReport, LLMCallLog
+ from ai_checks.domain.services import (
+@@ -164,8 +165,15 @@ class GipReportTests(TestCase):
+         data = gip_report_pdf(report)
+         self.assertTrue(data.startswith(b'%PDF'))
+         self.assertGreater(len(data), 1000)
+-        with pymupdf.open(stream=data, filetype='pdf') as pdf:
+-            text = ''.join(page.get_text() for page in pdf)
++        with pdfium_tools.open_pdf(io.BytesIO(data)) as pdf:
++            pages = []
++            for index in range(len(pdf)):
++                view = pdfium_tools.PdfPageView(pdf, index)
++                try:
++                    pages.append(view.get_text())
++                finally:
++                    view.close()
++            text = ''.join(pages)
+         self.assertIn('Отчет ГИПа по проекту', text)
+         self.assertIn('GIP-DOC', text)
+         self.assertIn('Ответственный', text)
+diff --git a/ai_checks/views.py b/ai_checks/views.py
+index 37c384d..09305a2 100644
+--- a/ai_checks/views.py
++++ b/ai_checks/views.py
+@@ -11,14 +11,16 @@ from __future__ import annotations
+ 
+ import io
+ import json
++import logging
+ from datetime import date, timedelta
+ 
+-from PIL import ImageDraw
++from PIL import Image, ImageDraw
+ from django.conf import settings
+ from django.contrib.auth.decorators import login_required
+ from django.http import Http404, HttpResponse
+ from django.shortcuts import get_object_or_404, render
+ from django.utils import timezone
++from django.views.decorators.cache import never_cache
+ from django.views.decorators.http import require_GET, require_POST
+ 
+ from ai_checks import pdfium_tools
+@@ -48,6 +50,8 @@ BBOX_MARGIN_PT = 12
+ PREVIEW_SCALE = 2  # был pymupdf.Matrix(2, 2)
+ BBOX_STROKE_PT = 1.2  # была толщина draw_rect в PyMuPDF
+ 
++logger = logging.getLogger(__name__)
++
+ 
+ def _ensure_enabled() -> None:
+     if not settings.AI_CHECKS_ENABLED:
+@@ -96,6 +100,7 @@ def _render_row(request, finding: PendingCheckResult):
+ 
+ @login_required
+ @require_GET
++@never_cache  # HTMX-фрагмент: без этого браузер/SW может отдавать устаревший статус прогона
+ def panel(request, document_id: int):
+     """HTMX-фрагмент: статус прогона и список находок."""
+     _ensure_enabled()
+@@ -200,21 +205,22 @@ def reject_finding(request, pk: int):
+     return _render_row(request, finding)
+ 
+ 
+-@login_required
+-@require_GET
+-def finding_preview(request, pk: int):
+-    """PNG-кроп места находки с подсветкой bbox (подсветка на PDF)."""
+-    _ensure_enabled()
+-    finding = get_object_or_404(
+-        PendingCheckResult.objects.select_related(
+-            'check_run__document_version__document',
+-        ),
+-        pk=pk,
++def _preview_placeholder() -> Image.Image:
++    """Серая заглушка вместо превью находки.
++
++    Возвращается, когда PDF версии не читается (битый файл, OSError):
++    500 здесь был бы виден как «сломанная картинка» в панели и в логах,
++    а так панель остаётся работоспособной (маркап см. на листе).
++    """
++    image = Image.new('RGB', (320, 200), (238, 240, 243))
++    ImageDraw.Draw(image).rectangle(
++        [1, 1, 318, 198], outline=(180, 186, 196), width=1,
+     )
+-    document = finding.check_run.document_version.document
+-    _document_for(request.user, document.pk)
++    return image
+ 
+-    version = finding.check_run.document_version
++
++def _render_finding_preview(version, finding: PendingCheckResult) -> Image.Image:
++    """Кроп места находки с подсветкой bbox (как прежний код вьюхи)."""
+     with pdfium_tools.open_pdf(version.file.path) as pdf:
+         if finding.page is None or not (1 <= finding.page <= len(pdf)):
+             view = pdfium_tools.PdfPageView(pdf, 0)
+@@ -254,6 +260,35 @@ def finding_preview(request, pk: int):
+         outline=(217, 26, 26),
+         width=max(1, round(BBOX_STROKE_PT * PREVIEW_SCALE)),
+     )
++    return image
++
++
++@login_required
++@require_GET
++def finding_preview(request, pk: int):
++    """PNG-кроп места находки с подсветкой bbox (подсветка на PDF)."""
++    _ensure_enabled()
++    finding = get_object_or_404(
++        PendingCheckResult.objects.select_related(
++            'check_run__document_version__document',
++        ),
++        pk=pk,
++    )
++    document = finding.check_run.document_version.document
++    _document_for(request.user, document.pk)
++
++    version = finding.check_run.document_version
++    try:
++        image = _render_finding_preview(version, finding)
++    except (pdfium_tools.PdfiumError, OSError, ValueError) as exc:
++        # PdfiumError — битый/недочитанный PDF (Data format error и т.п.);
++        # OSError — файл версии недоступен на диске. Раньше это было 500
++        # и «сломанная» картинка в панели (см. /ai/finding/84/preview/).
++        logger.warning(
++            'Превью находки %s (версия %s): %s: %s',
++            pk, version.pk, type(exc).__name__, exc,
++        )
++        image = _preview_placeholder()
+ 
+     buffer = io.BytesIO()
+     image.save(buffer, format='PNG')
+diff --git a/ai_checks/views.py.rej b/ai_checks/views.py.rej
+deleted file mode 100644
+index 6c48e08..0000000
+--- a/ai_checks/views.py.rej
++++ /dev/null
+@@ -1,9 +0,0 @@
+-diff a/ai_checks/views.py b/ai_checks/views.py	(rejected hunks)
+-@@ -20,6 +21,7 @@ from django.shortcuts import get_object_or_404, render
+- from django.utils import timezone
+- from django.views.decorators.http import require_GET, require_POST
+- 
+-+from ai_checks import pdfium_tools
+- from ai_checks.domain.models import CheckRun, GeneratedReport, PendingCheckResult
+- from ai_checks.domain.services import (
+-     bbox_ratios_for_rotation,
+diff --git a/static/js/sw-bypass-list.js b/static/js/sw-bypass-list.js
+index 776c612..8e2fbb3 100644
+--- a/static/js/sw-bypass-list.js
++++ b/static/js/sw-bypass-list.js
+@@ -7,14 +7,17 @@
+     self.SOD_SW_BYPASS = [
+         '/add/',
+         '/admin/',
++        '/ai/',
+         '/api-tokens/',
+         '/api/',
+         '/auth/',
+         '/autocomplete/',
+         '/dashboard/',
++        '/document/',
+         '/documents/',
+         '/download/',
+         '/feedback/',
++        '/finding/',
+         '/folders/',
+         '/issues/',
+         '/jsi18n/',
+@@ -26,8 +29,10 @@
+         '/offline/',
+         '/palette/',
+         '/password_change/',
++        '/project/',
+         '/projects/',
+         '/r/',
++        '/report/',
+         '/sections/',
+         '/storage/',
+     ];
+diff --git a/static/js/sw.js b/static/js/sw.js
+index b32d5b6..734a4f0 100644
+--- a/static/js/sw.js
++++ b/static/js/sw.js
+@@ -20,6 +20,11 @@ try {
+     importScripts('/static/js/sw-bypass-list.js');
+ } catch (error) { /* используем фолбэк ниже */ }
+ const BYPASS_PREFIXES = self.SOD_SW_BYPASS || [
++    /* Хотфикс: '/ai/' — HTMX-фрагменты ИИ-контура и превью находок;
++       раньше они попадали в stale-while-revalidate, и панель/маркапы
++       отдавались устаревшими из кэша. Фолбэк на случай сбоя
++       importScripts должен совпадать с sw-bypass-list.js. */
++    '/ai/',
+     '/palette/',
+     '/issues/',
+     '/projects/',

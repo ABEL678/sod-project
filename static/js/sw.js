@@ -20,6 +20,11 @@ try {
     importScripts('/static/js/sw-bypass-list.js');
 } catch (error) { /* используем фолбэк ниже */ }
 const BYPASS_PREFIXES = self.SOD_SW_BYPASS || [
+    /* Хотфикс: '/ai/' — HTMX-фрагменты ИИ-контура и превью находок;
+       раньше они попадали в stale-while-revalidate, и панель/маркапы
+       отдавались устаревшими из кэша. Фолбэк на случай сбоя
+       importScripts должен совпадать с sw-bypass-list.js. */
+    '/ai/',
     '/palette/',
     '/issues/',
     '/projects/',

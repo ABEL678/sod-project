@@ -633,43 +633,71 @@ def _report_summary_text(report) -> str:
 
 
 def gip_report_pdf(report) -> bytes:
-    """PDF отчёта ГИПа (PyMuPDF, встроенный CJK-шрифт с кириллицей)."""
-    fontname = 'china-s'
-    doc = pymupdf.open()
-    page = doc.new_page(width=595, height=842)
+    """PDF отчёта ГИПа (reportlab, BSD — замена PyMuPDF).
+
+    Кириллица через встроенный CID-шрифт STSong-Light (Adobe-GB1 содержит
+    кириллицу) — прямой аналог 'china-s' в PyMuPDF: шрифт не встраивается,
+    вьювер подставляет свой (как и раньше).
+    """
+    import io
+
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+    from reportlab.pdfgen import canvas as rl_canvas
+
+    fontname = 'STSong-Light'
+    pdfmetrics.registerFont(UnicodeCIDFont(fontname))
+
+    page_width, page_height = 595, 842
     margin = 42
-    width = page.rect.width - 2 * margin
-    y = margin
+    width = page_width - 2 * margin
+    buffer = io.BytesIO()
+    canvas = rl_canvas.Canvas(buffer, pagesize=(page_width, page_height))
+    y = margin  # курсор от верхнего края (TL-система, как в PyMuPDF)
 
     def add_page_if_needed(needed: float) -> None:
-        nonlocal page, y
-        if y + needed > page.rect.height - margin:
-            page = doc.new_page(width=595, height=842)
+        nonlocal y
+        if y + needed > page_height - margin:
+            canvas.showPage()  # сбрасывает состояние — шрифт задаём заново
+            canvas.setFont(fontname, 10)
             y = margin
 
     def write(text: str, size: float = 11, gap: float = 6) -> None:
         nonlocal y
         add_page_if_needed(size * 1.6)
-        page.insert_text(
-            (margin, y + size), text, fontname=fontname, fontsize=size,
-        )
+        canvas.setFont(fontname, size)
+        # курсор y (TL) -> базовая линия в BL-системе reportlab
+        canvas.drawString(margin, page_height - y - size, text)
         y += size * 1.6 + gap
 
     def write_wrapped(text: str, size: float = 10) -> None:
-        """Перенос по словам с ручной разбивкой на строки."""
+        """Перенос по словам с точным измерением ширины строки."""
         nonlocal y
-        max_chars = int(width / (size * 0.52)) or 60
         words = str(text).split()
         line = ''
         for word in words:
             candidate = (line + ' ' + word).strip()
-            if len(candidate) > max_chars and line:
+            if (
+                line
+                and pdfmetrics.stringWidth(
+                    candidate, fontname, size,
+                ) > width
+            ):
                 write(line, size=size, gap=0)
                 line = word
             else:
                 line = candidate
         if line:
             write(line, size=size, gap=0)
+
+    def fit_text(text, max_width: float, size: float) -> str:
+        """Обрезка текста по ширине ячейки (аналог insert_textbox clip)."""
+        text = str(text)
+        while text and pdfmetrics.stringWidth(
+            text, fontname, size,
+        ) > max_width:
+            text = text[:-1]
+        return text
 
     write(_report_title(report), size=15, gap=14)
 
@@ -699,9 +727,8 @@ def gip_report_pdf(report) -> bytes:
     headers = ('№', 'Документ', 'Статус', 'Срок', 'Ответственный')
     x = margin
     for header, col_width in zip(headers, columns):
-        page.insert_text(
-            (x + 2, y + 11), header, fontname=fontname, fontsize=9,
-        )
+        canvas.setFont(fontname, 9)
+        canvas.drawString(x + 2, page_height - y - 11, header)
         x += col_width
     y += line_height
 
@@ -709,13 +736,17 @@ def gip_report_pdf(report) -> bytes:
         add_page_if_needed(line_height)
         x = margin
         for value, col_width in zip(row, columns):
-            page.draw_rect(
-                pymupdf.Rect(x, y, x + col_width, y + line_height),
-                color=(0.75, 0.75, 0.75), width=0.4,
+            canvas.setStrokeColor((0.75, 0.75, 0.75))
+            canvas.setLineWidth(0.4)
+            canvas.rect(
+                x, page_height - y - line_height,
+                col_width, line_height, stroke=1, fill=0,
             )
-            clip = pymupdf.Rect(x + 2, y + 3, x + col_width - 2, y + line_height)
-            page.insert_textbox(
-                clip, str(value), fontname=fontname, fontsize=8.5,
+            canvas.setFont(fontname, 8.5)
+            canvas.drawString(
+                x + 2,
+                page_height - y - 3 - 8.5,
+                fit_text(value, col_width - 4, 8.5),
             )
             x += col_width
         y += line_height
@@ -724,7 +755,8 @@ def gip_report_pdf(report) -> bytes:
     write('Резюме (LLM):', size=12, gap=2)
     write_wrapped(str(payload.get('summary', '')), size=10)
 
-    return doc.tobytes()
+    canvas.save()
+    return buffer.getvalue()
 
 
 def gip_report_docx(report) -> bytes:

@@ -11,14 +11,16 @@ from __future__ import annotations
 
 import io
 import json
+import logging
 from datetime import date, timedelta
 
-from PIL import ImageDraw
+from PIL import Image, ImageDraw
 from django.conf import settings
 from django.contrib.auth.decorators import login_required
 from django.http import Http404, HttpResponse
 from django.shortcuts import get_object_or_404, render
 from django.utils import timezone
+from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_GET, require_POST
 
 from ai_checks import pdfium_tools
@@ -47,6 +49,8 @@ from storage.domain.services import check_issue_permission, create_issue
 BBOX_MARGIN_PT = 12
 PREVIEW_SCALE = 2  # был pymupdf.Matrix(2, 2)
 BBOX_STROKE_PT = 1.2  # была толщина draw_rect в PyMuPDF
+
+logger = logging.getLogger(__name__)
 
 
 def _ensure_enabled() -> None:
@@ -96,6 +100,7 @@ def _render_row(request, finding: PendingCheckResult):
 
 @login_required
 @require_GET
+@never_cache  # HTMX-фрагмент: без этого браузер/SW может отдавать устаревший статус прогона
 def panel(request, document_id: int):
     """HTMX-фрагмент: статус прогона и список находок."""
     _ensure_enabled()
@@ -200,21 +205,22 @@ def reject_finding(request, pk: int):
     return _render_row(request, finding)
 
 
-@login_required
-@require_GET
-def finding_preview(request, pk: int):
-    """PNG-кроп места находки с подсветкой bbox (подсветка на PDF)."""
-    _ensure_enabled()
-    finding = get_object_or_404(
-        PendingCheckResult.objects.select_related(
-            'check_run__document_version__document',
-        ),
-        pk=pk,
-    )
-    document = finding.check_run.document_version.document
-    _document_for(request.user, document.pk)
+def _preview_placeholder() -> Image.Image:
+    """Серая заглушка вместо превью находки.
 
-    version = finding.check_run.document_version
+    Возвращается, когда PDF версии не читается (битый файл, OSError):
+    500 здесь был бы виден как «сломанная картинка» в панели и в логах,
+    а так панель остаётся работоспособной (маркап см. на листе).
+    """
+    image = Image.new('RGB', (320, 200), (238, 240, 243))
+    ImageDraw.Draw(image).rectangle(
+        [1, 1, 318, 198], outline=(180, 186, 196), width=1,
+    )
+    return image
+
+
+def _render_finding_preview(version, finding: PendingCheckResult) -> Image.Image:
+    """Кроп места находки с подсветкой bbox (как прежний код вьюхи)."""
     with pdfium_tools.open_pdf(version.file.path) as pdf:
         if finding.page is None or not (1 <= finding.page <= len(pdf)):
             view = pdfium_tools.PdfPageView(pdf, 0)
@@ -254,6 +260,35 @@ def finding_preview(request, pk: int):
         outline=(217, 26, 26),
         width=max(1, round(BBOX_STROKE_PT * PREVIEW_SCALE)),
     )
+    return image
+
+
+@login_required
+@require_GET
+def finding_preview(request, pk: int):
+    """PNG-кроп места находки с подсветкой bbox (подсветка на PDF)."""
+    _ensure_enabled()
+    finding = get_object_or_404(
+        PendingCheckResult.objects.select_related(
+            'check_run__document_version__document',
+        ),
+        pk=pk,
+    )
+    document = finding.check_run.document_version.document
+    _document_for(request.user, document.pk)
+
+    version = finding.check_run.document_version
+    try:
+        image = _render_finding_preview(version, finding)
+    except (pdfium_tools.PdfiumError, OSError, ValueError) as exc:
+        # PdfiumError — битый/недочитанный PDF (Data format error и т.п.);
+        # OSError — файл версии недоступен на диске. Раньше это было 500
+        # и «сломанная» картинка в панели (см. /ai/finding/84/preview/).
+        logger.warning(
+            'Превью находки %s (версия %s): %s: %s',
+            pk, version.pk, type(exc).__name__, exc,
+        )
+        image = _preview_placeholder()
 
     buffer = io.BytesIO()
     image.save(buffer, format='PNG')

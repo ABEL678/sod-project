@@ -1,12 +1,13 @@
 """Отчёт ГИПу из замечаний (Issue) + экспорт PDF/Word."""
 
+import io
 from datetime import timedelta
 
-import pymupdf
 from django.contrib.auth.models import User
 from django.test import TestCase
 from django.utils import timezone
 
+from ai_checks import pdfium_tools
 from ai_checks.adapters.llm_http import StubLLMProvider
 from ai_checks.domain.models import GeneratedReport, LLMCallLog
 from ai_checks.domain.services import (
@@ -164,8 +165,15 @@ class GipReportTests(TestCase):
         data = gip_report_pdf(report)
         self.assertTrue(data.startswith(b'%PDF'))
         self.assertGreater(len(data), 1000)
-        with pymupdf.open(stream=data, filetype='pdf') as pdf:
-            text = ''.join(page.get_text() for page in pdf)
+        with pdfium_tools.open_pdf(io.BytesIO(data)) as pdf:
+            pages = []
+            for index in range(len(pdf)):
+                view = pdfium_tools.PdfPageView(pdf, index)
+                try:
+                    pages.append(view.get_text())
+                finally:
+                    view.close()
+            text = ''.join(pages)
         self.assertIn('Отчет ГИПа по проекту', text)
         self.assertIn('GIP-DOC', text)
         self.assertIn('Ответственный', text)

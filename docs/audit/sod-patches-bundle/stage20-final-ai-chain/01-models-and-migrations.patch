@@ -1,0 +1,433 @@
+diff --git a/ai_checks/domain/models.py b/ai_checks/domain/models.py
+index 4446908..100e71a 100644
+--- a/ai_checks/domain/models.py
++++ b/ai_checks/domain/models.py
+@@ -4,6 +4,8 @@
+ Ф0.1: LLMCallLog и CheckRun (CheckRun — обязательная FK-цель для
+ LLMCallLog.check_run). Ф0.2: InternalDocument и InternalChunk
+ (источники знаний, tenant_scope по 8.2). Остальные модели — в Ф1.
++Финальная архитектура ИИ-контура: ProjectDocumentChunk (чанки PDF-версий
++документов проекта, треб. 1) и RagQuery (история ИИ-поиска, треб. 2).
+ """
+ 
+ from __future__ import annotations
+@@ -13,6 +15,19 @@ from django.db import models
+ from pgvector.django import VectorField
+ 
+ 
++class IndexingStatus(models.TextChoices):
++    """Единый статус ИИ-индексации (треб. 3: pending/processing/done/error).
++
++    Используется и InternalDocument (база знаний), и DocumentVersion
++    (документы проекта) — чтобы UI показывал одинаковые бейджи.
++    """
++
++    PENDING = 'pending', 'В очереди'
++    PROCESSING = 'processing', 'Индексируется'
++    DONE = 'done', 'Готово'
++    ERROR = 'error', 'Ошибка'
++
++
+ class InternalDocument(models.Model):
+     """Источник знаний ИИ-контура (ARCHITECTURE.md 3.2, 8.2).
+ 
+@@ -76,15 +91,10 @@ class InternalDocument(models.Model):
+     indexed_at = models.DateTimeField(
+         null=True, blank=True, verbose_name='Проиндексирован',
+     )
+-    index_status = models.CharField(
++    indexing_status = models.CharField(
+         max_length=10,
+-        choices=[
+-            ('queued', 'В очереди'),
+-            ('running', 'Индексируется'),
+-            ('done', 'Готово'),
+-            ('failed', 'Ошибка'),
+-        ],
+-        default='queued',
++        choices=IndexingStatus.choices,
++        default=IndexingStatus.PENDING,
+         verbose_name='Статус индексации',
+     )
+     index_error = models.TextField(
+@@ -171,6 +181,127 @@ class InternalChunk(models.Model):
+         return f'{self.document_id} #{self.seq}'
+ 
+ 
++class ProjectDocumentChunk(models.Model):
++    """Фрагмент PDF-версии документа проекта (треб. 1).
++
++    Проектный индекс для сквозного RAG (треб. 6): чанки текущих и
++    исторических версий документов storage.Document. section/folder —
++    снимки принадлежности на момент индексации (для фильтра по разделу
++    ОВ/ЭОМ/АР и ссылок в источниках). Вектор — bge-m3 dense, 1024.
++    """
++
++    document = models.ForeignKey(
++        'storage.Document',
++        on_delete=models.CASCADE,
++        related_name='ai_chunks',
++        verbose_name='Документ проекта',
++    )
++    version = models.ForeignKey(
++        'storage.DocumentVersion',
++        on_delete=models.CASCADE,
++        related_name='ai_chunks',
++        verbose_name='Версия документа',
++    )
++    section = models.ForeignKey(
++        'storage.Section',
++        null=True,
++        blank=True,
++        on_delete=models.CASCADE,
++        related_name='ai_chunks',
++        verbose_name='Раздел',
++    )
++    folder = models.ForeignKey(
++        'storage.Folder',
++        null=True,
++        blank=True,
++        on_delete=models.CASCADE,
++        related_name='ai_chunks',
++        verbose_name='Папка',
++    )
++    seq = models.PositiveIntegerField(verbose_name='Порядок фрагмента')
++    text = models.TextField(verbose_name='Текст фрагмента')
++    page_from = models.PositiveIntegerField(
++        null=True, blank=True, verbose_name='Страница с',
++    )
++    page_to = models.PositiveIntegerField(
++        null=True, blank=True, verbose_name='Страница по',
++    )
++    embedding = VectorField(
++        dimensions=1024, verbose_name='Вектор (bge-m3 dense)',
++    )
++    created_at = models.DateTimeField(
++        auto_now_add=True, verbose_name='Создан',
++    )
++
++    class Meta:
++        verbose_name = 'Фрагмент документа проекта'
++        verbose_name_plural = 'Фрагменты документов проектов'
++        ordering = ['document', 'seq']
++        constraints = [
++            models.UniqueConstraint(
++                fields=['document', 'version', 'seq'],
++                name='ai_project_chunk_doc_ver_seq',
++            ),
++        ]
++
++    def __str__(self) -> str:
++        return f'{self.document_id}/v{self.version_id} #{self.seq}'
++
++
++class RagQuery(models.Model):
++    """История ИИ-поиска (треб. 2, 9, 10).
++
++    Одна строка = один запрос пользователя: вопрос, ответ, снимок
++    источников (sources JSON) и модель LLM. Видна всем участникам
++    проекта (треб. 9); поиск/фильтры/пагинация — по этому индексу
++    (треб. 10). Тексты промптов в БД не хранятся (приватность).
++    """
++
++    user = models.ForeignKey(
++        settings.AUTH_USER_MODEL,
++        null=True,
++        blank=True,
++        on_delete=models.SET_NULL,
++        related_name='rag_queries',
++        verbose_name='Автор',
++    )
++    project = models.ForeignKey(
++        'storage.Project',
++        null=True,
++        blank=True,
++        on_delete=models.CASCADE,
++        related_name='rag_queries',
++        verbose_name='Проект',
++    )
++    question = models.TextField(verbose_name='Вопрос')
++    answer = models.TextField(
++        blank=True, verbose_name='Ответ',
++    )
++    sources = models.JSONField(
++        default=list, blank=True, verbose_name='Источники',
++    )
++    model = models.CharField(
++        max_length=100, blank=True, verbose_name='Модель LLM',
++    )
++    created_at = models.DateTimeField(
++        auto_now_add=True, db_index=True, verbose_name='Создан',
++    )
++
++    class Meta:
++        verbose_name = 'Запрос ИИ-поиска'
++        verbose_name_plural = 'История ИИ-поиска'
++        ordering = ['-created_at']
++        indexes = [
++            models.Index(
++                fields=['project', '-created_at'],
++                name='ai_rag_project_created_idx',
++            ),
++        ]
++
++    def __str__(self) -> str:
++        return f'RagQuery #{self.pk} ({self.question[:40]})'
++
++
+ class RuleDefinition(models.Model):
+     """Правило проверки (ARCHITECTURE.md 3.2, этап Ф1).
+ 
+diff --git a/ai_checks/models.py b/ai_checks/models.py
+index e9dbe98..926c953 100644
+--- a/ai_checks/models.py
++++ b/ai_checks/models.py
+@@ -2,9 +2,26 @@
+ 
+ from ai_checks.domain.models import (
+     CheckRun,
++    IndexingStatus,
+     InternalChunk,
+     InternalDocument,
+     LLMCallLog,
++    PendingCheckResult,
++    ProjectDocumentChunk,
++    RagQuery,
++    ReminderRule,
++    RuleDefinition,
+ )
+ 
+-__all__ = ['CheckRun', 'InternalChunk', 'InternalDocument', 'LLMCallLog']
++__all__ = [
++    'CheckRun',
++    'IndexingStatus',
++    'InternalChunk',
++    'InternalDocument',
++    'LLMCallLog',
++    'PendingCheckResult',
++    'ProjectDocumentChunk',
++    'RagQuery',
++    'ReminderRule',
++    'RuleDefinition',
++]
+diff --git a/storage/domain/models.py b/storage/domain/models.py
+index 6df0eff..44746aa 100644
+--- a/storage/domain/models.py
++++ b/storage/domain/models.py
+@@ -337,6 +337,22 @@ class DocumentVersion(models.Model):
+     comment = models.TextField(blank=True, verbose_name="Комментарий")
+     uploaded_at = models.DateTimeField(auto_now_add=True, verbose_name="Дата загрузки")
+     uploaded_by = models.ForeignKey(User, on_delete=models.PROTECT, verbose_name="Загрузил")
++    # Этап 20 (треб. 3): статус ИИ-индексации версии (RAG-поиск по PDF).
++    # Значения согласованы с ai_checks.domain.models.IndexingStatus:
++    # pending → processing → done | error. Choices дублируются без
++    # импорта из ai_checks — домен storage не зависит от ИИ-контура.
++    INDEXING_STATUS_CHOICES = [
++        ('pending', 'В очереди'),
++        ('processing', 'Индексируется'),
++        ('done', 'Готово'),
++        ('error', 'Ошибка'),
++    ]
++    indexing_status = models.CharField(
++        max_length=10,
++        choices=INDEXING_STATUS_CHOICES,
++        default='pending',
++        verbose_name="Статус ИИ-индексации",
++    )
+ 
+     class Meta:
+         unique_together = ('document', 'version_number')
+diff --git a/ai_checks/migrations/0010_projectdocumentchunk_ragquery_indexing_status.py b/ai_checks/migrations/0010_projectdocumentchunk_ragquery_indexing_status.py
+new file mode 100644
+index 0000000..a6ac249
+--- /dev/null
++++ b/ai_checks/migrations/0010_projectdocumentchunk_ragquery_indexing_status.py
+@@ -0,0 +1,151 @@
++"""Финальная архитектура ИИ-контура (треб. 1-3).
++
++- ProjectDocumentChunk: чанки PDF-версий документов проекта с вектором
++  bge-m3 (1024) — проектный индекс сквозного RAG (треб. 1). Уникальность
++  (document, version, seq); HNSW/cosine-индекс — как у InternalChunk
++  (только PostgreSQL, на SQLite no-op).
++- RagQuery: история ИИ-поиска (треб. 2), индекс (project, -created_at).
++- InternalDocument.index_status → indexing_status (треб. 3): переименование
++  с конвертацией значений queued/running/done/failed →
++  pending/processing/done/error (единый IndexingStatus).
++
++HNSW-индекс повторяет паттерн 0003_hnsw_index (расширение `vector`
++создаётся там же раньше по порядку зависимостей).
++"""
++
++from django.db import migrations, models
++import django.db.models.deletion
++from pgvector.django import VectorField
++
++PROJECT_CHUNK_HNSW_NAME = 'ai_project_chunk_embedding_hnsw'
++
++# Треб. 3: конвертация старых значений статуса в новые.
++STATUS_FORWARD = {
++    'queued': 'pending',
++    'running': 'processing',
++    'done': 'done',
++    'failed': 'error',
++}
++STATUS_BACKWARD = {
++    'pending': 'queued',
++    'processing': 'running',
++    'done': 'done',
++    'error': 'failed',
++}
++
++
++def convert_status_forward(apps, schema_editor):
++    InternalDocument = apps.get_model('ai_checks', 'InternalDocument')
++    for old, new in STATUS_FORWARD.items():
++        InternalDocument.objects.filter(indexing_status=old).update(
++            indexing_status=new,
++        )
++
++
++def convert_status_backward(apps, schema_editor):
++    InternalDocument = apps.get_model('ai_checks', 'InternalDocument')
++    for new, old in STATUS_BACKWARD.items():
++        InternalDocument.objects.filter(indexing_status=new).update(
++            indexing_status=old,
++        )
++
++
++def create_project_chunk_hnsw(apps, schema_editor):
++    if schema_editor.connection.vendor != 'postgresql':
++        return
++    schema_editor.execute(
++        f'CREATE INDEX IF NOT EXISTS {PROJECT_CHUNK_HNSW_NAME} '
++        'ON ai_checks_projectdocumentchunk '
++        'USING hnsw (embedding vector_cosine_ops) '
++        'WITH (m=16, ef_construction=64);'
++    )
++
++
++def drop_project_chunk_hnsw(apps, schema_editor):
++    if schema_editor.connection.vendor != 'postgresql':
++        return
++    schema_editor.execute(f'DROP INDEX IF EXISTS {PROJECT_CHUNK_HNSW_NAME};')
++
++
++class Migration(migrations.Migration):
++
++    dependencies = [
++        ('ai_checks', '0009_internaldocument_index_error_and_more'),
++    ]
++
++    operations = [
++        # Треб. 3 (InternalDocument): переименование и конвертация значений.
++        migrations.RenameField(
++            model_name='internaldocument',
++            old_name='index_status',
++            new_name='indexing_status',
++        ),
++        migrations.RunPython(convert_status_forward, convert_status_backward),
++        migrations.AlterField(
++            model_name='internaldocument',
++            name='indexing_status',
++            field=models.CharField(
++                choices=[
++                    ('pending', 'В очереди'),
++                    ('processing', 'Индексируется'),
++                    ('done', 'Готово'),
++                    ('error', 'Ошибка'),
++                ],
++                default='pending',
++                max_length=10,
++                verbose_name='Статус индексации',
++            ),
++        ),
++        # Треб. 1: чанки PDF-версий документов проекта.
++        migrations.CreateModel(
++            name='ProjectDocumentChunk',
++            fields=[
++                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
++                ('seq', models.PositiveIntegerField(verbose_name='Порядок фрагмента')),
++                ('text', models.TextField(verbose_name='Текст фрагмента')),
++                ('page_from', models.PositiveIntegerField(blank=True, null=True, verbose_name='Страница с')),
++                ('page_to', models.PositiveIntegerField(blank=True, null=True, verbose_name='Страница по')),
++                ('embedding', VectorField(dimensions=1024, verbose_name='Вектор (bge-m3 dense)')),
++                ('created_at', models.DateTimeField(auto_now_add=True, verbose_name='Создан')),
++                ('document', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='ai_chunks', to='storage.document', verbose_name='Документ проекта')),
++                ('version', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='ai_chunks', to='storage.documentversion', verbose_name='Версия документа')),
++                ('section', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.CASCADE, related_name='ai_chunks', to='storage.section', verbose_name='Раздел')),
++                ('folder', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.CASCADE, related_name='ai_chunks', to='storage.folder', verbose_name='Папка')),
++            ],
++            options={
++                'verbose_name': 'Фрагмент документа проекта',
++                'verbose_name_plural': 'Фрагменты документов проектов',
++                'ordering': ['document', 'seq'],
++                'constraints': [
++                    models.UniqueConstraint(
++                        fields=('document', 'version', 'seq'),
++                        name='ai_project_chunk_doc_ver_seq',
++                    ),
++                ],
++            },
++        ),
++        # Треб. 2: история ИИ-поиска.
++        migrations.CreateModel(
++            name='RagQuery',
++            fields=[
++                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
++                ('question', models.TextField(verbose_name='Вопрос')),
++                ('answer', models.TextField(blank=True, verbose_name='Ответ')),
++                ('sources', models.JSONField(blank=True, default=list, verbose_name='Источники')),
++                ('model', models.CharField(blank=True, max_length=100, verbose_name='Модель LLM')),
++                ('created_at', models.DateTimeField(auto_now_add=True, db_index=True, verbose_name='Создан')),
++                ('project', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.CASCADE, related_name='rag_queries', to='storage.project', verbose_name='Проект')),
++                ('user', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='rag_queries', to='auth.user', verbose_name='Автор')),
++            ],
++            options={
++                'verbose_name': 'Запрос ИИ-поиска',
++                'verbose_name_plural': 'История ИИ-поиска',
++                'ordering': ['-created_at'],
++                'indexes': [
++                    models.Index(fields=['project', '-created_at'], name='ai_rag_project_created_idx'),
++                ],
++            },
++        ),
++        # HNSW/cosine по проектным чанкам (только PostgreSQL).
++        migrations.RunPython(create_project_chunk_hnsw, drop_project_chunk_hnsw),
++    ]
+diff --git a/storage/migrations/0030_documentversion_indexing_status.py b/storage/migrations/0030_documentversion_indexing_status.py
+new file mode 100644
+index 0000000..269ef49
+--- /dev/null
++++ b/storage/migrations/0030_documentversion_indexing_status.py
+@@ -0,0 +1,31 @@
++# Треб. 3: статус ИИ-индексации версии документа проекта
++# (pending/processing/done/error). Значения согласованы с
++# ai_checks.domain.models.IndexingStatus; choices дублируются без
++# импорта из ai_checks — домен storage не зависит от ИИ-контура.
++
++from django.db import migrations, models
++
++
++class Migration(migrations.Migration):
++
++    dependencies = [
++        ('storage', '0029_vor_item'),
++    ]
++
++    operations = [
++        migrations.AddField(
++            model_name='documentversion',
++            name='indexing_status',
++            field=models.CharField(
++                choices=[
++                    ('pending', 'В очереди'),
++                    ('processing', 'Индексируется'),
++                    ('done', 'Готово'),
++                    ('error', 'Ошибка'),
++                ],
++                default='pending',
++                max_length=10,
++                verbose_name='Статус ИИ-индексации',
++            ),
++        ),
++    ]

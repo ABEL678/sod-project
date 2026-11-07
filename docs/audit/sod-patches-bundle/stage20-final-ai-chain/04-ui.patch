@@ -1,0 +1,957 @@
+diff --git a/ai_checks/templates/ai_checks/_kb.html b/ai_checks/templates/ai_checks/_kb.html
+index e3ac4ad..70d9d3a 100644
+--- a/ai_checks/templates/ai_checks/_kb.html
++++ b/ai_checks/templates/ai_checks/_kb.html
+@@ -1,5 +1,8 @@
+ {% comment %}
+-stage2: вкладка «База знаний» проекта — список документов и загрузка PDF.
++Треб. 7: вкладка «База знаний» проекта — два блока:
++1) «Документы проекта» — таблица текущих версий с ИИ-статусом и кнопкой
++   «Переиндексировать проект» (треб. 5);
++2) «Внутренние стандарты» — таблица InternalDocument + «Загрузить стандарт».
+ {% endcomment %}
+ <div class="toolbar" data-role="ai-kb-toolbar">
+   <span class="fw-semibold">
+@@ -9,17 +12,44 @@ stage2: вкладка «База знаний» проекта — список
+   <span class="toolbar-spacer"></span>
+   <button type="button" class="btn btn-sm btn-primary text-nowrap"
+           data-bs-toggle="modal" data-bs-target="#kbUploadModal">
+-    <i class="bi bi-upload me-1" aria-hidden="true"></i>Загрузить документ
++    <i class="bi bi-upload me-1" aria-hidden="true"></i>Загрузить стандарт
+   </button>
+ </div>
+ 
+-{# stage2: таблица грузится собственным фрагментом (избегаем коллизии
+-   переменной documents с таблицей документов страницы проекта). #}
+-<div id="kbTableWrap" class="px-2 pt-2"
+-     hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
+-     hx-get="{% url 'ai_checks:kb_table' project.pk %}"
+-     hx-trigger="load" hx-swap="innerHTML">
+-  <div class="text-muted small p-2">Загрузка…</div>
++<div class="px-2 pt-2">
++  <div class="d-flex align-items-center justify-content-between mb-1">
++    <span class="fw-semibold small">
++      <i class="bi bi-folder2-open me-1" aria-hidden="true"></i>Документы проекта
++    </span>
++    <button type="button" class="btn btn-sm btn-outline-primary py-0"
++            hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
++            hx-post="{% url 'ai_checks:kb_reindex_project' project.pk %}"
++            hx-target="#kbProjectsWrap" hx-swap="innerHTML"
++            hx-confirm="Переиндексировать все документы проекта? (PDF-версии будут поставлены в очередь)"
++            title="Треб. 5: переиндексация всех PDF-документов проекта">
++      <i class="bi bi-arrow-repeat me-1" aria-hidden="true"></i>Переиндексировать проект
++    </button>
++  </div>
++  <div id="kbProjectsWrap"
++       hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
++       hx-get="{% url 'ai_checks:kb_projects_table' project.pk %}"
++       hx-trigger="load" hx-swap="innerHTML">
++    <div class="text-muted small">Загрузка…</div>
++  </div>
++</div>
++
++<div class="px-2 pt-3">
++  <div class="fw-semibold small mb-1">
++    <i class="bi bi-journal-bookmark me-1" aria-hidden="true"></i>Внутренние стандарты
++  </div>
++  {# stage2: таблица грузится собственным фрагментом (избегаем коллизии
++     переменной documents с таблицей документов страницы проекта). #}
++  <div id="kbTableWrap" class="px-0"
++       hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
++       hx-get="{% url 'ai_checks:kb_table' project.pk %}"
++       hx-trigger="load" hx-swap="innerHTML">
++    <div class="text-muted small">Загрузка…</div>
++  </div>
+ </div>
+ 
+ <div class="modal fade" id="kbUploadModal" tabindex="-1"
+diff --git a/ai_checks/templates/ai_checks/_kb_table.html b/ai_checks/templates/ai_checks/_kb_table.html
+index 13a119f..ee67f2e 100644
+--- a/ai_checks/templates/ai_checks/_kb_table.html
++++ b/ai_checks/templates/ai_checks/_kb_table.html
+@@ -26,11 +26,11 @@ stage2: таблица документов базы знаний (переис
+             </td>
+             <td class="small text-muted">{{ doc.created_at|date:"d.m.Y H:i" }}</td>
+             <td>
+-              {% if doc.index_status == 'done' %}
++              {% if doc.indexing_status == 'done' %}
+                 <span class="badge text-bg-success">Готово</span>
+-              {% elif doc.index_status == 'running' %}
++              {% elif doc.indexing_status == 'processing' %}
+                 <span class="badge text-bg-info">Индексируется</span>
+-              {% elif doc.index_status == 'failed' %}
++              {% elif doc.indexing_status == 'error' %}
+                 <span class="badge text-bg-danger" title="{{ doc.index_error }}">Ошибка</span>
+               {% else %}
+                 <span class="badge text-bg-secondary">В очереди</span>
+diff --git a/ai_checks/templates/ai_checks/_rag.html b/ai_checks/templates/ai_checks/_rag.html
+index 7579a50..d1148bc 100644
+--- a/ai_checks/templates/ai_checks/_rag.html
++++ b/ai_checks/templates/ai_checks/_rag.html
+@@ -1,34 +1,87 @@
+ {% comment %}
+-Ф2: вкладка «ИИ-поиск» — форма вопроса, результаты подгружаются в
+-#aiRagResults через HTMX (фрагмент _rag_results.html).
++Треб. 8/9: вкладка «ИИ-поиск» — форма с фильтрами (раздел, тип источника),
++чип-примеры, результаты (#aiRagResults) и история запросов (#aiRagHistory)
++под формой. История подгружается лениво и обновляется out-of-band после
++каждого поиска.
+ {% endcomment %}
+ <div class="toolbar" data-role="ai-rag-toolbar">
+   <span class="fw-semibold">
+-    <i class="bi bi-robot me-1" aria-hidden="true"></i>ИИ-поиск по базе знаний
++    <i class="bi bi-robot me-1" aria-hidden="true"></i>ИИ-поиск по документам проекта и базе знаний
+   </span>
+   <span class="toolbar-spacer"></span>
+   <span class="text-muted small">
+-    Только по доступным источникам компании и проекта
++    Документы проекта + внутренние стандарты компании
+   </span>
+ </div>
+ 
+-<form class="d-flex gap-2 px-2 pt-2"
++<form class="row g-2 px-2 pt-2 align-items-end"
+       hx-post="{% url 'ai_checks:rag_search' project.pk %}"
+       hx-target="#aiRagResults"
+       hx-swap="innerHTML">
+   {% csrf_token %}
+-  <input type="text" name="question" class="form-control form-control-sm"
+-         placeholder="Задайте вопрос по документам проекта…"
+-         aria-label="Вопрос к базе знаний" required>
+-  <select class="form-select form-select-sm w-auto" name="model"
+-          aria-label="Модель LLM">
+-    {% for code, label in ai_available_models %}
+-      <option value="{{ code }}"{% if forloop.first %} selected{% endif %}>{{ label }}</option>
+-    {% endfor %}
+-  </select>
+-  <button type="submit" class="btn btn-sm btn-primary text-nowrap">
+-    <i class="bi bi-search me-1" aria-hidden="true"></i>Найти
+-  </button>
++  <div class="col-12">
++    <input type="text" id="ragQuestion" name="question"
++           class="form-control form-control-sm"
++           placeholder="Задайте вопрос по документам проекта…"
++           aria-label="Вопрос к базе знаний" required>
++  </div>
++  <div class="col-6 col-md-3">
++    <label class="form-label small mb-1" for="ragSection">Раздел</label>
++    <select class="form-select form-select-sm" id="ragSection" name="section_code">
++      <option value="">Все разделы</option>
++      {% for section in sections %}
++        <option value="{{ section.code }}">{{ section.code }} — {{ section.name }}</option>
++      {% endfor %}
++    </select>
++  </div>
++  <div class="col-6 col-md-3">
++    <label class="form-label small mb-1" for="ragSourceType">Тип источника</label>
++    <select class="form-select form-select-sm" id="ragSourceType" name="source_type">
++      <option value="">Все источники</option>
++      <option value="project">Документы проекта</option>
++      <option value="standard">Внутренние стандарты</option>
++    </select>
++  </div>
++  <div class="col-6 col-md-3">
++    <label class="form-label small mb-1" for="ragModel">Модель</label>
++    <select class="form-select form-select-sm" id="ragModel" name="model" aria-label="Модель LLM">
++      {% for code, label in ai_available_models %}
++        <option value="{{ code }}"{% if forloop.first %} selected{% endif %}>{{ label }}</option>
++      {% endfor %}
++    </select>
++  </div>
++  <div class="col-6 col-md-3">
++    <button type="submit" class="btn btn-sm btn-primary w-100 text-nowrap">
++      <i class="bi bi-search me-1" aria-hidden="true"></i>Найти
++    </button>
++  </div>
+ </form>
+ 
++<div class="px-2 pt-1 d-flex flex-wrap gap-1 align-items-center">
++  <span class="small text-muted me-1">Например:</span>
++  {% for example in example_questions %}
++    <button type="button" class="btn btn-sm btn-outline-secondary rounded-pill py-0"
++            data-q="{{ example }}"
++            hx-on:click="const input = document.getElementById('ragQuestion'); input.value = this.dataset.q; input.focus();">
++      {{ example }}
++    </button>
++  {% endfor %}
++</div>
++
+ <div id="aiRagResults" class="px-2 pt-2"></div>
++
++<div class="px-2 pt-3">
++  <div class="d-flex align-items-center justify-content-between mb-1">
++    <span class="fw-semibold small">
++      <i class="bi bi-clock-history me-1" aria-hidden="true"></i>История запросов
++    </span>
++    <span class="text-muted small">видна всем участникам проекта</span>
++  </div>
++  {# Треб. 9/10: ленивая загрузка истории; OOB-обновление после поиска. #}
++  <div id="aiRagHistory"
++       hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
++       hx-get="{% url 'ai_checks:rag_history' project.pk %}"
++       hx-trigger="load" hx-swap="innerHTML">
++    <div class="text-muted small">Загрузка…</div>
++  </div>
++</div>
+diff --git a/ai_checks/templates/ai_checks/_rag_results.html b/ai_checks/templates/ai_checks/_rag_results.html
+index 475ecbb..e48b7b1 100644
+--- a/ai_checks/templates/ai_checks/_rag_results.html
++++ b/ai_checks/templates/ai_checks/_rag_results.html
+@@ -1,6 +1,7 @@
+ {% comment %}
+-Ф2: результаты RAG — источники с цитатами, сгруппированные по tenant_scope
+-(Проект → Компания → Общие знания).
++Треб. 8: результаты ИИ-поиска — ответ с цитатами [N] и карточки источников
++(тип, документ, раздел, лист, цитата). Группировка: документы проекта →
++внутренние стандарты.
+ {% endcomment %}
+ {% if error %}
+   <div class="alert alert-warning py-1 px-2 small mb-2">{{ error }}</div>
+@@ -18,23 +19,32 @@
+          style="white-space: pre-wrap;">{{ answer }}</div>
+   {% endif %}
+ 
+-  {% for scope, label, items in groups %}
++  {% for group_code, group_label, items in groups %}
+     <div class="mb-3">
+       <div class="fw-semibold small mb-1">
+-        {% if scope == 'project' %}
++        {% if group_code == 'project' %}
+           <i class="bi bi-folder2-open me-1" aria-hidden="true"></i>
+-        {% elif scope == 'company' %}
+-          <i class="bi bi-building me-1" aria-hidden="true"></i>
+         {% else %}
+-          <i class="bi bi-globe2 me-1" aria-hidden="true"></i>
++          <i class="bi bi-journal-bookmark me-1" aria-hidden="true"></i>
+         {% endif %}
+-        {{ label }}
++        {{ group_label }}
+       </div>
+       {% for source in items %}
+         <div class="border rounded p-2 mb-1 bg-white" id="rag-source-{{ source.chunk_id }}">
+-          <div class="d-flex justify-content-between align-items-baseline small">
+-            <span class="fw-semibold">{{ source.document_title }}</span>
++          <div class="d-flex justify-content-between align-items-baseline small flex-wrap gap-1">
++            <span>
++              <span class="badge text-bg-light border">
++                {% if source.type == 'project' %}Проект{% else %}Стандарт{% endif %}
++              </span>
++              <span class="fw-semibold ms-1">{{ source.document_title }}</span>
++            </span>
+             <span class="text-muted num">
++              {% if source.section_code %}
++                <span class="badge text-bg-light border">Раздел {{ source.section_code }}</span>
++              {% endif %}
++              {% if source.page %}
++                <span class="badge text-bg-light border">Лист {{ source.page }}</span>
++              {% endif %}
+               score {{ source.score|floatformat:3 }}
+             </span>
+           </div>
+diff --git a/ai_checks/urls.py b/ai_checks/urls.py
+index 1c4c47a..93eccf3 100644
+--- a/ai_checks/urls.py
++++ b/ai_checks/urls.py
+@@ -24,6 +24,15 @@ urlpatterns = [
+         'project/<int:project_id>/rag/search/',
+         views.rag_search, name='rag_search',
+     ),
++    # Треб. 9/10: история ИИ-поиска (поиск, фильтры, пагинация).
++    path(
++        'project/<int:project_id>/rag/history/',
++        views.rag_history, name='rag_history',
++    ),
++    path(
++        'project/<int:project_id>/rag/history/<int:pk>/',
++        views.rag_history_item, name='rag_history_item',
++    ),
+     # Ф4: отчёт ГИПу.
+     path(
+         'project/<int:project_id>/report/',
+@@ -35,7 +44,7 @@ urlpatterns = [
+     ),
+     path('report/<int:pk>/pdf/', views.report_pdf, name='report_pdf'),
+     path('report/<int:pk>/docx/', views.report_docx, name='report_docx'),
+-    # База знаний проекта (UX-аудит stage 2).
++    # База знаний проекта (UX-аудит stage 2 + треб. 5/7).
+     path(
+         'project/<int:project_id>/kb/',
+         views.kb_panel, name='kb_panel',
+@@ -44,6 +53,18 @@ urlpatterns = [
+         'project/<int:project_id>/kb/table/',
+         views.kb_table, name='kb_table',
+     ),
++    path(
++        'project/<int:project_id>/kb/documents/',
++        views.kb_projects_table, name='kb_projects_table',
++    ),
++    path(
++        'project/<int:project_id>/kb/reindex-project/',
++        views.kb_reindex_project_view, name='kb_reindex_project',
++    ),
++    path(
++        'project/<int:project_id>/kb/document/<int:document_id>/reindex/',
++        views.kb_reindex_document_view, name='kb_reindex_document',
++    ),
+     path(
+         'project/<int:project_id>/kb/upload/',
+         views.kb_upload, name='kb_upload',
+diff --git a/ai_checks/views.py b/ai_checks/views.py
+index 80a3ec7..c8298ee 100644
+--- a/ai_checks/views.py
++++ b/ai_checks/views.py
+@@ -5,6 +5,13 @@
+ (storage.domain.services.check_issue_permission). Подтверждение находки
+ создаёт Issue через storage.domain.services.create_issue (сервис ядра
+ не изменяется).
++
++Финальная архитектура ИИ-контура (этап 20):
++- ИИ-поиск: фильтры по разделу/типу источника (треб. 8), история запросов
++  с поиском/фильтрами/пагинацией (треб. 9, 10);
++- База знаний: блоки «Документы проекта» и «Внутренние стандарты»
++  (треб. 7), переиндексация проекта/документа (треб. 5);
++- Отчёт ГИПу: история отчётов (треб. 13).
+ """
+ 
+ from __future__ import annotations
+@@ -15,13 +22,21 @@ from datetime import date, timedelta
+ import pymupdf
+ from django.conf import settings
+ from django.contrib.auth.decorators import login_required
++from django.core.paginator import Paginator
++from django.db.models import Count, F
+ from django.http import Http404, HttpResponse
+ from django.shortcuts import get_object_or_404, render
+ from django.utils import timezone
+ from django.views.decorators.http import require_GET, require_POST
+ 
+-from ai_checks.domain.models import CheckRun, GeneratedReport, PendingCheckResult
++from ai_checks.domain.models import (
++    CheckRun,
++    GeneratedReport,
++    PendingCheckResult,
++    RagQuery,
++)
+ from ai_checks.domain.services import (
++    KB_CODE_PREFIX,
+     KNOWLEDGE_DOC_TYPES,
+     bbox_ratios_for_rotation,
+     crop_finding_image,
+@@ -31,6 +46,8 @@ from ai_checks.domain.services import (
+     index_internal_document,
+     knowledge_documents,
+     rag_answer,
++    reindex_document,
++    reindex_project,
+     remove_knowledge_document,
+     upload_knowledge_document,
+ )
+@@ -39,11 +56,18 @@ from ai_checks.tasks import (
+     check_document_version_task,
+     index_knowledge_document_task,
+ )
+-from storage.domain.models import Document
++from storage.domain.models import Document, DocumentVersion
+ from storage.domain.services import check_issue_permission, create_issue
+ 
+ BBOX_MARGIN_PT = 12
+ 
++# Треб. 8: пример-подсказка (чип) для формы ИИ-поиска.
++RAG_EXAMPLE_QUESTIONS = (
++    'Какие нагрузки из ОВ учтены в ЭОМ?',
++    'Какие требования заказчика к вентиляции?',
++    'Что говорит внутренний стандарт о составе РЧ?',
++)
++
+ 
+ def _ensure_enabled() -> None:
+     if not settings.AI_CHECKS_ENABLED:
+@@ -243,51 +267,71 @@ def finding_preview(request, pk: int):
+ 
+ 
+ def _rag_groups(sources: list[dict]) -> list[tuple[str, str, list[dict]]]:
+-    """Группирует источники по tenant_scope: проект → компания → общие."""
+-    order = ('project', 'company', 'global')
++    """Группирует источники по типу (треб. 8): проект → стандарты."""
++    order = ('project', 'standard')
+     labels = {
+-        'project': 'Проект',
+-        'company': 'Компания',
+-        'global': 'Общие знания',
++        'project': 'Документы проекта',
++        'standard': 'Внутренние стандарты',
+     }
+     groups = []
+-    for scope in order:
+-        items = [source for source in sources if source['tenant_scope'] == scope]
++    for group in order:
++        items = [
++            source for source in sources
++            if source.get('type', 'standard') == group
++        ]
+         if items:
+-            groups.append((scope, labels[scope], items))
++            groups.append((group, labels[group], items))
+     return groups
+ 
+ 
++RAG_HISTORY_PAGE_SIZE = 20
++
++
+ @login_required
+ @require_GET
+ def rag_panel(request, project_id: int):
+-    """HTMX-фрагмент вкладки «ИИ-поиск»: форма вопроса."""
++    """HTMX-фрагмент вкладки «ИИ-поиск»: форма вопроса и история."""
+     _ensure_enabled()
+     project = get_object_or_404(
+         get_accessible_projects(request.user), pk=project_id,
+     )
+-    return render(request, 'ai_checks/_rag.html', {'project': project})
++    return render(request, 'ai_checks/_rag.html', {
++        'project': project,
++        'sections': project.sections.order_by('order', 'pk'),
++        'example_questions': RAG_EXAMPLE_QUESTIONS,
++    })
+ 
+ 
+ @login_required
+ @require_POST
+ def rag_search(request, project_id: int):
+-    """HTMX-фрагмент: ответ и источники с цитатами (сгруппированы)."""
++    """HTMX-фрагмент: ответ и источники с цитатами (сгруппированы).
++
++    Треб. 8: фильтры «раздел» (ОВ/ЭОМ/АР…) и «тип источника»
++    (проект/стандарт). После ответа история запросов обновляется
++    out-of-band (треб. 9).
++    """
+     _ensure_enabled()
+     project = get_object_or_404(
+         get_accessible_projects(request.user), pk=project_id,
+     )
+     question = (request.POST.get('question') or '').strip()
++    section_code = (request.POST.get('section_code') or '').strip()
++    source_type = (request.POST.get('source_type') or '').strip() or None
+     error = ''
+     result = {'answer': '', 'sources': []}
+     if not question:
+         error = 'Введите вопрос.'
++    elif source_type not in (None, 'project', 'standard'):
++        error = 'Некорректный тип источника.'
+     else:
+         try:
+             result = rag_answer(
+                 question,
+-                company_id=project.company_id,
+-                project_id=project.pk,
++                project.pk,
++                request.user,
++                section_code=section_code or None,
++                source_type=source_type,
+                 model=_selected_model(request),
+             )
+         except ValueError as exc:
+@@ -299,7 +343,7 @@ def rag_search(request, project_id: int):
+                 'Поднимите dev-стек: docker compose -f docker-compose.dev.yml up -d.'
+             )
+ 
+-    return render(request, 'ai_checks/_rag_results.html', {
++    response = render(request, 'ai_checks/_rag_results.html', {
+         'project': project,
+         'question': question,
+         'answer': result['answer'],
+@@ -307,6 +351,120 @@ def rag_search(request, project_id: int):
+         'groups': _rag_groups(result['sources']),
+         'error': error,
+     })
++    if not error:
++        # Треб. 9: история видна всем участникам — обновляем блок OOB.
++        from django.template import loader
++
++        history_html = loader.render_to_string(
++            'ai_checks/_rag_history.html',
++            {**_rag_history_context(project, request), 'oob': True},
++            request=request,
++        )
++        response.content += history_html.encode(
++            response.charset or 'utf-8',
++        )
++    return response
++
++
++def _project_members(project) -> list:
++    """Участники проекта (для фильтра истории по автору, треб. 10)."""
++    members = {
++        membership.user
++        for membership in project.memberships.select_related('user')
++        if membership.user_id
++    }
++    if project.gip_id:
++        members.add(project.gip)
++    return sorted(members, key=lambda user: (user.last_name, user.username))
++
++
++def _rag_history_context(project, request) -> dict:
++    """Контекст истории ИИ-поиска: фильтры, пагинация (треб. 9, 10)."""
++    queries = RagQuery.objects.filter(project=project).select_related('user')
++
++    search_q = (request.GET.get('q') or request.POST.get('q') or '').strip()
++    if search_q:
++        queries = queries.filter(question__icontains=search_q)
++
++    author_id = (
++        request.GET.get('author') or request.POST.get('author') or ''
++    ).strip()
++    if author_id.isdigit():
++        queries = queries.filter(user_id=int(author_id))
++
++    date_from_raw = (
++        request.GET.get('date_from') or request.POST.get('date_from') or ''
++    ).strip()
++    date_to_raw = (
++        request.GET.get('date_to') or request.POST.get('date_to') or ''
++    ).strip()
++    try:
++        if date_from_raw:
++            queries = queries.filter(
++                created_at__date__gte=date.fromisoformat(date_from_raw),
++            )
++        if date_to_raw:
++            queries = queries.filter(
++                created_at__date__lte=date.fromisoformat(date_to_raw),
++            )
++    except ValueError:
++        # Некорректная дата — фильтр игнорируется, страница не падает.
++        pass
++
++    try:
++        page_number = max(1, int(request.GET.get('page') or 1))
++    except ValueError:
++        page_number = 1
++    page = Paginator(queries, RAG_HISTORY_PAGE_SIZE).get_page(page_number)
++
++    return {
++        'project': project,
++        'page_obj': page,
++        'members': _project_members(project),
++        'filters': {
++            'q': search_q,
++            'author': author_id,
++            'date_from': date_from_raw,
++            'date_to': date_to_raw,
++        },
++    }
++
++
++@login_required
++@require_GET
++def rag_history(request, project_id: int):
++    """HTMX-фрагмент: история ИИ-поиска проекта (треб. 9, 10).
++
++    Поиск по вопросу, фильтры по автору и датам, пагинация.
++    Видна всем участникам проекта.
++    """
++    _ensure_enabled()
++    project = get_object_or_404(
++        get_accessible_projects(request.user), pk=project_id,
++    )
++    return render(
++        request, 'ai_checks/_rag_history.html',
++        _rag_history_context(project, request),
++    )
++
++
++@login_required
++@require_GET
++def rag_history_item(request, project_id: int, pk: int):
++    """HTMX-фрагмент: ответ и источники выбранного запроса (треб. 9)."""
++    _ensure_enabled()
++    project = get_object_or_404(
++        get_accessible_projects(request.user), pk=project_id,
++    )
++    query = get_object_or_404(
++        RagQuery.objects.filter(project=project).select_related('user'),
++        pk=pk,
++    )
++    return render(request, 'ai_checks/_rag_history_detail.html', {
++        'project': project,
++        'query': query,
++        'groups': _rag_groups(query.sources or []),
++    })
+ 
+ 
+ def _selected_model(request) -> str | None:
+@@ -339,7 +497,11 @@ def _report_project(request, project_id: int):
+ @login_required
+ @require_GET
+ def report_panel(request, project_id: int):
+-    """HTMX-фрагмент вкладки «Отчёт ГИПу»: форма периода."""
++    """HTMX-фрагмент вкладки «Отчёт ГИПу»: форма периода и история.
++
++    Треб. 13: под формой — список последних отчётов (дата, период,
++    автор, кнопки PDF/Word). Вкладка целиком видна только ГИП/админ.
++    """
+     _ensure_enabled()
+     project = _report_project(request, project_id)
+     today = timezone.localdate()
+@@ -347,9 +509,19 @@ def report_panel(request, project_id: int):
+         'project': project,
+         'default_start': (today - timedelta(days=30)).isoformat(),
+         'default_end': today.isoformat(),
++        'reports': _gip_reports(project),
+     })
+ 
+ 
++def _gip_reports(project):
++    """История отчётов ГИПа (треб. 13): последние 20 по дате."""
++    return (
++        GeneratedReport.objects
++        .filter(project=project)
++        .select_related('created_by')[:20]
++    )
++
++
+ @login_required
+ @require_POST
+ def report_generate(request, project_id: int):
+@@ -384,6 +556,7 @@ def report_generate(request, project_id: int):
+         'project': project,
+         'report': report,
+         'error': error,
++        'reports': _gip_reports(project),
+         'period_label': (
+             f'{period_start:%d.%m.%Y} — {period_end:%d.%m.%Y}'
+             if report else ''
+@@ -458,6 +631,33 @@ def _kb_document(request, project_id: int, pk: int):
+     return project, document
+ 
+ 
++def project_documents(project):
++    """Документы проекта для блока «Документы проекта» (треб. 7).
++
++    Текущие версии неудалённых документов (кроме KB-* — они показаны
++    в блоке «Внутренние стандарты») с бейджем ИИ-индексации (треб. 3).
++    """
++    return (
++        DocumentVersion.objects
++        .filter(
++            document__project=project,
++            document__is_deleted=False,
++            document__current_version=F('pk'),
++        )
++        .exclude(document__code__startswith=KB_CODE_PREFIX)
++        .select_related('document', 'document__section', 'document__folder')
++        .annotate(chunk_count=Count('ai_chunks'))
++        .order_by('document__section__order', 'document__code')
++    )
++
++
++def _render_kb_projects(request, project):
++    return render(request, 'ai_checks/_kb_projects.html', {
++        'project': project,
++        'project_versions': project_documents(project),
++    })
++
++
+ def _render_kb_table(request, project):
+     return render(request, 'ai_checks/_kb_table.html', {
+         'project': project,
+@@ -468,7 +668,12 @@ def _render_kb_table(request, project):
+ @login_required
+ @require_GET
+ def kb_panel(request, project_id: int):
+-    """Вкладка «База знаний»: список документов и модалка загрузки."""
++    """Вкладка «База знаний» (треб. 7): два блока + модалка загрузки.
++
++    «Документы проекта» — таблица с ИИ-статусом и кнопкой
++    «Переиндексировать проект» (треб. 5); «Внутренние стандарты» —
++    таблица InternalDocument с кнопкой «Загрузить стандарт».
++    """
+     project = _kb_project(request, project_id)
+     return render(request, 'ai_checks/_kb.html', {
+         'project': project,
+@@ -484,11 +689,41 @@ def kb_panel(request, project_id: int):
+ @login_required
+ @require_GET
+ def kb_table(request, project_id: int):
+-    """HTMX-фрагмент: таблица документов базы знаний."""
++    """HTMX-фрагмент: таблица документов базы знаний (стандарты)."""
+     project = _kb_project(request, project_id)
+     return _render_kb_table(request, project)
+ 
+ 
++@login_required
++@require_GET
++def kb_projects_table(request, project_id: int):
++    """HTMX-фрагмент: таблица «Документы проекта» (треб. 7)."""
++    project = _kb_project(request, project_id)
++    return _render_kb_projects(request, project)
++
++
++@login_required
++@require_POST
++def kb_reindex_project_view(request, project_id: int):
++    """Кнопка «Переиндексировать проект» (треб. 5, 7)."""
++    project = _kb_project(request, project_id)
++    reindex_project(project.pk, request.user)
++    return _render_kb_projects(request, project)
++
++
++@login_required
++@require_POST
++def kb_reindex_document_view(request, project_id: int, document_id: int):
++    """Переиндексация одного документа проекта (треб. 5)."""
++    project = _kb_project(request, project_id)
++    get_object_or_404(
++        Document.objects.filter(project=project, is_deleted=False),
++        pk=document_id,
++    )
++    reindex_document(document_id, request.user)
++    return _render_kb_projects(request, project)
++
++
+ @login_required
+ @require_POST
+ def kb_upload(request, project_id: int):
+@@ -515,8 +750,8 @@ def kb_upload(request, project_id: int):
+ def kb_reindex(request, project_id: int, pk: int):
+     """Переиндексация документа базы знаний."""
+     project, document = _kb_document(request, project_id, pk)
+-    document.index_status = 'queued'
+-    document.save(update_fields=['index_status'])
++    document.indexing_status = 'pending'
++    document.save(update_fields=['indexing_status'])
+     index_knowledge_document_task.delay(document.pk)
+     return _render_kb_table(request, project)
+ 
+diff --git a/ai_checks/templates/ai_checks/_kb_projects.html b/ai_checks/templates/ai_checks/_kb_projects.html
+new file mode 100644
+index 0000000..1e08193
+--- /dev/null
++++ b/ai_checks/templates/ai_checks/_kb_projects.html
+@@ -0,0 +1,58 @@
++{% comment %}
++Треб. 7 (блок «Документы проекта»): текущие версии документов проекта
++со статусом ИИ-индексации (треб. 3) и числом чанков. Кнопка на строке —
++переиндексация одного документа (треб. 5).
++{% endcomment %}
++{% if project_versions %}
++  <div class="table-responsive">
++    <table class="table table-sm align-middle mb-0" id="kbProjectsTable">
++      <thead>
++        <tr class="small text-muted">
++          <th>Шифр</th>
++          <th>Название</th>
++          <th>Раздел</th>
++          <th>Версия</th>
++          <th>Индексация</th>
++          <th class="text-end">Чанки</th>
++          <th class="text-end">Действия</th>
++        </tr>
++      </thead>
++      <tbody>
++        {% for version in project_versions %}
++          <tr>
++            <td class="small text-nowrap">{{ version.document.code }}</td>
++            <td class="small">{{ version.document.name }}</td>
++            <td class="small">
++              {% if version.document.section %}{{ version.document.section.code }}{% else %}—{% endif %}
++            </td>
++            <td class="small">v{{ version.version_number }}</td>
++            <td>
++              {% if version.indexing_status == 'done' %}
++                <span class="badge text-bg-success">Готово</span>
++              {% elif version.indexing_status == 'processing' %}
++                <span class="badge text-bg-info">Индексируется</span>
++              {% elif version.indexing_status == 'error' %}
++                <span class="badge text-bg-danger">Ошибка</span>
++              {% else %}
++                <span class="badge text-bg-secondary">В очереди</span>
++              {% endif %}
++            </td>
++            <td class="text-end num small">{{ version.chunk_count }}</td>
++            <td class="text-end text-nowrap">
++              <button type="button" class="btn btn-sm btn-outline-secondary"
++                      hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
++                      hx-post="{% url 'ai_checks:kb_reindex_document' project.pk version.document_id %}"
++                      hx-target="#kbProjectsWrap" hx-swap="innerHTML"
++                      title="Переиндексировать документ">Переиндексировать</button>
++            </td>
++          </tr>
++        {% endfor %}
++      </tbody>
++    </table>
++  </div>
++{% else %}
++  <div class="alert alert-light border py-2 px-3 small mb-0">
++    В проекте пока нет PDF-документов — загрузите их во вкладке «Документы»,
++    и они появятся здесь со статусом индексации.
++  </div>
++{% endif %}
+diff --git a/ai_checks/templates/ai_checks/_rag_history.html b/ai_checks/templates/ai_checks/_rag_history.html
+new file mode 100644
+index 0000000..5a628fd
+--- /dev/null
++++ b/ai_checks/templates/ai_checks/_rag_history.html
+@@ -0,0 +1,114 @@
++{% comment %}
++Треб. 9/10: история ИИ-поиска — последние запросы проекта (по 20 на
++страницу): дата, автор, вопрос, модель. Клик по строке — ответ и
++источники (_rag_history_detail.html). Поиск по вопросу, фильтры по
++автору и датам, пагинация — всё через HTMX. Видна всем участникам.
++
++Включается как обычный фрагмент (lazy-load в контейнер #aiRagHistory
++вкладки) и как out-of-band-обновление после поиска (oob=True → корневой
++элемент получает id и hx-swap-oob и заменяет контейнер целиком).
++{% endcomment %}
++<div {% if oob %}id="aiRagHistory" hx-swap-oob="true"{% endif %}>
++  <form class="row g-1 align-items-end small mb-1"
++        hx-get="{% url 'ai_checks:rag_history' project.pk %}"
++        hx-target="#aiRagHistory" hx-swap="innerHTML" hx-trigger="submit">
++    <div class="col-12 col-md-4">
++      <input type="search" name="q" value="{{ filters.q }}"
++             class="form-control form-control-sm"
++             placeholder="Поиск по вопросу…"
++             aria-label="Поиск по вопросу"
++             hx-get="{% url 'ai_checks:rag_history' project.pk %}"
++             hx-target="#aiRagHistory" hx-trigger="keyup changed delay:400ms"
++             hx-include="[name='q']">
++    </div>
++    <div class="col-6 col-md-3">
++      <select name="author" class="form-select form-select-sm" aria-label="Автор"
++              hx-get="{% url 'ai_checks:rag_history' project.pk %}"
++              hx-target="#aiRagHistory" hx-trigger="change">
++        <option value="">Все авторы</option>
++        {% for member in members %}
++          <option value="{{ member.pk }}"{% if filters.author == member.pk|stringformat:'s' %} selected{% endif %}>
++            {{ member.get_full_name|default:member.username }}
++          </option>
++        {% endfor %}
++      </select>
++    </div>
++    <div class="col-3 col-md-2">
++      <input type="date" name="date_from" value="{{ filters.date_from }}"
++             class="form-control form-control-sm" aria-label="Дата с"
++             hx-get="{% url 'ai_checks:rag_history' project.pk %}"
++             hx-target="#aiRagHistory" hx-trigger="change"
++             hx-include="closest form">
++    </div>
++    <div class="col-3 col-md-2">
++      <input type="date" name="date_to" value="{{ filters.date_to }}"
++             class="form-control form-control-sm" aria-label="Дата по"
++             hx-get="{% url 'ai_checks:rag_history' project.pk %}"
++             hx-target="#aiRagHistory" hx-trigger="change"
++             hx-include="closest form">
++    </div>
++    <div class="col-12 col-md-1 d-grid">
++      <button type="submit" class="btn btn-sm btn-outline-secondary">ОК</button>
++    </div>
++  </form>
++
++  {% if page_obj.object_list %}
++    <div class="table-responsive">
++      <table class="table table-sm align-middle mb-0" id="ragHistoryTable">
++        <thead>
++          <tr class="small text-muted">
++            <th style="min-width: 96px;">Дата</th>
++            <th>Автор</th>
++            <th>Вопрос</th>
++            <th class="text-end">Модель</th>
++          </tr>
++        </thead>
++        <tbody>
++          {% for query in page_obj.object_list %}
++            <tr>
++              <td class="small text-muted text-nowrap">{{ query.created_at|date:"d.m.Y H:i" }}</td>
++              <td class="small">{{ query.user.get_full_name|default:query.user.username|default:'—' }}</td>
++              <td class="small">
++                <button type="button" class="btn btn-link btn-sm p-0 text-start text-decoration-none"
++                        hx-get="{% url 'ai_checks:rag_history_item' project.pk query.pk %}"
++                        hx-target="#rag-history-detail-{{ query.pk }} td"
++                        hx-swap="innerHTML"
++                        hx-on::after-request="document.getElementById('rag-history-detail-{{ query.pk }}').classList.remove('d-none');">
++                  {{ query.question|truncatechars:120 }}
++                </button>
++              </td>
++              <td class="small text-muted text-end">{{ query.model|default:'—' }}</td>
++            </tr>
++            <tr id="rag-history-detail-{{ query.pk }}" class="d-none">
++              <td colspan="4" class="small bg-light"></td>
++            </tr>
++          {% endfor %}
++        </tbody>
++      </table>
++    </div>
++
++    {% if page_obj.paginator.num_pages > 1 %}
++      <div class="d-flex align-items-center gap-2 small mt-1">
++        <span class="text-muted">Стр. {{ page_obj.number }} из {{ page_obj.paginator.num_pages }}</span>
++        {% if page_obj.has_previous %}
++          <button type="button" class="btn btn-sm btn-outline-secondary py-0"
++                  hx-get="{% url 'ai_checks:rag_history' project.pk %}?page={{ page_obj.previous_page_number }}{% if filters.q %}&q={{ filters.q|urlencode }}{% endif %}{% if filters.author %}&author={{ filters.author }}{% endif %}{% if filters.date_from %}&date_from={{ filters.date_from }}{% endif %}{% if filters.date_to %}&date_to={{ filters.date_to }}{% endif %}"
++                  hx-target="#aiRagHistory" hx-swap="innerHTML">← Назад</button>
++        {% endif %}
++        {% if page_obj.has_next %}
++          <button type="button" class="btn btn-sm btn-outline-secondary py-0"
++                  hx-get="{% url 'ai_checks:rag_history' project.pk %}?page={{ page_obj.next_page_number }}{% if filters.q %}&q={{ filters.q|urlencode }}{% endif %}{% if filters.author %}&author={{ filters.author }}{% endif %}{% if filters.date_from %}&date_from={{ filters.date_from }}{% endif %}{% if filters.date_to %}&date_to={{ filters.date_to }}{% endif %}"
++                  hx-target="#aiRagHistory" hx-swap="innerHTML">Вперёд →</button>
++        {% endif %}
++      </div>
++    {% endif %}
++  {% else %}
++    <div class="alert alert-light border py-2 px-3 small mb-0">
++      {% if filters.q or filters.author or filters.date_from or filters.date_to %}
++        По запросам ничего не найдено.
++      {% else %}
++        История ИИ-поиска пуста — задайте первый вопрос.
++      {% endif %}
++    </div>
++  {% endif %}
++</div>
+diff --git a/ai_checks/templates/ai_checks/_rag_history_detail.html b/ai_checks/templates/ai_checks/_rag_history_detail.html
+new file mode 100644
+index 0000000..d8a5264
+--- /dev/null
++++ b/ai_checks/templates/ai_checks/_rag_history_detail.html
+@@ -0,0 +1,41 @@
++{% comment %}
++Треб. 9: раскрываемый ответ выбранного запроса истории — ответ и источники
++(тип, документ, раздел, лист, цитата, score).
++{% endcomment %}
++<div class="p-2">
++  <div class="text-muted mb-1">
++    {{ query.created_at|date:"d.m.Y H:i" }}
++    {% if query.user %} · {{ query.user.get_full_name|default:query.user.username }}{% endif %}
++    {% if query.model %} · модель {{ query.model }}{% endif %}
++  </div>
++  <div class="fw-semibold small mb-1">«{{ query.question }}»</div>
++
++  {% if query.answer %}
++    <div class="border rounded p-2 mb-2 bg-white small" style="white-space: pre-wrap;">{{ query.answer }}</div>
++  {% endif %}
++
++  {% if not groups %}
++    <div class="small text-muted">Источников нет.</div>
++  {% endif %}
++
++  {% for group_code, group_label, items in groups %}
++    <div class="fw-semibold small mt-1 mb-1">{{ group_label }}:</div>
++    {% for source in items %}
++      <div class="border rounded p-2 mb-1 bg-white small">
++        <div class="d-flex justify-content-between align-items-baseline flex-wrap gap-1">
++          <span>
++            <span class="badge text-bg-light border">
++              {% if source.type == 'project' %}Проект{% else %}Стандарт{% endif %}
++            </span>
++            <span class="fw-semibold ms-1">{{ source.document_title }}</span>
++          </span>
++          <span class="text-muted">
++            {% if source.section_code %}раздел {{ source.section_code }}{% endif %}
++            {% if source.page %}{% if source.section_code %} · {% endif %}лист {{ source.page }}{% endif %}
++          </span>
++        </div>
++        <div class="text-muted mt-1">{{ source.text|truncatechars:280 }}</div>
++      </div>
++    {% endfor %}
++  {% endfor %}
++</div>

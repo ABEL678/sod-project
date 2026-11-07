@@ -1,0 +1,368 @@
+diff --git a/ai_checks/domain/services.py b/ai_checks/domain/services.py
+index c91ba0f..a7d6c4f 100644
+--- a/ai_checks/domain/services.py
++++ b/ai_checks/domain/services.py
+@@ -12,22 +21,27 @@ from dataclasses import dataclass
+ from datetime import timedelta
+ 
+ import pymupdf
++from django.core.exceptions import PermissionDenied
++from django.db import models as db_models
+ from django.db import transaction
+ from django.utils import timezone
+ 
+ from ai_checks.domain.models import (
+     CheckRun,
+     GeneratedReport,
++    IndexingStatus,
+     InternalChunk,
+     InternalDocument,
+     LLMCallLog,
+     PendingCheckResult,
++    ProjectDocumentChunk,
++    RagQuery,
+     ReminderRule,
+     RuleDefinition,
+ )
+ from ai_checks.domain.rules import RULE_CHECKS
+ from ai_checks.ports.embedding import EmbeddingService
+-from storage.domain.models import DocumentVersion
++from storage.domain.models import Document, DocumentVersion
+ 
+ logger = logging.getLogger(__name__)
+ 
+@@ -38,6 +52,11 @@ ENGINE_VERSION = 'rules@2026.11.1'
+ CHUNK_SIZE = 1000
+ CHUNK_OVERLAP = 200
+ 
++# Документы базы знаний создаются через upload_document с шифром KB-*;
++# в проектной таблице «Документы проекта» и переиндексации проекта они
++# не участвуют (они индексируются в InternalChunk как стандарты).
++KB_CODE_PREFIX = 'KB-'
++
+ 
+ @dataclass
+ class TextChunk:
+@@ -161,6 +180,155 @@ def index_document(
+     return len(chunks)
+ 
+ 
++def index_project_document(
++    version_id: int,
++    embedding_service: EmbeddingService | None = None,
++) -> int:
++    """Индексация PDF-версии документа проекта (треб. 4).
++
++    Удаляет прежние ProjectDocumentChunk документа, режет PDF на чанки,
++    считает векторы и сохраняет фрагменты со снимком раздела/папки.
++    Статус версии (треб. 3): pending → processing → done/error.
++    Идемпотентен: повторный вызов заменяет фрагменты. Сбой не роняет
++    Celery-задачу — версия помечается error (текст в логе приложения).
++    Возвращает число созданных чанков (0 — версия/документ не найдены).
++    """
++    try:
++        version = (
++            DocumentVersion.objects
++            .select_related('document', 'document__section', 'document__folder')
++            .get(pk=version_id)
++        )
++    except DocumentVersion.DoesNotExist:
++        logger.warning('Индексация: версия %s не найдена', version_id)
++        return 0
++
++    version.indexing_status = IndexingStatus.PROCESSING
++    version.save(update_fields=['indexing_status'])
++    try:
++        if embedding_service is None:
++            # Ленивый импорт: домен не зависит от конкретного адаптера.
++            from ai_checks.adapters.embedding_onnx import BgeM3OnnxEmbedding
++
++            embedding_service = BgeM3OnnxEmbedding()
++
++        chunks = split_into_chunks(extract_pages(version.file.path))
++        vectors: list[list[float]] = []
++        if chunks:
++            vectors = embedding_service.embed_texts(
++                [chunk.text for chunk in chunks],
++            )
++        if len(vectors) != len(chunks):
++            raise ValueError(
++                'EmbeddingService вернул неверное число векторов: '
++                f'{len(vectors)} != {len(chunks)}'
++            )
++        dimension = embedding_service.dim
++        for vector in vectors:
++            if len(vector) != dimension:
++                raise ValueError(
++                    'Размерность вектора не совпадает с EmbeddingService.dim: '
++                    f'{len(vector)} != {dimension}'
++                )
++
++        with transaction.atomic():
++            # Старые чанки документа (в т.ч. от прошлых версий) сносим:
++            # актуальный контекст — только проиндексированная версия.
++            ProjectDocumentChunk.objects.filter(
++                document=version.document,
++            ).delete()
++            if chunks:
++                ProjectDocumentChunk.objects.bulk_create([
++                    ProjectDocumentChunk(
++                        document=version.document,
++                        version=version,
++                        section=version.document.section,
++                        folder=version.document.folder,
++                        seq=seq,
++                        text=chunk.text,
++                        page_from=chunk.page_from,
++                        page_to=chunk.page_to,
++                        embedding=vector,
++                    )
++                    for seq, (chunk, vector) in enumerate(zip(chunks, vectors))
++                ])
++            version.indexing_status = IndexingStatus.DONE
++            version.save(update_fields=['indexing_status'])
++        return len(chunks)
++    except Exception as exc:  # noqa: BLE001 — статус версии важнее трейса
++        logger.exception(
++            'Индексация версии %s упала: %s', version_id, exc,
++        )
++        version.indexing_status = IndexingStatus.ERROR
++        version.save(update_fields=['indexing_status'])
++        return 0
++
++
++def reindex_document(document_id: int, user=None) -> int:
++    """Резервная индексация одного документа проекта (треб. 5).
++
++    Ставит текущей версии документа статус pending и задачу Celery.
++    user — инициатор (используется вьюхой для проверки прав; сервис
++    дополнительно не пускает удалённые документы). Возвращает id версии
++    (0 — индексировать нечего: нет документа/версии или это KB-*).
++    """
++    from ai_checks.tasks import index_project_document_task
++
++    version = (
++        DocumentVersion.objects
++        .filter(
++            document_id=document_id,
++            document__is_deleted=False,
++            document__current_version=db_models.F('pk'),
++        )
++        .exclude(document__code__startswith=KB_CODE_PREFIX)
++        .first()
++    )
++    if version is None:
++        return 0
++    version.indexing_status = IndexingStatus.PENDING
++    version.save(update_fields=['indexing_status'])
++    index_project_document_task.delay(version.pk)
++    return version.pk
++
++
++def reindex_project(project_id: int, user=None) -> int:
++    """Резервная индексация всех документов проекта (треб. 5).
++
++    Все неудалённые документы проекта с текущей PDF-версией получают
++    статус pending и задачу index_project_document. user — инициатор:
++    если задан, сервис fail-closed перепроверяет доступ к проекту
++    (вьюха проверяет права отдельно). Возвращает число поставленных
++    задач (не PDF и KB-* — пропускаются).
++    """
++    from ai_checks.tasks import index_project_document_task
++
++    if user is not None:
++        from storage.domain.services import get_accessible_projects
++
++        if not get_accessible_projects(user).filter(pk=project_id).exists():
++            raise PermissionDenied('Нет доступа к проекту')
++
++    versions = list(
++        DocumentVersion.objects
++        .filter(
++            document__project_id=project_id,
++            document__is_deleted=False,
++            document__current_version=db_models.F('pk'),
++        )
++        .exclude(document__code__startswith=KB_CODE_PREFIX)
++        .order_by('document__code')
++    )
++    if not versions:
++        return 0
++    DocumentVersion.objects.filter(
++        pk__in=[version.pk for version in versions],
++    ).update(indexing_status=IndexingStatus.PENDING)
++    for version in versions:
++        index_project_document_task.delay(version.pk)
++    return len(versions)
++
++
+ def run_rules_check(
+     document_version: DocumentVersion,
+     initiated_by,
+@@ -994,6 +1354,10 @@ def upload_knowledge_document(
+         name=title or uploaded_file.name,
+         doc_type='report',
+         file=uploaded_file,
++        # База знаний индексируется в InternalChunk, а не в проектный
++        # индекс ProjectDocumentChunk (треб. 6: тип источника
++        # «проект» = PDF-документы проекта, «стандарт» = база знаний).
++        skip_ai_index=True,
+     )
+     document = version.document if hasattr(version, 'document') else version
+ 
+@@ -1005,12 +1369,12 @@ def upload_knowledge_document(
+         doc_type=doc_type,
+         title=title or uploaded_file.name,
+         created_by=user,
+-        index_status='queued',
++        indexing_status=IndexingStatus.PENDING,
+     )
+ 
+ 
+ def index_internal_document(internal_document_id: int) -> int:
+-    """Индексация InternalDocument со статусами (queued→running→done/failed)."""
++    """Индексация InternalDocument со статусами (pending→processing→done/error)."""
+     try:
+         internal = InternalDocument.objects.select_related(
+             'source_document',
+@@ -1018,22 +1382,22 @@ def index_internal_document(internal_document_id: int) -> int:
+     except InternalDocument.DoesNotExist:
+         return 0
+ 
+-    internal.index_status = 'running'
+-    internal.save(update_fields=['index_status'])
++    internal.indexing_status = IndexingStatus.PROCESSING
++    internal.save(update_fields=['indexing_status'])
+     try:
+         version = internal.source_document.current_version
+         if version is None:
+             raise ValueError('У исходного документа нет текущей версии')
+         count = index_document(internal, version.file.path)
+-        internal.index_status = 'done'
++        internal.indexing_status = IndexingStatus.DONE
+         internal.index_error = ''
+-        internal.save(update_fields=['index_status', 'index_error'])
++        internal.save(update_fields=['indexing_status', 'index_error'])
+         return count
+     except Exception as exc:  # noqa: BLE001 — статус важнее трейса
+         logger.exception('Индексация базы знаний #%s упала: %s', internal.pk, exc)
+-        internal.index_status = 'failed'
++        internal.indexing_status = IndexingStatus.ERROR
+         internal.index_error = str(exc)[:1000]
+-        internal.save(update_fields=['index_status', 'index_error'])
++        internal.save(update_fields=['indexing_status', 'index_error'])
+         return 0
+ 
+ 
+diff --git a/ai_checks/tasks.py b/ai_checks/tasks.py
+index 598f43c..a926565 100644
+--- a/ai_checks/tasks.py
++++ b/ai_checks/tasks.py
+@@ -37,7 +37,39 @@ def check_reminders_task() -> int:
+ 
+ @shared_task(ignore_result=True, name='ai_checks.index_knowledge_document')
+ def index_knowledge_document_task(internal_document_id: int) -> int:
+-    """Индексация документа базы знаний (статусы queued→running→done/failed)."""
++    """Индексация документа базы знаний (статусы pending→processing→done/error)."""
+     from ai_checks.domain.services import index_internal_document
+ 
+     return index_internal_document(internal_document_id)
++
++
++@shared_task(ignore_result=True, name='ai_checks.index_project_document')
++def index_project_document_task(version_id: int) -> int:
++    """Индексация PDF-версии документа проекта (треб. 4).
++
++    Ставится автоматически из storage.domain.services.upload_document()
++    при AI_CHECKS_ENABLED=True (или из reindex_project/reindex_document,
++    треб. 5). Статус версии: pending → processing → done/error.
++    """
++    from ai_checks.domain.services import index_project_document
++
++    return index_project_document(version_id)
++
++
++@shared_task(ignore_result=True, name='ai_checks.reindex_project')
++def reindex_project_task(project_id: int, user_id: int | None = None) -> int:
++    """Резервная индексация всех документов проекта (треб. 5).
++
++    Для больших проектов можно вызывать как задачу вместо постановки
++    N отдельных задач: в текущем UI используется построчный вариант
++    reindex_project() (одна задача на версию — виден прогресс по
++    бейджам статуса).
++    """
++    from ai_checks.domain.services import reindex_project
++
++    user = None
++    if user_id is not None:
++        from django.contrib.auth.models import User
++
++        user = User.objects.filter(pk=user_id).first()
++    return reindex_project(project_id, user)
+diff --git a/storage/domain/services.py b/storage/domain/services.py
+index 0e1481f..b1685ee 100644
+--- a/storage/domain/services.py
++++ b/storage/domain/services.py
+@@ -3,6 +3,7 @@ from collections import defaultdict
+ from datetime import timedelta
+ from decimal import Decimal, InvalidOperation
+ import io
++import logging
+ 
+ from django.conf import settings
+ import uuid
+@@ -18,6 +19,8 @@ from django.db.models import Count, Max, Prefetch, Q, QuerySet
+ from django.db import transaction
+ from django.utils import timezone
+ 
++logger = logging.getLogger(__name__)
++
+ from storage.domain.models import (
+     Company,
+     Document,
+@@ -3153,6 +3156,7 @@ def upload_document(
+     file,
+     comment: str = "",
+     folder: Folder | None = None,
++    skip_ai_index: bool = False,
+ ) -> DocumentVersion:
+     """Единственная точка создания версий документа.
+ 
+@@ -3163,6 +3167,11 @@ def upload_document(
+     - Автоинкремент номера версии.
+     - Создание DocumentVersion с file_size и uploaded_by.
+     - Обновление current_version и updated_at у документа.
++    - Этап 20 (треб. 4): автоиндексация PDF-версии для ИИ-поиска
++      (Celery-задача ai_checks.index_project_document) — когда включён
++      AI_CHECKS_ENABLED и файл PDF. skip_ai_index=True отключает
++      постановку задачи (документы базы знаний индексируются отдельно
++      в InternalChunk через ai_checks).
+     """
+     if not check_write_permission(user, section):
+         raise PermissionDenied("Нет прав на запись в этот раздел")
+@@ -3319,6 +3328,25 @@ def upload_document(
+         doc.updated_at = timezone.now()
+         doc.save(update_fields=['current_version', 'updated_at'])
+ 
++    # Этап 20 (треб. 4): после фиксации версии — автоиндексация PDF для
++    # ИИ-поиска. Ленивый импорт задачи (домен storage не зависит от
++    # ai_checks на уровне модуля); в dev/тестах Celery eager, в проде —
++    # воркер. Сбой постановки не должен ронять загрузку документа.
++    if (
++        not skip_ai_index
++        and getattr(settings, 'AI_CHECKS_ENABLED', False)
++        and filename.lower().endswith('.pdf')
++    ):
++        try:
++            from ai_checks.tasks import index_project_document_task
++
++            index_project_document_task.delay(version.pk)
++        except Exception:  # noqa: BLE001 — загрузка важнее индексации
++            logger.exception(
++                'Не удалось поставить задачу индексации версии %s',
++                version.pk,
++            )
++
+     return version
+ 
+ 

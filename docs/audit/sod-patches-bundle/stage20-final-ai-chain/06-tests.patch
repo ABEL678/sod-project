@@ -1,0 +1,1075 @@
+diff --git a/ai_checks/tests/mocks.py b/ai_checks/tests/mocks.py
+index 9ef7c72..04a4db8 100644
+--- a/ai_checks/tests/mocks.py
++++ b/ai_checks/tests/mocks.py
+@@ -141,3 +141,62 @@ class MockVectorBackend:
+         if norm_left == 0 or norm_right == 0:
+             return 0.0
+         return dot / (norm_left * norm_right)
++
++
++class MockProjectVectorBackend:
++    """Поиск по ProjectDocumentChunk для тестов на SQLite (без pgvector).
++
++    Повторяет контракт ProjectChunkVectorBackend.search: косинус по
++    векторам чанков проекта, опциональный фильтр по разделу. Только
++    неудалённые документы проекта.
++    """
++
++    def __init__(self) -> None:
++        self.calls: list[dict] = []
++
++    def search(self, vector, filters, top_k: int) -> list:
++        import math
++
++        from ai_checks.domain.models import ProjectDocumentChunk
++
++        filters = filters or {}
++        self.calls.append({'filters': dict(filters), 'top_k': top_k})
++
++        queryset = ProjectDocumentChunk.objects.filter(
++            document__project_id=filters.get('project_id'),
++            document__is_deleted=False,
++        )
++        if filters.get('section_code'):
++            queryset = queryset.filter(
++                section__code=filters['section_code'],
++            )
++
++        scored = []
++        for chunk in queryset.select_related('document', 'section'):
++            scored.append({
++                'id': chunk.pk,
++                'document_id': chunk.document_id,
++                'section_code': (
++                    chunk.section.code if chunk.section_id else None
++                ),
++                'score': self._cosine(vector, chunk.embedding),
++                'page_from': chunk.page_from,
++                'page_to': chunk.page_to,
++            })
++        scored.sort(key=lambda hit: hit['score'], reverse=True)
++        return scored[:max(1, int(top_k or 1))]
++
++    @staticmethod
++    def _cosine(left, right) -> float:
++        import math
++
++        left = [float(value) for value in left]
++        right = [float(value) for value in right]
++        if len(left) != len(right) or not left:
++            return 0.0
++        dot = sum(a * b for a, b in zip(left, right))
++        norm_left = math.sqrt(sum(a * a for a in left))
++        norm_right = math.sqrt(sum(b * b for b in right))
++        if norm_left == 0 or norm_right == 0:
++            return 0.0
++        return dot / (norm_left * norm_right)
+diff --git a/ai_checks/tests/test_knowledge.py b/ai_checks/tests/test_knowledge.py
+index e6c5127..666f552 100644
+--- a/ai_checks/tests/test_knowledge.py
++++ b/ai_checks/tests/test_knowledge.py
+@@ -65,7 +65,7 @@ class KnowledgeBaseServiceTests(MediaIsolationMixin, TestCase):
+         self.assertEqual(internal.tenant_scope, 'project')
+         self.assertEqual(internal.project_id, self.project.pk)
+         self.assertIsNone(internal.company_id)
+-        self.assertEqual(internal.index_status, 'queued')
++        self.assertEqual(internal.indexing_status, 'pending')
+         self.assertTrue(internal.source_document.code.startswith('KB-'))
+         self.assertEqual(internal.source_document.project_id, self.project.pk)
+ 
+@@ -84,7 +84,7 @@ class KnowledgeBaseServiceTests(MediaIsolationMixin, TestCase):
+         count = index_internal_document(internal.pk)
+         internal.refresh_from_db()
+         self.assertGreater(count, 0)
+-        self.assertEqual(internal.index_status, 'done')
++        self.assertEqual(internal.indexing_status, 'done')
+         self.assertGreater(internal.chunks.count(), 0)
+         self.assertIsNotNone(internal.indexed_at)
+         self.assertEqual(index_internal_document(internal.pk), count)
+@@ -97,7 +97,7 @@ class KnowledgeBaseServiceTests(MediaIsolationMixin, TestCase):
+         ))
+         index_internal_document(internal.pk)
+         internal.refresh_from_db()
+-        self.assertEqual(internal.index_status, 'failed')
++        self.assertEqual(internal.indexing_status, 'error')
+         self.assertTrue(internal.index_error)
+ 
+     def test_remove_is_soft(self):
+@@ -174,7 +174,7 @@ class KnowledgeBaseViewTests(MediaIsolationMixin, TestCase):
+         internal = InternalDocument.objects.get(title='Стандарт через UI')
+         # Celery eager: индексация выполнилась синхронно.
+         internal.refresh_from_db()
+-        self.assertEqual(internal.index_status, 'done')
++        self.assertEqual(internal.indexing_status, 'done')
+ 
+     def test_chunks_fragment(self):
+         internal = upload_knowledge_document(
+diff --git a/ai_checks/tests/test_reports.py b/ai_checks/tests/test_reports.py
+index 8e79da4..758d80a 100644
+--- a/ai_checks/tests/test_reports.py
++++ b/ai_checks/tests/test_reports.py
+@@ -170,6 +170,8 @@ class GipReportTests(TestCase):
+         self.assertIn('GIP-DOC', text)
+         self.assertIn('Ответственный', text)
+         self.assertIn('Новое', text)
++        # Треб. 12: раздел «Выводы» после сводки.
++        self.assertIn('Выводы:', text)
+ 
+     def test_export_docx(self):
+         import io
+@@ -189,5 +191,7 @@ class GipReportTests(TestCase):
+         )
+         self.assertIn('Отчет ГИПа по проекту', paragraphs)
+         self.assertIn('Резюме (LLM)', paragraphs)
++        # Треб. 12: раздел «Выводы» после сводки.
++        self.assertIn('Выводы', paragraphs)
+         self.assertIn('GIP-DOC', tables_text)
+         self.assertIn('Иван Петров', tables_text)
+diff --git a/ai_checks/tests/test_project_indexing.py b/ai_checks/tests/test_project_indexing.py
+new file mode 100644
+index 0000000..42898de
+--- /dev/null
++++ b/ai_checks/tests/test_project_indexing.py
+@@ -0,0 +1,300 @@
++"""Этап 20 (треб. 1-5): индексация документов проекта (ProjectDocumentChunk).
++
++Автоиндексация из upload_document (hook, треб. 4), статусы indexing_status
++на DocumentVersion (треб. 3), резервная индексация reindex_project /
++reindex_document (треб. 5). Тесты запускаются на PostgreSQL+pgvector
++(docker-compose.dev.yml): проектный векторный поиск требует PG.
++"""
++
++from unittest import mock
++
++from django.contrib.auth.models import User
++from django.core.files.base import ContentFile
++from django.core.files.uploadedfile import SimpleUploadedFile
++from django.test import TestCase, override_settings
++
++import pymupdf
++
++from ai_checks.adapters.embedding_onnx import BgeM3OnnxEmbedding
++from ai_checks.domain.models import ProjectDocumentChunk
++from ai_checks.domain.services import (
++    index_project_document,
++    reindex_document,
++    reindex_project,
++)
++from ai_checks.tests.base import MediaIsolationMixin
++from storage.domain.models import (
++    Company,
++    Document,
++    DocumentVersion,
++    Project,
++    Section,
++)
++from storage.domain.services import upload_document
++
++
++def make_pdf(pages_text: list[str]) -> bytes:
++    pdf = pymupdf.open()
++    for text in pages_text:
++        page = pdf.new_page()
++        page.insert_textbox(
++            pymupdf.Rect(50, 50, 545, 800), text, fontsize=9,
++        )
++    data = pdf.tobytes()
++    pdf.close()
++    return data
++
++
++@override_settings(AI_CHECKS_ENABLED=True)
++class ProjectDocumentIndexingTests(MediaIsolationMixin, TestCase):
++    """index_project_document: чанки, статусы, снимок раздела/папки."""
++
++    def setUp(self):
++        self.user = User.objects.create_superuser(
++            username='proj_index_user', email='pi@example.com',
++            password='TestPass123',
++        )
++        self.company = Company.objects.create(name='ПИ-Компания')
++        self.project = Project.objects.create(
++            company=self.company, code='PI-1', name='Проект индексации',
++            status='active', created_by=self.user, gip=self.user,
++        )
++        self.section_ov = Section.objects.create(
++            project=self.project, code='ОВ', name='Отопление и вентиляция',
++            order=1,
++        )
++        self.embedding = BgeM3OnnxEmbedding()
++
++    def _upload_pdf(self, pages_text, code='ОВ-01', section=None):
++        return upload_document(
++            user=self.user,
++            project=self.project,
++            section=section or self.section_ov,
++            code=code,
++            name='Документ индексации',
++            doc_type='report',
++            file=SimpleUploadedFile(
++                'doc.pdf', make_pdf(pages_text), 'application/pdf',
++            ),
++        )
++
++    def test_upload_document_enqueues_indexing(self):
++        """Треб. 4: upload_document при AI_CHECKS_ENABLED=True индексирует
++        PDF (в eager-режиме Celery задача выполняется синхронно)."""
++        version = self._upload_pdf(['Нагрузка на вентиляцию 120 м3/ч. ' * 40])
++        version.refresh_from_db()
++        self.assertEqual(version.indexing_status, 'done')
++        self.assertGreater(
++            ProjectDocumentChunk.objects.filter(
++                document=version.document,
++            ).count(), 0,
++        )
++        # Снимки раздела/папки (треб. 1).
++        chunk = ProjectDocumentChunk.objects.filter(
++            document=version.document,
++        ).first()
++        self.assertEqual(chunk.section_id, self.section_ov.pk)
++        self.assertEqual(chunk.version_id, version.pk)
++
++    def test_upload_non_pdf_skips_indexing(self):
++        """Не-PDF файлы не ставятся в индексацию (статус остаётся pending)."""
++        version = upload_document(
++            user=self.user,
++            project=self.project,
++            section=self.section_ov,
++            code='ОВ-02',
++            name='Не PDF',
++            doc_type='report',
++            file=SimpleUploadedFile('data.txt', b'plain text', 'text/plain'),
++        )
++        version.refresh_from_db()
++        self.assertEqual(version.indexing_status, 'pending')
++        self.assertFalse(
++            ProjectDocumentChunk.objects.filter(
++                document=version.document,
++            ).exists(),
++        )
++
++    def test_disabled_flag_skips_indexing(self):
++        """AI_CHECKS_ENABLED=False (по умолчанию) — индексация не ставится."""
++        with override_settings(AI_CHECKS_ENABLED=False):
++            version = self._upload_pdf(['Текст страницы. ' * 40])
++        version.refresh_from_db()
++        self.assertEqual(version.indexing_status, 'pending')
++
++    def test_index_replaces_old_chunks(self):
++        """Повторная индексация заменяет прежние фрагменты (идемпотентно)."""
++        version = self._upload_pdf(['Первый текст. ' * 40])
++        first_count = ProjectDocumentChunk.objects.filter(
++            document=version.document,
++        ).count()
++        new_version = upload_document(
++            user=self.user,
++            project=self.project,
++            section=self.section_ov,
++            code='ОВ-01',
++            name='Документ индексации',
++            doc_type='report',
++            file=SimpleUploadedFile(
++                'doc2.pdf', make_pdf(['Второй текст. ' * 40]),
++                'application/pdf',
++            ),
++        )
++        new_version.refresh_from_db()  # eager-задача уже отработала
++        old_chunks = ProjectDocumentChunk.objects.filter(
++            document=version.document,
++            version=version,
++        ).count()
++        new_chunks = ProjectDocumentChunk.objects.filter(
++            document=new_version.document,
++            version=new_version,
++        ).count()
++        self.assertEqual(old_chunks, 0)
++        self.assertEqual(new_chunks, first_count)
++        self.assertEqual(new_version.indexing_status, 'done')
++
++    def test_index_error_status_on_broken_pdf(self):
++        """Битый PDF → статус error, задача не роняет Celery (треб. 3)."""
++        version = DocumentVersion.objects.create(
++            document=Document.objects.create(
++                project=self.project,
++                section=self.section_ov,
++                code='ОВ-03',
++                name='Битый',
++                doc_type='report',
++                status='draft',
++                created_by=self.user,
++            ),
++            version_number=1,
++            file=ContentFile(b'%PDF-1.4 broken', name='broken.pdf'),
++            file_size=len(b'%PDF-1.4 broken'),
++            uploaded_by=self.user,
++        )
++        self.document = version.document
++        count = index_project_document(version.pk, self.embedding)
++        version.refresh_from_db()
++        self.assertEqual(count, 0)
++        self.assertEqual(version.indexing_status, 'error')
++
++    def test_missing_version_returns_zero(self):
++        self.assertEqual(index_project_document(999999), 0)
++
++
++@override_settings(AI_CHECKS_ENABLED=True)
++class ReindexTests(MediaIsolationMixin, TestCase):
++    """Резервная индексация: reindex_document / reindex_project (треб. 5)."""
++
++    def setUp(self):
++        self.user = User.objects.create_superuser(
++            username='reindex_user', email='ri@example.com',
++            password='TestPass123',
++        )
++        self.other = User.objects.create_user(
++            username='stranger', password='TestPass123',
++        )
++        self.company = Company.objects.create(name='Рекс-Компания')
++        self.project = Project.objects.create(
++            company=self.company, code='RX-1', name='Проект рекс',
++            status='active', created_by=self.user, gip=self.user,
++        )
++        self.section = Section.objects.create(
++            project=self.project, code='ЭОМ', name='Электрика', order=1,
++        )
++        self.doc_a = self._make_document('ЭОМ-01')
++        self.doc_b = self._make_document('ЭОМ-02')
++
++    def _make_document(self, code):
++        """Загрузка PDF; возвращает ДОКУМЕНТ (upload_document → версия)."""
++        version = upload_document(
++            user=self.user,
++            project=self.project,
++            section=self.section,
++            code=code,
++            name=f'Документ {code}',
++            doc_type='report',
++            file=SimpleUploadedFile(
++                'doc.pdf', make_pdf([f'Текст {code}. ' * 40]),
++                'application/pdf',
++            ),
++        )
++        return version.document
++
++    def test_reindex_document(self):
++        version = self.doc_a.current_version
++        DocumentVersion.objects.filter(pk=version.pk).update(
++            indexing_status='error',
++        )
++        with mock.patch(
++            'ai_checks.tasks.index_project_document_task',
++        ) as task:
++            version_id = reindex_document(self.doc_a.pk, self.user)
++        self.assertEqual(version_id, version.pk)
++        task.delay.assert_called_once_with(version.pk)
++        version.refresh_from_db()
++        self.assertEqual(version.indexing_status, 'pending')
++
++    def test_reindex_document_ignores_kb_code(self):
++        """KB-* документы не переиндексируются как проектные (0 версий)."""
++        kb_doc = upload_document(
++            user=self.user,
++            project=self.project,
++            section=self.section,
++            code='KB-TEST000001',
++            name='Стандарт',
++            doc_type='report',
++            file=SimpleUploadedFile(
++                'kb.pdf', make_pdf(['Стандарт. ' * 40]), 'application/pdf',
++            ),
++            skip_ai_index=True,
++        )
++        with mock.patch(
++            'ai_checks.tasks.index_project_document_task',
++        ) as task:
++            self.assertEqual(
++                reindex_document(kb_doc.document_id, self.user), 0,
++            )
++        task.delay.assert_not_called()
++
++    def test_reindex_project_enqueues_all(self):
++        """Все текущие версии получают pending и по задаче Celery.
++
++        Задача патчится: проверяем постановку и статусы до выполнения
++        (в eager-режиме задача синхронно доводила бы статус до done).
++        """
++        DocumentVersion.objects.update(indexing_status='error')
++        with mock.patch(
++            'ai_checks.tasks.index_project_document_task',
++        ) as task:
++            count = reindex_project(self.project.pk, self.user)
++        self.assertEqual(count, 2)
++        self.assertEqual(task.delay.call_count, 2)
++        statuses = set(
++            DocumentVersion.objects.filter(
++                document__project=self.project,
++            ).values_list('indexing_status', flat=True)
++        )
++        self.assertEqual(statuses, {'pending'})
++
++    def test_reindex_project_no_access_denied(self):
++        from django.core.exceptions import PermissionDenied
++
++        with self.assertRaises(PermissionDenied):
++            reindex_project(self.project.pk, self.other)
++
++    def test_reindex_project_empty(self):
++        empty_project = Project.objects.create(
++            company=self.company, code='RX-2', name='Пустой',
++            status='active', created_by=self.user,
++        )
++        self.assertEqual(reindex_project(empty_project.pk, self.user), 0)
++
++    def test_eager_run_after_reindex(self):
++        """Сквозной сценарий: reindex_project + eager-задачи → done."""
++        DocumentVersion.objects.update(indexing_status='error')
++        reindex_project(self.project.pk, self.user)
++        statuses = set(
++            DocumentVersion.objects.filter(
++                document__project=self.project,
++            ).values_list('indexing_status', flat=True)
++        )
++        self.assertEqual(statuses, {'done'})
+diff --git a/ai_checks/tests/test_rag_history.py b/ai_checks/tests/test_rag_history.py
+new file mode 100644
+index 0000000..5ae96de
+--- /dev/null
++++ b/ai_checks/tests/test_rag_history.py
+@@ -0,0 +1,372 @@
++"""Этап 20 (треб. 6, 9, 10): сквозной RAG и история ИИ-поиска.
++
++Поиск по ProjectDocumentChunk + InternalChunk с объединением и top_k,
++формат источников, запись RagQuery, вьюхи истории (поиск/фильтры/
++пагинация/детализация). Проектный поиск — через MockProjectVectorBackend
++(ORM + косинус), внутренний — MockVectorBackend (как в test_rag.py).
++"""
++
++from datetime import timedelta
++
++from django.contrib.auth.models import User
++from django.test import TestCase, override_settings
++from django.urls import reverse
++from django.utils import timezone
++
++from ai_checks.domain.models import RagQuery
++from ai_checks.domain.services import rag_answer
++from ai_checks.tests.mocks import (
++    MockEmbeddingService,
++    MockLLMProvider,
++    MockProjectVectorBackend,
++    MockVectorBackend,
++)
++from ai_checks.domain.models import InternalChunk, InternalDocument
++from storage.domain.models import Company, Document, Project, Section
++
++
++@override_settings(
++    AI_LLM_PROVIDER='', AI_LLM_API_KEY='', AI_GIGACHAT_AUTH_KEY='',
++)
++class CrossSourceRagTests(TestCase):
++    """Треб. 6: объединение проектных чанков и базы знаний."""
++
++    def setUp(self):
++        self.user = User.objects.create_superuser(
++            username='cross_user', email='cross@example.com',
++            password='TestPass123',
++        )
++        self.company = Company.objects.create(name='Кросс-Компания')
++        self.project = Project.objects.create(
++            company=self.company, code='CR-1', name='Проект кросс',
++            status='active', created_by=self.user, gip=self.user,
++        )
++        self.section_ov = Section.objects.create(
++            project=self.project, code='ОВ', name='ОВ', order=1,
++        )
++        self.section_eom = Section.objects.create(
++            project=self.project, code='ЭОМ', name='ЭОМ', order=2,
++        )
++        self.embedding = MockEmbeddingService(dim=1024)
++        self.backend = MockVectorBackend()
++        self.project_backend = MockProjectVectorBackend()
++        self.question = 'Какая температура воздуха рабочая?'
++
++    def _project_doc(self, code, section):
++        return Document.objects.create(
++            project=self.project, section=section,
++            code=code, name=f'Док {code}',
++            doc_type='report', status='draft', created_by=self.user,
++        )
++
++    def _internal_chunk(self, title, text):
++        document = Document.objects.filter(
++            project=self.project, code__endswith='X',
++        ).first()
++        if document is None:
++            document = Document.objects.create(
++                project=self.project, section=self.section_ov,
++                code='CR-X', name='Для стандартов',
++                doc_type='report', status='draft', created_by=self.user,
++            )
++        internal = InternalDocument.objects.create(
++            tenant_scope='company', company=self.company,
++            source_document=document, doc_type='internal_standard',
++            title=title, created_by=self.user,
++        )
++        return InternalChunk.objects.create(
++            document=internal, seq=0, text=text,
++            embedding=self.embedding.embed_texts([text])[0],
++        )
++
++    def test_sources_format_and_merge(self):
++        """Треб. 6: sources в формате {type, document_title, section_code,
++        page, text, score}; проектные и стандартные источники сливаются."""
++        doc = self._project_doc('ОВ-01', self.section_ov)
++        ProjectChunkFactory.create(
++            document=doc, section=self.section_ov,
++            text=self.question, page=7, embedding_service=self.embedding,
++        )
++        internal = self._internal_chunk('СП по вентиляции', self.question)
++
++        result = rag_answer(
++            self.question,
++            self.project.pk,
++            self.user,
++            embedding_service=self.embedding,
++            vector_backend=self.backend,
++            project_backend=self.project_backend,
++        )
++
++        types = {source['type'] for source in result['sources']}
++        self.assertEqual(types, {'project', 'standard'})
++        project_sources = [
++            source for source in result['sources']
++            if source['type'] == 'project'
++        ]
++        self.assertEqual(project_sources[0]['section_code'], 'ОВ')
++        self.assertEqual(project_sources[0]['page'], 7)
++        self.assertIn('ОВ-01', project_sources[0]['document_title'])
++        standard_sources = [
++            source for source in result['sources']
++            if source['type'] == 'standard'
++        ]
++        self.assertEqual(standard_sources[0]['document_title'], 'СП по вентиляции')
++
++    def test_section_filter_limits_project_chunks(self):
++        """Треб. 8: section_code фильтрует проектные чанки по разделу."""
++        doc_ov = self._project_doc('ОВ-02', self.section_ov)
++        doc_eom = self._project_doc('ЭОМ-01', self.section_eom)
++        ProjectChunkFactory.create(
++            document=doc_ov, section=self.section_ov,
++            text=self.question, embedding_service=self.embedding,
++        )
++        ProjectChunkFactory.create(
++            document=doc_eom, section=self.section_eom,
++            text=self.question, embedding_service=self.embedding,
++        )
++        result = rag_answer(
++            self.question,
++            self.project.pk,
++            self.user,
++            section_code='ОВ',
++            embedding_service=self.embedding,
++            vector_backend=self.backend,
++            project_backend=self.project_backend,
++        )
++        project_sections = {
++            source['section_code']
++            for source in result['sources']
++            if source['type'] == 'project'
++        }
++        self.assertEqual(project_sections, {'ОВ'})
++
++    def test_source_type_project_only(self):
++        """Треб. 8: source_type='project' — только проектные источники."""
++        doc = self._project_doc('ОВ-03', self.section_ov)
++        ProjectChunkFactory.create(
++            document=doc, section=self.section_ov,
++            text=self.question, embedding_service=self.embedding,
++        )
++        self._internal_chunk('Стандарт', self.question)
++        result = rag_answer(
++            self.question,
++            self.project.pk,
++            self.user,
++            source_type='project',
++            embedding_service=self.embedding,
++            vector_backend=self.backend,
++            project_backend=self.project_backend,
++        )
++        self.assertEqual(
++            {source['type'] for source in result['sources']}, {'project'},
++        )
++
++    def test_rag_query_saved_with_user(self):
++        """Треб. 6/9: запрос сохраняется в истории с пользователем."""
++        doc = self._project_doc('ОВ-04', self.section_ov)
++        ProjectChunkFactory.create(
++            document=doc, section=self.section_ov,
++            text=self.question, embedding_service=self.embedding,
++        )
++        rag_answer(
++            self.question,
++            self.project.pk,
++            self.user,
++            model='z-ai/glm-5.3-flash-free',
++            embedding_service=self.embedding,
++            vector_backend=self.backend,
++            project_backend=self.project_backend,
++            llm_provider=MockLLMProvider(),
++        )
++        query = RagQuery.objects.get(project=self.project)
++        self.assertEqual(query.user, self.user)
++        self.assertEqual(query.question, self.question)
++        self.assertTrue(query.sources)
++        self.assertEqual(query.model, 'z-ai/glm-5.3-flash-free')
++
++    def test_rag_query_saved_on_empty_result(self):
++        """Пустой результат тоже попадает в историю."""
++        rag_answer(
++            self.question,
++            self.project.pk,
++            self.user,
++            embedding_service=self.embedding,
++            vector_backend=self.backend,
++            project_backend=self.project_backend,
++        )
++        query = RagQuery.objects.get(project=self.project)
++        self.assertEqual(query.sources, [])
++        self.assertEqual(query.answer, 'Ничего не найдено')
++
++
++class ProjectChunkFactory:
++    """Хелпер создания ProjectDocumentChunk (общий для файлов тестов)."""
++
++    @staticmethod
++    def create(document, version=None, section=None, seq=0, text='',
++               page=None, embedding_service=None):
++        from django.core.files.base import ContentFile
++
++        from ai_checks.domain.models import ProjectDocumentChunk
++        from storage.domain.models import DocumentVersion as DV
++
++        if embedding_service is None:
++            from ai_checks.adapters.embedding_onnx import BgeM3OnnxEmbedding
++
++            embedding_service = BgeM3OnnxEmbedding()
++        if version is None:
++            version = document.current_version
++            if version is None:
++                version = DV.objects.create(
++                    document=document, version_number=1,
++                    file=ContentFile(b'', name='stub.pdf'), file_size=0,
++                    uploaded_by=document.created_by,
++                )
++                document.current_version = version
++                document.save(update_fields=['current_version'])
++        return ProjectDocumentChunk.objects.create(
++            document=document,
++            version=version,
++            section=section if section is not None else document.section,
++            seq=seq,
++            text=text,
++            page_from=page,
++            page_to=page,
++            embedding=embedding_service.embed_texts([text])[0],
++        )
++
++
++@override_settings(
++    AI_LLM_PROVIDER='', AI_LLM_API_KEY='', AI_GIGACHAT_AUTH_KEY='',
++    AI_CHECKS_ENABLED=True,
++)
++class RagHistoryViewTests(TestCase):
++    """Треб. 9/10: история ИИ-поиска — видимость, поиск, фильтры, пагинация."""
++
++    PAGE_SIZE = 20
++
++    def setUp(self):
++        self.user = User.objects.create_superuser(
++            username='hist_user', email='hist@example.com',
++            password='TestPass123',
++        )
++        self.member = User.objects.create_user(
++            username='hist_member', password='TestPass123',
++            first_name='Анна', last_name='Смирнова',
++        )
++        self.stranger = User.objects.create_user(
++            username='hist_stranger', password='TestPass123',
++        )
++        self.company = Company.objects.create(name='Ист-Компания')
++        self.project = Project.objects.create(
++            company=self.company, code='HS-1', name='Проект истории',
++            status='active', created_by=self.user, gip=self.user,
++        )
++        self.project.memberships.create(user=self.member, role_in_project='developer')
++        # Доступ к проектам определяется компанией профиля
++        # (get_accessible_projects), поэтому участнику нужна компания.
++        self.member.userprofile.company = self.company
++        self.member.userprofile.save()
++        self.client = self.client_class()
++
++    def _log_query(self, question, user, project=None, model='', days_ago=0):
++        query = RagQuery.objects.create(
++            user=user,
++            project=project if project is not None else self.project,
++            question=question,
++            answer='Ответ',
++            sources=[],
++            model=model,
++        )
++        if days_ago:
++            RagQuery.objects.filter(pk=query.pk).update(
++                created_at=timezone.now() - timedelta(days=days_ago),
++            )
++            query.refresh_from_db()
++        return query
++
++    def _history_url(self, **params):
++        return reverse('ai_checks:rag_history', args=[self.project.pk]) + (
++            '?' + '&'.join(f'{k}={v}' for k, v in params.items()) if params else ''
++        )
++
++    def test_history_visible_to_members(self):
++        """Треб. 9: история видна всем участникам проекта."""
++        self._log_query('Вопрос ГИПа', self.user)
++        self.client.force_login(self.member)
++        response = self.client.get(self._history_url())
++        self.assertEqual(response.status_code, 200)
++        self.assertContains(response, 'Вопрос ГИПа')
++
++    def test_history_hidden_from_strangers(self):
++        self._log_query('Вопрос ГИПа', self.user)
++        self.client.force_login(self.stranger)
++        response = self.client.get(self._history_url())
++        self.assertEqual(response.status_code, 404)
++
++    def test_history_search_by_question(self):
++        """Треб. 10: поиск по вопросу."""
++        self._log_query('Какие нагрузки из ОВ?', self.user)
++        self._log_query('Другой вопрос', self.user)
++        self.client.force_login(self.user)
++        response = self.client.get(self._history_url(q='нагрузки'))
++        self.assertContains(response, 'Какие нагрузки из ОВ?')
++        self.assertNotContains(response, 'Другой вопрос')
++
++    def test_history_filter_by_author(self):
++        """Треб. 10: фильтр по автору."""
++        self._log_query('Вопрос Анны', self.member)
++        self._log_query('Вопрос ГИПа', self.user)
++        self.client.force_login(self.user)
++        response = self.client.get(self._history_url(author=self.member.pk))
++        self.assertContains(response, 'Вопрос Анны')
++        self.assertNotContains(response, 'Вопрос ГИПа')
++
++    def test_history_filter_by_date(self):
++        """Треб. 10: фильтр по дате (date_from)."""
++        self._log_query('Старый запрос', self.user, days_ago=10)
++        self._log_query('Свежий запрос', self.user, days_ago=1)
++        self.client.force_login(self.user)
++        today = timezone.localdate()
++        response = self.client.get(
++            self._history_url(
++                date_from=(today - timedelta(days=5)).isoformat(),
++            ),
++        )
++        self.assertContains(response, 'Свежий запрос')
++        self.assertNotContains(response, 'Старый запрос')
++
++    def test_history_pagination(self):
++        """Треб. 10: пагинация по 20 записей на страницу."""
++        for index in range(25):
++            self._log_query(f'Вопрос номер {index}', self.user)
++        self.client.force_login(self.user)
++        first_page = self.client.get(self._history_url())
++        self.assertEqual(len(first_page.context['page_obj'].object_list), 20)
++        self.assertEqual(first_page.context['page_obj'].paginator.num_pages, 2)
++        second_page = self.client.get(self._history_url(page=2))
++        self.assertEqual(len(second_page.context['page_obj'].object_list), 5)
++
++    def test_history_item_detail(self):
++        """Треб. 9: клик по строке — ответ и источники."""
++        query = self._log_query(
++            'Вопрос с источником', self.user, model='deepseek/deepseek-v4.1-flash-free',
++        )
++        RagQuery.objects.filter(pk=query.pk).update(
++            sources=[{
++                'type': 'project',
++                'document_title': 'ОВ-05 — Отопление',
++                'section_code': 'ОВ',
++                'page': 3,
++                'text': 'Цитата из документа',
++                'score': 0.9,
++            }],
++        )
++        self.client.force_login(self.member)
++        response = self.client.get(
++            reverse('ai_checks:rag_history_item', args=[self.project.pk, query.pk]),
++        )
++        self.assertContains(response, 'ОВ-05 — Отопление')
++        self.assertContains(response, 'лист 3')
++        self.assertContains(response, 'deepseek/deepseek-v4.1-flash-free')
+diff --git a/ai_checks/tests/test_views_stage20.py b/ai_checks/tests/test_views_stage20.py
+new file mode 100644
+index 0000000..8e90422
+--- /dev/null
++++ b/ai_checks/tests/test_views_stage20.py
+@@ -0,0 +1,257 @@
++"""Этап 20 (треб. 7-10, 13): вьюхи — База знаний, ИИ-поиск, история отчётов.
++
++Тесты запускаются на PostgreSQL+pgvector: rag_search ищет по реальному
++ProjectChunkVectorBackend (dev/prod-стек docker-compose.dev.yml).
++"""
++
++from django.contrib.auth.models import User
++from django.core.files.uploadedfile import SimpleUploadedFile
++from django.test import TestCase, override_settings
++from django.urls import reverse
++
++import pymupdf
++
++from ai_checks.domain.models import GeneratedReport, RagQuery
++from ai_checks.tests.base import MediaIsolationMixin
++from ai_checks.tests.test_project_indexing import make_pdf
++from issues.models import Issue
++from storage.domain.models import Company, Project, Section
++
++
++def _upload_pdf(user, project, section, code='ОВ-01'):
++    """Загрузка PDF через сервис ядра (eager-задача индексирует)."""
++    from storage.domain.services import upload_document
++
++    return upload_document(
++        user=user,
++        project=project,
++        section=section,
++        code=code,
++        name=f'Документ {code}',
++        doc_type='report',
++        file=SimpleUploadedFile(
++            'doc.pdf', make_pdf([f'Нагрузка вентиляции {code}. ' * 40]),
++            'application/pdf',
++        ),
++    )
++
++
++@override_settings(
++    AI_CHECKS_ENABLED=True,
++    AI_LLM_PROVIDER='', AI_LLM_API_KEY='', AI_GIGACHAT_AUTH_KEY='',
++)
++class KnowledgeBaseViewTests(MediaIsolationMixin, TestCase):
++    """Треб. 7: два блока вкладки «База знаний» + переиндексация (5)."""
++
++    def setUp(self):
++        self.gip = User.objects.create_superuser(
++            username='kb_view_gip', email='kbg@example.com',
++            password='TestPass123',
++        )
++        self.member = User.objects.create_user(
++            username='kb_view_member', password='TestPass123',
++        )
++        self.company = Company.objects.create(name='KBV-Компания')
++        self.project = Project.objects.create(
++            company=self.company, code='KBV-1', name='Проект KBV',
++            status='active', created_by=self.gip, gip=self.gip,
++        )
++        self.section = Section.objects.create(
++            project=self.project, code='ОВ', name='ОВ', order=1,
++        )
++        self.client.force_login(self.gip)
++
++    def test_kb_panel_has_both_blocks(self):
++        _upload_pdf(self.gip, self.project, self.section)
++        response = self.client.get(
++            reverse('ai_checks:kb_panel', args=[self.project.pk]),
++        )
++        self.assertEqual(response.status_code, 200)
++        self.assertContains(response, 'Документы проекта')
++        self.assertContains(response, 'Внутренние стандарты')
++        self.assertContains(response, 'Переиндексировать проект')
++        self.assertContains(response, 'Загрузить стандарт')
++
++    def test_kb_projects_table_lists_documents(self):
++        """Треб. 7: таблица документов проекта с бейджем статуса."""
++        version = _upload_pdf(self.gip, self.project, self.section)
++        response = self.client.get(
++            reverse('ai_checks:kb_projects_table', args=[self.project.pk]),
++        )
++        self.assertEqual(response.status_code, 200)
++        self.assertContains(response, 'ОВ-01')
++        self.assertContains(response, 'Готово')  # eager-задача → done
++        self.assertContains(response, str(version.version_number))
++
++    def test_kb_reindex_project_view(self):
++        """Кнопка «Переиндексировать проект» ставит статусы и задачи."""
++        from unittest import mock
++
++        _upload_pdf(self.gip, self.project, self.section)
++        with mock.patch('ai_checks.tasks.index_project_document_task'):
++            response = self.client.post(
++                reverse('ai_checks:kb_reindex_project', args=[self.project.pk]),
++            )
++        self.assertEqual(response.status_code, 200)
++
++    def test_kb_reindex_project_forbidden_for_member(self):
++        """База знаний доступна только ГИП/админ (треб. 7 — расширение 5)."""
++        self.member.userprofile.company = self.company
++        self.member.userprofile.save()
++        self.client.force_login(self.member)
++        response = self.client.post(
++            reverse('ai_checks:kb_reindex_project', args=[self.project.pk]),
++        )
++        self.assertEqual(response.status_code, 404)
++
++    def test_kb_reindex_document_view(self):
++        from unittest import mock
++
++        version = _upload_pdf(self.gip, self.project, self.section)
++        with mock.patch('ai_checks.tasks.index_project_document_task'):
++            response = self.client.post(
++                reverse(
++                    'ai_checks:kb_reindex_document',
++                    args=[self.project.pk, version.document_id],
++                ),
++            )
++        self.assertEqual(response.status_code, 200)
++        version.refresh_from_db()
++        self.assertEqual(version.indexing_status, 'pending')
++
++
++@override_settings(
++    AI_CHECKS_ENABLED=True,
++    AI_LLM_PROVIDER='', AI_LLM_API_KEY='', AI_GIGACHAT_AUTH_KEY='',
++)
++class RagSearchViewTests(MediaIsolationMixin, TestCase):
++    """Треб. 8: форма ИИ-поиска с фильтрами и чип-примером."""
++
++    def setUp(self):
++        self.gip = User.objects.create_superuser(
++            username='rag_view_gip', email='rgv@example.com',
++            password='TestPass123',
++        )
++        self.company = Company.objects.create(name='RGV-Компания')
++        self.project = Project.objects.create(
++            company=self.company, code='RGV-1', name='Проект RGV',
++            status='active', created_by=self.gip, gip=self.gip,
++        )
++        self.section_ov = Section.objects.create(
++            project=self.project, code='ОВ', name='ОВ', order=1,
++        )
++        self.client.force_login(self.gip)
++        self.url = reverse('ai_checks:rag_search', args=[self.project.pk])
++
++    def test_rag_panel_renders_filters_and_chip(self):
++        response = self.client.get(
++            reverse('ai_checks:rag_panel', args=[self.project.pk]),
++        )
++        self.assertEqual(response.status_code, 200)
++        self.assertContains(response, 'Раздел')
++        self.assertContains(response, 'Тип источника')
++        self.assertContains(response, 'Какие нагрузки из ОВ учтены в ЭОМ?')
++        self.assertContains(response, 'История запросов')
++
++    def test_rag_search_finds_project_document(self):
++        """Сквозной поиск: PDF проиндексирован, ответ содержит источник."""
++        _upload_pdf(self.gip, self.project, self.section_ov)
++        response = self.client.post(self.url, {
++            'question': 'Какие нагрузки из ОВ учтены в ЭОМ?',
++            'section_code': 'ОВ',
++            'source_type': 'project',
++            'model': '',
++        })
++        self.assertEqual(response.status_code, 200)
++        self.assertContains(response, 'Документы проекта')
++        self.assertContains(response, 'Раздел ОВ')
++        self.assertTrue(
++            RagQuery.objects.filter(project=self.project).exists(),
++        )
++
++    def test_rag_search_history_oob_refresh(self):
++        """Треб. 9: после поиска история обновляется out-of-band."""
++        response = self.client.post(self.url, {
++            'question': 'Пустой поиск — нет документов',
++            'section_code': '',
++            'source_type': '',
++            'model': '',
++        })
++        self.assertEqual(response.status_code, 200)
++        # OOB-блок истории в ответе.
++        self.assertContains(response, 'hx-swap-oob')
++
++
++@override_settings(
++    AI_CHECKS_ENABLED=True,
++    AI_LLM_PROVIDER='', AI_LLM_API_KEY='', AI_GIGACHAT_AUTH_KEY='',
++)
++class ReportHistoryViewTests(MediaIsolationMixin, TestCase):
++    """Треб. 13: история отчётов ГИПу под формой."""
++
++    def setUp(self):
++        self.gip = User.objects.create_superuser(
++            username='rep_view_gip', email='rvg@example.com',
++            password='TestPass123',
++        )
++        self.company = Company.objects.create(name='RVG-Компания')
++        self.project = Project.objects.create(
++            company=self.company, code='RVG-1', name='Проект RVG',
++            status='active', created_by=self.gip, gip=self.gip,
++        )
++        self.section = Section.objects.create(
++            project=self.project, code='АР', name='АР', order=1,
++        )
++        from storage.domain.models import Document
++
++        self.document = Document.objects.create(
++            project=self.project, section=self.section,
++            code='АР-01', name='Лист АР',
++            doc_type='drawing', status='draft', created_by=self.gip,
++        )
++        self.client.force_login(self.gip)
++
++    def test_report_panel_lists_history(self):
++        from datetime import date
++
++        GeneratedReport.objects.create(
++            project=self.project,
++            period=f'{date(2026, 1, 1).isoformat()}..{date(2026, 1, 31).isoformat()}',
++            payload={'total_issues': 0, 'summary': 'Пусто'},
++            created_by=self.gip,
++        )
++        response = self.client.get(
++            reverse('ai_checks:report_panel', args=[self.project.pk]),
++        )
++        self.assertEqual(response.status_code, 200)
++        self.assertContains(response, 'История отчётов')
++        self.assertContains(response, '/pdf/')
++
++    def test_report_generate_updates_history_oob(self):
++        """После генерации отчёт попадает в историю (OOB-обновление)."""
++        from datetime import date, timedelta
++
++        Issue.objects.create(
++            document=self.document, author=self.gip,
++            description='Замечание для отчёта', status='NEW',
++        )
++        today = timezone_localdate()
++        response = self.client.post(
++            reverse('ai_checks:report_generate', args=[self.project.pk]),
++            {
++                'period_start': (today - timedelta(days=7)).isoformat(),
++                'period_end': today.isoformat(),
++            },
++        )
++        self.assertEqual(response.status_code, 200)
++        self.assertContains(response, 'hx-swap-oob')
++        self.assertContains(response, 'aiReportHistory')
++        self.assertEqual(
++            GeneratedReport.objects.filter(project=self.project).count(), 1,
++        )
++
++
++def timezone_localdate():
++    from django.utils import timezone
++
++    return timezone.localdate()

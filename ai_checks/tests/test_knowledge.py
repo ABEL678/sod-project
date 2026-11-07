@@ -1,6 +1,5 @@
 """База знаний: загрузка (UI-сервис), индексация, просмотр, удаление."""
 
-import pymupdf
 from django.contrib.auth.models import User
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase, override_settings
@@ -20,18 +19,15 @@ from storage.domain.models import (
     Project,
     Section,
 )
+from ai_checks.tests import pdfgen
 from ai_checks.tests.base import MediaIsolationMixin
 
 
 def make_pdf_bytes(text='Smoke sheet', font_size=10) -> bytes:
-    pdf = pymupdf.open()
-    page = pdf.new_page(width=595, height=842)
-    page.insert_textbox(
-        pymupdf.Rect(50, 50, 545, 800), text, fontsize=font_size,
-    )
-    data = pdf.tobytes()
-    pdf.close()
-    return data
+    """Одностраничный PDF с переносимым текстом (reportlab, как pdfgen)."""
+    return pdfgen.make_pdf_pages(page_items=[{
+        'wrapped_texts': [(text, font_size, (50, 50, 545, 800))],
+    }])
 
 
 @override_settings(AI_LLM_PROVIDER='', AI_LLM_API_KEY='', AI_GIGACHAT_AUTH_KEY='')

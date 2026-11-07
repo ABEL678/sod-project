@@ -1,0 +1,179 @@
+diff --git a/ai_checks/domain/services.py b/ai_checks/domain/services.py
+index c91ba0f..a7d6c4f 100644
+--- a/ai_checks/domain/services.py
++++ b/ai_checks/domain/services.py
+@@ -3,6 +3,15 @@
+ Контракт (ARCHITECTURE.md 8.4): PyMuPDF извлекает текст и страницы,
+ текст режется на чанки с перекрытием, векторы пишутся в InternalChunk.
+ Сервис не знает про HTTP/UI/Celery — только домен и ORM.
++
++Финальная архитектура ИИ-контура (этап 20):
++- index_project_document() — индексация PDF-версий документов проекта в
++  ProjectDocumentChunk (треб. 1, 4), статусы на DocumentVersion
++  (pending → processing → done/error, треб. 3);
++- reindex_project() / reindex_document() — резервная индексация (треб. 5);
++- rag_answer() — сквозной RAG по документам проекта и базе знаний с
++  сохранением истории RagQuery (треб. 6, 9);
++- экспорт отчёта ГИПа дополнен разделом «Выводы» (треб. 12).
+ """
+ 
+ from __future__ import annotations
+@@ -621,6 +926,50 @@ def _report_summary_text(report) -> str:
+     return '\n'.join(lines)
+ 
+ 
++def _report_conclusions(report) -> list[str]:
++    """Выводы для экспорта (треб. 12): короткие тезисы из агрегатов.
++
++    Детерминированные (без LLM) — чтобы PDF/Word не зависели от сбоев
++    синтеза; резюме LLM печатается отдельным блоком.
++    """
++    payload = report.payload or {}
++    conclusions: list[str] = []
++    total = payload.get('total_issues', 0)
++    by_status = payload.get('by_status', {})
++    if not total:
++        conclusions.append(
++            'За период замечания не регистрировались — внимание к '
++            'документам проекта не требуется.'
++        )
++        return conclusions
++    conclusions.append(f'За период зарегистрировано замечаний: {total}.')
++    overdue = payload.get('overdue_count', 0)
++    if overdue:
++        conclusions.append(
++            f'Просрочено {overdue} замечаний — требуется контроль сроков.'
++        )
++    else:
++        conclusions.append('Просроченных замечаний нет.')
++    progress = by_status.get('progress', 0) + by_status.get('open', 0)
++    if progress:
++        conclusions.append(
++            f'Незавершённые замечания: {progress} '
++            '(открытые и в работе).'
++        )
++    if payload.get('by_assignee'):
++        top_name, top_count = max(
++            payload['by_assignee'].items(), key=lambda kv: kv[1],
++        )
++        conclusions.append(
++            f'Больше всего замечаний у исполнителя {top_name}: {top_count}.'
++        )
++    if payload.get('top_issues'):
++        conclusions.append(
++            'Наиболее значимые замечания перечислены в таблице выше.'
++        )
++    return conclusions
++
++
+ def gip_report_pdf(report) -> bytes:
+     """PDF отчёта ГИПа (PyMuPDF, встроенный CJK-шрифт с кириллицей)."""
+     fontname = 'china-s'
+@@ -713,6 +1062,12 @@ def gip_report_pdf(report) -> bytes:
+     write('Резюме (LLM):', size=12, gap=2)
+     write_wrapped(str(payload.get('summary', '')), size=10)
+ 
++    # Треб. 12: раздел «Выводы» после сводки.
++    y += 8
++    write('Выводы:', size=12, gap=2)
++    for conclusion in _report_conclusions(report):
++        write_wrapped(f'• {conclusion}', size=10)
++
+     return doc.tobytes()
+ 
+ 
+@@ -764,6 +1119,11 @@ def gip_report_docx(report) -> bytes:
+     document.add_heading('Резюме (LLM)', level=2)
+     document.add_paragraph(str(payload.get('summary', '')))
+ 
++    # Треб. 12: раздел «Выводы» после сводки.
++    document.add_heading('Выводы', level=2)
++    for conclusion in _report_conclusions(report):
++        document.add_paragraph(conclusion, style='List Bullet')
++
+     buffer = io.BytesIO()
+     document.save(buffer)
+     return buffer.getvalue()
+diff --git a/ai_checks/templates/ai_checks/_report.html b/ai_checks/templates/ai_checks/_report.html
+index bdfd63b..8ab23b3 100644
+--- a/ai_checks/templates/ai_checks/_report.html
++++ b/ai_checks/templates/ai_checks/_report.html
+@@ -40,3 +40,13 @@
+ </form>
+ 
+ <div id="aiReportResults" class="px-2 pt-2"></div>
++
++<div class="px-2 pt-3">
++  <div class="d-flex align-items-center justify-content-between mb-1">
++    <span class="fw-semibold small">
++      <i class="bi bi-clock-history me-1" aria-hidden="true"></i>История отчётов
++    </span>
++    <span class="text-muted small">последние 20 · только ГИП/админ</span>
++  </div>
++  {% include 'ai_checks/_report_history.html' %}
++</div>
+diff --git a/ai_checks/templates/ai_checks/_report_result.html b/ai_checks/templates/ai_checks/_report_result.html
+index 8b4ac71..1cbb9c4 100644
+--- a/ai_checks/templates/ai_checks/_report_result.html
++++ b/ai_checks/templates/ai_checks/_report_result.html
+@@ -73,4 +73,7 @@
+       <div class="border rounded p-2 bg-light" style="white-space: pre-wrap;">{{ report.payload.summary }}</div>
+     </div>
+   </div>
++
++  {# Треб. 13: после генерации история отчётов обновляется out-of-band. #}
++  {% include 'ai_checks/_report_history.html' with oob=True %}
+ {% endif %}
+diff --git a/ai_checks/templates/ai_checks/_report_history.html b/ai_checks/templates/ai_checks/_report_history.html
+new file mode 100644
+index 0000000..bab076b
+--- /dev/null
++++ b/ai_checks/templates/ai_checks/_report_history.html
+@@ -0,0 +1,47 @@
++{% comment %}
++Треб. 13: история отчётов ГИПу — последние 20 (дата, период, автор,
++кнопки PDF/Word). Видна только ГИП/админ (вкладка целиком ограничена
++_report_allowed). Включается в _report.html и обновляется out-of-band
++после генерации (oob=True → hx-swap-oob на корневом элементе).
++{% endcomment %}
++<div id="aiReportHistory" {% if oob %}hx-swap-oob="true"{% endif %}>
++  {% if reports %}
++    <div class="table-responsive">
++      <table class="table table-sm align-middle mb-0" id="aiReportHistoryTable">
++        <thead>
++          <tr class="small text-muted">
++            <th style="min-width: 110px;">Дата</th>
++            <th>Период</th>
++            <th>Автор</th>
++            <th class="text-end">Экспорт</th>
++          </tr>
++        </thead>
++        <tbody>
++          {% for report in reports %}
++            <tr>
++              <td class="small text-muted text-nowrap">{{ report.created_at|date:"d.m.Y H:i" }}</td>
++              <td class="small">{{ report.period }}</td>
++              <td class="small">{{ report.created_by.get_full_name|default:report.created_by.username|default:'—' }}</td>
++              <td class="text-end text-nowrap">
++                <a class="btn btn-sm btn-outline-secondary py-0"
++                   href="{% url 'ai_checks:report_pdf' report.pk %}"
++                   title="Скачать PDF">
++                  <i class="bi bi-file-earmark-pdf" aria-hidden="true"></i> PDF
++                </a>
++                <a class="btn btn-sm btn-outline-secondary py-0"
++                   href="{% url 'ai_checks:report_docx' report.pk %}"
++                   title="Скачать Word">
++                  <i class="bi bi-file-earmark-word" aria-hidden="true"></i> Word
++                </a>
++              </td>
++            </tr>
++          {% endfor %}
++        </tbody>
++      </table>
++    </div>
++  {% else %}
++    <div class="alert alert-light border py-2 px-3 small mb-0">
++      Отчётов ещё нет — сформируйте первый отчёт за период выше.
++    </div>
++  {% endif %}
++</div>

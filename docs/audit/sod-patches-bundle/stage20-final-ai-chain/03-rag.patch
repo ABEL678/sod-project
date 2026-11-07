@@ -1,0 +1,430 @@
+diff --git a/ai_checks/adapters/vector_pg.py b/ai_checks/adapters/vector_pg.py
+index ccdbd28..01d8824 100644
+--- a/ai_checks/adapters/vector_pg.py
++++ b/ai_checks/adapters/vector_pg.py
+@@ -14,7 +14,7 @@ from django.db import connection
+ from django.db.models import Q
+ from pgvector.django import CosineDistance
+ 
+-from ai_checks.domain.models import InternalChunk
++from ai_checks.domain.models import InternalChunk, ProjectDocumentChunk
+ from ai_checks.ports.vector import VectorBackend
+ 
+ 
+@@ -99,3 +99,61 @@ class PgVectorBackend(VectorBackend):
+             }
+             for chunk in rows
+         ]
++
++
++class ProjectChunkVectorBackend:
++    """Cosine-поиск по фрагментам PDF-документов проекта (треб. 6).
++
++    Контракт тот же, что у VectorBackend.search(vector, filters, top_k).
++    Фильтры: project_id (обязателен), section_code (опционально — раздел
++    ОВ/ЭОМ/АР). Ищутся чанки неудалённых документов проекта; чанки
++    KB-* документов здесь не встречаются (они живут в InternalChunk).
++    На SQLite — NotImplementedError (как у PgVectorBackend.search).
++    """
++
++    def __init__(self, dimension: int = 1024) -> None:
++        self.dimension = dimension
++
++    def search(
++        self,
++        vector: Any,
++        filters: Any,
++        top_k: int,
++    ) -> list:
++        if connection.vendor != 'postgresql':
++            raise NotImplementedError(
++                'Поиск по документам проекта доступен только на PostgreSQL'
++            )
++
++        filters = filters or {}
++        project_id = filters.get('project_id')
++        if not project_id:
++            return []
++        top_k = max(1, int(top_k or 1))
++
++        queryset = ProjectDocumentChunk.objects.filter(
++            document__project_id=project_id,
++            document__is_deleted=False,
++        )
++        section_code = filters.get('section_code')
++        if section_code:
++            queryset = queryset.filter(section__code=section_code)
++
++        rows = (
++            queryset
++            .annotate(distance=CosineDistance('embedding', vector))
++            .order_by('distance')[:top_k]
++        )
++        return [
++            {
++                'id': chunk.id,
++                'document_id': chunk.document_id,
++                'section_code': (
++                    chunk.section.code if chunk.section_id else None
++                ),
++                'score': float(1.0 - chunk.distance),
++                'page_from': chunk.page_from,
++                'page_to': chunk.page_to,
++            }
++            for chunk in rows
++        ]
+diff --git a/ai_checks/domain/services.py b/ai_checks/domain/services.py
+index c91ba0f..a7d6c4f 100644
+--- a/ai_checks/domain/services.py
++++ b/ai_checks/domain/services.py
+@@ -232,125 +400,262 @@ def run_rules_check(
+ 
+ def rag_answer(
+     question: str,
+-    company_id: int,
+     project_id: int | None = None,
++    user=None,
++    company_id: int | None = None,
++    section_code: str | None = None,
++    source_type: str | None = None,
++    model: str | None = None,
+     top_k: int = 5,
+     embedding_service: EmbeddingService | None = None,
+     vector_backend=None,
++    project_backend=None,
+     llm_provider=None,
+-    model: str | None = None,
+ ) -> dict:
+-    """RAG-ответ по внутренней базе знаний (Ф2, без LLM).
+-
+-    Вопрос → эмбеддинг → PgVectorBackend.search с tenant-фильтрами (8.2) →
+-    контекст из чанков. Тексты ответов/промптов не логируются (приватность).
+-    Возвращает {answer, sources}; при отсутствии чанков — «Ничего не найдено».
+-    answer — заглушка-дайджест (LLM-синтез — следующая фаза).
++    """Сквозной RAG-ответ: документы проекта + база знаний (треб. 6).
++
++    Вопрос → эмбеддинг → поиск по ProjectDocumentChunk (project_id,
++    опционально section_code) и по InternalChunk (tenant_scope 8.2:
++    project/company + глобальные) → объединение, сортировка по score,
++    top_k → LLM-синтез с цитатами [N] → запись RagQuery (история,
++    треб. 9). Возвращает {answer, sources}.
++
++    Формат sources (треб. 6): [{type, document_title, section_code,
++    page, text, score}]; дополнительно chunk_id/tenant_scope для UI.
++    type: 'project' — PDF-документы проекта, 'standard' — база знаний.
++    source_type: None — все источники, 'project'/'standard' — один блок.
++
++    DI-параметры (embedding_service/vector_backend/project_backend/
++    llm_provider) — для тестов и смены адаптеров; company_id можно
++    передать явно (иначе берётся из проекта). SQLite-режим: проектный
++    поиск недоступен (pgvector), внутренний — через mock-бэкенд тестов.
+     """
+     question = (question or '').strip()
+     if not question:
+         raise ValueError('Пустой вопрос')
++    if source_type not in (None, 'project', 'standard'):
++        raise ValueError('Тип источника: project или standard')
+ 
+     if embedding_service is None:
+         # Ленивый импорт: домен не зависит от конкретного адаптера.
+         from ai_checks.adapters.embedding_onnx import BgeM3OnnxEmbedding
+ 
+         embedding_service = BgeM3OnnxEmbedding()
+-    if vector_backend is None:
+-        from ai_checks.adapters.vector_pg import PgVectorBackend
+ 
+-        vector_backend = PgVectorBackend(dimension=embedding_service.dim)
++    # company_id: явный аргумент (совместимость со старыми вызовами) или
++    # компания проекта — для tenant-фильтра базы знаний (8.2).
++    if company_id is None and project_id is not None:
++        company_id = (
++            Document.objects
++            .filter(project_id=project_id)
++            .values_list('project__company_id', flat=True)
++            .first()
++        )
+ 
+     vectors = embedding_service.embed_texts([question])
+     if not vectors:
+         raise ValueError('EmbeddingService не вернул вектор вопроса')
++    question_vector = vectors[0]
+ 
+-    filters = {
+-        'company_id': company_id,
+-        'project_id': project_id,
+-    }
+-    hits = vector_backend.search(vectors[0], filters, top_k)
+-    if not hits:
+-        return {'answer': 'Ничего не найдено', 'sources': []}
+-
+-    chunk_by_id = {
+-        chunk.pk: chunk
+-        for chunk in InternalChunk.objects
+-        .select_related('document')
+-        .filter(pk__in=[hit['id'] for hit in hits])
+-    }
+-
+-    sources = []
+-    for hit in hits:
+-        chunk = chunk_by_id.get(hit['id'])
+-        if chunk is None:
+-            continue
+-        sources.append({
+-            'chunk_id': chunk.pk,
+-            'document_title': chunk.document.title,
+-            'text': chunk.text,
+-            'score': hit.get('score'),
+-            'tenant_scope': chunk.document.tenant_scope,
+-        })
+-    if not sources:
+-        return {'answer': 'Ничего не найдено', 'sources': []}
++    merged_hits: list[dict] = []  # {source_type, hit}
++    project_search_failed = False
++    internal_search_failed = False
+ 
+-    digest = '\n\n'.join(
+-        f'[{source["document_title"]}] {source["text"][:300]}'
+-        for source in sources[:3]
+-    )
++    # 1) Документы проекта (ProjectDocumentChunk, треб. 6).
++    if source_type in (None, 'project') and project_id is not None:
++        if project_backend is None:
++            from ai_checks.adapters.vector_pg import ProjectChunkVectorBackend
+ 
+-    # LLM-синтез ответа по найденным фрагментам (модель выбирается в UI).
+-    # Сбой LLM не ломает поиск: отдаём дайджест-заглушку.
+-    if llm_provider is None:
+-        from ai_checks.adapters.llm_http import get_llm_provider
++            project_backend = ProjectChunkVectorBackend(
++                dimension=embedding_service.dim,
++            )
++        try:
++            project_hits = project_backend.search(
++                question_vector,
++                {
++                    'project_id': project_id,
++                    'section_code': section_code,
++                },
++                top_k,
++            )
++        except NotImplementedError:
++            project_search_failed = True
++            project_hits = []
++        merged_hits.extend(
++            {'source_type': 'project', 'hit': hit}
++            for hit in project_hits
++        )
+ 
+-        llm_provider = get_llm_provider()
++    # 2) База знаний (InternalChunk, tenant-фильтры 8.2).
++    if source_type in (None, 'standard'):
++        if vector_backend is None:
++            from ai_checks.adapters.vector_pg import PgVectorBackend
++
++            vector_backend = PgVectorBackend(dimension=embedding_service.dim)
++        filters = {
++            'company_id': company_id,
++            'project_id': project_id,
++        }
++        try:
++            internal_hits = vector_backend.search(
++                question_vector, filters, top_k,
++            )
++        except NotImplementedError:
++            internal_search_failed = True
++            internal_hits = []
++        merged_hits.extend(
++            {'source_type': 'standard', 'hit': hit}
++            for hit in internal_hits
++        )
+ 
+-    context_text = '\n\n'.join(
+-        f'[{source["document_title"]}] {source["text"][:600]}'
+-        for source in sources
++    # Треб. 6: объединить, отсортировать по score, взять top_k.
++    merged_hits.sort(
++        key=lambda entry: entry['hit'].get('score') or 0.0,
++        reverse=True,
+     )
+-    answer = digest
+-    try:
+-        response = llm_provider.complete([
+-            {
+-                'role': 'system',
+-                'content': (
+-                    'Ответь на вопрос, опираясь ТОЛЬКО на фрагменты '
+-                    'источников. Если ответа в них нет — скажи об этом.'
++    merged_hits = merged_hits[:max(1, int(top_k or 1))]
++
++    sources = []
++    for entry in merged_hits:
++        hit = entry['hit']
++        if entry['source_type'] == 'project':
++            chunk = (
++                ProjectDocumentChunk.objects
++                .select_related('document', 'section', 'version')
++                .filter(pk=hit['id'])
++                .first()
++            )
++            if chunk is None:
++                continue
++            sources.append({
++                'type': 'project',
++                'chunk_id': chunk.pk,
++                'document_title': (
++                    f'{chunk.document.code} — {chunk.document.name}'
+                 ),
+-            },
+-            {
+-                'role': 'user',
+-                'content': (
+-                    f'Вопрос: {question}\n\nИсточники:\n{context_text}'
++                'section_code': (
++                    chunk.section.code if chunk.section_id else None
+                 ),
+-            },
+-        ], model=model)
+-        answer = response.text
+-        LLMCallLog.objects.create(
+-            provider=getattr(llm_provider, 'name', 'unknown'),
+-            model=response.model or 'unknown',
+-            purpose=LLMCallLog.Purpose.RAG_ANSWER,
+-            prompt_tokens=response.prompt_tokens,
+-            completion_tokens=response.completion_tokens,
+-            latency_ms=response.latency_ms,
+-            status=LLMCallLog.Status.OK,
+-            prompt_version=RAG_PROMPT_VERSION,
+-            user=None,
++                'page': hit.get('page_from'),
++                'text': chunk.text,
++                'score': hit.get('score'),
++                'tenant_scope': 'project',
++            })
++        else:
++            chunk = (
++                InternalChunk.objects
++                .select_related('document')
++                .filter(pk=hit['id'])
++                .first()
++            )
++            if chunk is None:
++                continue
++            sources.append({
++                'type': 'standard',
++                'chunk_id': chunk.pk,
++                'document_title': chunk.document.title,
++                'section_code': None,
++                'page': hit.get('page_from'),
++                'text': chunk.text,
++                'score': hit.get('score'),
++                'tenant_scope': chunk.document.tenant_scope,
++            })
++
++    answer = 'Ничего не найдено'
++    if sources:
++        # Дайджест-заглушка на случай сбоя LLM (поиск важнее синтеза).
++        answer = '\n\n'.join(
++            f'[{source["document_title"]}] {source["text"][:300]}'
++            for source in sources[:3]
+         )
+-    except Exception as exc:  # noqa: BLE001 — поиск важнее сбоя LLM
+-        logger.exception('LLM для RAG-ответа упал: %s', exc)
+-        LLMCallLog.objects.create(
+-            provider=getattr(llm_provider, 'name', 'unknown'),
+-            model=getattr(llm_provider, 'model', 'unknown'),
+-            purpose=LLMCallLog.Purpose.RAG_ANSWER,
+-            status=LLMCallLog.Status.ERROR,
+-            error_message=str(exc)[:1000],
+-            prompt_version=RAG_PROMPT_VERSION,
+-            user=None,
++
++    used_model = ''
++    if sources:
++        # LLM-синтез ответа с цитатами (модель выбирается в UI, треб. 14).
++        # Без источников LLM не вызываем: экономия токенов и честный
++        # «Ничего не найдено» (поведение Ф2 сохранено).
++        if llm_provider is None:
++            from ai_checks.adapters.llm_http import get_llm_provider
++
++            llm_provider = get_llm_provider()
++
++        source_lines = []
++        for index, source in enumerate(sources, start=1):
++            meta_parts = []
++            if source.get('section_code'):
++                meta_parts.append(f'раздел {source["section_code"]}')
++            if source.get('page'):
++                meta_parts.append(f'лист {source["page"]}')
++            meta = f' ({", ".join(meta_parts)})' if meta_parts else ''
++            source_lines.append(
++                f'[{index}] {source["document_title"]}{meta}:\n'
++                f'{source["text"][:600]}'
++            )
++        context_text = '\n\n'.join(source_lines)
++
++        try:
++            response = llm_provider.complete([
++                {
++                    'role': 'system',
++                    'content': (
++                        'Ты — помощник инженера-проектировщика. Ответь на '
++                        'вопрос, опираясь ТОЛЬКО на приведённые фрагменты '
++                        'документов. После каждого утверждения указывай '
++                        'источник в квадратных скобках ([1], [2]…). Если '
++                        'ответа во фрагментах нет — прямо скажи об этом. '
++                        'Не выдумывай факты и числа.'
++                    ),
++                },
++                {
++                    'role': 'user',
++                    'content': (
++                        f'Вопрос: {question}\n\nИсточники:\n{context_text}'
++                    ),
++                },
++            ], model=model)
++            answer = response.text
++            used_model = response.model or model or ''
++            LLMCallLog.objects.create(
++                provider=getattr(llm_provider, 'name', 'unknown'),
++                model=response.model or 'unknown',
++                purpose=LLMCallLog.Purpose.RAG_ANSWER,
++                prompt_tokens=response.prompt_tokens,
++                completion_tokens=response.completion_tokens,
++                latency_ms=response.latency_ms,
++                status=LLMCallLog.Status.OK,
++                prompt_version=RAG_PROMPT_VERSION,
++                user=user,
++            )
++        except Exception as exc:  # noqa: BLE001 — поиск важнее сбоя LLM
++            logger.exception('LLM для RAG-ответа упал: %s', exc)
++            used_model = model or getattr(llm_provider, 'model', '') or ''
++            LLMCallLog.objects.create(
++                provider=getattr(llm_provider, 'name', 'unknown'),
++                model=getattr(llm_provider, 'model', 'unknown'),
++                purpose=LLMCallLog.Purpose.RAG_ANSWER,
++                status=LLMCallLog.Status.ERROR,
++                error_message=str(exc)[:1000],
++                prompt_version=RAG_PROMPT_VERSION,
++                user=user,
++            )
++
++    # Треб. 6/9: запрос попадает в историю (RagQuery) — её видят все
++    # участники проекта; пользователь может быть анонимным (API) → null.
++    if project_search_failed and internal_search_failed:
++        # Оба векторных пути недоступны (например, SQLite-режим) —
++        # честно отдаём ошибку вместо пустого «Ничего не найдено».
++        raise NotImplementedError(
++            'Векторный поиск доступен только на PostgreSQL. '
++            'Поднимите dev-стек: docker compose -f docker-compose.dev.yml up -d.'
+         )
++    RagQuery.objects.create(
++        user=user if getattr(user, 'is_authenticated', user is not None) else None,
++        project_id=project_id,
++        question=question,
++        answer=answer,
++        sources=sources,
++        model=used_model[:100],
++    )
+ 
+     return {'answer': answer, 'sources': sources}
+ 
