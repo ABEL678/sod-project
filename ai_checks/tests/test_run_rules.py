@@ -27,8 +27,9 @@ def make_pdf(*, with_frame=False, with_stamp=False, font_size=10) -> bytes:
     if with_frame:
         page.draw_rect(pymupdf.Rect(20, 20, 575, 822), color=(0, 0, 0), width=1)
     if with_stamp:
+        # Штамп, примыкающий к правому нижнему углу листа (новое правило).
         page.draw_rect(
-            pymupdf.Rect(400, 700, 580, 750), color=(0, 0, 0), width=1,
+            pymupdf.Rect(400, 780, 575, 825), color=(0, 0, 0), width=1,
         )
     page.insert_text((72, 100), 'Текст листа', fontsize=font_size)
     data = pdf.tobytes()
@@ -88,8 +89,13 @@ class RunRulesCheckTests(MediaIsolationMixin, TestCase):
         for finding in findings:
             self.assertEqual(finding.status, PendingCheckResult.Status.PENDING)
             self.assertIsNotNone(finding.page)
-            self.assertIsNotNone(finding.bbox)
-            self.assertEqual(len(finding.bbox), 4)
+            if finding.rule.code == 'SPDS.RAME':
+                # Рамка: находка уровня страницы, bbox пуст (не выделяем
+                # красным весь лист).
+                self.assertIsNone(finding.bbox)
+            else:
+                self.assertIsNotNone(finding.bbox)
+                self.assertEqual(len(finding.bbox), 4)
         severities = {
             finding.rule.code: finding.severity for finding in findings
         }

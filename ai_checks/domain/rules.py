@@ -29,7 +29,10 @@ LINE_TOLERANCE_PT = 1.5
 def _page_finding(page, bbox, message, severity, evidence='') -> dict:
     return {
         'page': page.number + 1,
-        'bbox': [round(float(value), 2) for value in bbox],
+        'bbox': (
+            [round(float(value), 2) for value in bbox]
+            if bbox is not None else None
+        ),
         'message': message,
         'severity': severity,
         'evidence': evidence,
@@ -88,20 +91,60 @@ def check_frame(page) -> list[dict]:
             ('лево', left), ('право', right),
         ) if not found
     ]
+    # bbox = None: рамка — свойство всего листа, выделять прямоугольником
+    # всю страницу не нужно (находка уровня страницы; пин встанет в центр).
     return [_page_finding(
         page,
-        [rect.x0, rect.y0, rect.x1, rect.y1],
+        None,
         'Не найдена рамка листа (СПДС)',
         'major',
         evidence='Отсутствуют линии: ' + ', '.join(missing),
     )]
 
 
-def check_stamp(page) -> list[dict]:
-    """SPDS.STAMP: наличие основной надписи (штамп) в правом нижнем углу.
+# Характерные надписи ГОСТ-штампа (документация реальных чертежей:
+# текст «Основная надпись» в штампе не встречается — это его название).
+STAMP_LABELS = (
+    'стадия',
+    'лист',
+    'листов',
+    'масштаб',
+    'разраб',
+    'пров',
+    'н.контр',
+    'нормоконтр',
+    'гип',
+    'утв',
+    'шифр',
+    'изм.',
+)
 
-    Признак: текст «Основная надпись» в зоне штампа ИЛИ нарисованный
-    прямоугольник подходящего размера, целиком лежащий в этой зоне.
+# Минимумы структуры таблицы штампа (тонкие линии, ГОСТ 21.101).
+STAMP_MIN_H_LINES = 6
+STAMP_MIN_V_LINES = 4
+
+
+def _segment_hits_zone(x0, y0, x1, y1, zone) -> bool:
+    """Пересечение сегмента с зоной (интервалы; сегменты нулевой толщины)."""
+    seg_x0, seg_x1 = min(x0, x1), max(x0, x1)
+    seg_y0, seg_y1 = min(y0, y1), max(y0, y1)
+    return (
+        seg_x1 >= zone.x0 and seg_x0 <= zone.x1
+        and seg_y1 >= zone.y0 and seg_y0 <= zone.y1
+    )
+
+
+def check_stamp(page) -> list[dict]:
+    """SPDS.STAMP: наличие основной надписи (штамп СПДС).
+
+    Штамп реального чертежа — таблица тонких линий в правом нижнем углу
+    (часто нарисованных прямоугольниками-штрихами), с полями «Стадия»,
+    «Лист», «Листов», «Масштаб» и т.п. Признаки (любой):
+    1) исторический текст «Основная надпись»;
+    2) ≥2 характерные надписи ГОСТ-штампа в зоне;
+    3) структура таблицы: ≥6 горизонтальных и ≥4 вертикальных тонких
+       линий в зоне;
+    4) рамка штампа, примыкающая к правому нижнему углу листа.
     """
     rect = page.rect
     zone = pymupdf_rect(
@@ -117,29 +160,61 @@ def check_stamp(page) -> list[dict]:
     if 'основная надпись' in normalized:
         return []
 
-    min_stamp_width = rect.width * 0.15
-    min_stamp_height = rect.height * 0.04
+    matched_labels = [label for label in STAMP_LABELS if label in normalized]
+    if len(matched_labels) >= 2:
+        return []
+
+    horizontal = vertical = 0
+    attached_box = False
+    min_box_width = rect.width * 0.25
+    min_box_height = rect.height * 0.03
+    max_box_height = rect.height * 0.35
+    edge_tolerance = rect.width * 0.05
+
     for drawing in page.get_drawings():
         for item in drawing['items']:
-            if item[0] != 're':
-                continue
-            stamp = item[1]
-            if (
-                stamp.width >= min_stamp_width
-                and stamp.height >= min_stamp_height
-                and stamp.x0 >= zone.x0 - LINE_TOLERANCE_PT
-                and stamp.y0 >= zone.y0 - LINE_TOLERANCE_PT
-                and stamp.x1 <= zone.x1 + LINE_TOLERANCE_PT
-                and stamp.y1 <= zone.y1 + LINE_TOLERANCE_PT
-            ):
-                return []
+            segments = []
+            if item[0] == 're':
+                box = item[1]
+                segments = [
+                    (box.x0, box.y0, box.x1, box.y0),
+                    (box.x0, box.y1, box.x1, box.y1),
+                    (box.x0, box.y0, box.x0, box.y1),
+                    (box.x1, box.y0, box.x1, box.y1),
+                ]
+                if (
+                    box.width >= min_box_width
+                    and min_box_height <= box.height <= max_box_height
+                    and box.x1 >= rect.x1 - edge_tolerance
+                    and box.y1 >= rect.y1 - edge_tolerance
+                ):
+                    attached_box = True
+            elif item[0] == 'l':
+                point_a, point_b = item[1], item[2]
+                segments = [(point_a.x, point_a.y, point_b.x, point_b.y)]
+            for x0, y0, x1, y1 in segments:
+                if not _segment_hits_zone(x0, y0, x1, y1, zone):
+                    continue
+                if abs(y1 - y0) <= LINE_TOLERANCE_PT and abs(x1 - x0) >= 20:
+                    horizontal += 1
+                elif abs(x1 - x0) <= LINE_TOLERANCE_PT and abs(y1 - y0) >= 20:
+                    vertical += 1
+
+    if horizontal >= STAMP_MIN_H_LINES and vertical >= STAMP_MIN_V_LINES:
+        return []
+    if attached_box:
+        return []
 
     return [_page_finding(
         page,
         [zone.x0, zone.y0, zone.x1, zone.y1],
         'Не найдена основная надпись (штамп)',
         'major',
-        evidence='В правом нижнем углу нет штампа СПДС',
+        evidence=(
+            'В правом нижнем углу нет штампа СПДС '
+            f'(надписей: {len(matched_labels)}, '
+            f'линий: {horizontal}/{vertical})'
+        ),
     )]
 
 

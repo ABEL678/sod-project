@@ -6,6 +6,14 @@ from django.conf import settings
 from django.db import migrations, models
 
 
+def create_vector_extension(apps, schema_editor):
+    """Расширение pgvector ДО создания колонки vector (иначе PostgreSQL
+    падает с «type "vector" does not exist»). На SQLite — no-op;
+    CREATE EXTENSION IF NOT EXISTS идемпотентен."""
+    if schema_editor.connection.vendor == 'postgresql':
+        schema_editor.execute('CREATE EXTENSION IF NOT EXISTS vector;')
+
+
 class Migration(migrations.Migration):
 
     dependencies = [
@@ -15,6 +23,9 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
+        migrations.RunPython(
+            create_vector_extension, migrations.RunPython.noop,
+        ),
         migrations.CreateModel(
             name='InternalDocument',
             fields=[

@@ -55,23 +55,47 @@ class FrameRuleTests(SimpleTestCase):
         self.assertEqual(finding['page'], 1)
         self.assertEqual(finding['severity'], 'major')
         self.assertIn('рамка', finding['message'])
-        self.assertEqual(len(finding['bbox']), 4)
+        # bbox = None: не выделяем красным весь лист (замечание владельца).
+        self.assertIsNone(finding['bbox'])
         pdf.close()
 
 
 class StampRuleTests(SimpleTestCase):
     @skipUnless(CYRILLIC_FONT, 'Нужен шрифт с кириллицей для PDF')
-    def test_stamp_by_text_no_findings(self):
+    def test_stamp_by_legacy_text_no_findings(self):
         pdf, page = make_page(texts=[
             ('Основная надпись', 8, (400, 720)),
         ])
         self.assertEqual(check_stamp(page), [])
         pdf.close()
 
-    def test_stamp_by_rect_no_findings(self):
+    @skipUnless(CYRILLIC_FONT, 'Нужен шрифт с кириллицей для PDF')
+    def test_stamp_by_gost_labels_no_findings(self):
+        # Реальный ГОСТ-штамп: «Основной надписи» в тексте нет — есть поля.
+        pdf, page = make_page(texts=[
+            ('Стадия Лист Листов', 8, (400, 720)),
+        ])
+        self.assertEqual(check_stamp(page), [])
+        pdf.close()
+
+    def test_stamp_by_table_lines_no_findings(self):
+        def draw_table(p):
+            for index in range(6):
+                y = 600 + index * 12
+                p.draw_line((370, y), (580, y), color=(0, 0, 0), width=0.5)
+            for index in range(5):
+                x = 380 + index * 40
+                p.draw_line((x, 595), (x, 700), color=(0, 0, 0), width=0.5)
+
+        pdf, page = make_page(draw=draw_table)
+        self.assertEqual(check_stamp(page), [])
+        pdf.close()
+
+    def test_stamp_box_at_corner_no_findings(self):
         pdf, page = make_page(
             draw=lambda p: p.draw_rect(
-                pymupdf.Rect(400, 700, 580, 750), color=(0, 0, 0), width=1,
+                pymupdf.Rect(400, 780, 575, 825),
+                color=(0, 0, 0), width=1,
             ),
         )
         self.assertEqual(check_stamp(page), [])

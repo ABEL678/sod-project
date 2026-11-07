@@ -21,7 +21,12 @@ from django.utils import timezone
 from django.views.decorators.http import require_GET, require_POST
 
 from ai_checks.domain.models import CheckRun, GeneratedReport, PendingCheckResult
-from ai_checks.domain.services import generate_gip_report, rag_answer
+from ai_checks.domain.services import (
+    bbox_ratios_for_rotation,
+    crop_finding_image,
+    generate_gip_report,
+    rag_answer,
+)
 from storage.domain.services import get_accessible_projects
 from ai_checks.tasks import check_document_version_task
 from storage.domain.models import Document
@@ -75,39 +80,6 @@ def _render_row(request, finding: PendingCheckResult):
     })
 
 
-def _bbox_ratios(version, finding: PendingCheckResult) -> dict:
-    """Переводит bbox находки (пункты PDF) в ratios 0..1 для create_issue."""
-    if finding.bbox is None or finding.page is None:
-        return {}
-
-    with pymupdf.open(version.file.path) as pdf:
-        if finding.page < 1 or finding.page > pdf.page_count:
-            return {}
-        page_rect = pdf[finding.page - 1].rect
-
-    width = max(float(page_rect.width), 1.0)
-    height = max(float(page_rect.height), 1.0)
-    x0, y0, x1, y1 = (float(value) for value in finding.bbox)
-
-    def ratio(value, size):
-        return min(1.0, max(0.0, value / size))
-
-    x1_ratio = ratio(min(x0, x1), width)
-    y1_ratio = ratio(min(y0, y1), height)
-    x2_ratio = ratio(max(x0, x1), width)
-    y2_ratio = ratio(max(y0, y1), height)
-    if x1_ratio >= x2_ratio or y1_ratio >= y2_ratio:
-        return {}
-    return {
-        'x1_ratio': x1_ratio,
-        'y1_ratio': y1_ratio,
-        'x2_ratio': x2_ratio,
-        'y2_ratio': y2_ratio,
-        'x_ratio': (x1_ratio + x2_ratio) / 2.0,
-        'y_ratio': (y1_ratio + y2_ratio) / 2.0,
-    }
-
-
 @login_required
 @require_GET
 def panel(request, document_id: int):
@@ -150,7 +122,22 @@ def confirm_finding(request, pk: int):
 
     if finding.status == PendingCheckResult.Status.PENDING:
         version = finding.check_run.document_version
-        ratios = _bbox_ratios(version, finding)
+        # Поворот вьювера передаёт кнопка (hx-vals): bbox PyMuPDF —
+        # неповёрнутая система, вьювер отображает с поворотом.
+        ratios = bbox_ratios_for_rotation(
+            version.file.path,
+            finding.page,
+            finding.bbox,
+            request.POST.get('rotation'),
+        )
+        crop_base64 = None
+        if finding.bbox and finding.page:
+            try:
+                crop_base64 = crop_finding_image(
+                    version.file.path, finding.page, finding.bbox,
+                )
+            except (OSError, RuntimeError, ValueError):
+                crop_base64 = None
         create_issue(
             request.user,
             document,
@@ -163,13 +150,17 @@ def confirm_finding(request, pk: int):
             y1_ratio=ratios.get('y1_ratio'),
             x2_ratio=ratios.get('x2_ratio'),
             y2_ratio=ratios.get('y2_ratio'),
+            crop_image_base64=crop_base64,
         )
         finding.status = PendingCheckResult.Status.CONFIRMED
         finding.reviewed_by = request.user
         finding.reviewed_at = timezone.now()
         finding.save(update_fields=['status', 'reviewed_by', 'reviewed_at'])
 
-    return _render_row(request, finding)
+    response = _render_row(request, finding)
+    # HTMX: обновить список/счётчики «Замечания» после создания Issue.
+    response['HX-Trigger'] = 'ai-finding-confirmed'
+    return response
 
 
 @login_required
@@ -287,6 +278,7 @@ def rag_search(request, project_id: int):
                 question,
                 company_id=project.company_id,
                 project_id=project.pk,
+                model=_selected_model(request),
             )
         except ValueError as exc:
             error = str(exc)
@@ -305,6 +297,15 @@ def rag_search(request, project_id: int):
         'groups': _rag_groups(result['sources']),
         'error': error,
     })
+
+
+def _selected_model(request) -> str | None:
+    """Модель из UI: только из разрешённого списка настроек."""
+    allowed = {
+        code for code, _label in getattr(settings, 'AI_AVAILABLE_MODELS', [])
+    }
+    model = (request.POST.get('model') or '').strip()
+    return model if model in allowed else None
 
 
 def _report_allowed(user) -> bool:
@@ -360,6 +361,7 @@ def report_generate(request, project_id: int):
         try:
             report = generate_gip_report(
                 project, period_start, period_end, request.user,
+                model=_selected_model(request),
             )
         except ValueError as exc:
             error = str(exc)

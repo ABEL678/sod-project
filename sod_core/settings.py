@@ -127,6 +127,14 @@ AI_LLM_BASE_URL = os.environ.get('AI_LLM_BASE_URL', 'https://api.deepseek.com/v1
 AI_LLM_MODEL = os.environ.get('AI_LLM_MODEL', 'deepseek-chat')
 AI_LLM_TIMEOUT = int(os.environ.get('AI_LLM_TIMEOUT', '60'))
 
+# Модели, доступные для выбора в UI ИИ-контура (OrcaRouter, free-tier).
+# Выбранная модель уходит в LLMProvider.complete(model=...).
+AI_AVAILABLE_MODELS = [
+    ('deepseek/deepseek-v4-flash-free', 'DeepSeek V4 Flash (Free)'),
+    ('z-ai/glm-5.3-flash-free', 'GLM 5.3 Flash (Free)'),
+    ('deepseek/deepseek-v4.1-flash-free', 'DeepSeek V4.1 Flash (Free)'),
+]
+
 # GigaChat (Сбер, работа из РФ): AI_LLM_PROVIDER=gigachat включает
 # GigaChatProvider (Authorization Key → OAuth-токен → OpenAI-совместимый API).
 AI_LLM_PROVIDER = os.environ.get('AI_LLM_PROVIDER', '')

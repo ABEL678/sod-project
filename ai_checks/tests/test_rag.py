@@ -5,7 +5,7 @@
 """
 
 from django.contrib.auth.models import User
-from django.test import TestCase
+from django.test import TestCase, override_settings
 
 from ai_checks.domain.models import InternalChunk, InternalDocument
 from ai_checks.domain.services import rag_answer
@@ -18,6 +18,9 @@ from storage.domain.models import (
 )
 
 
+@override_settings(
+    AI_LLM_PROVIDER='', AI_LLM_API_KEY='', AI_GIGACHAT_AUTH_KEY='',
+)
 class RagAnswerTests(TestCase):
     DIM = 1024
 

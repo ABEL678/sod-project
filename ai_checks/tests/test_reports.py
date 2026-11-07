@@ -140,7 +140,7 @@ class GipReportTests(TestCase):
                 self.user, llm_provider=StubLLMProvider(),
             )
 
-    @override_settings(AI_LLM_API_KEY='')
+    @override_settings(AI_LLM_API_KEY='', AI_LLM_PROVIDER='')
     def test_stub_used_without_api_key(self):
         from ai_checks.adapters.llm_http import get_llm_provider
         self.assertIsInstance(get_llm_provider(), StubLLMProvider)

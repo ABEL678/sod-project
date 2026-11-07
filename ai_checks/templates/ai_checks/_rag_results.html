@@ -13,6 +13,11 @@
     Вопрос: «{{ question }}» · источников: {{ sources|length }}
   </div>
 
+  {% if answer %}
+    <div class="border rounded p-2 mb-2 bg-white small" id="ragAnswer"
+         style="white-space: pre-wrap;">{{ answer }}</div>
+  {% endif %}
+
   {% for scope, label, items in groups %}
     <div class="mb-3">
       <div class="fw-semibold small mb-1">

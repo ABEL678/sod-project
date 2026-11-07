@@ -32,7 +32,8 @@ def make_clean_pdf() -> bytes:
     pdf = pymupdf.open()
     page = pdf.new_page(width=595, height=842)
     page.draw_rect(pymupdf.Rect(20, 20, 575, 822), color=(0, 0, 0), width=1)
-    page.draw_rect(pymupdf.Rect(400, 700, 580, 750), color=(0, 0, 0), width=1)
+    # Штамп, примыкающий к правому нижнему углу листа (новое правило).
+    page.draw_rect(pymupdf.Rect(400, 780, 575, 825), color=(0, 0, 0), width=1)
     page.insert_text((72, 100), 'Текст', fontsize=10)
     data = pdf.tobytes()
     pdf.close()
@@ -101,17 +102,34 @@ class AiChecksUiTests(MediaIsolationMixin, TestCase):
     @override_settings(AI_CHECKS_ENABLED=True)
     def test_confirm_finding_creates_issue(self):
         run = run_rules_check(self.version, self.user)
-        finding = run.results.first()
+        # Координаты хранятся в каноническом пространстве (rotation=0);
+        # пересчёт под текущий поворот вьювера делает отрисовка.
+        finding = (
+            run.results.select_related('rule')
+            .exclude(bbox__isnull=True)
+            .first()
+        )
         response = self.client.post(
             reverse('ai_checks:confirm', args=[finding.pk]),
         )
         self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response['HX-Trigger'], 'ai-finding-confirmed',
+        )
         finding.refresh_from_db()
         self.assertEqual(finding.status, PendingCheckResult.Status.CONFIRMED)
         self.assertEqual(finding.reviewed_by, self.user)
         issue = Issue.objects.get(document=self.document)
         self.assertTrue(issue.description.startswith('[ИИ]'))
         self.assertEqual(issue.page_number, finding.page)
+        # Канонические ratios (неповёрнутый лист), упорядочены.
+        self.assertIsNotNone(issue.x1_ratio)
+        self.assertIsNotNone(issue.x2_ratio)
+        self.assertLess(issue.x1_ratio, issue.x2_ratio)
+        self.assertLess(issue.y1_ratio, issue.y2_ratio)
+        # Скриншот (кроп bbox) приложен к Issue.
+        self.assertTrue(issue.crop_image)
+        self.assertIn('issue_crop_', issue.crop_image.name)
 
     @override_settings(AI_CHECKS_ENABLED=True)
     def test_reject_finding(self):

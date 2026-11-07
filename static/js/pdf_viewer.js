@@ -85,7 +85,19 @@
     const pageCleanups = [];
     let pdfDocument = null;
     let currentScale = 1.0;
-    let currentRotation = 0;
+    // Поворот вьювера сохраняется per-document (localStorage): после
+    // перезагрузки страницы лист остаётся повернутым (Ф4-фиксы UX).
+    let currentRotation = (function () {
+        const docMatch = window.location.pathname.match(/documents\/(\d+)/);
+        if (!docMatch) {
+            return 0;
+        }
+        const saved = parseInt(
+            window.localStorage.getItem('pdfRotation:' + docMatch[1]) || '0',
+            10,
+        );
+        return [0, 90, 180, 270].includes(saved) ? saved : 0;
+    })();
     let currentPage = 1;
     let panMode = false;
     let textMode = false;
@@ -242,6 +254,49 @@
         drawMarksInto(pages, pageNumber);
     }
 
+    // Координаты замечаний хранятся в КАНОНИЧЕСКОМ пространстве
+    // (неповёрнутый лист, rotation=0) — так пины не «улетают» при любом
+    // повороте вьювера. На отрисовке — пересчёт в текущее отображение.
+    function toDisplayPoint(x, y) {
+        switch (currentRotation % 360) {
+            case 90: return { x: 1 - y, y: x };
+            case 180: return { x: 1 - x, y: 1 - y };
+            case 270: return { x: y, y: 1 - x };
+            default: return { x: x, y: y };
+        }
+    }
+
+    function toDisplayRect(x1, y1, x2, y2) {
+        const cornerA = toDisplayPoint(x1, y1);
+        const cornerB = toDisplayPoint(x2, y2);
+        return {
+            x1: Math.min(cornerA.x, cornerB.x),
+            y1: Math.min(cornerA.y, cornerB.y),
+            x2: Math.max(cornerA.x, cornerB.x),
+            y2: Math.max(cornerA.y, cornerB.y),
+        };
+    }
+
+    function toCanonicalPoint(x, y) {
+        switch (currentRotation % 360) {
+            case 90: return { x: y, y: 1 - x };
+            case 180: return { x: 1 - x, y: 1 - y };
+            case 270: return { x: 1 - y, y: x };
+            default: return { x: x, y: y };
+        }
+    }
+
+    function toCanonicalRect(x1, y1, x2, y2) {
+        const cornerA = toCanonicalPoint(x1, y1);
+        const cornerB = toCanonicalPoint(x2, y2);
+        return {
+            x1: Math.min(cornerA.x, cornerB.x),
+            y1: Math.min(cornerA.y, cornerB.y),
+            x2: Math.max(cornerA.x, cornerB.x),
+            y2: Math.max(cornerA.y, cornerB.y),
+        };
+    }
+
     function drawMarksInto(pageMap, pageNumber) {
         const page = pageMap.get(Number(pageNumber));
         if (!page) {
@@ -286,14 +341,17 @@
                     y2 = Math.min(1, y + 0.02);
                 }
 
+                // Канонические ratios → текущее отображение (поворот вьювера).
+                const displayCenter = toDisplayPoint(x, y);
+                const displayRect = toDisplayRect(x1, y1, x2, y2);
                 items.push({
                     issue: issue,
-                    cx: x,
-                    cy: y,
-                    x1: x1,
-                    y1: y1,
-                    x2: x2,
-                    y2: y2,
+                    cx: displayCenter.x,
+                    cy: displayCenter.y,
+                    x1: displayRect.x1,
+                    y1: displayRect.y1,
+                    x2: displayRect.x2,
+                    y2: displayRect.y2,
                 });
             });
 
@@ -769,14 +827,22 @@
             dragStart = null;
 
             if (rectangle.x2 - rectangle.x1 < 0.005 || rectangle.y2 - rectangle.y1 < 0.005) {
-                openModal(start.page, null, {x: x, y: y}, '');
+                // Точка/область конвертируются в каноническое пространство
+                // (неповёрнутый лист) — кроп остаётся в пространстве вида.
+                openModal(start.page, null, toCanonicalPoint(x, y), '');
                 return;
             }
             const crop = cropCanvas(canvas, rectangle);
+            const canonicalRect = toCanonicalRect(
+                rectangle.x1, rectangle.y1, rectangle.x2, rectangle.y2,
+            );
             openModal(
                 start.page,
-                rectangle,
-                {x: (rectangle.x1 + rectangle.x2) / 2, y: (rectangle.y1 + rectangle.y2) / 2},
+                canonicalRect,
+                {
+                    x: (canonicalRect.x1 + canonicalRect.x2) / 2,
+                    y: (canonicalRect.y1 + canonicalRect.y2) / 2,
+                },
                 crop
             );
         }
@@ -2576,12 +2642,24 @@
 
     window.rotatePage = function () {
         currentRotation = (currentRotation - 90 + 360) % 360;
+        const docMatch = window.location.pathname.match(/documents\/(\d+)/);
+        if (docMatch) {
+            window.localStorage.setItem(
+                'pdfRotation:' + docMatch[1], String(currentRotation),
+            );
+        }
         if (comparison.active) {
             comparison.rotation = currentRotation;
             renderComparisonPage(comparison.page);
             return;
         }
         renderPages();
+    };
+
+    // Текущий угол поворота листа во вьювере (для синхронизации координат
+    // ИИ-находок при создании Issue: bbox PyMuPDF — неповёрнутая система).
+    window.getPdfViewerRotation = function () {
+        return currentRotation;
     };
 
     window.setZoom = function (scale) {

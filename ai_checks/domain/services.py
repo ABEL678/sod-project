@@ -237,6 +237,8 @@ def rag_answer(
     top_k: int = 5,
     embedding_service: EmbeddingService | None = None,
     vector_backend=None,
+    llm_provider=None,
+    model: str | None = None,
 ) -> dict:
     """RAG-ответ по внутренней базе знаний (Ф2, без LLM).
 
@@ -297,10 +299,64 @@ def rag_answer(
         f'[{source["document_title"]}] {source["text"][:300]}'
         for source in sources[:3]
     )
-    return {'answer': digest, 'sources': sources}
+
+    # LLM-синтез ответа по найденным фрагментам (модель выбирается в UI).
+    # Сбой LLM не ломает поиск: отдаём дайджест-заглушку.
+    if llm_provider is None:
+        from ai_checks.adapters.llm_http import get_llm_provider
+
+        llm_provider = get_llm_provider()
+
+    context_text = '\n\n'.join(
+        f'[{source["document_title"]}] {source["text"][:600]}'
+        for source in sources
+    )
+    answer = digest
+    try:
+        response = llm_provider.complete([
+            {
+                'role': 'system',
+                'content': (
+                    'Ответь на вопрос, опираясь ТОЛЬКО на фрагменты '
+                    'источников. Если ответа в них нет — скажи об этом.'
+                ),
+            },
+            {
+                'role': 'user',
+                'content': (
+                    f'Вопрос: {question}\n\nИсточники:\n{context_text}'
+                ),
+            },
+        ], model=model)
+        answer = response.text
+        LLMCallLog.objects.create(
+            provider=getattr(llm_provider, 'name', 'unknown'),
+            model=response.model or 'unknown',
+            purpose=LLMCallLog.Purpose.RAG_ANSWER,
+            prompt_tokens=response.prompt_tokens,
+            completion_tokens=response.completion_tokens,
+            latency_ms=response.latency_ms,
+            status=LLMCallLog.Status.OK,
+            prompt_version=RAG_PROMPT_VERSION,
+            user=None,
+        )
+    except Exception as exc:  # noqa: BLE001 — поиск важнее сбоя LLM
+        logger.exception('LLM для RAG-ответа упал: %s', exc)
+        LLMCallLog.objects.create(
+            provider=getattr(llm_provider, 'name', 'unknown'),
+            model=getattr(llm_provider, 'model', 'unknown'),
+            purpose=LLMCallLog.Purpose.RAG_ANSWER,
+            status=LLMCallLog.Status.ERROR,
+            error_message=str(exc)[:1000],
+            prompt_version=RAG_PROMPT_VERSION,
+            user=None,
+        )
+
+    return {'answer': answer, 'sources': sources}
 
 
 GIP_REPORT_PROMPT_VERSION = 'gip-report@1'
+RAG_PROMPT_VERSION = 'rag-answer@1'
 SEVERITY_ORDER = ('blocker', 'major', 'minor', 'info')
 SEVERITY_LABELS = {
     'blocker': 'Блокирующие',
@@ -340,6 +396,7 @@ def generate_gip_report(
     period_end,
     user,
     llm_provider=None,
+    model: str | None = None,
 ) -> GeneratedReport:
     """Сводка замечаний для ГИПа за период (Ф4, DeepSeek/заглушка).
 
@@ -417,7 +474,7 @@ def generate_gip_report(
                 ),
             },
             {'role': 'user', 'content': context_text},
-        ])
+        ], model=model)
         summary = response.text
         llm_call = LLMCallLog.objects.create(
             provider=getattr(llm_provider, 'name', 'unknown'),
@@ -530,3 +587,105 @@ def send_pending_reminders(now=None) -> int:
                 if notification is not None:
                     created += 1
     return created
+
+
+import base64
+
+
+def bbox_ratios_for_rotation(
+    file_path: str,
+    page_number: int | None,
+    bbox,
+    viewer_rotation: int | None = None,
+) -> dict:
+    """Ratios bbox с учётом поворота листа (vьювер/PDF).
+
+    PyMuPDF отдаёт координаты в неповёрнутой системе; вьювер рисует лист
+    с поворотом (viewer_rotation — текущий поворот вьювера; если не задан,
+    берётся page.rotation из PDF). Возвращает x1/y1/x2/y2/x/y в долях 0..1
+    или {} (если данных нет).
+    """
+    if bbox is None or page_number is None:
+        return {}
+    with pymupdf.open(file_path) as pdf:
+        if not (1 <= int(page_number) <= pdf.page_count):
+            return {}
+        page = pdf[int(page_number) - 1]
+        rotation = (
+            int(viewer_rotation)
+            if viewer_rotation is not None and str(viewer_rotation) != ''
+            else int(page.rotation or 0)
+        ) % 360
+
+        width = float(page.mediabox.width)
+        height = float(page.mediabox.height)
+        x0, y0, x1, y1 = (float(v) for v in bbox)
+        x0, x1 = min(x0, x1), max(x0, x1)
+        y0, y1 = min(y0, y1), max(y0, y1)
+
+        if rotation == 90:
+            px0, py0 = height - y1, x0
+            px1, py1 = height - y0, x1
+            display_w, display_h = height, width
+        elif rotation == 180:
+            px0, py0 = width - x1, height - y1
+            px1, py1 = width - x0, height - y0
+            display_w, display_h = width, height
+        elif rotation == 270:
+            px0, py0 = y0, width - x1
+            px1, py1 = y1, width - x0
+            display_w, display_h = height, width
+        else:
+            px0, py0, px1, py1 = x0, y0, x1, y1
+            display_w, display_h = width, height
+
+    def ratio(value: float, size: float) -> float:
+        return min(1.0, max(0.0, value / size))
+
+    x1_ratio = ratio(px0, display_w)
+    y1_ratio = ratio(py0, display_h)
+    x2_ratio = ratio(px1, display_w)
+    y2_ratio = ratio(py1, display_h)
+    if x1_ratio >= x2_ratio or y1_ratio >= y2_ratio:
+        return {}
+    return {
+        'x1_ratio': x1_ratio,
+        'y1_ratio': y1_ratio,
+        'x2_ratio': x2_ratio,
+        'y2_ratio': y2_ratio,
+        'x_ratio': (x1_ratio + x2_ratio) / 2.0,
+        'y_ratio': (y1_ratio + y2_ratio) / 2.0,
+    }
+
+
+def crop_finding_image(
+    file_path: str,
+    page_number: int,
+    bbox,
+    margin: float = 8.0,
+    zoom: float = 2.0,
+) -> str | None:
+    """Кроп bbox из PDF (JPEG, base64) для Issue.crop_image.
+
+    create_issue ожидает base64 JPEG (магия \\xff\\xd8, ≤5 МБ).
+    """
+    if bbox is None or page_number is None:
+        return None
+    with pymupdf.open(file_path) as pdf:
+        if not (1 <= int(page_number) <= pdf.page_count):
+            return None
+        page = pdf[int(page_number) - 1]
+        page_rect = page.mediabox
+        clip = pymupdf.Rect(
+            max(page_rect.x0, float(bbox[0]) - margin),
+            max(page_rect.y0, float(bbox[1]) - margin),
+            min(page_rect.x1, float(bbox[2]) + margin),
+            min(page_rect.y1, float(bbox[3]) + margin),
+        )
+        if clip.is_empty or clip.width < 1 or clip.height < 1:
+            return None
+        pixmap = page.get_pixmap(
+            clip=clip, matrix=pymupdf.Matrix(zoom, zoom),
+        )
+        data = pixmap.tobytes('jpeg')
+    return base64.b64encode(data).decode('ascii')

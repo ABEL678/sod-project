@@ -6,10 +6,6 @@
     <i class="bi bi-file-earmark-bar-graph me-1" aria-hidden="true"></i>
     Отчёт ГИПу по подтверждённым замечаниям
   </span>
-  <span class="toolbar-spacer"></span>
-  <span class="text-muted small">
-    Резюме — DeepSeek; без ключа используется локальная заглушка
-  </span>
 </div>
 
 <form class="d-flex flex-wrap gap-2 align-items-end px-2 pt-2"
@@ -28,6 +24,15 @@
     <input type="date" class="form-control form-control-sm"
            id="reportPeriodEnd" name="period_end"
            value="{{ default_end }}" required>
+  </div>
+  <div>
+    <label class="form-label small mb-1" for="reportModel">Модель</label>
+    <select class="form-select form-select-sm" id="reportModel" name="model"
+            aria-label="Модель LLM">
+      {% for code, label in ai_available_models %}
+        <option value="{{ code }}"{% if forloop.first %} selected{% endif %}>{{ label }}</option>
+      {% endfor %}
+    </select>
   </div>
   <button type="submit" class="btn btn-sm btn-primary text-nowrap">
     <i class="bi bi-stars me-1" aria-hidden="true"></i>Сгенерировать

@@ -55,16 +55,6 @@
       {% endif %}
       <span class="doc" title="{{ document.code }} — {{ document.name }}">{{ document.code }}</span>
     </nav>
-    <span class="viewer-workflow-actions" data-viewer-actions>
-      {% for action in workflow_actions %}
-        <button type="button"
-                class="wf-btn wf-btn-text btn btn-sm btn-outline-secondary me-1 mb-1"
-                data-workflow-action="{{ action.code }}"
-                data-workflow-url="{{ action.url }}"
-                title="{{ action.label }}"
-                aria-label="{{ action.label }}">{{ action.label }}</button>
-      {% endfor %}
-    </span>
   </div>
   <form action="{% url 'storage:search' document.project.pk %}" method="get" class="d-flex topbar-search">
     <input type="search" name="q" class="form-control form-control-sm"
@@ -228,14 +218,34 @@
       <i class="bi bi-grid-3x2-gap" aria-hidden="true"></i>
     </button>
   </div>
-</div>
-
-<div id="publicationBlockedBanner"
-     class="alert alert-danger d-flex flex-wrap align-items-center gap-2 mx-3 mt-3 mb-0{% if not open_issues_count %} d-none{% endif %}"
-     role="alert">
-  <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
-  <span>Публикация заблокирована: <span data-open-issues-count>{{ open_issues_count }}</span> открытых замечаний.</span>
-  <a class="alert-link ms-auto" href="{{ issues_registry_url }}">Перейти к замечаниям</a>
+  {% if not public_view %}
+  {# Этап 19: workflow из хедера — сюда; плашка «Публикация заблокирована» встроена в кнопку #}
+  <div class="group viewer-workflow-actions" data-viewer-actions
+       style="margin-left: auto;">
+    {% if open_issues_count %}
+      <button type="button"
+              class="btn btn-sm btn-danger me-1"
+              data-blocked="1"
+              aria-disabled="true"
+              onclick="runWorkflowAction(this)"
+              title="Публикация заблокирована: {{ open_issues_count }} открытых замечаний — закройте замечания, чтобы отправить документ на проверку"
+              aria-label="Отправить на проверку (заблокировано: {{ open_issues_count }} открытых замечаний)">
+        Отправить на проверку
+        <span class="badge text-bg-light border ms-1" data-open-issues-count>{{ open_issues_count }}</span>
+      </button>
+    {% else %}
+      {% for action in workflow_actions %}
+        <button type="button"
+                class="wf-btn wf-btn-text btn btn-sm btn-outline-secondary me-1"
+                data-workflow-action="{{ action.code }}"
+                data-workflow-url="{{ action.url }}"
+                onclick="runWorkflowAction(this)"
+                title="{{ action.label }}"
+                aria-label="{{ action.label }}">{{ action.label }}</button>
+      {% endfor %}
+    {% endif %}
+  </div>
+  {% endif %}
 </div>
 
 <div class="workspace" id="main-splitter">
@@ -474,8 +484,7 @@
   <button type="button" class="context-item" data-action="download">Скачать вложение</button>
 </div>
 
-{# Hotfix (Аудит 7): шаблон вьювера автономный (не наследует base.html),
-   поэтому bootstrap.bundle подключается ЗДЕСЬ — это не дубль #}
+{# Hotfix (Аудит 7): шаблон автономный — bootstrap.bundle подключается здесь, это не дубль #}
 <script src="{% static 'js/vendor/bootstrap.bundle.min.js' %}"></script>
 <script src="{% static 'js/pdfjs/pdf.min.js' %}"></script>
 <script src="{% static 'js/design-tokens.js' %}?v=20261109-h6"></script>
@@ -496,6 +505,90 @@
     }
 </script>
 <script>
+  // Этап 19: workflow-кнопки перенесены из хедера в тулбар (app.js на
+  // этой странице не подключён — минимальный обработчик здесь).
+  function openIssuesPhrase(count) {
+    const mod100 = count % 100, mod10 = count % 10;
+    if (mod100 >= 11 && mod100 <= 14) return 'открытых замечаний';
+    if (mod10 === 1) return 'открытое замечание';
+    if (mod10 >= 2 && mod10 <= 4) return 'открытых замечания';
+    return 'открытых замечаний';
+  }
+
+  function showBlockedToast(message) {
+    let container = document.getElementById('aiToastContainer');
+    if (!container) {
+      container = document.createElement('div');
+      container.id = 'aiToastContainer';
+      container.className = 'toast-container position-fixed top-0 start-50 translate-middle-x p-3';
+      container.style.zIndex = '1100';
+      document.body.appendChild(container);
+    }
+    const toastEl = document.createElement('div');
+    toastEl.className = 'toast align-items-center text-bg-danger border-0';
+    toastEl.setAttribute('role', 'alert');
+    toastEl.innerHTML =
+      '<div class="d-flex"><div class="toast-body">' + message + '</div>'
+      + '<button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast" aria-label="Закрыть"></button></div>';
+    container.appendChild(toastEl);
+    const toast = new bootstrap.Toast(toastEl, { delay: 5000 });
+    toast.show();
+    toastEl.addEventListener('hidden.bs.toast', function () {
+      toastEl.remove();
+    });
+  }
+
+  function runWorkflowAction(btn) {
+    if (btn.dataset.blocked === '1') {
+      const count = parseInt(
+        (btn.querySelector('[data-open-issues-count]') || {}).textContent
+          || '0',
+        10,
+      ) || 0;
+      showBlockedToast(
+        'Публикация заблокирована: ' + count + ' '
+        + openIssuesPhrase(count)
+        + '. Закройте или отклоните их, чтобы отправить документ на проверку',
+      );
+      return;
+    }
+    const action = btn.dataset.workflowAction;
+    const url = btn.dataset.workflowUrl;
+    if (!action || !url || btn.dataset.busy === '1') {
+      return;
+    }
+    btn.dataset.busy = '1';
+    const tokenInput = document.querySelector('input[name=csrfmiddlewaretoken]');
+    const body = new URLSearchParams();
+    body.set('action', action);
+    fetch(url, {
+      method: 'POST',
+      headers: {
+        'X-CSRFToken': tokenInput ? tokenInput.value : '',
+        'X-Requested-With': 'XMLHttpRequest'
+      },
+      body: body
+    })
+      .then(function (response) {
+        return response.json().then(function (data) {
+          return { ok: response.ok, data: data };
+        });
+      })
+      .then(function (result) {
+        if (!result.ok || result.data.status !== 'ok') {
+          alert((result.data && result.data.error) || 'Не удалось выполнить действие');
+          return;
+        }
+        window.location.reload();
+      })
+      .catch(function () {
+        alert('Сеть недоступна — попробуйте ещё раз');
+      })
+      .finally(function () {
+        delete btn.dataset.busy;
+      });
+  }
+
   function changeVersion(value) {
     if (typeof window.closePdfComparison === 'function') {
       window.closePdfComparison();

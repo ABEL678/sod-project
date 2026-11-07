@@ -8,6 +8,10 @@
           title="ИИ-проверка листа (детерминированные правила)">
     <i class="bi bi-robot" aria-hidden="true"></i> Проверить
   </button>
+  <button type="button" class="ai-checks__close" id="aiChecksClose"
+          title="Закрыть панель проверки" aria-label="Закрыть панель проверки">
+    <i class="bi bi-x-lg" aria-hidden="true"></i>
+  </button>
   <div class="ai-checks__body d-none" id="aiChecksBody"
        hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'>
     <div class="text-muted small p-2">Загрузка…</div>
@@ -23,6 +27,14 @@
     box-shadow: 0 2px 8px rgba(0, 0, 0, .25);
   }
   .ai-checks__fab:hover { filter: brightness(1.07); }
+  .ai-checks__close {
+    position: absolute; top: -14px; right: 0;
+    width: 28px; height: 28px; border-radius: 50%;
+    border: 1px solid #d4d4ce; background: #fff; color: #333;
+    font-size: 12px; cursor: pointer; line-height: 1;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, .18);
+  }
+  .ai-checks__close:hover { background: #f1f3f6; }
   .ai-checks__body {
     position: absolute; right: 0; bottom: 46px;
     width: 400px; max-width: calc(100vw - 32px); max-height: 62vh;
@@ -48,14 +60,112 @@
   var toggle = document.getElementById('aiChecksToggle');
   var body = document.getElementById('aiChecksBody');
   if (!toggle || !body) { return; }
+
+  // Кнопка «Проверить» скрыта, если нет документа или открыта
+  // карточка «Детали» (правая панель перекрывает нижний правый угол).
+  var root = document.getElementById('aiChecksPanel');
+  var hiddenByUser = false;
+
+  function updateFabVisibility() {
+    if (!root) { return; }
+    if (hiddenByUser) {
+      root.classList.add('d-none');
+      return;
+    }
+    var viewer = document.getElementById('pdfViewer');
+    var hasDocument = !!(viewer && viewer.dataset.pdfUrl);
+    var detail = document.getElementById('detail');
+    var detailsOpen = !!(detail
+      && getComputedStyle(detail).display !== 'none');
+    root.classList.toggle('d-none', !hasDocument || detailsOpen);
+  }
+
+  // Крестик: скрывает панель и FAB целиком (чистый вид). Кнопка вернётся
+  // при следующем клике по листу (не мешает чтению чертежа).
+  // Слушатель на КОРНЕ: крестик — сосед #aiChecksBody, не его потомок.
+  root.addEventListener('click', function (event) {
+    if (!event.target.closest('#aiChecksClose')) {
+      return;
+    }
+    hiddenByUser = true;
+    body.classList.add('d-none');
+    updateFabVisibility();
+    var stage = document.getElementById('pdf-panel')
+      || document.querySelector('.stage');
+    if (stage) {
+      stage.addEventListener('click', function restoreFab() {
+        stage.removeEventListener('click', restoreFab);
+        hiddenByUser = false;
+        updateFabVisibility();
+      });
+    }
+  });
+
+  // Toggle: открытие всегда обновляет содержимое (свежий статус прогона),
+  // повторное нажатие при открытом панели — закрывает её.
   toggle.addEventListener('click', function () {
     var hidden = body.classList.toggle('d-none');
-    if (!hidden && !body.dataset.loaded && window.htmx) {
-      body.dataset.loaded = '1';
+    if (hidden) { return; }
+    if (window.htmx) {
       window.htmx.ajax('GET', '{% url "ai_checks:panel" document.pk %}', {
         target: body, swap: 'innerHTML'
       });
     }
   });
+
+  // После подтверждения ИИ-находки (HX-Trigger: ai-finding-confirmed)
+  // обновляем правую панель «Замечания» и счётчики без перезагрузки.
+  function refreshIssuesPanel() {
+    fetch(window.location.href, { credentials: 'same-origin' })
+      .then(function (response) { return response.ok ? response.text() : null; })
+      .then(function (html) {
+        if (!html) { return; }
+        var freshDoc = new DOMParser().parseFromString(html, 'text/html');
+        var freshPanel = freshDoc.getElementById('issues-panel');
+        var currentPanel = document.getElementById('issues-panel');
+        if (freshPanel && currentPanel) {
+          var listWasHidden = document.getElementById('list')
+            && document.getElementById('list').style.display === 'none';
+          currentPanel.innerHTML = freshPanel.innerHTML;
+          if (listWasHidden) {
+            document.getElementById('list').style.display = 'block';
+            document.getElementById('detail').style.display = 'none';
+          }
+          if (typeof updateIssueCounters === 'function') {
+            updateIssueCounters();
+          }
+        }
+        var freshCount = freshDoc.querySelector('[data-open-issues-count]');
+        if (freshCount) {
+          document.querySelectorAll('[data-open-issues-count]').forEach(
+            function (el) { el.textContent = freshCount.textContent; }
+          );
+        }
+        updateFabVisibility();
+      })
+      .catch(function () {});
+  }
+  document.body.addEventListener('ai-finding-confirmed', refreshIssuesPanel);
+
+  // Отслеживаем открытие/закрытие «Деталей» (inline style меняется в
+  // openIssueCard/closeIssueCard) + оборачиваем сами функции страницы:
+  // двойная гарантия, что кнопка «Проверить» скроется вместе с карточкой.
+  var detailNode = document.getElementById('detail');
+  if (detailNode && window.MutationObserver) {
+    new MutationObserver(updateFabVisibility).observe(detailNode, {
+      attributes: true, attributeFilter: ['style']
+    });
+  }
+  ['openIssueCard', 'closeIssueCard'].forEach(function (name) {
+    var original = window[name];
+    if (typeof original === 'function') {
+      window[name] = function () {
+        var result = original.apply(this, arguments);
+        updateFabVisibility();
+        return result;
+      };
+    }
+  });
+  updateFabVisibility();
 })();
 </script>
