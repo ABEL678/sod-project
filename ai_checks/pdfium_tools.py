@@ -23,6 +23,8 @@ MediaBox):
 from __future__ import annotations
 
 import io
+import pathlib
+import re
 from ctypes import byref, c_double, c_float, c_int, c_ubyte
 
 import pypdfium2 as pdfium
@@ -76,11 +78,138 @@ class Rect:
                 f'{self.x1:.2f}, {self.y1:.2f})')
 
 
+# заголовки объектов для авто-ремонта ('N G obj' в потоке файла)
+_OBJ_RE = re.compile(rb'(?:^|[\r\n>])(\d{1,10})[\t ]+(\d{1,5})[\t ]+obj\b')
+
+
+def _read_source(source) -> bytes:
+    """Приводит источник к bytes ДО передачи в pypdfium2.
+
+    - str/Path: читаем сами (open(path, 'rb').read() эквивалент
+      Path.read_bytes) — данные отдаются через FPDF_LoadMemDocument64,
+      нативный FPDF_LoadDocument (и его кодировки пути/второе открытие
+      файла) не используется; отсутствующий файл даёт понятное
+      исключение с путём.
+    - file-like: читается целиком в bytes, поэтому требование pypdfium2
+      «file-like должен оставаться открытым до конца работы с
+      документом» выполняется автоматически — объект можно закрыть
+      сразу после open_pdf (байты удерживаются самим документом).
+    - bytes/ctypes.Array — как есть.
+    """
+    if isinstance(source, (str, pathlib.Path)):
+        return pathlib.Path(source).read_bytes()
+    if isinstance(source, (bytes, bytearray)):
+        return bytes(source)
+    read = getattr(source, 'read', None)
+    if read is None:
+        return source  # ctypes.Array и пр. — pypdfium2 примет как есть
+    data = read()
+    if not isinstance(data, (bytes, bytearray)):
+        raise PdfiumError(
+            'Файл открыт в текстовом режиме — нужен open(path, "rb") '
+            f'(получено {type(data).__name__})',
+        )
+    return bytes(data)
+
+
+def _object_dict(data: bytes, offset: int) -> bytes:
+    """Словарь объекта (до endobj) для поиска /Type."""
+    end = data.find(b'endobj', offset)
+    if end < 0:
+        end = min(offset + 4096, len(data))
+    return data[offset:end]
+
+
+def _rebuild_xref(data: bytes) -> bytes | None:
+    """Пересобирает xref-таблицу по фактическому расположению объектов.
+
+    Аналог молчаливого авто-ремонта MuPDF (pdf_repair_xref), который
+    выполнялся в прежней реализации на PyMuPDF: сканирует заголовки
+    'N G obj', находит /Type /Catalog (если каталога нет, но есть
+    /Type /Pages — синтезирует Catalog над ним), дописывает в копию
+    файла свежую xref-таблицу и trailer. Возвращает новую копию байтов
+    или None, если ремонт невозможен (нет объектов/каталога).
+    """
+    if data.find(b'%PDF-') < 0:
+        return None
+    entries: dict[int, tuple[int, int]] = {}
+    for match in _OBJ_RE.finditer(data):
+        num, gen = int(match.group(1)), int(match.group(2))
+        if num not in entries:  # при инкрементальных обновлениях 1-я копия
+            entries[num] = (gen, match.start(1))
+    if not entries:
+        return None
+    root = pages_root = None
+    for num, (gen, offset) in sorted(entries.items()):
+        body = _object_dict(data, offset)
+        if root is None and re.search(rb'/Type[\t ]*/Catalog\b', body):
+            root = (num, gen)
+        if pages_root is None and re.search(rb'/Type[\t ]*/Pages\b', body):
+            pages_root = (num, gen)
+    if root is None and pages_root is None:
+        return None
+    max_num = max(entries)
+    extra = b''
+    if root is None:
+        syn_num = max_num + 1
+        extra = (
+            f'{syn_num} 0 obj\n<< /Type /Catalog /Pages '
+            f'{pages_root[0]} {pages_root[1]} R >>\nendobj\n'.encode()
+        )
+        entries[syn_num] = (0, len(data) + 1)  # сразу после добавляемой \n
+        max_num = syn_num
+        root = (syn_num, 0)
+    out = bytearray(data)
+    out.extend(b'\n')
+    out.extend(extra)
+    xref_off = len(out)
+    out.extend(f'xref\n0 {max_num + 1}\n'.encode())
+    out.extend(b'0000000000 65535 f \n')
+    for i in range(1, max_num + 1):
+        if i in entries:
+            gen, offset = entries[i]
+            out.extend(f'{offset:010d} {gen:05d} n \n'.encode())
+        else:
+            out.extend(b'0000000000 65535 f \n')
+    out.extend(
+        f'trailer\n<< /Size {max_num + 1} /Root {root[0]} {root[1]} R >>\n'
+        f'startxref\n{xref_off}\n%%EOF\n'.encode()
+    )
+    return bytes(out)
+
+
+def _repair_due(exc: Exception) -> bool:
+    """Ремонт уместен только для FPDF_ERR_FORMAT (битая структура данных)."""
+    if getattr(exc, 'err_code', None) == pdfium_raw.FPDF_ERR_FORMAT:
+        return True
+    return 'Data format error' in str(exc)  # сборки без err_code
+
+
 def open_pdf(source) -> pdfium.PdfDocument:
-    """Открывает PDF (путь/bytes/файл); битый файл -> PdfiumError."""
+    """Открывает PDF (путь/bytes/файл); битый файл -> PdfiumError.
+
+    Данные читаются в bytes до передачи в pypdfium2 (см. _read_source):
+    str-путь не идёт в нативный FPDF_LoadDocument, file-like не нужно
+    держать открытым. Если PDFium не смог разобрать корректно
+    прочитанные данные (FPDF_ERR_FORMAT «Data format error» — например,
+    у файла нет xref-таблицы из-за обрыва при передаче; PyMuPDF такие
+    файлы открывал молча), выполняется пересборка xref (_rebuild_xref)
+    и повторная попытка открытия восстановленной копии.
+    """
     try:
-        return pdfium.PdfDocument(source)
-    except Exception as exc:  # pypdfium2.PdfiumError, OSError
+        data = _read_source(source)
+        try:
+            return pdfium.PdfDocument(data)
+        except pdfium.PdfiumError as exc:
+            if not (data and _repair_due(exc)):
+                raise
+            repaired = _rebuild_xref(data)
+            if repaired is None:
+                raise
+            return pdfium.PdfDocument(repaired)
+    except pdfium.PdfiumError as exc:
+        raise PdfiumError(f'Не удалось открыть PDF: {exc}') from exc
+    except Exception as exc:  # OSError (файл/права), TypeError и пр.
         raise PdfiumError(f'Не удалось открыть PDF: {exc}') from exc
 
 

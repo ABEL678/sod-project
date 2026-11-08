@@ -74,10 +74,10 @@ index ccdbd28..01d8824 100644
 +            for chunk in rows
 +        ]
 diff --git a/ai_checks/domain/services.py b/ai_checks/domain/services.py
-index c91ba0f..a7d6c4f 100644
+index 731eebb..3bcb4fc 100644
 --- a/ai_checks/domain/services.py
 +++ b/ai_checks/domain/services.py
-@@ -232,125 +400,262 @@ def run_rules_check(
+@@ -243,125 +411,262 @@ def run_rules_check(
  
  def rag_answer(
      question: str,
@@ -163,7 +163,10 @@ index c91ba0f..a7d6c4f 100644
 -        .select_related('document')
 -        .filter(pk__in=[hit['id'] for hit in hits])
 -    }
--
++    merged_hits: list[dict] = []  # {source_type, hit}
++    project_search_failed = False
++    internal_search_failed = False
+ 
 -    sources = []
 -    for hit in hits:
 -        chunk = chunk_by_id.get(hit['id'])
@@ -178,23 +181,15 @@ index c91ba0f..a7d6c4f 100644
 -        })
 -    if not sources:
 -        return {'answer': 'Ничего не найдено', 'sources': []}
-+    merged_hits: list[dict] = []  # {source_type, hit}
-+    project_search_failed = False
-+    internal_search_failed = False
- 
--    digest = '\n\n'.join(
--        f'[{source["document_title"]}] {source["text"][:300]}'
--        for source in sources[:3]
--    )
 +    # 1) Документы проекта (ProjectDocumentChunk, треб. 6).
 +    if source_type in (None, 'project') and project_id is not None:
 +        if project_backend is None:
 +            from ai_checks.adapters.vector_pg import ProjectChunkVectorBackend
  
--    # LLM-синтез ответа по найденным фрагментам (модель выбирается в UI).
--    # Сбой LLM не ломает поиск: отдаём дайджест-заглушку.
--    if llm_provider is None:
--        from ai_checks.adapters.llm_http import get_llm_provider
+-    digest = '\n\n'.join(
+-        f'[{source["document_title"]}] {source["text"][:300]}'
+-        for source in sources[:3]
+-    )
 +            project_backend = ProjectChunkVectorBackend(
 +                dimension=embedding_service.dim,
 +            )
@@ -215,12 +210,16 @@ index c91ba0f..a7d6c4f 100644
 +            for hit in project_hits
 +        )
  
--        llm_provider = get_llm_provider()
+-    # LLM-синтез ответа по найденным фрагментам (модель выбирается в UI).
+-    # Сбой LLM не ломает поиск: отдаём дайджест-заглушку.
+-    if llm_provider is None:
+-        from ai_checks.adapters.llm_http import get_llm_provider
 +    # 2) База знаний (InternalChunk, tenant-фильтры 8.2).
 +    if source_type in (None, 'standard'):
 +        if vector_backend is None:
 +            from ai_checks.adapters.vector_pg import PgVectorBackend
-+
+ 
+-        llm_provider = get_llm_provider()
 +            vector_backend = PgVectorBackend(dimension=embedding_service.dim)
 +        filters = {
 +            'company_id': company_id,

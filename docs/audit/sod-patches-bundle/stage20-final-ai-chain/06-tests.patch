@@ -66,10 +66,10 @@ index 9ef7c72..04a4db8 100644
 +            return 0.0
 +        return dot / (norm_left * norm_right)
 diff --git a/ai_checks/tests/test_knowledge.py b/ai_checks/tests/test_knowledge.py
-index e6c5127..666f552 100644
+index c222d40..dc72abb 100644
 --- a/ai_checks/tests/test_knowledge.py
 +++ b/ai_checks/tests/test_knowledge.py
-@@ -65,7 +65,7 @@ class KnowledgeBaseServiceTests(MediaIsolationMixin, TestCase):
+@@ -61,7 +61,7 @@ class KnowledgeBaseServiceTests(MediaIsolationMixin, TestCase):
          self.assertEqual(internal.tenant_scope, 'project')
          self.assertEqual(internal.project_id, self.project.pk)
          self.assertIsNone(internal.company_id)
@@ -78,7 +78,7 @@ index e6c5127..666f552 100644
          self.assertTrue(internal.source_document.code.startswith('KB-'))
          self.assertEqual(internal.source_document.project_id, self.project.pk)
  
-@@ -84,7 +84,7 @@ class KnowledgeBaseServiceTests(MediaIsolationMixin, TestCase):
+@@ -80,7 +80,7 @@ class KnowledgeBaseServiceTests(MediaIsolationMixin, TestCase):
          count = index_internal_document(internal.pk)
          internal.refresh_from_db()
          self.assertGreater(count, 0)
@@ -87,7 +87,7 @@ index e6c5127..666f552 100644
          self.assertGreater(internal.chunks.count(), 0)
          self.assertIsNotNone(internal.indexed_at)
          self.assertEqual(index_internal_document(internal.pk), count)
-@@ -97,7 +97,7 @@ class KnowledgeBaseServiceTests(MediaIsolationMixin, TestCase):
+@@ -93,7 +93,7 @@ class KnowledgeBaseServiceTests(MediaIsolationMixin, TestCase):
          ))
          index_internal_document(internal.pk)
          internal.refresh_from_db()
@@ -96,7 +96,7 @@ index e6c5127..666f552 100644
          self.assertTrue(internal.index_error)
  
      def test_remove_is_soft(self):
-@@ -174,7 +174,7 @@ class KnowledgeBaseViewTests(MediaIsolationMixin, TestCase):
+@@ -170,7 +170,7 @@ class KnowledgeBaseViewTests(MediaIsolationMixin, TestCase):
          internal = InternalDocument.objects.get(title='Стандарт через UI')
          # Celery eager: индексация выполнилась синхронно.
          internal.refresh_from_db()
@@ -105,33 +105,41 @@ index e6c5127..666f552 100644
  
      def test_chunks_fragment(self):
          internal = upload_knowledge_document(
-diff --git a/ai_checks/tests/test_reports.py b/ai_checks/tests/test_reports.py
-index 8e79da4..758d80a 100644
---- a/ai_checks/tests/test_reports.py
-+++ b/ai_checks/tests/test_reports.py
-@@ -170,6 +170,8 @@ class GipReportTests(TestCase):
-         self.assertIn('GIP-DOC', text)
-         self.assertIn('Ответственный', text)
-         self.assertIn('Новое', text)
-+        # Треб. 12: раздел «Выводы» после сводки.
-+        self.assertIn('Выводы:', text)
- 
-     def test_export_docx(self):
-         import io
-@@ -189,5 +191,7 @@ class GipReportTests(TestCase):
+diff --git a/ai_checks/tests/test_model_selection.py b/ai_checks/tests/test_model_selection.py
+index ad14a27..13ba68d 100644
+--- a/ai_checks/tests/test_model_selection.py
++++ b/ai_checks/tests/test_model_selection.py
+@@ -78,9 +78,9 @@ class ModelSelectionServiceTests(TestCase):
+             description='Замечание', status='NEW',
          )
-         self.assertIn('Отчет ГИПа по проекту', paragraphs)
-         self.assertIn('Резюме (LLM)', paragraphs)
-+        # Треб. 12: раздел «Выводы» после сводки.
-+        self.assertIn('Выводы', paragraphs)
-         self.assertIn('GIP-DOC', tables_text)
-         self.assertIn('Иван Петров', tables_text)
+         spy = SpyLLMProvider()
+-        now = timezone.now()
++        today = timezone.localdate()  # локальная дата — см. _report_issues
+         report = generate_gip_report(
+-            self.project, (now - timedelta(days=1)).date(), now.date(),
++            self.project, today - timedelta(days=1), today,
+             self.user,
+             llm_provider=spy,
+             model='z-ai/glm-5.3-flash-free',
+@@ -93,10 +93,10 @@ class ModelSelectionServiceTests(TestCase):
+         )
+ 
+     def test_gip_report_default_model_is_none(self):
+-        now = timezone.now()
++        today = timezone.localdate()  # локальная дата — см. _report_issues
+         spy = SpyLLMProvider()
+         generate_gip_report(
+-            self.project, now.date(), now.date(), self.user,
++            self.project, today, today, self.user,
+             llm_provider=spy,
+         )
+         self.assertIsNone(spy.calls[0]['model'])
 diff --git a/ai_checks/tests/test_project_indexing.py b/ai_checks/tests/test_project_indexing.py
 new file mode 100644
-index 0000000..42898de
+index 0000000..f0ef3ca
 --- /dev/null
 +++ b/ai_checks/tests/test_project_indexing.py
-@@ -0,0 +1,300 @@
+@@ -0,0 +1,313 @@
 +"""Этап 20 (треб. 1-5): индексация документов проекта (ProjectDocumentChunk).
 +
 +Автоиндексация из upload_document (hook, треб. 4), статусы indexing_status
@@ -140,14 +148,15 @@ index 0000000..42898de
 +(docker-compose.dev.yml): проектный векторный поиск требует PG.
 +"""
 +
++from io import BytesIO
 +from unittest import mock
 +
 +from django.contrib.auth.models import User
 +from django.core.files.base import ContentFile
 +from django.core.files.uploadedfile import SimpleUploadedFile
 +from django.test import TestCase, override_settings
-+
-+import pymupdf
++from reportlab.lib.utils import simpleSplit
++from reportlab.pdfgen import canvas as rl_canvas
 +
 +from ai_checks.adapters.embedding_onnx import BgeM3OnnxEmbedding
 +from ai_checks.domain.models import ProjectDocumentChunk
@@ -157,6 +166,7 @@ index 0000000..42898de
 +    reindex_project,
 +)
 +from ai_checks.tests.base import MediaIsolationMixin
++from ai_checks.tests.pdfgen import cyr_font
 +from storage.domain.models import (
 +    Company,
 +    Document,
@@ -168,15 +178,26 @@ index 0000000..42898de
 +
 +
 +def make_pdf(pages_text: list[str]) -> bytes:
-+    pdf = pymupdf.open()
++    """Генерирует PDF через reportlab (pypdfium2-стек, без PyMuPDF).
++
++    Текст переносится внутри рамки (50, 50)-(545, 800) — как прежний
++    insert_textbox PyMuPDF (длинный текст обрезался бы краем страницы).
++    """
++    font = cyr_font()
++    buffer = BytesIO()
++    canvas = rl_canvas.Canvas(buffer, pagesize=(595, 842))
 +    for text in pages_text:
-+        page = pdf.new_page()
-+        page.insert_textbox(
-+            pymupdf.Rect(50, 50, 545, 800), text, fontsize=9,
-+        )
-+    data = pdf.tobytes()
-+    pdf.close()
-+    return data
++        if text:
++            canvas.setFont(font, 9)
++            baseline = 50 + 9
++            for line in simpleSplit(text, font, 9, 545 - 50):
++                if baseline > 800:
++                    break
++                canvas.drawString(50, 842 - baseline, line)
++                baseline += 9 * 1.2
++        canvas.showPage()
++    canvas.save()
++    return buffer.getvalue()
 +
 +
 +@override_settings(AI_CHECKS_ENABLED=True)
@@ -810,12 +831,59 @@ index 0000000..5ae96de
 +        self.assertContains(response, 'ОВ-05 — Отопление')
 +        self.assertContains(response, 'лист 3')
 +        self.assertContains(response, 'deepseek/deepseek-v4.1-flash-free')
+diff --git a/ai_checks/tests/test_reports.py b/ai_checks/tests/test_reports.py
+index 87f6345..c8d98c6 100644
+--- a/ai_checks/tests/test_reports.py
++++ b/ai_checks/tests/test_reports.py
+@@ -72,8 +72,12 @@ class GipReportTests(TestCase):
+         return issue
+ 
+     def test_report_aggregates_issues(self):
+-        now = timezone.now()
+-        yesterday = now.date() - timedelta(days=1)
++        # даты периода — ЛОКАЛЬНЫЕ (timezone.localdate): _report_issues
++        # фильтрует по created_at__date, который Django конвертирует в
++        # текущую зону; timezone.now().date() даёт UTC-дату и после
++        # полуночи (до 03:00 MSK) исключает свежие замечания
++        today = timezone.localdate()
++        yesterday = today - timedelta(days=1)
+         self._issue('NEW', due_date=yesterday, description='Просрочка')
+         self._issue('IN_PROGRESS', description='В работе')
+         self._issue('DONE', description='На проверке')
+@@ -84,8 +88,8 @@ class GipReportTests(TestCase):
+ 
+         report = generate_gip_report(
+             self.project,
+-            (now - timedelta(days=30)).date(),
+-            now.date(),
++            today - timedelta(days=30),
++            today,
+             self.user,
+             llm_provider=StubLLMProvider(),
+         )
+@@ -178,6 +182,8 @@ class GipReportTests(TestCase):
+         self.assertIn('GIP-DOC', text)
+         self.assertIn('Ответственный', text)
+         self.assertIn('Новое', text)
++        # Треб. 12: раздел «Выводы» после сводки.
++        self.assertIn('Выводы:', text)
+ 
+     def test_export_docx(self):
+         import io
+@@ -197,5 +203,7 @@ class GipReportTests(TestCase):
+         )
+         self.assertIn('Отчет ГИПа по проекту', paragraphs)
+         self.assertIn('Резюме (LLM)', paragraphs)
++        # Треб. 12: раздел «Выводы» после сводки.
++        self.assertIn('Выводы', paragraphs)
+         self.assertIn('GIP-DOC', tables_text)
+         self.assertIn('Иван Петров', tables_text)
 diff --git a/ai_checks/tests/test_views_stage20.py b/ai_checks/tests/test_views_stage20.py
 new file mode 100644
-index 0000000..8e90422
+index 0000000..d7778bc
 --- /dev/null
 +++ b/ai_checks/tests/test_views_stage20.py
-@@ -0,0 +1,257 @@
+@@ -0,0 +1,255 @@
 +"""Этап 20 (треб. 7-10, 13): вьюхи — База знаний, ИИ-поиск, история отчётов.
 +
 +Тесты запускаются на PostgreSQL+pgvector: rag_search ищет по реальному
@@ -826,8 +894,6 @@ index 0000000..8e90422
 +from django.core.files.uploadedfile import SimpleUploadedFile
 +from django.test import TestCase, override_settings
 +from django.urls import reverse
-+
-+import pymupdf
 +
 +from ai_checks.domain.models import GeneratedReport, RagQuery
 +from ai_checks.tests.base import MediaIsolationMixin

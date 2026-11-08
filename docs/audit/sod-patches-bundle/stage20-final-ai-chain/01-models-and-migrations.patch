@@ -1,5 +1,5 @@
 diff --git a/ai_checks/domain/models.py b/ai_checks/domain/models.py
-index 4446908..100e71a 100644
+index 6a8bca1..d3625aa 100644
 --- a/ai_checks/domain/models.py
 +++ b/ai_checks/domain/models.py
 @@ -4,6 +4,8 @@
@@ -178,65 +178,6 @@ index 4446908..100e71a 100644
  class RuleDefinition(models.Model):
      """Правило проверки (ARCHITECTURE.md 3.2, этап Ф1).
  
-diff --git a/ai_checks/models.py b/ai_checks/models.py
-index e9dbe98..926c953 100644
---- a/ai_checks/models.py
-+++ b/ai_checks/models.py
-@@ -2,9 +2,26 @@
- 
- from ai_checks.domain.models import (
-     CheckRun,
-+    IndexingStatus,
-     InternalChunk,
-     InternalDocument,
-     LLMCallLog,
-+    PendingCheckResult,
-+    ProjectDocumentChunk,
-+    RagQuery,
-+    ReminderRule,
-+    RuleDefinition,
- )
- 
--__all__ = ['CheckRun', 'InternalChunk', 'InternalDocument', 'LLMCallLog']
-+__all__ = [
-+    'CheckRun',
-+    'IndexingStatus',
-+    'InternalChunk',
-+    'InternalDocument',
-+    'LLMCallLog',
-+    'PendingCheckResult',
-+    'ProjectDocumentChunk',
-+    'RagQuery',
-+    'ReminderRule',
-+    'RuleDefinition',
-+]
-diff --git a/storage/domain/models.py b/storage/domain/models.py
-index 6df0eff..44746aa 100644
---- a/storage/domain/models.py
-+++ b/storage/domain/models.py
-@@ -337,6 +337,22 @@ class DocumentVersion(models.Model):
-     comment = models.TextField(blank=True, verbose_name="Комментарий")
-     uploaded_at = models.DateTimeField(auto_now_add=True, verbose_name="Дата загрузки")
-     uploaded_by = models.ForeignKey(User, on_delete=models.PROTECT, verbose_name="Загрузил")
-+    # Этап 20 (треб. 3): статус ИИ-индексации версии (RAG-поиск по PDF).
-+    # Значения согласованы с ai_checks.domain.models.IndexingStatus:
-+    # pending → processing → done | error. Choices дублируются без
-+    # импорта из ai_checks — домен storage не зависит от ИИ-контура.
-+    INDEXING_STATUS_CHOICES = [
-+        ('pending', 'В очереди'),
-+        ('processing', 'Индексируется'),
-+        ('done', 'Готово'),
-+        ('error', 'Ошибка'),
-+    ]
-+    indexing_status = models.CharField(
-+        max_length=10,
-+        choices=INDEXING_STATUS_CHOICES,
-+        default='pending',
-+        verbose_name="Статус ИИ-индексации",
-+    )
- 
-     class Meta:
-         unique_together = ('document', 'version_number')
 diff --git a/ai_checks/migrations/0010_projectdocumentchunk_ragquery_indexing_status.py b/ai_checks/migrations/0010_projectdocumentchunk_ragquery_indexing_status.py
 new file mode 100644
 index 0000000..a6ac249
@@ -394,6 +335,65 @@ index 0000000..a6ac249
 +        # HNSW/cosine по проектным чанкам (только PostgreSQL).
 +        migrations.RunPython(create_project_chunk_hnsw, drop_project_chunk_hnsw),
 +    ]
+diff --git a/ai_checks/models.py b/ai_checks/models.py
+index e9dbe98..926c953 100644
+--- a/ai_checks/models.py
++++ b/ai_checks/models.py
+@@ -2,9 +2,26 @@
+ 
+ from ai_checks.domain.models import (
+     CheckRun,
++    IndexingStatus,
+     InternalChunk,
+     InternalDocument,
+     LLMCallLog,
++    PendingCheckResult,
++    ProjectDocumentChunk,
++    RagQuery,
++    ReminderRule,
++    RuleDefinition,
+ )
+ 
+-__all__ = ['CheckRun', 'InternalChunk', 'InternalDocument', 'LLMCallLog']
++__all__ = [
++    'CheckRun',
++    'IndexingStatus',
++    'InternalChunk',
++    'InternalDocument',
++    'LLMCallLog',
++    'PendingCheckResult',
++    'ProjectDocumentChunk',
++    'RagQuery',
++    'ReminderRule',
++    'RuleDefinition',
++]
+diff --git a/storage/domain/models.py b/storage/domain/models.py
+index 6df0eff..44746aa 100644
+--- a/storage/domain/models.py
++++ b/storage/domain/models.py
+@@ -337,6 +337,22 @@ class DocumentVersion(models.Model):
+     comment = models.TextField(blank=True, verbose_name="Комментарий")
+     uploaded_at = models.DateTimeField(auto_now_add=True, verbose_name="Дата загрузки")
+     uploaded_by = models.ForeignKey(User, on_delete=models.PROTECT, verbose_name="Загрузил")
++    # Этап 20 (треб. 3): статус ИИ-индексации версии (RAG-поиск по PDF).
++    # Значения согласованы с ai_checks.domain.models.IndexingStatus:
++    # pending → processing → done | error. Choices дублируются без
++    # импорта из ai_checks — домен storage не зависит от ИИ-контура.
++    INDEXING_STATUS_CHOICES = [
++        ('pending', 'В очереди'),
++        ('processing', 'Индексируется'),
++        ('done', 'Готово'),
++        ('error', 'Ошибка'),
++    ]
++    indexing_status = models.CharField(
++        max_length=10,
++        choices=INDEXING_STATUS_CHOICES,
++        default='pending',
++        verbose_name="Статус ИИ-индексации",
++    )
+ 
+     class Meta:
+         unique_together = ('document', 'version_number')
 diff --git a/storage/migrations/0030_documentversion_indexing_status.py b/storage/migrations/0030_documentversion_indexing_status.py
 new file mode 100644
 index 0000000..269ef49

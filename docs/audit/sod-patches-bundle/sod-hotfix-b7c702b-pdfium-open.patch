@@ -1,0 +1,368 @@
+diff --git a/ai_checks/domain/services.py b/ai_checks/domain/services.py
+index 731eebb..cc384cf 100644
+--- a/ai_checks/domain/services.py
++++ b/ai_checks/domain/services.py
+@@ -905,41 +905,48 @@ def bbox_ratios_for_rotation(
+     лист с поворотом (viewer_rotation — текущий поворот вьювера; если не
+     задан, берётся page.rotation из PDF). Возвращает x1/y1/x2/y2/x/y
+     в долях 0..1 или {} (если данных нет).
++
++    Неоткрываемый файл (PdfiumError: обрыв при передаче, пустой файл)
++    тоже даёт {} — подтверждение находки не должно падать 500
++    (view подставляет ratios по умолчанию, кроп не строится).
+     """
+     if bbox is None or page_number is None:
+         return {}
+-    with pdfium_tools.open_pdf(file_path) as pdf:
+-        if not (1 <= int(page_number) <= len(pdf)):
+-            return {}
+-        view = pdfium_tools.PdfPageView(pdf, int(page_number) - 1)
+-        rotation = (
+-            int(viewer_rotation)
+-            if viewer_rotation is not None and str(viewer_rotation) != ''
+-            else int(view.rotation or 0)
+-        ) % 360
+-
+-        width = float(view.mediabox.width)
+-        height = float(view.mediabox.height)
+-        view.close()
+-        x0, y0, x1, y1 = (float(v) for v in bbox)
+-        x0, x1 = min(x0, x1), max(x0, x1)
+-        y0, y1 = min(y0, y1), max(y0, y1)
+-
+-        if rotation == 90:
+-            px0, py0 = height - y1, x0
+-            px1, py1 = height - y0, x1
+-            display_w, display_h = height, width
+-        elif rotation == 180:
+-            px0, py0 = width - x1, height - y1
+-            px1, py1 = width - x0, height - y0
+-            display_w, display_h = width, height
+-        elif rotation == 270:
+-            px0, py0 = y0, width - x1
+-            px1, py1 = y1, width - x0
+-            display_w, display_h = height, width
+-        else:
+-            px0, py0, px1, py1 = x0, y0, x1, y1
+-            display_w, display_h = width, height
++    try:
++        with pdfium_tools.open_pdf(file_path) as pdf:
++            if not (1 <= int(page_number) <= len(pdf)):
++                return {}
++            view = pdfium_tools.PdfPageView(pdf, int(page_number) - 1)
++            rotation = (
++                int(viewer_rotation)
++                if viewer_rotation is not None and str(viewer_rotation) != ''
++                else int(view.rotation or 0)
++            ) % 360
++
++            width = float(view.mediabox.width)
++            height = float(view.mediabox.height)
++            view.close()
++            x0, y0, x1, y1 = (float(v) for v in bbox)
++            x0, x1 = min(x0, x1), max(x0, x1)
++            y0, y1 = min(y0, y1), max(y0, y1)
++
++            if rotation == 90:
++                px0, py0 = height - y1, x0
++                px1, py1 = height - y0, x1
++                display_w, display_h = height, width
++            elif rotation == 180:
++                px0, py0 = width - x1, height - y1
++                px1, py1 = width - x0, height - y0
++                display_w, display_h = width, height
++            elif rotation == 270:
++                px0, py0 = y0, width - x1
++                px1, py1 = y1, width - x0
++                display_w, display_h = height, width
++            else:
++                px0, py0, px1, py1 = x0, y0, x1, y1
++                display_w, display_h = width, height
++    except pdfium_tools.PdfiumError:
++        return {}
+ 
+     def ratio(value: float, size: float) -> float:
+         return min(1.0, max(0.0, value / size))
+diff --git a/ai_checks/pdfium_tools.py b/ai_checks/pdfium_tools.py
+index 5c5a785..e4c8f75 100644
+--- a/ai_checks/pdfium_tools.py
++++ b/ai_checks/pdfium_tools.py
+@@ -23,6 +23,8 @@ MediaBox):
+ from __future__ import annotations
+ 
+ import io
++import pathlib
++import re
+ from ctypes import byref, c_double, c_float, c_int, c_ubyte
+ 
+ import pypdfium2 as pdfium
+@@ -76,11 +78,138 @@ class Rect:
+                 f'{self.x1:.2f}, {self.y1:.2f})')
+ 
+ 
++# заголовки объектов для авто-ремонта ('N G obj' в потоке файла)
++_OBJ_RE = re.compile(rb'(?:^|[\r\n>])(\d{1,10})[\t ]+(\d{1,5})[\t ]+obj\b')
++
++
++def _read_source(source) -> bytes:
++    """Приводит источник к bytes ДО передачи в pypdfium2.
++
++    - str/Path: читаем сами (open(path, 'rb').read() эквивалент
++      Path.read_bytes) — данные отдаются через FPDF_LoadMemDocument64,
++      нативный FPDF_LoadDocument (и его кодировки пути/второе открытие
++      файла) не используется; отсутствующий файл даёт понятное
++      исключение с путём.
++    - file-like: читается целиком в bytes, поэтому требование pypdfium2
++      «file-like должен оставаться открытым до конца работы с
++      документом» выполняется автоматически — объект можно закрыть
++      сразу после open_pdf (байты удерживаются самим документом).
++    - bytes/ctypes.Array — как есть.
++    """
++    if isinstance(source, (str, pathlib.Path)):
++        return pathlib.Path(source).read_bytes()
++    if isinstance(source, (bytes, bytearray)):
++        return bytes(source)
++    read = getattr(source, 'read', None)
++    if read is None:
++        return source  # ctypes.Array и пр. — pypdfium2 примет как есть
++    data = read()
++    if not isinstance(data, (bytes, bytearray)):
++        raise PdfiumError(
++            'Файл открыт в текстовом режиме — нужен open(path, "rb") '
++            f'(получено {type(data).__name__})',
++        )
++    return bytes(data)
++
++
++def _object_dict(data: bytes, offset: int) -> bytes:
++    """Словарь объекта (до endobj) для поиска /Type."""
++    end = data.find(b'endobj', offset)
++    if end < 0:
++        end = min(offset + 4096, len(data))
++    return data[offset:end]
++
++
++def _rebuild_xref(data: bytes) -> bytes | None:
++    """Пересобирает xref-таблицу по фактическому расположению объектов.
++
++    Аналог молчаливого авто-ремонта MuPDF (pdf_repair_xref), который
++    выполнялся в прежней реализации на PyMuPDF: сканирует заголовки
++    'N G obj', находит /Type /Catalog (если каталога нет, но есть
++    /Type /Pages — синтезирует Catalog над ним), дописывает в копию
++    файла свежую xref-таблицу и trailer. Возвращает новую копию байтов
++    или None, если ремонт невозможен (нет объектов/каталога).
++    """
++    if data.find(b'%PDF-') < 0:
++        return None
++    entries: dict[int, tuple[int, int]] = {}
++    for match in _OBJ_RE.finditer(data):
++        num, gen = int(match.group(1)), int(match.group(2))
++        if num not in entries:  # при инкрементальных обновлениях 1-я копия
++            entries[num] = (gen, match.start(1))
++    if not entries:
++        return None
++    root = pages_root = None
++    for num, (gen, offset) in sorted(entries.items()):
++        body = _object_dict(data, offset)
++        if root is None and re.search(rb'/Type[\t ]*/Catalog\b', body):
++            root = (num, gen)
++        if pages_root is None and re.search(rb'/Type[\t ]*/Pages\b', body):
++            pages_root = (num, gen)
++    if root is None and pages_root is None:
++        return None
++    max_num = max(entries)
++    extra = b''
++    if root is None:
++        syn_num = max_num + 1
++        extra = (
++            f'{syn_num} 0 obj\n<< /Type /Catalog /Pages '
++            f'{pages_root[0]} {pages_root[1]} R >>\nendobj\n'.encode()
++        )
++        entries[syn_num] = (0, len(data) + 1)  # сразу после добавляемой \n
++        max_num = syn_num
++        root = (syn_num, 0)
++    out = bytearray(data)
++    out.extend(b'\n')
++    out.extend(extra)
++    xref_off = len(out)
++    out.extend(f'xref\n0 {max_num + 1}\n'.encode())
++    out.extend(b'0000000000 65535 f \n')
++    for i in range(1, max_num + 1):
++        if i in entries:
++            gen, offset = entries[i]
++            out.extend(f'{offset:010d} {gen:05d} n \n'.encode())
++        else:
++            out.extend(b'0000000000 65535 f \n')
++    out.extend(
++        f'trailer\n<< /Size {max_num + 1} /Root {root[0]} {root[1]} R >>\n'
++        f'startxref\n{xref_off}\n%%EOF\n'.encode()
++    )
++    return bytes(out)
++
++
++def _repair_due(exc: Exception) -> bool:
++    """Ремонт уместен только для FPDF_ERR_FORMAT (битая структура данных)."""
++    if getattr(exc, 'err_code', None) == pdfium_raw.FPDF_ERR_FORMAT:
++        return True
++    return 'Data format error' in str(exc)  # сборки без err_code
++
++
+ def open_pdf(source) -> pdfium.PdfDocument:
+-    """Открывает PDF (путь/bytes/файл); битый файл -> PdfiumError."""
++    """Открывает PDF (путь/bytes/файл); битый файл -> PdfiumError.
++
++    Данные читаются в bytes до передачи в pypdfium2 (см. _read_source):
++    str-путь не идёт в нативный FPDF_LoadDocument, file-like не нужно
++    держать открытым. Если PDFium не смог разобрать корректно
++    прочитанные данные (FPDF_ERR_FORMAT «Data format error» — например,
++    у файла нет xref-таблицы из-за обрыва при передаче; PyMuPDF такие
++    файлы открывал молча), выполняется пересборка xref (_rebuild_xref)
++    и повторная попытка открытия восстановленной копии.
++    """
+     try:
+-        return pdfium.PdfDocument(source)
+-    except Exception as exc:  # pypdfium2.PdfiumError, OSError
++        data = _read_source(source)
++        try:
++            return pdfium.PdfDocument(data)
++        except pdfium.PdfiumError as exc:
++            if not (data and _repair_due(exc)):
++                raise
++            repaired = _rebuild_xref(data)
++            if repaired is None:
++                raise
++            return pdfium.PdfDocument(repaired)
++    except pdfium.PdfiumError as exc:
++        raise PdfiumError(f'Не удалось открыть PDF: {exc}') from exc
++    except Exception as exc:  # OSError (файл/права), TypeError и пр.
+         raise PdfiumError(f'Не удалось открыть PDF: {exc}') from exc
+ 
+ 
+diff --git a/ai_checks/tests/test_pdfium_open.py b/ai_checks/tests/test_pdfium_open.py
+new file mode 100644
+index 0000000..a79212d
+--- /dev/null
++++ b/ai_checks/tests/test_pdfium_open.py
+@@ -0,0 +1,122 @@
++"""open_pdf: чтение источника в bytes и авто-ремонт PDF без xref-таблицы.
++
++Регрессия на 500 кнопки «Подтвердить» после замены PyMuPDF на pypdfium2:
++PDFium (в отличие от MuPDF) не восстанавливает файлы без xref-таблицы
++(обрыв при передаче) и падает с FPDF_ERR_FORMAT «Data format error».
++"""
++
++from __future__ import annotations
++
++import os
++import tempfile
++
++from django.test import SimpleTestCase
++
++from ai_checks import pdfium_tools
++from ai_checks.domain.services import bbox_ratios_for_rotation
++from ai_checks.tests.pdfgen import make_pdf_bytes
++
++BBOX = [10, 20, 30, 50]
++
++
++def _good_pdf_bytes() -> bytes:
++    return make_pdf_bytes(texts=[('Source', 10, (20, 40))])
++
++
++def _truncated_pdf_bytes() -> bytes:
++    """Валидный PDF, обрезанный после последнего endobj (нет xref/trailer)."""
++    data = _good_pdf_bytes()
++    return data[:data.rfind(b'endobj') + 6]
++
++
++class OpenPdfSourceTests(SimpleTestCase):
++    """Чекпойнты аудита: путь/file-like читаются в bytes корректно."""
++
++    def setUp(self):
++        fd, self.path = tempfile.mkstemp(suffix='.pdf')
++        os.close(fd)
++        with open(self.path, 'wb') as fh:
++            fh.write(_good_pdf_bytes())
++
++    def tearDown(self):
++        if os.path.exists(self.path):
++            os.remove(self.path)
++
++    def test_str_path_opens(self):
++        with pdfium_tools.open_pdf(self.path) as pdf:
++            self.assertEqual(len(pdf), 1)
++
++    def test_bytes_open(self):
++        with pdfium_tools.open_pdf(_good_pdf_bytes()) as pdf:
++            self.assertEqual(len(pdf), 1)
++
++    def test_filelike_may_close_before_use(self):
++        with open(self.path, 'rb') as fh:
++            pdf = pdfium_tools.open_pdf(fh)
++        # дескриптор уже закрыт — документ обязан работать (bytes прочитаны)
++        with pdf:
++            self.assertEqual(len(pdf), 1)
++
++    def test_text_mode_filelike_rejected(self):
++        # бинарный PDF в текстовом режиме: decode может упасть раньше —
++        # в любом случае наружу должен выходить PdfiumError, а не
++        # низкоуровневый UnicodeDecodeError/TypeError
++        with open(self.path, 'r') as fh:
++            with self.assertRaises(pdfium_tools.PdfiumError):
++                pdfium_tools.open_pdf(fh)
++
++    def test_missing_file_mentions_path(self):
++        missing = os.path.join(self.path + '.missing')
++        with self.assertRaises(pdfium_tools.PdfiumError) as ctx:
++            pdfium_tools.open_pdf(missing)
++        self.assertIn(missing, str(ctx.exception))
++
++
++class OpenPdfRepairTests(SimpleTestCase):
++    """PDF без xref-таблицы: PyMuPDF открывал молча — open_pdf чинит."""
++
++    def setUp(self):
++        fd, self.path = tempfile.mkstemp(suffix='.pdf')
++        os.close(fd)
++        with open(self.path, 'wb') as fh:
++            fh.write(_truncated_pdf_bytes())
++
++    def tearDown(self):
++        if os.path.exists(self.path):
++            os.remove(self.path)
++
++    def test_truncated_bytes_repaired(self):
++        with pdfium_tools.open_pdf(_truncated_pdf_bytes()) as pdf:
++            self.assertEqual(len(pdf), 1)
++
++    def test_truncated_path_repaired(self):
++        with pdfium_tools.open_pdf(self.path) as pdf:
++            self.assertEqual(len(pdf), 1)
++
++    def test_truncated_text_extracted(self):
++        with pdfium_tools.open_pdf(self.path) as pdf:
++            view = pdfium_tools.PdfPageView(pdf, 0)
++            try:
++                self.assertIn('Source', view.get_text())
++            finally:
++                view.close()
++
++    def test_bbox_ratios_works_on_truncated(self):
++        ratios = bbox_ratios_for_rotation(self.path, 1, BBOX, None)
++        self.assertTrue(ratios)
++
++    def test_bbox_ratios_unrepairable_returns_empty(self):
++        # пустой файл: ремонт невозможен — но 500 не должно быть
++        with open(self.path, 'wb') as fh:
++            fh.write(b'')
++        self.assertEqual(
++            bbox_ratios_for_rotation(self.path, 1, BBOX, None), {},
++        )
++
++    def test_empty_bytes_clear_error(self):
++        with self.assertRaises(pdfium_tools.PdfiumError):
++            pdfium_tools.open_pdf(b'')
++
++    def test_garbage_without_header_clear_error(self):
++        with self.assertRaises(pdfium_tools.PdfiumError):
++            pdfium_tools.open_pdf(b'this is not a pdf at all' * 20)

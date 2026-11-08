@@ -905,41 +905,48 @@ def bbox_ratios_for_rotation(
     лист с поворотом (viewer_rotation — текущий поворот вьювера; если не
     задан, берётся page.rotation из PDF). Возвращает x1/y1/x2/y2/x/y
     в долях 0..1 или {} (если данных нет).
+
+    Неоткрываемый файл (PdfiumError: обрыв при передаче, пустой файл)
+    тоже даёт {} — подтверждение находки не должно падать 500
+    (view подставляет ratios по умолчанию, кроп не строится).
     """
     if bbox is None or page_number is None:
         return {}
-    with pdfium_tools.open_pdf(file_path) as pdf:
-        if not (1 <= int(page_number) <= len(pdf)):
-            return {}
-        view = pdfium_tools.PdfPageView(pdf, int(page_number) - 1)
-        rotation = (
-            int(viewer_rotation)
-            if viewer_rotation is not None and str(viewer_rotation) != ''
-            else int(view.rotation or 0)
-        ) % 360
+    try:
+        with pdfium_tools.open_pdf(file_path) as pdf:
+            if not (1 <= int(page_number) <= len(pdf)):
+                return {}
+            view = pdfium_tools.PdfPageView(pdf, int(page_number) - 1)
+            rotation = (
+                int(viewer_rotation)
+                if viewer_rotation is not None and str(viewer_rotation) != ''
+                else int(view.rotation or 0)
+            ) % 360
 
-        width = float(view.mediabox.width)
-        height = float(view.mediabox.height)
-        view.close()
-        x0, y0, x1, y1 = (float(v) for v in bbox)
-        x0, x1 = min(x0, x1), max(x0, x1)
-        y0, y1 = min(y0, y1), max(y0, y1)
+            width = float(view.mediabox.width)
+            height = float(view.mediabox.height)
+            view.close()
+            x0, y0, x1, y1 = (float(v) for v in bbox)
+            x0, x1 = min(x0, x1), max(x0, x1)
+            y0, y1 = min(y0, y1), max(y0, y1)
 
-        if rotation == 90:
-            px0, py0 = height - y1, x0
-            px1, py1 = height - y0, x1
-            display_w, display_h = height, width
-        elif rotation == 180:
-            px0, py0 = width - x1, height - y1
-            px1, py1 = width - x0, height - y0
-            display_w, display_h = width, height
-        elif rotation == 270:
-            px0, py0 = y0, width - x1
-            px1, py1 = y1, width - x0
-            display_w, display_h = height, width
-        else:
-            px0, py0, px1, py1 = x0, y0, x1, y1
-            display_w, display_h = width, height
+            if rotation == 90:
+                px0, py0 = height - y1, x0
+                px1, py1 = height - y0, x1
+                display_w, display_h = height, width
+            elif rotation == 180:
+                px0, py0 = width - x1, height - y1
+                px1, py1 = width - x0, height - y0
+                display_w, display_h = width, height
+            elif rotation == 270:
+                px0, py0 = y0, width - x1
+                px1, py1 = y1, width - x0
+                display_w, display_h = height, width
+            else:
+                px0, py0, px1, py1 = x0, y0, x1, y1
+                display_w, display_h = width, height
+    except pdfium_tools.PdfiumError:
+        return {}
 
     def ratio(value: float, size: float) -> float:
         return min(1.0, max(0.0, value / size))
