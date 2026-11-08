@@ -1,10 +1,6 @@
-"""UI ИИ-контура (Ф1): панель «Проверить», находки, подтверждение/отклонение.
+"""UI ИИ-контура (Ф1): ИИ-поиск, отчёт ГИПу, база знаний.
 
-Все вьюхи доступны только при AI_CHECKS_ENABLED=True (иначе 404) и только
-пользователям с правом создавать замечания к документу
-(storage.domain.services.check_issue_permission). Подтверждение находки
-создаёт Issue через storage.domain.services.create_issue (сервис ядра
-не изменяется).
+Все вьюхи доступны только при AI_CHECKS_ENABLED=True (иначе 404).
 
 Финальная архитектура ИИ-контура (этап 20):
 - ИИ-поиск: фильтры по разделу/типу источника (треб. 8), история запросов
@@ -16,40 +12,30 @@
 
 from __future__ import annotations
 
-import io
-import json
 import logging
 from datetime import date, timedelta
 
-from PIL import Image, ImageDraw
 from django.conf import settings
 from django.contrib.auth.decorators import login_required
 from django.core.paginator import Paginator
 from django.db.models import Count, F
-from django.http import Http404, HttpResponse
+from django.http import Http404
 from django.shortcuts import get_object_or_404, render
 from django.utils import timezone
 from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_GET, require_POST
 
-from ai_checks import pdfium_tools
 from ai_checks.domain.models import (
-    CheckRun,
     GeneratedReport,
     InternalDocument,
-    PendingCheckResult,
     RagQuery,
 )
 from ai_checks.domain.services import (
     KB_CODE_PREFIX,
-    KNOWLEDGE_DOC_TYPES,
     BASE_NORM_LABEL,
-    bbox_ratios_for_rotation,
-    crop_finding_image,
     generate_gip_report,
     gip_report_docx,
     gip_report_pdf,
-    index_internal_document,
     knowledge_documents,
     rag_answer,
     reindex_document,
@@ -58,16 +44,8 @@ from ai_checks.domain.services import (
     upload_knowledge_document,
 )
 from storage.domain.services import get_accessible_projects
-from ai_checks.tasks import (
-    check_document_version_task,
-    index_knowledge_document_task,
-)
+from ai_checks.tasks import index_knowledge_document_task
 from storage.domain.models import Document, DocumentVersion
-from storage.domain.services import check_issue_permission, create_issue
-
-BBOX_MARGIN_PT = 12
-PREVIEW_SCALE = 2  # был pymupdf.Matrix(2, 2)
-BBOX_STROKE_PT = 1.2  # была толщина draw_rect в PyMuPDF
 
 logger = logging.getLogger(__name__)
 
@@ -82,311 +60,6 @@ RAG_EXAMPLE_QUESTIONS = (
 def _ensure_enabled() -> None:
     if not settings.AI_CHECKS_ENABLED:
         raise Http404('ИИ-контур выключен (AI_CHECKS_ENABLED=False)')
-
-
-def _document_for(user, document_id: int) -> Document:
-    document = get_object_or_404(Document, pk=document_id, is_deleted=False)
-    if not check_issue_permission(user, document):
-        raise Http404('Нет доступа к документу')
-    return document
-
-
-def _latest_run(document: Document):
-    version = document.current_version
-    if version is None:
-        return None, None
-    run = (
-        CheckRun.objects
-        .filter(document_version=version)
-        .order_by('-created_at')
-        .first()
-    )
-    return version, run
-
-
-def _render_panel(request, document, run=None, error=''):
-    version = document.current_version
-    findings = []
-    if run is not None:
-        findings = list(
-            run.results.select_related('rule').order_by('page', 'pk').all(),
-        )
-    # Блок 3: проверка по листу — панель показывает находки этого листа.
-    page_filter = run.page_number if run is not None else None
-    page_findings = findings
-    if page_filter:
-        page_findings = [
-            finding for finding in findings
-            if finding.page == page_filter
-        ]
-    # Блок 2: селектор «Проверка по» — внутренние стандарты проекта
-    # (та же видимость, что у блока «Внутренние стандарты» в БЗ).
-    norm_standards = list(
-        knowledge_documents(document.project)
-        .filter(doc_type=InternalDocument.DocType.INTERNAL_STANDARD)
-        .order_by('title')
-    )
-    return render(request, 'ai_checks/panel.html', {
-        'document': document,
-        'version': version,
-        'run': run,
-        'findings': findings,
-        'page_filter': page_filter,
-        'page_findings': page_findings,
-        'norm_standards': norm_standards,
-        'norm_base_label': BASE_NORM_LABEL,
-        'error': error,
-    })
-
-
-def _render_row(request, finding: PendingCheckResult):
-    return render(request, 'ai_checks/_finding_row.html', {
-        'finding': finding,
-    })
-
-
-@login_required
-@require_GET
-@never_cache  # HTMX-фрагмент: без этого браузер/SW может отдавать устаревший статус прогона
-def panel(request, document_id: int):
-    """HTMX-фрагмент: статус прогона и список находок."""
-    _ensure_enabled()
-    document = _document_for(request.user, document_id)
-    version, run = _latest_run(document)
-    return _render_panel(request, document, run=run)
-
-
-@login_required
-@require_POST
-def start_check(request, document_id: int):
-    """Запуск прогона (Celery; в dev — синхронно через eager-режим).
-
-    Бэта-фикс 2026-11-08, блок 3: принимает page_number (проверка
-    одного листа) и norm_source_id (селектор «Проверка по»);
-    невалидные значения молча приводятся к None (полный прогон
-    по базовому ГОСТ Р 21.101-2026).
-    """
-    _ensure_enabled()
-    document = _document_for(request.user, document_id)
-    version = document.current_version
-    if version is None:
-        return _render_panel(
-            request, document, error='У документа нет текущей версии.',
-        )
-
-    page_number = request.POST.get('page_number') or None
-    if page_number is not None:
-        try:
-            page_number = max(1, int(page_number))
-        except (TypeError, ValueError):
-            page_number = None
-
-    norm_source_id = request.POST.get('norm_source_id') or None
-    if norm_source_id is not None:
-        try:
-            norm_source_id = int(norm_source_id)
-        except (TypeError, ValueError):
-            norm_source_id = None
-        else:
-            if not InternalDocument.objects.filter(
-                pk=norm_source_id,
-                doc_type=InternalDocument.DocType.INTERNAL_STANDARD,
-                is_active=True,
-            ).exists():
-                norm_source_id = None
-
-    check_document_version_task.delay(
-        version.pk,
-        request.user.pk,
-        page_number=page_number,
-        norm_source_id=norm_source_id,
-    )
-    version, run = _latest_run(document)
-    return _render_panel(request, document, run=run)
-
-
-@login_required
-@require_POST
-def confirm_finding(request, pk: int):
-    """Подтверждение находки: создаёт Issue через сервис ядра."""
-    _ensure_enabled()
-    finding = get_object_or_404(
-        PendingCheckResult.objects.select_related(
-            'check_run__document_version__document', 'rule',
-        ),
-        pk=pk,
-    )
-    document = finding.check_run.document_version.document
-    _document_for(request.user, document.pk)
-
-    if finding.status == PendingCheckResult.Status.PENDING:
-        version = finding.check_run.document_version
-        # Поворот вьювера передаёт кнопка (hx-vals): bbox PyMuPDF —
-        # неповёрнутая система, вьювер отображает с поворотом.
-        ratios = bbox_ratios_for_rotation(
-            version.file.path,
-            finding.page,
-            finding.bbox,
-            request.POST.get('rotation'),
-        )
-        crop_base64 = None
-        if finding.bbox and finding.page:
-            try:
-                crop_base64 = crop_finding_image(
-                    version.file.path, finding.page, finding.bbox,
-                )
-            except (OSError, RuntimeError, ValueError):
-                crop_base64 = None
-        try:
-            create_issue(
-                request.user,
-                document,
-                description=f'[ИИ] {finding.message}',
-                version=version,
-                page_number=finding.page,
-                x_ratio=ratios.get('x_ratio', 0.5 if finding.page else None),
-                y_ratio=ratios.get('y_ratio', 0.5 if finding.page else None),
-                x1_ratio=ratios.get('x1_ratio'),
-                y1_ratio=ratios.get('y1_ratio'),
-                x2_ratio=ratios.get('x2_ratio'),
-                y2_ratio=ratios.get('y2_ratio'),
-                crop_image_base64=crop_base64,
-            )
-        except ValueError as exc:
-            # Бэта-тест 2026-11-08: create_issue валидирует координаты и
-            # кроп (<=5 МБ) и бросает ValueError — без перехвата это 500
-            # «Подтвердить» (находка остаётся pending, можно повторить).
-            logger.warning(
-                'Подтверждение находки %s (версия %s): %s: %s',
-                pk, version.pk, type(exc).__name__, exc,
-            )
-            response = _render_row(request, finding)
-            response['HX-Trigger'] = 'ai-finding-error'
-            return response
-        finding.status = PendingCheckResult.Status.CONFIRMED
-        finding.reviewed_by = request.user
-        finding.reviewed_at = timezone.now()
-        finding.save(update_fields=['status', 'reviewed_by', 'reviewed_at'])
-
-    response = _render_row(request, finding)
-    # HTMX: обновить список/счётчики «Замечания» после создания Issue.
-    response['HX-Trigger'] = 'ai-finding-confirmed'
-    return response
-
-
-@login_required
-@require_POST
-def reject_finding(request, pk: int):
-    """Отклонение находки: status=rejected."""
-    _ensure_enabled()
-    finding = get_object_or_404(
-        PendingCheckResult.objects.select_related(
-            'check_run__document_version__document',
-        ),
-        pk=pk,
-    )
-    document = finding.check_run.document_version.document
-    _document_for(request.user, document.pk)
-
-    if finding.status == PendingCheckResult.Status.PENDING:
-        finding.status = PendingCheckResult.Status.REJECTED
-        finding.reviewed_by = request.user
-        finding.reviewed_at = timezone.now()
-        finding.save(update_fields=['status', 'reviewed_by', 'reviewed_at'])
-
-    return _render_row(request, finding)
-
-
-def _preview_placeholder() -> Image.Image:
-    """Серая заглушка вместо превью находки.
-
-    Возвращается, когда PDF версии не читается (битый файл, OSError):
-    500 здесь был бы виден как «сломанная картинка» в панели и в логах,
-    а так панель остаётся работоспособной (маркап см. на листе).
-    """
-    image = Image.new('RGB', (320, 200), (238, 240, 243))
-    ImageDraw.Draw(image).rectangle(
-        [1, 1, 318, 198], outline=(180, 186, 196), width=1,
-    )
-    return image
-
-
-def _render_finding_preview(version, finding: PendingCheckResult) -> Image.Image:
-    """Кроп места находки с подсветкой bbox (как прежний код вьюхи)."""
-    with pdfium_tools.open_pdf(version.file.path) as pdf:
-        if finding.page is None or not (1 <= finding.page <= len(pdf)):
-            view = pdfium_tools.PdfPageView(pdf, 0)
-        else:
-            view = pdfium_tools.PdfPageView(pdf, finding.page - 1)
-
-        page_rect = view.rect
-        bbox = finding.bbox or [
-            page_rect.x0, page_rect.y0, page_rect.x1, page_rect.y1,
-        ]
-        clip = pdfium_tools.Rect(
-            max(page_rect.x0, bbox[0] - BBOX_MARGIN_PT),
-            max(page_rect.y0, bbox[1] - BBOX_MARGIN_PT),
-            min(page_rect.x1, bbox[2] + BBOX_MARGIN_PT),
-            min(page_rect.y1, bbox[3] + BBOX_MARGIN_PT),
-        )
-        if clip.is_empty or clip.width < 1 or clip.height < 1:
-            clip = pdfium_tools.Rect(
-                page_rect.x0, page_rect.y0,
-                min(page_rect.x1, page_rect.x0 + 200),
-                min(page_rect.y1, page_rect.y0 + 160),
-            )
-        try:
-            image = view.render_clip(clip, scale=PREVIEW_SCALE)
-        finally:
-            view.close()
-
-    draw = ImageDraw.Draw(image)
-    box_px = [
-        (bbox[0] - clip.x0) * PREVIEW_SCALE,
-        (bbox[1] - clip.y0) * PREVIEW_SCALE,
-        (bbox[2] - clip.x0) * PREVIEW_SCALE,
-        (bbox[3] - clip.y0) * PREVIEW_SCALE,
-    ]
-    draw.rectangle(
-        box_px,
-        outline=(217, 26, 26),
-        width=max(1, round(BBOX_STROKE_PT * PREVIEW_SCALE)),
-    )
-    return image
-
-
-@login_required
-@require_GET
-def finding_preview(request, pk: int):
-    """PNG-кроп места находки с подсветкой bbox (подсветка на PDF)."""
-    _ensure_enabled()
-    finding = get_object_or_404(
-        PendingCheckResult.objects.select_related(
-            'check_run__document_version__document',
-        ),
-        pk=pk,
-    )
-    document = finding.check_run.document_version.document
-    _document_for(request.user, document.pk)
-
-    version = finding.check_run.document_version
-    try:
-        image = _render_finding_preview(version, finding)
-    except (pdfium_tools.PdfiumError, OSError, ValueError) as exc:
-        # PdfiumError — битый/недочитанный PDF (Data format error и т.п.);
-        # OSError — файл версии недоступен на диске. Раньше это было 500
-        # и «сломанная» картинка в панели (см. /ai/finding/84/preview/).
-        logger.warning(
-            'Превью находки %s (версия %s): %s: %s',
-            pk, version.pk, type(exc).__name__, exc,
-        )
-        image = _preview_placeholder()
-
-    buffer = io.BytesIO()
-    image.save(buffer, format='PNG')
-    return HttpResponse(
-        buffer.getvalue(), content_type='image/png',
-    )
 
 
 def _rag_groups(sources: list[dict]) -> list[tuple[str, str, list[dict]]]:
@@ -412,6 +85,7 @@ RAG_HISTORY_PAGE_SIZE = 20
 
 @login_required
 @require_GET
+@never_cache  # HTMX-фрагмент: без этого браузер/SW может отдавать устаревший статус прогона
 def rag_panel(request, project_id: int):
     """HTMX-фрагмент вкладки «ИИ-поиск»: форма вопроса и история."""
     _ensure_enabled()
