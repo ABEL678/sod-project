@@ -1,0 +1,9 @@
+fix(ai_checks): PDF fallback через pypdf и sticky-контролы в панели
+
+- open_pdf(): ловим реальное исключение вместо пустого PdfiumError('') —
+  теперь _repair_due() корректно определяет форматную ошибку и запускает
+  xref-repair; добавлена попытка 3 (переконвертация через pypdf)
+- _panel.html: добавлен CSS .ai-checks__controls-sticky (position: sticky,
+  top: 0, z-index: 10, background: #fff) — кнопки не скролятся с находками
+- _start_controls.html: обёртка кнопок с классом sticky
+- test_pdfium_open.py: добавлен класс OpenPdfPyPdfFallbackTests (3 теста)

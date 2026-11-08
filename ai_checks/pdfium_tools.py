@@ -185,6 +185,27 @@ def _repair_due(exc: Exception) -> bool:
     return 'Data format error' in str(exc)  # сборки без err_code
 
 
+def _reencode_pdf_via_pypdf(data: bytes) -> bytes | None:
+    """Переконвертирует PDF через pypdf (fallback для pypdfium2).
+
+    Некоторые PDF (сгенерированные PyMuPDF, специфичными библиотеками)
+    содержат байты, которые pypdfium2 не может разобрать, но которые
+    PyMuPDF открывает молча. pypdf при чтении и перезаписи «нормализует»
+    структуру файла, и pypdfium2 успешно открывает результат.
+    """
+    try:
+        from pypdf import PdfReader, PdfWriter
+        reader = PdfReader(io.BytesIO(data))
+        writer = PdfWriter()
+        for page in reader.pages:
+            writer.add_page(page)
+        out = io.BytesIO()
+        writer.write(out)
+        return out.getvalue()
+    except Exception:  # noqa: BLE001 — fallback: молча возвращаем None
+        return None
+
+
 def open_pdf(source) -> pdfium.PdfDocument:
     """Открывает PDF (путь/bytes/файл); битый файл -> PdfiumError.
 
@@ -195,22 +216,34 @@ def open_pdf(source) -> pdfium.PdfDocument:
     у файла нет xref-таблицы из-за обрыва при передаче; PyMuPDF такие
     файлы открывал молча), выполняется пересборка xref (_rebuild_xref)
     и повторная попытка открытия восстановленной копии.
+    
+    Если ремонт xref не помог — пробуем переконвертацию через pypdf
+    (нормализует структуру файла, которую pypdfium2 не понимает).
     """
+    data = _read_source(source)
+    
+    # Попытка 1: прямой открытие.
     try:
-        data = _read_source(source)
-        try:
-            return pdfium.PdfDocument(data)
-        except pdfium.PdfiumError as exc:
-            if not (data and _repair_due(exc)):
-                raise
-            repaired = _rebuild_xref(data)
-            if repaired is None:
-                raise
-            return pdfium.PdfDocument(repaired)
+        return pdfium.PdfDocument(data)
     except pdfium.PdfiumError as exc:
-        raise PdfiumError(f'Не удалось открыть PDF: {exc}') from exc
-    except Exception as exc:  # OSError (файл/права), TypeError и пр.
-        raise PdfiumError(f'Не удалось открыть PDF: {exc}') from exc
+        # Попытка 2: ремонт xref (если ошибка формата).
+        if data and _repair_due(exc):
+            try:
+                repaired = _rebuild_xref(data)
+                if repaired is not None:
+                    return pdfium.PdfDocument(repaired)
+            except Exception:  # noqa: BLE001
+                pass
+    
+    # Попытка 3: переконвертация через pypdf (fallback).
+    reencoded = _reencode_pdf_via_pypdf(data)
+    if reencoded is not None:
+        try:
+            return pdfium.PdfDocument(reencoded)
+        except pdfium.PdfiumError:
+            pass
+    
+    raise PdfiumError(f'Не удалось открыть PDF')
 
 
 class PdfPageView:
