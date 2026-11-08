@@ -1,6 +1,7 @@
 {% comment %}
-Ф2: результаты RAG — источники с цитатами, сгруппированные по tenant_scope
-(Проект → Компания → Общие знания).
+Треб. 8: результаты ИИ-поиска — ответ с цитатами [N] и карточки источников
+(тип, документ, раздел, лист, цитата). Группировка: документы проекта →
+внутренние стандарты.
 {% endcomment %}
 {% if error %}
   <div class="alert alert-warning py-1 px-2 small mb-2">{{ error }}</div>
@@ -18,23 +19,32 @@
          style="white-space: pre-wrap;">{{ answer }}</div>
   {% endif %}
 
-  {% for scope, label, items in groups %}
+  {% for group_code, group_label, items in groups %}
     <div class="mb-3">
       <div class="fw-semibold small mb-1">
-        {% if scope == 'project' %}
+        {% if group_code == 'project' %}
           <i class="bi bi-folder2-open me-1" aria-hidden="true"></i>
-        {% elif scope == 'company' %}
-          <i class="bi bi-building me-1" aria-hidden="true"></i>
         {% else %}
-          <i class="bi bi-globe2 me-1" aria-hidden="true"></i>
+          <i class="bi bi-journal-bookmark me-1" aria-hidden="true"></i>
         {% endif %}
-        {{ label }}
+        {{ group_label }}
       </div>
       {% for source in items %}
         <div class="border rounded p-2 mb-1 bg-white" id="rag-source-{{ source.chunk_id }}">
-          <div class="d-flex justify-content-between align-items-baseline small">
-            <span class="fw-semibold">{{ source.document_title }}</span>
+          <div class="d-flex justify-content-between align-items-baseline small flex-wrap gap-1">
+            <span>
+              <span class="badge text-bg-light border">
+                {% if source.type == 'project' %}Проект{% else %}Стандарт{% endif %}
+              </span>
+              <span class="fw-semibold ms-1">{{ source.document_title }}</span>
+            </span>
             <span class="text-muted num">
+              {% if source.section_code %}
+                <span class="badge text-bg-light border">Раздел {{ source.section_code }}</span>
+              {% endif %}
+              {% if source.page %}
+                <span class="badge text-bg-light border">Лист {{ source.page }}</span>
+              {% endif %}
               score {{ source.score|floatformat:3 }}
             </span>
           </div>

@@ -337,6 +337,22 @@ class DocumentVersion(models.Model):
     comment = models.TextField(blank=True, verbose_name="Комментарий")
     uploaded_at = models.DateTimeField(auto_now_add=True, verbose_name="Дата загрузки")
     uploaded_by = models.ForeignKey(User, on_delete=models.PROTECT, verbose_name="Загрузил")
+    # Этап 20 (треб. 3): статус ИИ-индексации версии (RAG-поиск по PDF).
+    # Значения согласованы с ai_checks.domain.models.IndexingStatus:
+    # pending → processing → done | error. Choices дублируются без
+    # импорта из ai_checks — домен storage не зависит от ИИ-контура.
+    INDEXING_STATUS_CHOICES = [
+        ('pending', 'В очереди'),
+        ('processing', 'Индексируется'),
+        ('done', 'Готово'),
+        ('error', 'Ошибка'),
+    ]
+    indexing_status = models.CharField(
+        max_length=10,
+        choices=INDEXING_STATUS_CHOICES,
+        default='pending',
+        verbose_name="Статус ИИ-индексации",
+    )
 
     class Meta:
         unique_together = ('document', 'version_number')

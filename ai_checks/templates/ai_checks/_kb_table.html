@@ -26,11 +26,11 @@ stage2: таблица документов базы знаний (переис�
             </td>
             <td class="small text-muted">{{ doc.created_at|date:"d.m.Y H:i" }}</td>
             <td>
-              {% if doc.index_status == 'done' %}
+              {% if doc.indexing_status == 'done' %}
                 <span class="badge text-bg-success">Готово</span>
-              {% elif doc.index_status == 'running' %}
+              {% elif doc.indexing_status == 'processing' %}
                 <span class="badge text-bg-info">Индексируется</span>
-              {% elif doc.index_status == 'failed' %}
+              {% elif doc.indexing_status == 'error' %}
                 <span class="badge text-bg-danger" title="{{ doc.index_error }}">Ошибка</span>
               {% else %}
                 <span class="badge text-bg-secondary">В очереди</span>

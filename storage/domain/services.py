@@ -3,6 +3,7 @@ from collections import defaultdict
 from datetime import timedelta
 from decimal import Decimal, InvalidOperation
 import io
+import logging
 
 from django.conf import settings
 import uuid
@@ -16,6 +17,8 @@ from django.core.validators import validate_email
 from django.db.models import Count, Max, Prefetch, Q, QuerySet
 from django.db import transaction
 from django.utils import timezone
+
+logger = logging.getLogger(__name__)
 
 from storage.domain.models import (
     Company,
@@ -3152,6 +3155,7 @@ def upload_document(
     file,
     comment: str = "",
     folder: Folder | None = None,
+    skip_ai_index: bool = False,
 ) -> DocumentVersion:
     """Единственная точка создания версий документа.
 
@@ -3162,6 +3166,11 @@ def upload_document(
     - Автоинкремент номера версии.
     - Создание DocumentVersion с file_size и uploaded_by.
     - Обновление current_version и updated_at у документа.
+    - Этап 20 (треб. 4): автоиндексация PDF-версии для ИИ-поиска
+      (Celery-задача ai_checks.index_project_document) — когда включён
+      AI_CHECKS_ENABLED и файл PDF. skip_ai_index=True отключает
+      постановку задачи (документы базы знаний индексируются отдельно
+      в InternalChunk через ai_checks).
     """
     if not check_write_permission(user, section):
         raise PermissionDenied("Нет прав на запись в этот раздел")
@@ -3317,6 +3326,25 @@ def upload_document(
         doc.current_version = version
         doc.updated_at = timezone.now()
         doc.save(update_fields=['current_version', 'updated_at'])
+
+    # Этап 20 (треб. 4): после фиксации версии — автоиндексация PDF для
+    # ИИ-поиска. Ленивый импорт задачи (домен storage не зависит от
+    # ai_checks на уровне модуля); в dev/тестах Celery eager, в проде —
+    # воркер. Сбой постановки не должен ронять загрузку документа.
+    if (
+        not skip_ai_index
+        and getattr(settings, 'AI_CHECKS_ENABLED', False)
+        and filename.lower().endswith('.pdf')
+    ):
+        try:
+            from ai_checks.tasks import index_project_document_task
+
+            index_project_document_task.delay(version.pk)
+        except Exception:  # noqa: BLE001 — загрузка важнее индексации
+            logger.exception(
+                'Не удалось поставить задачу индексации версии %s',
+                version.pk,
+            )
 
     return version
 

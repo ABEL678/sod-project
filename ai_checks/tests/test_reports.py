@@ -72,8 +72,12 @@ class GipReportTests(TestCase):
         return issue
 
     def test_report_aggregates_issues(self):
-        now = timezone.now()
-        yesterday = now.date() - timedelta(days=1)
+        # даты периода — ЛОКАЛЬНЫЕ (timezone.localdate): _report_issues
+        # фильтрует по created_at__date, который Django конвертирует в
+        # текущую зону; timezone.now().date() даёт UTC-дату и после
+        # полуночи (до 03:00 MSK) исключает свежие замечания
+        today = timezone.localdate()
+        yesterday = today - timedelta(days=1)
         self._issue('NEW', due_date=yesterday, description='Просрочка')
         self._issue('IN_PROGRESS', description='В работе')
         self._issue('DONE', description='На проверке')
@@ -84,8 +88,8 @@ class GipReportTests(TestCase):
 
         report = generate_gip_report(
             self.project,
-            (now - timedelta(days=30)).date(),
-            now.date(),
+            today - timedelta(days=30),
+            today,
             self.user,
             llm_provider=StubLLMProvider(),
         )
@@ -178,6 +182,8 @@ class GipReportTests(TestCase):
         self.assertIn('GIP-DOC', text)
         self.assertIn('Ответственный', text)
         self.assertIn('Новое', text)
+        # Треб. 12: раздел «Выводы» после сводки.
+        self.assertIn('Выводы:', text)
 
     def test_export_docx(self):
         import io
@@ -197,5 +203,7 @@ class GipReportTests(TestCase):
         )
         self.assertIn('Отчет ГИПа по проекту', paragraphs)
         self.assertIn('Резюме (LLM)', paragraphs)
+        # Треб. 12: раздел «Выводы» после сводки.
+        self.assertIn('Выводы', paragraphs)
         self.assertIn('GIP-DOC', tables_text)
         self.assertIn('Иван Петров', tables_text)

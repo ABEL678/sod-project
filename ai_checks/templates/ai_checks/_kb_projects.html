@@ -1,0 +1,58 @@
+{% comment %}
+Треб. 7 (блок «Документы проекта»): текущие версии документов проекта
+со статусом ИИ-индексации (треб. 3) и числом чанков. Кнопка на строке —
+переиндексация одного документа (треб. 5).
+{% endcomment %}
+{% if project_versions %}
+  <div class="table-responsive">
+    <table class="table table-sm align-middle mb-0" id="kbProjectsTable">
+      <thead>
+        <tr class="small text-muted">
+          <th>Шифр</th>
+          <th>Название</th>
+          <th>Раздел</th>
+          <th>Версия</th>
+          <th>Индексация</th>
+          <th class="text-end">Чанки</th>
+          <th class="text-end">Действия</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for version in project_versions %}
+          <tr>
+            <td class="small text-nowrap">{{ version.document.code }}</td>
+            <td class="small">{{ version.document.name }}</td>
+            <td class="small">
+              {% if version.document.section %}{{ version.document.section.code }}{% else %}—{% endif %}
+            </td>
+            <td class="small">v{{ version.version_number }}</td>
+            <td>
+              {% if version.indexing_status == 'done' %}
+                <span class="badge text-bg-success">Готово</span>
+              {% elif version.indexing_status == 'processing' %}
+                <span class="badge text-bg-info">Индексируется</span>
+              {% elif version.indexing_status == 'error' %}
+                <span class="badge text-bg-danger">Ошибка</span>
+              {% else %}
+                <span class="badge text-bg-secondary">В очереди</span>
+              {% endif %}
+            </td>
+            <td class="text-end num small">{{ version.chunk_count }}</td>
+            <td class="text-end text-nowrap">
+              <button type="button" class="btn btn-sm btn-outline-secondary"
+                      hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
+                      hx-post="{% url 'ai_checks:kb_reindex_document' project.pk version.document_id %}"
+                      hx-target="#kbProjectsWrap" hx-swap="innerHTML"
+                      title="Переиндексировать документ">Переиндексировать</button>
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+{% else %}
+  <div class="alert alert-light border py-2 px-3 small mb-0">
+    В проекте пока нет PDF-документов — загрузите их во вкладке «Документы»,
+    и они появятся здесь со статусом индексации.
+  </div>
+{% endif %}

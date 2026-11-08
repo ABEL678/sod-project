@@ -61,7 +61,7 @@ class KnowledgeBaseServiceTests(MediaIsolationMixin, TestCase):
         self.assertEqual(internal.tenant_scope, 'project')
         self.assertEqual(internal.project_id, self.project.pk)
         self.assertIsNone(internal.company_id)
-        self.assertEqual(internal.index_status, 'queued')
+        self.assertEqual(internal.indexing_status, 'pending')
         self.assertTrue(internal.source_document.code.startswith('KB-'))
         self.assertEqual(internal.source_document.project_id, self.project.pk)
 
@@ -80,7 +80,7 @@ class KnowledgeBaseServiceTests(MediaIsolationMixin, TestCase):
         count = index_internal_document(internal.pk)
         internal.refresh_from_db()
         self.assertGreater(count, 0)
-        self.assertEqual(internal.index_status, 'done')
+        self.assertEqual(internal.indexing_status, 'done')
         self.assertGreater(internal.chunks.count(), 0)
         self.assertIsNotNone(internal.indexed_at)
         self.assertEqual(index_internal_document(internal.pk), count)
@@ -93,7 +93,7 @@ class KnowledgeBaseServiceTests(MediaIsolationMixin, TestCase):
         ))
         index_internal_document(internal.pk)
         internal.refresh_from_db()
-        self.assertEqual(internal.index_status, 'failed')
+        self.assertEqual(internal.indexing_status, 'error')
         self.assertTrue(internal.index_error)
 
     def test_remove_is_soft(self):
@@ -170,7 +170,7 @@ class KnowledgeBaseViewTests(MediaIsolationMixin, TestCase):
         internal = InternalDocument.objects.get(title='Стандарт через UI')
         # Celery eager: индексация выполнилась синхронно.
         internal.refresh_from_db()
-        self.assertEqual(internal.index_status, 'done')
+        self.assertEqual(internal.indexing_status, 'done')
 
     def test_chunks_fragment(self):
         internal = upload_knowledge_document(

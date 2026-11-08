@@ -4,6 +4,8 @@
 Ф0.1: LLMCallLog и CheckRun (CheckRun — обязательная FK-цель для
 LLMCallLog.check_run). Ф0.2: InternalDocument и InternalChunk
 (источники знаний, tenant_scope по 8.2). Остальные модели — в Ф1.
+Финальная архитектура ИИ-контура: ProjectDocumentChunk (чанки PDF-версий
+документов проекта, треб. 1) и RagQuery (история ИИ-поиска, треб. 2).
 """
 
 from __future__ import annotations
@@ -11,6 +13,19 @@ from __future__ import annotations
 from django.conf import settings
 from django.db import models
 from pgvector.django import VectorField
+
+
+class IndexingStatus(models.TextChoices):
+    """Единый статус ИИ-индексации (треб. 3: pending/processing/done/error).
+
+    Используется и InternalDocument (база знаний), и DocumentVersion
+    (документы проекта) — чтобы UI показывал одинаковые бейджи.
+    """
+
+    PENDING = 'pending', 'В очереди'
+    PROCESSING = 'processing', 'Индексируется'
+    DONE = 'done', 'Готово'
+    ERROR = 'error', 'Ошибка'
 
 
 class InternalDocument(models.Model):
@@ -76,15 +91,10 @@ class InternalDocument(models.Model):
     indexed_at = models.DateTimeField(
         null=True, blank=True, verbose_name='Проиндексирован',
     )
-    index_status = models.CharField(
+    indexing_status = models.CharField(
         max_length=10,
-        choices=[
-            ('queued', 'В очереди'),
-            ('running', 'Индексируется'),
-            ('done', 'Готово'),
-            ('failed', 'Ошибка'),
-        ],
-        default='queued',
+        choices=IndexingStatus.choices,
+        default=IndexingStatus.PENDING,
         verbose_name='Статус индексации',
     )
     index_error = models.TextField(
@@ -169,6 +179,127 @@ class InternalChunk(models.Model):
 
     def __str__(self) -> str:
         return f'{self.document_id} #{self.seq}'
+
+
+class ProjectDocumentChunk(models.Model):
+    """Фрагмент PDF-версии документа проекта (треб. 1).
+
+    Проектный индекс для сквозного RAG (треб. 6): чанки текущих и
+    исторических версий документов storage.Document. section/folder —
+    снимки принадлежности на момент индексации (для фильтра по разделу
+    ОВ/ЭОМ/АР и ссылок в источниках). Вектор — bge-m3 dense, 1024.
+    """
+
+    document = models.ForeignKey(
+        'storage.Document',
+        on_delete=models.CASCADE,
+        related_name='ai_chunks',
+        verbose_name='Документ проекта',
+    )
+    version = models.ForeignKey(
+        'storage.DocumentVersion',
+        on_delete=models.CASCADE,
+        related_name='ai_chunks',
+        verbose_name='Версия документа',
+    )
+    section = models.ForeignKey(
+        'storage.Section',
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name='ai_chunks',
+        verbose_name='Раздел',
+    )
+    folder = models.ForeignKey(
+        'storage.Folder',
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name='ai_chunks',
+        verbose_name='Папка',
+    )
+    seq = models.PositiveIntegerField(verbose_name='Порядок фрагмента')
+    text = models.TextField(verbose_name='Текст фрагмента')
+    page_from = models.PositiveIntegerField(
+        null=True, blank=True, verbose_name='Страница с',
+    )
+    page_to = models.PositiveIntegerField(
+        null=True, blank=True, verbose_name='Страница по',
+    )
+    embedding = VectorField(
+        dimensions=1024, verbose_name='Вектор (bge-m3 dense)',
+    )
+    created_at = models.DateTimeField(
+        auto_now_add=True, verbose_name='Создан',
+    )
+
+    class Meta:
+        verbose_name = 'Фрагмент документа проекта'
+        verbose_name_plural = 'Фрагменты документов проектов'
+        ordering = ['document', 'seq']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['document', 'version', 'seq'],
+                name='ai_project_chunk_doc_ver_seq',
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f'{self.document_id}/v{self.version_id} #{self.seq}'
+
+
+class RagQuery(models.Model):
+    """История ИИ-поиска (треб. 2, 9, 10).
+
+    Одна строка = один запрос пользователя: вопрос, ответ, снимок
+    источников (sources JSON) и модель LLM. Видна всем участникам
+    проекта (треб. 9); поиск/фильтры/пагинация — по этому индексу
+    (треб. 10). Тексты промптов в БД не хранятся (приватность).
+    """
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='rag_queries',
+        verbose_name='Автор',
+    )
+    project = models.ForeignKey(
+        'storage.Project',
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name='rag_queries',
+        verbose_name='Проект',
+    )
+    question = models.TextField(verbose_name='Вопрос')
+    answer = models.TextField(
+        blank=True, verbose_name='Ответ',
+    )
+    sources = models.JSONField(
+        default=list, blank=True, verbose_name='Источники',
+    )
+    model = models.CharField(
+        max_length=100, blank=True, verbose_name='Модель LLM',
+    )
+    created_at = models.DateTimeField(
+        auto_now_add=True, db_index=True, verbose_name='Создан',
+    )
+
+    class Meta:
+        verbose_name = 'Запрос ИИ-поиска'
+        verbose_name_plural = 'История ИИ-поиска'
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(
+                fields=['project', '-created_at'],
+                name='ai_rag_project_created_idx',
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f'RagQuery #{self.pk} ({self.question[:40]})'
 
 
 class RuleDefinition(models.Model):

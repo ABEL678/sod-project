@@ -24,6 +24,15 @@ urlpatterns = [
         'project/<int:project_id>/rag/search/',
         views.rag_search, name='rag_search',
     ),
+    # Треб. 9/10: история ИИ-поиска (поиск, фильтры, пагинация).
+    path(
+        'project/<int:project_id>/rag/history/',
+        views.rag_history, name='rag_history',
+    ),
+    path(
+        'project/<int:project_id>/rag/history/<int:pk>/',
+        views.rag_history_item, name='rag_history_item',
+    ),
     # Ф4: отчёт ГИПу.
     path(
         'project/<int:project_id>/report/',
@@ -35,7 +44,7 @@ urlpatterns = [
     ),
     path('report/<int:pk>/pdf/', views.report_pdf, name='report_pdf'),
     path('report/<int:pk>/docx/', views.report_docx, name='report_docx'),
-    # База знаний проекта (UX-аудит stage 2).
+    # База знаний проекта (UX-аудит stage 2 + треб. 5/7).
     path(
         'project/<int:project_id>/kb/',
         views.kb_panel, name='kb_panel',
@@ -43,6 +52,18 @@ urlpatterns = [
     path(
         'project/<int:project_id>/kb/table/',
         views.kb_table, name='kb_table',
+    ),
+    path(
+        'project/<int:project_id>/kb/documents/',
+        views.kb_projects_table, name='kb_projects_table',
+    ),
+    path(
+        'project/<int:project_id>/kb/reindex-project/',
+        views.kb_reindex_project_view, name='kb_reindex_project',
+    ),
+    path(
+        'project/<int:project_id>/kb/document/<int:document_id>/reindex/',
+        views.kb_reindex_document_view, name='kb_reindex_document',
     ),
     path(
         'project/<int:project_id>/kb/upload/',

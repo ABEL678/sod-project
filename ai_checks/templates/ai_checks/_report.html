@@ -40,3 +40,13 @@
 </form>
 
 <div id="aiReportResults" class="px-2 pt-2"></div>
+
+<div class="px-2 pt-3">
+  <div class="d-flex align-items-center justify-content-between mb-1">
+    <span class="fw-semibold small">
+      <i class="bi bi-clock-history me-1" aria-hidden="true"></i>История отчётов
+    </span>
+    <span class="text-muted small">последние 20 · только ГИП/админ</span>
+  </div>
+  {% include 'ai_checks/_report_history.html' %}
+</div>

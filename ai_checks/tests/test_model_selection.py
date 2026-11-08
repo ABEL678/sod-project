@@ -78,9 +78,9 @@ class ModelSelectionServiceTests(TestCase):
             description='Замечание', status='NEW',
         )
         spy = SpyLLMProvider()
-        now = timezone.now()
+        today = timezone.localdate()  # локальная дата — см. _report_issues
         report = generate_gip_report(
-            self.project, (now - timedelta(days=1)).date(), now.date(),
+            self.project, today - timedelta(days=1), today,
             self.user,
             llm_provider=spy,
             model='z-ai/glm-5.3-flash-free',
@@ -93,10 +93,10 @@ class ModelSelectionServiceTests(TestCase):
         )
 
     def test_gip_report_default_model_is_none(self):
-        now = timezone.now()
+        today = timezone.localdate()  # локальная дата — см. _report_issues
         spy = SpyLLMProvider()
         generate_gip_report(
-            self.project, now.date(), now.date(), self.user,
+            self.project, today, today, self.user,
             llm_provider=spy,
         )
         self.assertIsNone(spy.calls[0]['model'])

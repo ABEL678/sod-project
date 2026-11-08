@@ -1,0 +1,114 @@
+{% comment %}
+Треб. 9/10: история ИИ-поиска — последние запросы проекта (по 20 на
+страницу): дата, автор, вопрос, модель. Клик по строке — ответ и
+источники (_rag_history_detail.html). Поиск по вопросу, фильтры по
+автору и датам, пагинация — всё через HTMX. Видна всем участникам.
+
+Включается как обычный фрагмент (lazy-load в контейнер #aiRagHistory
+вкладки) и как out-of-band-обновление после поиска (oob=True → корневой
+элемент получает id и hx-swap-oob и заменяет контейнер целиком).
+{% endcomment %}
+<div {% if oob %}id="aiRagHistory" hx-swap-oob="true"{% endif %}>
+  <form class="row g-1 align-items-end small mb-1"
+        hx-get="{% url 'ai_checks:rag_history' project.pk %}"
+        hx-target="#aiRagHistory" hx-swap="innerHTML" hx-trigger="submit">
+    <div class="col-12 col-md-4">
+      <input type="search" name="q" value="{{ filters.q }}"
+             class="form-control form-control-sm"
+             placeholder="Поиск по вопросу…"
+             aria-label="Поиск по вопросу"
+             hx-get="{% url 'ai_checks:rag_history' project.pk %}"
+             hx-target="#aiRagHistory" hx-trigger="keyup changed delay:400ms"
+             hx-include="[name='q']">
+    </div>
+    <div class="col-6 col-md-3">
+      <select name="author" class="form-select form-select-sm" aria-label="Автор"
+              hx-get="{% url 'ai_checks:rag_history' project.pk %}"
+              hx-target="#aiRagHistory" hx-trigger="change">
+        <option value="">Все авторы</option>
+        {% for member in members %}
+          <option value="{{ member.pk }}"{% if filters.author == member.pk|stringformat:'s' %} selected{% endif %}>
+            {{ member.get_full_name|default:member.username }}
+          </option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-3 col-md-2">
+      <input type="date" name="date_from" value="{{ filters.date_from }}"
+             class="form-control form-control-sm" aria-label="Дата с"
+             hx-get="{% url 'ai_checks:rag_history' project.pk %}"
+             hx-target="#aiRagHistory" hx-trigger="change"
+             hx-include="closest form">
+    </div>
+    <div class="col-3 col-md-2">
+      <input type="date" name="date_to" value="{{ filters.date_to }}"
+             class="form-control form-control-sm" aria-label="Дата по"
+             hx-get="{% url 'ai_checks:rag_history' project.pk %}"
+             hx-target="#aiRagHistory" hx-trigger="change"
+             hx-include="closest form">
+    </div>
+    <div class="col-12 col-md-1 d-grid">
+      <button type="submit" class="btn btn-sm btn-outline-secondary">ОК</button>
+    </div>
+  </form>
+
+  {% if page_obj.object_list %}
+    <div class="table-responsive">
+      <table class="table table-sm align-middle mb-0" id="ragHistoryTable">
+        <thead>
+          <tr class="small text-muted">
+            <th style="min-width: 96px;">Дата</th>
+            <th>Автор</th>
+            <th>Вопрос</th>
+            <th class="text-end">Модель</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for query in page_obj.object_list %}
+            <tr>
+              <td class="small text-muted text-nowrap">{{ query.created_at|date:"d.m.Y H:i" }}</td>
+              <td class="small">{{ query.user.get_full_name|default:query.user.username|default:'—' }}</td>
+              <td class="small">
+                <button type="button" class="btn btn-link btn-sm p-0 text-start text-decoration-none"
+                        hx-get="{% url 'ai_checks:rag_history_item' project.pk query.pk %}"
+                        hx-target="#rag-history-detail-{{ query.pk }} td"
+                        hx-swap="innerHTML"
+                        hx-on::after-request="document.getElementById('rag-history-detail-{{ query.pk }}').classList.remove('d-none');">
+                  {{ query.question|truncatechars:120 }}
+                </button>
+              </td>
+              <td class="small text-muted text-end">{{ query.model|default:'—' }}</td>
+            </tr>
+            <tr id="rag-history-detail-{{ query.pk }}" class="d-none">
+              <td colspan="4" class="small bg-light"></td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    {% if page_obj.paginator.num_pages > 1 %}
+      <div class="d-flex align-items-center gap-2 small mt-1">
+        <span class="text-muted">Стр. {{ page_obj.number }} из {{ page_obj.paginator.num_pages }}</span>
+        {% if page_obj.has_previous %}
+          <button type="button" class="btn btn-sm btn-outline-secondary py-0"
+                  hx-get="{% url 'ai_checks:rag_history' project.pk %}?page={{ page_obj.previous_page_number }}{% if filters.q %}&q={{ filters.q|urlencode }}{% endif %}{% if filters.author %}&author={{ filters.author }}{% endif %}{% if filters.date_from %}&date_from={{ filters.date_from }}{% endif %}{% if filters.date_to %}&date_to={{ filters.date_to }}{% endif %}"
+                  hx-target="#aiRagHistory" hx-swap="innerHTML">← Назад</button>
+        {% endif %}
+        {% if page_obj.has_next %}
+          <button type="button" class="btn btn-sm btn-outline-secondary py-0"
+                  hx-get="{% url 'ai_checks:rag_history' project.pk %}?page={{ page_obj.next_page_number }}{% if filters.q %}&q={{ filters.q|urlencode }}{% endif %}{% if filters.author %}&author={{ filters.author }}{% endif %}{% if filters.date_from %}&date_from={{ filters.date_from }}{% endif %}{% if filters.date_to %}&date_to={{ filters.date_to }}{% endif %}"
+                  hx-target="#aiRagHistory" hx-swap="innerHTML">Вперёд →</button>
+        {% endif %}
+      </div>
+    {% endif %}
+  {% else %}
+    <div class="alert alert-light border py-2 px-3 small mb-0">
+      {% if filters.q or filters.author or filters.date_from or filters.date_to %}
+        По запросам ничего не найдено.
+      {% else %}
+        История ИИ-поиска пуста — задайте первый вопрос.
+      {% endif %}
+    </div>
+  {% endif %}
+</div>

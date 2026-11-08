@@ -1,5 +1,8 @@
 {% comment %}
-stage2: вкладка «База знаний» проекта — список документов и загрузка PDF.
+Треб. 7: вкладка «База знаний» проекта — два блока:
+1) «Документы проекта» — таблица текущих версий с ИИ-статусом и кнопкой
+   «Переиндексировать проект» (треб. 5);
+2) «Внутренние стандарты» — таблица InternalDocument + «Загрузить стандарт».
 {% endcomment %}
 <div class="toolbar" data-role="ai-kb-toolbar">
   <span class="fw-semibold">
@@ -9,17 +12,44 @@ stage2: вкладка «База знаний» проекта — список
   <span class="toolbar-spacer"></span>
   <button type="button" class="btn btn-sm btn-primary text-nowrap"
           data-bs-toggle="modal" data-bs-target="#kbUploadModal">
-    <i class="bi bi-upload me-1" aria-hidden="true"></i>Загрузить документ
+    <i class="bi bi-upload me-1" aria-hidden="true"></i>Загрузить стандарт
   </button>
 </div>
 
-{# stage2: таблица грузится собственным фрагментом (избегаем коллизии
-   переменной documents с таблицей документов страницы проекта). #}
-<div id="kbTableWrap" class="px-2 pt-2"
-     hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
-     hx-get="{% url 'ai_checks:kb_table' project.pk %}"
-     hx-trigger="load" hx-swap="innerHTML">
-  <div class="text-muted small p-2">Загрузка…</div>
+<div class="px-2 pt-2">
+  <div class="d-flex align-items-center justify-content-between mb-1">
+    <span class="fw-semibold small">
+      <i class="bi bi-folder2-open me-1" aria-hidden="true"></i>Документы проекта
+    </span>
+    <button type="button" class="btn btn-sm btn-outline-primary py-0"
+            hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
+            hx-post="{% url 'ai_checks:kb_reindex_project' project.pk %}"
+            hx-target="#kbProjectsWrap" hx-swap="innerHTML"
+            hx-confirm="Переиндексировать все документы проекта? (PDF-версии будут поставлены в очередь)"
+            title="Треб. 5: переиндексация всех PDF-документов проекта">
+      <i class="bi bi-arrow-repeat me-1" aria-hidden="true"></i>Переиндексировать проект
+    </button>
+  </div>
+  <div id="kbProjectsWrap"
+       hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
+       hx-get="{% url 'ai_checks:kb_projects_table' project.pk %}"
+       hx-trigger="load" hx-swap="innerHTML">
+    <div class="text-muted small">Загрузка…</div>
+  </div>
+</div>
+
+<div class="px-2 pt-3">
+  <div class="fw-semibold small mb-1">
+    <i class="bi bi-journal-bookmark me-1" aria-hidden="true"></i>Внутренние стандарты
+  </div>
+  {# stage2: таблица грузится собственным фрагментом (избегаем коллизии
+     переменной documents с таблицей документов страницы проекта). #}
+  <div id="kbTableWrap" class="px-0"
+       hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
+       hx-get="{% url 'ai_checks:kb_table' project.pk %}"
+       hx-trigger="load" hx-swap="innerHTML">
+    <div class="text-muted small">Загрузка…</div>
+  </div>
 </div>
 
 <div class="modal fade" id="kbUploadModal" tabindex="-1"

@@ -141,3 +141,62 @@ class MockVectorBackend:
         if norm_left == 0 or norm_right == 0:
             return 0.0
         return dot / (norm_left * norm_right)
+
+
+class MockProjectVectorBackend:
+    """Поиск по ProjectDocumentChunk для тестов на SQLite (без pgvector).
+
+    Повторяет контракт ProjectChunkVectorBackend.search: косинус по
+    векторам чанков проекта, опциональный фильтр по разделу. Только
+    неудалённые документы проекта.
+    """
+
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    def search(self, vector, filters, top_k: int) -> list:
+        import math
+
+        from ai_checks.domain.models import ProjectDocumentChunk
+
+        filters = filters or {}
+        self.calls.append({'filters': dict(filters), 'top_k': top_k})
+
+        queryset = ProjectDocumentChunk.objects.filter(
+            document__project_id=filters.get('project_id'),
+            document__is_deleted=False,
+        )
+        if filters.get('section_code'):
+            queryset = queryset.filter(
+                section__code=filters['section_code'],
+            )
+
+        scored = []
+        for chunk in queryset.select_related('document', 'section'):
+            scored.append({
+                'id': chunk.pk,
+                'document_id': chunk.document_id,
+                'section_code': (
+                    chunk.section.code if chunk.section_id else None
+                ),
+                'score': self._cosine(vector, chunk.embedding),
+                'page_from': chunk.page_from,
+                'page_to': chunk.page_to,
+            })
+        scored.sort(key=lambda hit: hit['score'], reverse=True)
+        return scored[:max(1, int(top_k or 1))]
+
+    @staticmethod
+    def _cosine(left, right) -> float:
+        import math
+
+        left = [float(value) for value in left]
+        right = [float(value) for value in right]
+        if len(left) != len(right) or not left:
+            return 0.0
+        dot = sum(a * b for a, b in zip(left, right))
+        norm_left = math.sqrt(sum(a * a for a in left))
+        norm_right = math.sqrt(sum(b * b for b in right))
+        if norm_left == 0 or norm_right == 0:
+            return 0.0
+        return dot / (norm_left * norm_right)

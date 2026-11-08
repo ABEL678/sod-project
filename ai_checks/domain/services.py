@@ -3,6 +3,15 @@
 Контракт (ARCHITECTURE.md 8.4): pypdfium2 извлекает текст и страницы,
 текст режется на чанки с перекрытием, векторы пишутся в InternalChunk.
 Сервис не знает про HTTP/UI/Celery — только домен и ORM.
+
+Финальная архитектура ИИ-контура (этап 20):
+- index_project_document() — индексация PDF-версий документов проекта в
+  ProjectDocumentChunk (треб. 1, 4), статусы на DocumentVersion
+  (pending → processing → done/error, треб. 3);
+- reindex_project() / reindex_document() — резервная индексация (треб. 5);
+- rag_answer() — сквозной RAG по документам проекта и базе знаний с
+  сохранением истории RagQuery (треб. 6, 9);
+- экспорт отчёта ГИПа дополнен разделом «Выводы» (треб. 12).
 """
 
 from __future__ import annotations
@@ -11,6 +20,8 @@ import logging
 from dataclasses import dataclass
 from datetime import timedelta
 
+from django.core.exceptions import PermissionDenied
+from django.db import models as db_models
 from django.db import transaction
 from django.utils import timezone
 
@@ -18,16 +29,19 @@ from ai_checks import pdfium_tools
 from ai_checks.domain.models import (
     CheckRun,
     GeneratedReport,
+    IndexingStatus,
     InternalChunk,
     InternalDocument,
     LLMCallLog,
     PendingCheckResult,
+    ProjectDocumentChunk,
+    RagQuery,
     ReminderRule,
     RuleDefinition,
 )
 from ai_checks.domain.rules import RULE_CHECKS
 from ai_checks.ports.embedding import EmbeddingService
-from storage.domain.models import DocumentVersion
+from storage.domain.models import Document, DocumentVersion
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +51,11 @@ ENGINE_VERSION = 'rules@2026.11.1'
 # Размер чанка и перекрытие (ТЗ Ф0.2: ~1000 символов, перекрытие 200).
 CHUNK_SIZE = 1000
 CHUNK_OVERLAP = 200
+
+# Документы базы знаний создаются через upload_document с шифром KB-*;
+# в проектной таблице «Документы проекта» и переиндексации проекта они
+# не участвуют (они индексируются в InternalChunk как стандарты).
+KB_CODE_PREFIX = 'KB-'
 
 
 @dataclass
@@ -168,6 +187,155 @@ def index_document(
     return len(chunks)
 
 
+def index_project_document(
+    version_id: int,
+    embedding_service: EmbeddingService | None = None,
+) -> int:
+    """Индексация PDF-версии документа проекта (треб. 4).
+
+    Удаляет прежние ProjectDocumentChunk документа, режет PDF на чанки,
+    считает векторы и сохраняет фрагменты со снимком раздела/папки.
+    Статус версии (треб. 3): pending → processing → done/error.
+    Идемпотентен: повторный вызов заменяет фрагменты. Сбой не роняет
+    Celery-задачу — версия помечается error (текст в логе приложения).
+    Возвращает число созданных чанков (0 — версия/документ не найдены).
+    """
+    try:
+        version = (
+            DocumentVersion.objects
+            .select_related('document', 'document__section', 'document__folder')
+            .get(pk=version_id)
+        )
+    except DocumentVersion.DoesNotExist:
+        logger.warning('Индексация: версия %s не найдена', version_id)
+        return 0
+
+    version.indexing_status = IndexingStatus.PROCESSING
+    version.save(update_fields=['indexing_status'])
+    try:
+        if embedding_service is None:
+            # Ленивый импорт: домен не зависит от конкретного адаптера.
+            from ai_checks.adapters.embedding_onnx import BgeM3OnnxEmbedding
+
+            embedding_service = BgeM3OnnxEmbedding()
+
+        chunks = split_into_chunks(extract_pages(version.file.path))
+        vectors: list[list[float]] = []
+        if chunks:
+            vectors = embedding_service.embed_texts(
+                [chunk.text for chunk in chunks],
+            )
+        if len(vectors) != len(chunks):
+            raise ValueError(
+                'EmbeddingService вернул неверное число векторов: '
+                f'{len(vectors)} != {len(chunks)}'
+            )
+        dimension = embedding_service.dim
+        for vector in vectors:
+            if len(vector) != dimension:
+                raise ValueError(
+                    'Размерность вектора не совпадает с EmbeddingService.dim: '
+                    f'{len(vector)} != {dimension}'
+                )
+
+        with transaction.atomic():
+            # Старые чанки документа (в т.ч. от прошлых версий) сносим:
+            # актуальный контекст — только проиндексированная версия.
+            ProjectDocumentChunk.objects.filter(
+                document=version.document,
+            ).delete()
+            if chunks:
+                ProjectDocumentChunk.objects.bulk_create([
+                    ProjectDocumentChunk(
+                        document=version.document,
+                        version=version,
+                        section=version.document.section,
+                        folder=version.document.folder,
+                        seq=seq,
+                        text=chunk.text,
+                        page_from=chunk.page_from,
+                        page_to=chunk.page_to,
+                        embedding=vector,
+                    )
+                    for seq, (chunk, vector) in enumerate(zip(chunks, vectors))
+                ])
+            version.indexing_status = IndexingStatus.DONE
+            version.save(update_fields=['indexing_status'])
+        return len(chunks)
+    except Exception as exc:  # noqa: BLE001 — статус версии важнее трейса
+        logger.exception(
+            'Индексация версии %s упала: %s', version_id, exc,
+        )
+        version.indexing_status = IndexingStatus.ERROR
+        version.save(update_fields=['indexing_status'])
+        return 0
+
+
+def reindex_document(document_id: int, user=None) -> int:
+    """Резервная индексация одного документа проекта (треб. 5).
+
+    Ставит текущей версии документа статус pending и задачу Celery.
+    user — инициатор (используется вьюхой для проверки прав; сервис
+    дополнительно не пускает удалённые документы). Возвращает id версии
+    (0 — индексировать нечего: нет документа/версии или это KB-*).
+    """
+    from ai_checks.tasks import index_project_document_task
+
+    version = (
+        DocumentVersion.objects
+        .filter(
+            document_id=document_id,
+            document__is_deleted=False,
+            document__current_version=db_models.F('pk'),
+        )
+        .exclude(document__code__startswith=KB_CODE_PREFIX)
+        .first()
+    )
+    if version is None:
+        return 0
+    version.indexing_status = IndexingStatus.PENDING
+    version.save(update_fields=['indexing_status'])
+    index_project_document_task.delay(version.pk)
+    return version.pk
+
+
+def reindex_project(project_id: int, user=None) -> int:
+    """Резервная индексация всех документов проекта (треб. 5).
+
+    Все неудалённые документы проекта с текущей PDF-версией получают
+    статус pending и задачу index_project_document. user — инициатор:
+    если задан, сервис fail-closed перепроверяет доступ к проекту
+    (вьюха проверяет права отдельно). Возвращает число поставленных
+    задач (не PDF и KB-* — пропускаются).
+    """
+    from ai_checks.tasks import index_project_document_task
+
+    if user is not None:
+        from storage.domain.services import get_accessible_projects
+
+        if not get_accessible_projects(user).filter(pk=project_id).exists():
+            raise PermissionDenied('Нет доступа к проекту')
+
+    versions = list(
+        DocumentVersion.objects
+        .filter(
+            document__project_id=project_id,
+            document__is_deleted=False,
+            document__current_version=db_models.F('pk'),
+        )
+        .exclude(document__code__startswith=KB_CODE_PREFIX)
+        .order_by('document__code')
+    )
+    if not versions:
+        return 0
+    DocumentVersion.objects.filter(
+        pk__in=[version.pk for version in versions],
+    ).update(indexing_status=IndexingStatus.PENDING)
+    for version in versions:
+        index_project_document_task.delay(version.pk)
+    return len(versions)
+
+
 def run_rules_check(
     document_version: DocumentVersion,
     initiated_by,
@@ -243,125 +411,262 @@ def run_rules_check(
 
 def rag_answer(
     question: str,
-    company_id: int,
     project_id: int | None = None,
+    user=None,
+    company_id: int | None = None,
+    section_code: str | None = None,
+    source_type: str | None = None,
+    model: str | None = None,
     top_k: int = 5,
     embedding_service: EmbeddingService | None = None,
     vector_backend=None,
+    project_backend=None,
     llm_provider=None,
-    model: str | None = None,
 ) -> dict:
-    """RAG-ответ по внутренней базе знаний (Ф2, без LLM).
+    """Сквозной RAG-ответ: документы проекта + база знаний (треб. 6).
 
-    Вопрос → эмбеддинг → PgVectorBackend.search с tenant-фильтрами (8.2) →
-    контекст из чанков. Тексты ответов/промптов не логируются (приватность).
-    Возвращает {answer, sources}; при отсутствии чанков — «Ничего не найдено».
-    answer — заглушка-дайджест (LLM-синтез — следующая фаза).
+    Вопрос → эмбеддинг → поиск по ProjectDocumentChunk (project_id,
+    опционально section_code) и по InternalChunk (tenant_scope 8.2:
+    project/company + глобальные) → объединение, сортировка по score,
+    top_k → LLM-синтез с цитатами [N] → запись RagQuery (история,
+    треб. 9). Возвращает {answer, sources}.
+
+    Формат sources (треб. 6): [{type, document_title, section_code,
+    page, text, score}]; дополнительно chunk_id/tenant_scope для UI.
+    type: 'project' — PDF-документы проекта, 'standard' — база знаний.
+    source_type: None — все источники, 'project'/'standard' — один блок.
+
+    DI-параметры (embedding_service/vector_backend/project_backend/
+    llm_provider) — для тестов и смены адаптеров; company_id можно
+    передать явно (иначе берётся из проекта). SQLite-режим: проектный
+    поиск недоступен (pgvector), внутренний — через mock-бэкенд тестов.
     """
     question = (question or '').strip()
     if not question:
         raise ValueError('Пустой вопрос')
+    if source_type not in (None, 'project', 'standard'):
+        raise ValueError('Тип источника: project или standard')
 
     if embedding_service is None:
         # Ленивый импорт: домен не зависит от конкретного адаптера.
         from ai_checks.adapters.embedding_onnx import BgeM3OnnxEmbedding
 
         embedding_service = BgeM3OnnxEmbedding()
-    if vector_backend is None:
-        from ai_checks.adapters.vector_pg import PgVectorBackend
 
-        vector_backend = PgVectorBackend(dimension=embedding_service.dim)
+    # company_id: явный аргумент (совместимость со старыми вызовами) или
+    # компания проекта — для tenant-фильтра базы знаний (8.2).
+    if company_id is None and project_id is not None:
+        company_id = (
+            Document.objects
+            .filter(project_id=project_id)
+            .values_list('project__company_id', flat=True)
+            .first()
+        )
 
     vectors = embedding_service.embed_texts([question])
     if not vectors:
         raise ValueError('EmbeddingService не вернул вектор вопроса')
+    question_vector = vectors[0]
 
-    filters = {
-        'company_id': company_id,
-        'project_id': project_id,
-    }
-    hits = vector_backend.search(vectors[0], filters, top_k)
-    if not hits:
-        return {'answer': 'Ничего не найдено', 'sources': []}
+    merged_hits: list[dict] = []  # {source_type, hit}
+    project_search_failed = False
+    internal_search_failed = False
 
-    chunk_by_id = {
-        chunk.pk: chunk
-        for chunk in InternalChunk.objects
-        .select_related('document')
-        .filter(pk__in=[hit['id'] for hit in hits])
-    }
+    # 1) Документы проекта (ProjectDocumentChunk, треб. 6).
+    if source_type in (None, 'project') and project_id is not None:
+        if project_backend is None:
+            from ai_checks.adapters.vector_pg import ProjectChunkVectorBackend
+
+            project_backend = ProjectChunkVectorBackend(
+                dimension=embedding_service.dim,
+            )
+        try:
+            project_hits = project_backend.search(
+                question_vector,
+                {
+                    'project_id': project_id,
+                    'section_code': section_code,
+                },
+                top_k,
+            )
+        except NotImplementedError:
+            project_search_failed = True
+            project_hits = []
+        merged_hits.extend(
+            {'source_type': 'project', 'hit': hit}
+            for hit in project_hits
+        )
+
+    # 2) База знаний (InternalChunk, tenant-фильтры 8.2).
+    if source_type in (None, 'standard'):
+        if vector_backend is None:
+            from ai_checks.adapters.vector_pg import PgVectorBackend
+
+            vector_backend = PgVectorBackend(dimension=embedding_service.dim)
+        filters = {
+            'company_id': company_id,
+            'project_id': project_id,
+        }
+        try:
+            internal_hits = vector_backend.search(
+                question_vector, filters, top_k,
+            )
+        except NotImplementedError:
+            internal_search_failed = True
+            internal_hits = []
+        merged_hits.extend(
+            {'source_type': 'standard', 'hit': hit}
+            for hit in internal_hits
+        )
+
+    # Треб. 6: объединить, отсортировать по score, взять top_k.
+    merged_hits.sort(
+        key=lambda entry: entry['hit'].get('score') or 0.0,
+        reverse=True,
+    )
+    merged_hits = merged_hits[:max(1, int(top_k or 1))]
 
     sources = []
-    for hit in hits:
-        chunk = chunk_by_id.get(hit['id'])
-        if chunk is None:
-            continue
-        sources.append({
-            'chunk_id': chunk.pk,
-            'document_title': chunk.document.title,
-            'text': chunk.text,
-            'score': hit.get('score'),
-            'tenant_scope': chunk.document.tenant_scope,
-        })
-    if not sources:
-        return {'answer': 'Ничего не найдено', 'sources': []}
-
-    digest = '\n\n'.join(
-        f'[{source["document_title"]}] {source["text"][:300]}'
-        for source in sources[:3]
-    )
-
-    # LLM-синтез ответа по найденным фрагментам (модель выбирается в UI).
-    # Сбой LLM не ломает поиск: отдаём дайджест-заглушку.
-    if llm_provider is None:
-        from ai_checks.adapters.llm_http import get_llm_provider
-
-        llm_provider = get_llm_provider()
-
-    context_text = '\n\n'.join(
-        f'[{source["document_title"]}] {source["text"][:600]}'
-        for source in sources
-    )
-    answer = digest
-    try:
-        response = llm_provider.complete([
-            {
-                'role': 'system',
-                'content': (
-                    'Ответь на вопрос, опираясь ТОЛЬКО на фрагменты '
-                    'источников. Если ответа в них нет — скажи об этом.'
+    for entry in merged_hits:
+        hit = entry['hit']
+        if entry['source_type'] == 'project':
+            chunk = (
+                ProjectDocumentChunk.objects
+                .select_related('document', 'section', 'version')
+                .filter(pk=hit['id'])
+                .first()
+            )
+            if chunk is None:
+                continue
+            sources.append({
+                'type': 'project',
+                'chunk_id': chunk.pk,
+                'document_title': (
+                    f'{chunk.document.code} — {chunk.document.name}'
                 ),
-            },
-            {
-                'role': 'user',
-                'content': (
-                    f'Вопрос: {question}\n\nИсточники:\n{context_text}'
+                'section_code': (
+                    chunk.section.code if chunk.section_id else None
                 ),
-            },
-        ], model=model)
-        answer = response.text
-        LLMCallLog.objects.create(
-            provider=getattr(llm_provider, 'name', 'unknown'),
-            model=response.model or 'unknown',
-            purpose=LLMCallLog.Purpose.RAG_ANSWER,
-            prompt_tokens=response.prompt_tokens,
-            completion_tokens=response.completion_tokens,
-            latency_ms=response.latency_ms,
-            status=LLMCallLog.Status.OK,
-            prompt_version=RAG_PROMPT_VERSION,
-            user=None,
+                'page': hit.get('page_from'),
+                'text': chunk.text,
+                'score': hit.get('score'),
+                'tenant_scope': 'project',
+            })
+        else:
+            chunk = (
+                InternalChunk.objects
+                .select_related('document')
+                .filter(pk=hit['id'])
+                .first()
+            )
+            if chunk is None:
+                continue
+            sources.append({
+                'type': 'standard',
+                'chunk_id': chunk.pk,
+                'document_title': chunk.document.title,
+                'section_code': None,
+                'page': hit.get('page_from'),
+                'text': chunk.text,
+                'score': hit.get('score'),
+                'tenant_scope': chunk.document.tenant_scope,
+            })
+
+    answer = 'Ничего не найдено'
+    if sources:
+        # Дайджест-заглушка на случай сбоя LLM (поиск важнее синтеза).
+        answer = '\n\n'.join(
+            f'[{source["document_title"]}] {source["text"][:300]}'
+            for source in sources[:3]
         )
-    except Exception as exc:  # noqa: BLE001 — поиск важнее сбоя LLM
-        logger.exception('LLM для RAG-ответа упал: %s', exc)
-        LLMCallLog.objects.create(
-            provider=getattr(llm_provider, 'name', 'unknown'),
-            model=getattr(llm_provider, 'model', 'unknown'),
-            purpose=LLMCallLog.Purpose.RAG_ANSWER,
-            status=LLMCallLog.Status.ERROR,
-            error_message=str(exc)[:1000],
-            prompt_version=RAG_PROMPT_VERSION,
-            user=None,
+
+    used_model = ''
+    if sources:
+        # LLM-синтез ответа с цитатами (модель выбирается в UI, треб. 14).
+        # Без источников LLM не вызываем: экономия токенов и честный
+        # «Ничего не найдено» (поведение Ф2 сохранено).
+        if llm_provider is None:
+            from ai_checks.adapters.llm_http import get_llm_provider
+
+            llm_provider = get_llm_provider()
+
+        source_lines = []
+        for index, source in enumerate(sources, start=1):
+            meta_parts = []
+            if source.get('section_code'):
+                meta_parts.append(f'раздел {source["section_code"]}')
+            if source.get('page'):
+                meta_parts.append(f'лист {source["page"]}')
+            meta = f' ({", ".join(meta_parts)})' if meta_parts else ''
+            source_lines.append(
+                f'[{index}] {source["document_title"]}{meta}:\n'
+                f'{source["text"][:600]}'
+            )
+        context_text = '\n\n'.join(source_lines)
+
+        try:
+            response = llm_provider.complete([
+                {
+                    'role': 'system',
+                    'content': (
+                        'Ты — помощник инженера-проектировщика. Ответь на '
+                        'вопрос, опираясь ТОЛЬКО на приведённые фрагменты '
+                        'документов. После каждого утверждения указывай '
+                        'источник в квадратных скобках ([1], [2]…). Если '
+                        'ответа во фрагментах нет — прямо скажи об этом. '
+                        'Не выдумывай факты и числа.'
+                    ),
+                },
+                {
+                    'role': 'user',
+                    'content': (
+                        f'Вопрос: {question}\n\nИсточники:\n{context_text}'
+                    ),
+                },
+            ], model=model)
+            answer = response.text
+            used_model = response.model or model or ''
+            LLMCallLog.objects.create(
+                provider=getattr(llm_provider, 'name', 'unknown'),
+                model=response.model or 'unknown',
+                purpose=LLMCallLog.Purpose.RAG_ANSWER,
+                prompt_tokens=response.prompt_tokens,
+                completion_tokens=response.completion_tokens,
+                latency_ms=response.latency_ms,
+                status=LLMCallLog.Status.OK,
+                prompt_version=RAG_PROMPT_VERSION,
+                user=user,
+            )
+        except Exception as exc:  # noqa: BLE001 — поиск важнее сбоя LLM
+            logger.exception('LLM для RAG-ответа упал: %s', exc)
+            used_model = model or getattr(llm_provider, 'model', '') or ''
+            LLMCallLog.objects.create(
+                provider=getattr(llm_provider, 'name', 'unknown'),
+                model=getattr(llm_provider, 'model', 'unknown'),
+                purpose=LLMCallLog.Purpose.RAG_ANSWER,
+                status=LLMCallLog.Status.ERROR,
+                error_message=str(exc)[:1000],
+                prompt_version=RAG_PROMPT_VERSION,
+                user=user,
+            )
+
+    # Треб. 6/9: запрос попадает в историю (RagQuery) — её видят все
+    # участники проекта; пользователь может быть анонимным (API) → null.
+    if project_search_failed and internal_search_failed:
+        # Оба векторных пути недоступны (например, SQLite-режим) —
+        # честно отдаём ошибку вместо пустого «Ничего не найдено».
+        raise NotImplementedError(
+            'Векторный поиск доступен только на PostgreSQL. '
+            'Поднимите dev-стек: docker compose -f docker-compose.dev.yml up -d.'
         )
+    RagQuery.objects.create(
+        user=user if getattr(user, 'is_authenticated', user is not None) else None,
+        project_id=project_id,
+        question=question,
+        answer=answer,
+        sources=sources,
+        model=used_model[:100],
+    )
 
     return {'answer': answer, 'sources': sources}
 
@@ -632,6 +937,50 @@ def _report_summary_text(report) -> str:
     return '\n'.join(lines)
 
 
+def _report_conclusions(report) -> list[str]:
+    """Выводы для экспорта (треб. 12): короткие тезисы из агрегатов.
+
+    Детерминированные (без LLM) — чтобы PDF/Word не зависели от сбоев
+    синтеза; резюме LLM печатается отдельным блоком.
+    """
+    payload = report.payload or {}
+    conclusions: list[str] = []
+    total = payload.get('total_issues', 0)
+    by_status = payload.get('by_status', {})
+    if not total:
+        conclusions.append(
+            'За период замечания не регистрировались — внимание к '
+            'документам проекта не требуется.'
+        )
+        return conclusions
+    conclusions.append(f'За период зарегистрировано замечаний: {total}.')
+    overdue = payload.get('overdue_count', 0)
+    if overdue:
+        conclusions.append(
+            f'Просрочено {overdue} замечаний — требуется контроль сроков.'
+        )
+    else:
+        conclusions.append('Просроченных замечаний нет.')
+    progress = by_status.get('progress', 0) + by_status.get('open', 0)
+    if progress:
+        conclusions.append(
+            f'Незавершённые замечания: {progress} '
+            '(открытые и в работе).'
+        )
+    if payload.get('by_assignee'):
+        top_name, top_count = max(
+            payload['by_assignee'].items(), key=lambda kv: kv[1],
+        )
+        conclusions.append(
+            f'Больше всего замечаний у исполнителя {top_name}: {top_count}.'
+        )
+    if payload.get('top_issues'):
+        conclusions.append(
+            'Наиболее значимые замечания перечислены в таблице выше.'
+        )
+    return conclusions
+
+
 def gip_report_pdf(report) -> bytes:
     """PDF отчёта ГИПа (reportlab, BSD — замена PyMuPDF).
 
@@ -755,6 +1104,12 @@ def gip_report_pdf(report) -> bytes:
     write('Резюме (LLM):', size=12, gap=2)
     write_wrapped(str(payload.get('summary', '')), size=10)
 
+    # Треб. 12: раздел «Выводы» после сводки.
+    y += 8
+    write('Выводы:', size=12, gap=2)
+    for conclusion in _report_conclusions(report):
+        write_wrapped(f'• {conclusion}', size=10)
+
     canvas.save()
     return buffer.getvalue()
 
@@ -806,6 +1161,11 @@ def gip_report_docx(report) -> bytes:
 
     document.add_heading('Резюме (LLM)', level=2)
     document.add_paragraph(str(payload.get('summary', '')))
+
+    # Треб. 12: раздел «Выводы» после сводки.
+    document.add_heading('Выводы', level=2)
+    for conclusion in _report_conclusions(report):
+        document.add_paragraph(conclusion, style='List Bullet')
 
     buffer = io.BytesIO()
     document.save(buffer)
@@ -1046,6 +1406,10 @@ def upload_knowledge_document(
         name=title or uploaded_file.name,
         doc_type='report',
         file=uploaded_file,
+        # База знаний индексируется в InternalChunk, а не в проектный
+        # индекс ProjectDocumentChunk (треб. 6: тип источника
+        # «проект» = PDF-документы проекта, «стандарт» = база знаний).
+        skip_ai_index=True,
     )
     document = version.document if hasattr(version, 'document') else version
 
@@ -1057,12 +1421,12 @@ def upload_knowledge_document(
         doc_type=doc_type,
         title=title or uploaded_file.name,
         created_by=user,
-        index_status='queued',
+        indexing_status=IndexingStatus.PENDING,
     )
 
 
 def index_internal_document(internal_document_id: int) -> int:
-    """Индексация InternalDocument со статусами (queued→running→done/failed)."""
+    """Индексация InternalDocument со статусами (pending→processing→done/error)."""
     try:
         internal = InternalDocument.objects.select_related(
             'source_document',
@@ -1070,22 +1434,22 @@ def index_internal_document(internal_document_id: int) -> int:
     except InternalDocument.DoesNotExist:
         return 0
 
-    internal.index_status = 'running'
-    internal.save(update_fields=['index_status'])
+    internal.indexing_status = IndexingStatus.PROCESSING
+    internal.save(update_fields=['indexing_status'])
     try:
         version = internal.source_document.current_version
         if version is None:
             raise ValueError('У исходного документа нет текущей версии')
         count = index_document(internal, version.file.path)
-        internal.index_status = 'done'
+        internal.indexing_status = IndexingStatus.DONE
         internal.index_error = ''
-        internal.save(update_fields=['index_status', 'index_error'])
+        internal.save(update_fields=['indexing_status', 'index_error'])
         return count
     except Exception as exc:  # noqa: BLE001 — статус важнее трейса
         logger.exception('Индексация базы знаний #%s упала: %s', internal.pk, exc)
-        internal.index_status = 'failed'
+        internal.indexing_status = IndexingStatus.ERROR
         internal.index_error = str(exc)[:1000]
-        internal.save(update_fields=['index_status', 'index_error'])
+        internal.save(update_fields=['indexing_status', 'index_error'])
         return 0
 
 

@@ -1,34 +1,87 @@
 {% comment %}
-Ф2: вкладка «ИИ-поиск» — форма вопроса, результаты подгружаются в
-#aiRagResults через HTMX (фрагмент _rag_results.html).
+Треб. 8/9: вкладка «ИИ-поиск» — форма с фильтрами (раздел, тип источника),
+чип-примеры, результаты (#aiRagResults) и история запросов (#aiRagHistory)
+под формой. История подгружается лениво и обновляется out-of-band после
+каждого поиска.
 {% endcomment %}
 <div class="toolbar" data-role="ai-rag-toolbar">
   <span class="fw-semibold">
-    <i class="bi bi-robot me-1" aria-hidden="true"></i>ИИ-поиск по базе знаний
+    <i class="bi bi-robot me-1" aria-hidden="true"></i>ИИ-поиск по документам проекта и базе знаний
   </span>
   <span class="toolbar-spacer"></span>
   <span class="text-muted small">
-    Только по доступным источникам компании и проекта
+    Документы проекта + внутренние стандарты компании
   </span>
 </div>
 
-<form class="d-flex gap-2 px-2 pt-2"
+<form class="row g-2 px-2 pt-2 align-items-end"
       hx-post="{% url 'ai_checks:rag_search' project.pk %}"
       hx-target="#aiRagResults"
       hx-swap="innerHTML">
   {% csrf_token %}
-  <input type="text" name="question" class="form-control form-control-sm"
-         placeholder="Задайте вопрос по документам проекта…"
-         aria-label="Вопрос к базе знаний" required>
-  <select class="form-select form-select-sm w-auto" name="model"
-          aria-label="Модель LLM">
-    {% for code, label in ai_available_models %}
-      <option value="{{ code }}"{% if forloop.first %} selected{% endif %}>{{ label }}</option>
-    {% endfor %}
-  </select>
-  <button type="submit" class="btn btn-sm btn-primary text-nowrap">
-    <i class="bi bi-search me-1" aria-hidden="true"></i>Найти
-  </button>
+  <div class="col-12">
+    <input type="text" id="ragQuestion" name="question"
+           class="form-control form-control-sm"
+           placeholder="Задайте вопрос по документам проекта…"
+           aria-label="Вопрос к базе знаний" required>
+  </div>
+  <div class="col-6 col-md-3">
+    <label class="form-label small mb-1" for="ragSection">Раздел</label>
+    <select class="form-select form-select-sm" id="ragSection" name="section_code">
+      <option value="">Все разделы</option>
+      {% for section in sections %}
+        <option value="{{ section.code }}">{{ section.code }} — {{ section.name }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="col-6 col-md-3">
+    <label class="form-label small mb-1" for="ragSourceType">Тип источника</label>
+    <select class="form-select form-select-sm" id="ragSourceType" name="source_type">
+      <option value="">Все источники</option>
+      <option value="project">Документы проекта</option>
+      <option value="standard">Внутренние стандарты</option>
+    </select>
+  </div>
+  <div class="col-6 col-md-3">
+    <label class="form-label small mb-1" for="ragModel">Модель</label>
+    <select class="form-select form-select-sm" id="ragModel" name="model" aria-label="Модель LLM">
+      {% for code, label in ai_available_models %}
+        <option value="{{ code }}"{% if forloop.first %} selected{% endif %}>{{ label }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="col-6 col-md-3">
+    <button type="submit" class="btn btn-sm btn-primary w-100 text-nowrap">
+      <i class="bi bi-search me-1" aria-hidden="true"></i>Найти
+    </button>
+  </div>
 </form>
 
+<div class="px-2 pt-1 d-flex flex-wrap gap-1 align-items-center">
+  <span class="small text-muted me-1">Например:</span>
+  {% for example in example_questions %}
+    <button type="button" class="btn btn-sm btn-outline-secondary rounded-pill py-0"
+            data-q="{{ example }}"
+            hx-on:click="const input = document.getElementById('ragQuestion'); input.value = this.dataset.q; input.focus();">
+      {{ example }}
+    </button>
+  {% endfor %}
+</div>
+
 <div id="aiRagResults" class="px-2 pt-2"></div>
+
+<div class="px-2 pt-3">
+  <div class="d-flex align-items-center justify-content-between mb-1">
+    <span class="fw-semibold small">
+      <i class="bi bi-clock-history me-1" aria-hidden="true"></i>История запросов
+    </span>
+    <span class="text-muted small">видна всем участникам проекта</span>
+  </div>
+  {# Треб. 9/10: ленивая загрузка истории; OOB-обновление после поиска. #}
+  <div id="aiRagHistory"
+       hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
+       hx-get="{% url 'ai_checks:rag_history' project.pk %}"
+       hx-trigger="load" hx-swap="innerHTML">
+    <div class="text-muted small">Загрузка…</div>
+  </div>
+</div>

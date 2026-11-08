@@ -1,0 +1,47 @@
+{% comment %}
+Треб. 13: история отчётов ГИПу — последние 20 (дата, период, автор,
+кнопки PDF/Word). Видна только ГИП/админ (вкладка целиком ограничена
+_report_allowed). Включается в _report.html и обновляется out-of-band
+после генерации (oob=True → hx-swap-oob на корневом элементе).
+{% endcomment %}
+<div id="aiReportHistory" {% if oob %}hx-swap-oob="true"{% endif %}>
+  {% if reports %}
+    <div class="table-responsive">
+      <table class="table table-sm align-middle mb-0" id="aiReportHistoryTable">
+        <thead>
+          <tr class="small text-muted">
+            <th style="min-width: 110px;">Дата</th>
+            <th>Период</th>
+            <th>Автор</th>
+            <th class="text-end">Экспорт</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for report in reports %}
+            <tr>
+              <td class="small text-muted text-nowrap">{{ report.created_at|date:"d.m.Y H:i" }}</td>
+              <td class="small">{{ report.period }}</td>
+              <td class="small">{{ report.created_by.get_full_name|default:report.created_by.username|default:'—' }}</td>
+              <td class="text-end text-nowrap">
+                <a class="btn btn-sm btn-outline-secondary py-0"
+                   href="{% url 'ai_checks:report_pdf' report.pk %}"
+                   title="Скачать PDF">
+                  <i class="bi bi-file-earmark-pdf" aria-hidden="true"></i> PDF
+                </a>
+                <a class="btn btn-sm btn-outline-secondary py-0"
+                   href="{% url 'ai_checks:report_docx' report.pk %}"
+                   title="Скачать Word">
+                  <i class="bi bi-file-earmark-word" aria-hidden="true"></i> Word
+                </a>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <div class="alert alert-light border py-2 px-3 small mb-0">
+      Отчётов ещё нет — сформируйте первый отчёт за период выше.
+    </div>
+  {% endif %}
+</div>

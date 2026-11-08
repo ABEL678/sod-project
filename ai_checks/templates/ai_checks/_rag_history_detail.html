@@ -1,0 +1,41 @@
+{% comment %}
+Треб. 9: раскрываемый ответ выбранного запроса истории — ответ и источники
+(тип, документ, раздел, лист, цитата, score).
+{% endcomment %}
+<div class="p-2">
+  <div class="text-muted mb-1">
+    {{ query.created_at|date:"d.m.Y H:i" }}
+    {% if query.user %} · {{ query.user.get_full_name|default:query.user.username }}{% endif %}
+    {% if query.model %} · модель {{ query.model }}{% endif %}
+  </div>
+  <div class="fw-semibold small mb-1">«{{ query.question }}»</div>
+
+  {% if query.answer %}
+    <div class="border rounded p-2 mb-2 bg-white small" style="white-space: pre-wrap;">{{ query.answer }}</div>
+  {% endif %}
+
+  {% if not groups %}
+    <div class="small text-muted">Источников нет.</div>
+  {% endif %}
+
+  {% for group_code, group_label, items in groups %}
+    <div class="fw-semibold small mt-1 mb-1">{{ group_label }}:</div>
+    {% for source in items %}
+      <div class="border rounded p-2 mb-1 bg-white small">
+        <div class="d-flex justify-content-between align-items-baseline flex-wrap gap-1">
+          <span>
+            <span class="badge text-bg-light border">
+              {% if source.type == 'project' %}Проект{% else %}Стандарт{% endif %}
+            </span>
+            <span class="fw-semibold ms-1">{{ source.document_title }}</span>
+          </span>
+          <span class="text-muted">
+            {% if source.section_code %}раздел {{ source.section_code }}{% endif %}
+            {% if source.page %}{% if source.section_code %} · {% endif %}лист {{ source.page }}{% endif %}
+          </span>
+        </div>
+        <div class="text-muted mt-1">{{ source.text|truncatechars:280 }}</div>
+      </div>
+    {% endfor %}
+  {% endfor %}
+</div>
