@@ -1307,6 +1307,16 @@ def bbox_ratios_for_rotation(
                 display_w, display_h = width, height
     except pdfium_tools.PdfiumError:
         return {}
+    except (ValueError, TypeError) as exc:
+        # Бэта-тест 2026-11-08: viewer_rotation приходит из hx-vals кнопки —
+        # подделанный/повреждённый запрос (rotation='abc') или битый bbox в
+        # БД давали ValueError -> 500 «Подтвердить». Пустой результат —
+        # вьюха подставит координаты по умолчанию, кроп не строится.
+        logger.warning(
+            'bbox_ratios_for_rotation: некорректные данные (%s: %s)',
+            type(exc).__name__, exc,
+        )
+        return {}
 
     def ratio(value: float, size: float) -> float:
         return min(1.0, max(0.0, value / size))
@@ -1356,6 +1366,20 @@ def crop_finding_image(
             return None
         try:
             data = view.render_jpeg_clip(clip, scale=zoom)
+            # Бэта-тест 2026-11-08: create_issue отклоняет кроп > 5 МБ
+            # (ValueError -> был 500 в confirm_finding). Плотный
+            # крупноформатный лист при zoom=2 легко превышает лимит —
+            # пересобираем кроп с меньшим масштабом/качеством (до 3 раз).
+            quality = 95
+            scale = zoom
+            for _ in range(3):
+                if len(data) <= 4 * 1024 * 1024:
+                    break
+                scale = max(0.5, scale * 0.6)
+                quality = max(60, quality - 20)
+                data = view.render_jpeg_clip(
+                    clip, scale=scale, quality=quality,
+                )
         finally:
             view.close()
     return base64.b64encode(data).decode('ascii')

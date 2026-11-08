@@ -42,8 +42,7 @@
   <div class="fw-semibold small mb-1">
     <i class="bi bi-journal-bookmark me-1" aria-hidden="true"></i>Внутренние стандарты
   </div>
-  {# stage2: таблица грузится собственным фрагментом (избегаем коллизии
-     переменной documents с таблицей документов страницы проекта). #}
+  {# stage2: таблица грузится фрагментом kb_table (коллизия documents) #}
   <div id="kbTableWrap" class="px-0"
        hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
        hx-get="{% url 'ai_checks:kb_table' project.pk %}"

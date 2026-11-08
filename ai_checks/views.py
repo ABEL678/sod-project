@@ -181,20 +181,32 @@ def confirm_finding(request, pk: int):
                 )
             except (OSError, RuntimeError, ValueError):
                 crop_base64 = None
-        create_issue(
-            request.user,
-            document,
-            description=f'[ИИ] {finding.message}',
-            version=version,
-            page_number=finding.page,
-            x_ratio=ratios.get('x_ratio', 0.5 if finding.page else None),
-            y_ratio=ratios.get('y_ratio', 0.5 if finding.page else None),
-            x1_ratio=ratios.get('x1_ratio'),
-            y1_ratio=ratios.get('y1_ratio'),
-            x2_ratio=ratios.get('x2_ratio'),
-            y2_ratio=ratios.get('y2_ratio'),
-            crop_image_base64=crop_base64,
-        )
+        try:
+            create_issue(
+                request.user,
+                document,
+                description=f'[ИИ] {finding.message}',
+                version=version,
+                page_number=finding.page,
+                x_ratio=ratios.get('x_ratio', 0.5 if finding.page else None),
+                y_ratio=ratios.get('y_ratio', 0.5 if finding.page else None),
+                x1_ratio=ratios.get('x1_ratio'),
+                y1_ratio=ratios.get('y1_ratio'),
+                x2_ratio=ratios.get('x2_ratio'),
+                y2_ratio=ratios.get('y2_ratio'),
+                crop_image_base64=crop_base64,
+            )
+        except ValueError as exc:
+            # Бэта-тест 2026-11-08: create_issue валидирует координаты и
+            # кроп (<=5 МБ) и бросает ValueError — без перехвата это 500
+            # «Подтвердить» (находка остаётся pending, можно повторить).
+            logger.warning(
+                'Подтверждение находки %s (версия %s): %s: %s',
+                pk, version.pk, type(exc).__name__, exc,
+            )
+            response = _render_row(request, finding)
+            response['HX-Trigger'] = 'ai-finding-error'
+            return response
         finding.status = PendingCheckResult.Status.CONFIRMED
         finding.reviewed_by = request.user
         finding.reviewed_at = timezone.now()
@@ -723,6 +735,7 @@ def _render_kb_table(request, project):
 @login_required
 @require_GET
 def kb_panel(request, project_id: int):
+    _ensure_enabled()  # гейт флага (был пропущен — БЗ открывалась при выключенном ИИ-контуре)
     """Вкладка «База знаний» (треб. 7): два блока + модалка загрузки.
 
     «Документы проекта» — таблица с ИИ-статусом и кнопкой
@@ -744,6 +757,7 @@ def kb_panel(request, project_id: int):
 @login_required
 @require_GET
 def kb_table(request, project_id: int):
+    _ensure_enabled()  # гейт флага (был пропущен — БЗ открывалась при выключенном ИИ-контуре)
     """HTMX-фрагмент: таблица документов базы знаний (стандарты)."""
     project = _kb_project(request, project_id)
     return _render_kb_table(request, project)
@@ -752,6 +766,7 @@ def kb_table(request, project_id: int):
 @login_required
 @require_GET
 def kb_projects_table(request, project_id: int):
+    _ensure_enabled()  # гейт флага (был пропущен — БЗ открывалась при выключенном ИИ-контуре)
     """HTMX-фрагмент: таблица «Документы проекта» (треб. 7)."""
     project = _kb_project(request, project_id)
     return _render_kb_projects(request, project)
@@ -760,6 +775,7 @@ def kb_projects_table(request, project_id: int):
 @login_required
 @require_POST
 def kb_reindex_project_view(request, project_id: int):
+    _ensure_enabled()  # гейт флага (был пропущен — БЗ открывалась при выключенном ИИ-контуре)
     """Кнопка «Переиндексировать проект» (треб. 5, 7)."""
     project = _kb_project(request, project_id)
     reindex_project(project.pk, request.user)
@@ -769,6 +785,7 @@ def kb_reindex_project_view(request, project_id: int):
 @login_required
 @require_POST
 def kb_reindex_document_view(request, project_id: int, document_id: int):
+    _ensure_enabled()  # гейт флага (был пропущен — БЗ открывалась при выключенном ИИ-контуре)
     """Переиндексация одного документа проекта (треб. 5)."""
     project = _kb_project(request, project_id)
     get_object_or_404(
@@ -782,6 +799,7 @@ def kb_reindex_document_view(request, project_id: int, document_id: int):
 @login_required
 @require_POST
 def kb_upload(request, project_id: int):
+    _ensure_enabled()  # гейт флага (был пропущен — БЗ открывалась при выключенном ИИ-контуре)
     """Загрузка PDF в базу знаний + постановка индексации в Celery."""
     project = _kb_project(request, project_id)
     uploaded = request.FILES.get('file')
@@ -803,6 +821,7 @@ def kb_upload(request, project_id: int):
 @login_required
 @require_POST
 def kb_reindex(request, project_id: int, pk: int):
+    _ensure_enabled()  # гейт флага (был пропущен — БЗ открывалась при выключенном ИИ-контуре)
     """Переиндексация документа базы знаний."""
     project, document = _kb_document(request, project_id, pk)
     document.indexing_status = 'pending'
@@ -814,6 +833,7 @@ def kb_reindex(request, project_id: int, pk: int):
 @login_required
 @require_POST
 def kb_disable(request, project_id: int, pk: int):
+    _ensure_enabled()  # гейт флага (был пропущен — БЗ открывалась при выключенном ИИ-контуре)
     """Мягкое удаление из базы знаний (is_active=False)."""
     project, document = _kb_document(request, project_id, pk)
     remove_knowledge_document(document)
@@ -823,6 +843,7 @@ def kb_disable(request, project_id: int, pk: int):
 @login_required
 @require_GET
 def kb_chunks(request, project_id: int, pk: int):
+    _ensure_enabled()  # гейт флага (был пропущен — БЗ открывалась при выключенном ИИ-контуре)
     """Фрагмент: текст чанков документа базы знаний (первые 20)."""
     _project, document = _kb_document(request, project_id, pk)
     return render(request, 'ai_checks/_kb_chunks.html', {

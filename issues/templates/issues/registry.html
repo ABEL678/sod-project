@@ -14,7 +14,7 @@
             <h1 class="h4 mb-0">Замечания проекта {{ project.code }}</h1>
             <div class="small text-muted">
                 {{ project.code }} — {{ project.name }} ·
-                всего {{ counts.total }} замечание{{ counts.total|pluralize:"я,й" }}
+                всего {{ counts.total }} замечани{{ counts.total|plural_ru:"е,я,й" }}
             </div>
         </div>
         <div class="d-flex gap-2">

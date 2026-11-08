@@ -129,6 +129,7 @@ from storage.domain.services import (
     reset_project_structure,
     restore_document,
     restore_folder,
+    ru_plural,
     save_document_view,
     search_documents,
     submit_feedback,
@@ -795,6 +796,21 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
                 _today - _timedelta(days=30)
             ).isoformat()
             context['default_end'] = _today.isoformat()
+
+        # Бэта-тест 2026-11-08: при серверном include фрагментов ai_checks
+        # из project_detail их контекст нужно собрать здесь — htmx-фрагменты
+        # (rag_history/report_panel) при полной загрузке страницы не
+        # вызываются. Без этого «Например:» пуст (нет example_questions),
+        # а «История отчётов» показывает «Отчётов ещё нет» даже при
+        # существующих отчётах (нет reports).
+        if active_tab == 'ai-search':
+            from ai_checks.views import RAG_EXAMPLE_QUESTIONS
+
+            context['example_questions'] = RAG_EXAMPLE_QUESTIONS
+        elif active_tab == 'ai-report':
+            from ai_checks.views import _gip_reports
+
+            context['reports'] = _gip_reports(project)
 
         sections = list(get_sections_with_counts(user, project))
         all_roots = list(get_folder_tree(user, project))
@@ -2424,7 +2440,20 @@ class DocumentDetailView(LoginRequiredMixin, DetailView):
             context['issue_assignees'] = get_issue_assignees(
                 self.request.user, self.object
             )
-            context['open_issues_count'] = _open_issues_count(self.object)
+            open_issues = _open_issues_count(self.object)
+            context['open_issues_count'] = open_issues
+            # Грамматика заголовка кнопки для 1/2–4/5+ (см. title в
+            # document_detail.html; бэта-тест 2026-11-08: «4 открытых
+            # замечаний» — неверно). Джанговский pluralize трёх форм
+            # не поддерживает, поэтому считаем здесь.
+            context['open_issues_phrase'] = (
+                f'{open_issues} '
+                + ru_plural(
+                    open_issues,
+                    'открытое замечание', 'открытых замечания',
+                    'открытых замечаний',
+                )
+            )
             context['issues_registry_url'] = '{}?{}'.format(
                 reverse('issues:issue_registry', args=[self.object.project_id]),
                 urlencode({'q': self.object.code}),

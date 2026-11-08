@@ -1652,6 +1652,21 @@ def get_folder_tree(user: User, project: Project) -> list[Folder]:
     return by_parent[None]
 
 
+def ru_plural(number, one: str, few: str, many: str) -> str:
+    """Русская плюрализация с исключением 11–14 (1 замечание, 2 замечания,
+    5 замечаний). Django-фильтр pluralize трёх форм не поддерживает
+    (возвращает '' при двух запятых в аргументе)."""
+    number = abs(int(number)) % 100
+    if 11 <= number <= 14:
+        return many
+    last = number % 10
+    if last == 1:
+        return one
+    if 2 <= last <= 4:
+        return few
+    return many
+
+
 def get_flat_folders(user: User, project: Project):
     """Плоский список активных папок для выбора при перемещении."""
     _ensure_project_access(user, project)

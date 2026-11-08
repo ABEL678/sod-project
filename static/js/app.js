@@ -344,9 +344,13 @@
             var node = document.querySelector(
                 '.folder-node[data-folder-id="' + folderId + '"]'
             );
-            if (node) {
+            if (node && node.dataset.sectionId) {
+                // Бэта-тест 2026-11-08: у корневых супер-папок (ИРД/ПД/РД)
+                // sectionId пуст — сервер отклонит загрузку с 400
+                // «Не выбран раздел». Возвращаем null -> пользователь
+                // получит внятную подсказку «Сначала выберите раздел».
                 return {
-                    sectionId: node.dataset.sectionId || '',
+                    sectionId: node.dataset.sectionId,
                     folderId: folderId,
                     name: node.dataset.folderName || 'выбранную папку'
                 };

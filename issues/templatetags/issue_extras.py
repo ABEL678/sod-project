@@ -13,8 +13,18 @@ from datetime import date
 from django import template
 
 from storage.domain.design_colors import DEFAULT_STATUS, ISSUE_STATUS_CLASS
+from storage.domain.services import ru_plural
 
 register = template.Library()
+
+
+@register.filter
+def plural_ru(number, forms):
+    """Русская плюрализация тремя формами: «е,я,й» ->
+    замечание / замечания / замечаний. Джанговский pluralize трёх
+    форм не поддерживает (возвращает '' при 3 аргументах)."""
+    one, few, many = (part.strip() for part in forms.split(',', 2))
+    return ru_plural(number, one, few, many)
 
 # Живой срок показываем только по активным замечаниям:
 # у закрытых и аннулированных дедлайн уже не давит.

@@ -1,0 +1,378 @@
+diff --git a/ai_checks/adapters/llm_http.py b/ai_checks/adapters/llm_http.py
+index 2107e40..36e6b65 100644
+--- a/ai_checks/adapters/llm_http.py
++++ b/ai_checks/adapters/llm_http.py
+@@ -128,25 +128,38 @@ def get_llm_provider():
+         ).strip()
+         if not auth_key:
+             return StubLLMProvider()
++        # Тот же бюджет, что у HttpLLMProvider (см. комментарий ниже):
++        # синхронный вызов не должен превышать таймаут воркера gunicorn.
+         return GigaChatProvider(
+             auth_key,
+             model=getattr(settings, 'AI_GIGACHAT_MODEL', 'GigaChat-2'),
+-            timeout=float(getattr(settings, 'AI_GIGACHAT_TIMEOUT', 60)),
++            timeout=min(
++                float(getattr(settings, 'AI_GIGACHAT_TIMEOUT', 60)), 12.0,
++            ),
+             verify_ssl=bool(
+                 getattr(settings, 'AI_GIGACHAT_VERIFY_SSL', True),
+             ),
++            retries=2,
+         )
+ 
+     api_key = (getattr(settings, 'AI_LLM_API_KEY', '') or '').strip()
+     if not api_key:
+         return StubLLMProvider()
++    # Бюджет синхронного LLM-вызова УМНОЖАЕТСЯ на число попыток и должен
++    # укладываться в таймаут воркера gunicorn (по умолчанию 30 с), иначе
++    # зависший API-провайдер убивает воркер -> 500 «Internal Server Error»
++    # (наблюдено 2026-11-08 на stream-cad.ru: модель z-ai/glm-5.3-flash-free
++    # не отвечает -> прежний дефолт 60 c x 3 попытки превысил лимит).
++    # 12 c x 2 попытки + паузы ~ 1.5 c = максимум ~25.5 c < 30 c.
++    timeout = min(float(getattr(settings, 'AI_LLM_TIMEOUT', 60)), 12.0)
+     return HttpLLMProvider(
+         api_key=api_key,
+         base_url=getattr(
+             settings, 'AI_LLM_BASE_URL', 'https://api.deepseek.com/v1',
+         ),
+         model=getattr(settings, 'AI_LLM_MODEL', 'deepseek-chat'),
+-        timeout=float(getattr(settings, 'AI_LLM_TIMEOUT', 60)),
++        timeout=timeout,
++        retries=2,
+     )
+ 
+ 
+diff --git a/ai_checks/domain/services.py b/ai_checks/domain/services.py
+index 5372e71..6eb65c7 100644
+--- a/ai_checks/domain/services.py
++++ b/ai_checks/domain/services.py
+@@ -1307,6 +1307,16 @@ def bbox_ratios_for_rotation(
+                 display_w, display_h = width, height
+     except pdfium_tools.PdfiumError:
+         return {}
++    except (ValueError, TypeError) as exc:
++        # Бэта-тест 2026-11-08: viewer_rotation приходит из hx-vals кнопки —
++        # подделанный/повреждённый запрос (rotation='abc') или битый bbox в
++        # БД давали ValueError -> 500 «Подтвердить». Пустой результат —
++        # вьюха подставит координаты по умолчанию, кроп не строится.
++        logger.warning(
++            'bbox_ratios_for_rotation: некорректные данные (%s: %s)',
++            type(exc).__name__, exc,
++        )
++        return {}
+ 
+     def ratio(value: float, size: float) -> float:
+         return min(1.0, max(0.0, value / size))
+@@ -1356,6 +1366,20 @@ def crop_finding_image(
+             return None
+         try:
+             data = view.render_jpeg_clip(clip, scale=zoom)
++            # Бэта-тест 2026-11-08: create_issue отклоняет кроп > 5 МБ
++            # (ValueError -> был 500 в confirm_finding). Плотный
++            # крупноформатный лист при zoom=2 легко превышает лимит —
++            # пересобираем кроп с меньшим масштабом/качеством (до 3 раз).
++            quality = 95
++            scale = zoom
++            for _ in range(3):
++                if len(data) <= 4 * 1024 * 1024:
++                    break
++                scale = max(0.5, scale * 0.6)
++                quality = max(60, quality - 20)
++                data = view.render_jpeg_clip(
++                    clip, scale=scale, quality=quality,
++                )
+         finally:
+             view.close()
+     return base64.b64encode(data).decode('ascii')
+diff --git a/ai_checks/templates/ai_checks/_kb.html b/ai_checks/templates/ai_checks/_kb.html
+index 70d9d3a..21a222f 100644
+--- a/ai_checks/templates/ai_checks/_kb.html
++++ b/ai_checks/templates/ai_checks/_kb.html
+@@ -42,8 +42,7 @@
+   <div class="fw-semibold small mb-1">
+     <i class="bi bi-journal-bookmark me-1" aria-hidden="true"></i>Внутренние стандарты
+   </div>
+-  {# stage2: таблица грузится собственным фрагментом (избегаем коллизии
+-     переменной documents с таблицей документов страницы проекта). #}
++  {# stage2: таблица грузится фрагментом kb_table (коллизия documents) #}
+   <div id="kbTableWrap" class="px-0"
+        hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
+        hx-get="{% url 'ai_checks:kb_table' project.pk %}"
+diff --git a/ai_checks/views.py b/ai_checks/views.py
+index cb93687..e95263e 100644
+--- a/ai_checks/views.py
++++ b/ai_checks/views.py
+@@ -181,20 +181,32 @@ def confirm_finding(request, pk: int):
+                 )
+             except (OSError, RuntimeError, ValueError):
+                 crop_base64 = None
+-        create_issue(
+-            request.user,
+-            document,
+-            description=f'[ИИ] {finding.message}',
+-            version=version,
+-            page_number=finding.page,
+-            x_ratio=ratios.get('x_ratio', 0.5 if finding.page else None),
+-            y_ratio=ratios.get('y_ratio', 0.5 if finding.page else None),
+-            x1_ratio=ratios.get('x1_ratio'),
+-            y1_ratio=ratios.get('y1_ratio'),
+-            x2_ratio=ratios.get('x2_ratio'),
+-            y2_ratio=ratios.get('y2_ratio'),
+-            crop_image_base64=crop_base64,
+-        )
++        try:
++            create_issue(
++                request.user,
++                document,
++                description=f'[ИИ] {finding.message}',
++                version=version,
++                page_number=finding.page,
++                x_ratio=ratios.get('x_ratio', 0.5 if finding.page else None),
++                y_ratio=ratios.get('y_ratio', 0.5 if finding.page else None),
++                x1_ratio=ratios.get('x1_ratio'),
++                y1_ratio=ratios.get('y1_ratio'),
++                x2_ratio=ratios.get('x2_ratio'),
++                y2_ratio=ratios.get('y2_ratio'),
++                crop_image_base64=crop_base64,
++            )
++        except ValueError as exc:
++            # Бэта-тест 2026-11-08: create_issue валидирует координаты и
++            # кроп (<=5 МБ) и бросает ValueError — без перехвата это 500
++            # «Подтвердить» (находка остаётся pending, можно повторить).
++            logger.warning(
++                'Подтверждение находки %s (версия %s): %s: %s',
++                pk, version.pk, type(exc).__name__, exc,
++            )
++            response = _render_row(request, finding)
++            response['HX-Trigger'] = 'ai-finding-error'
++            return response
+         finding.status = PendingCheckResult.Status.CONFIRMED
+         finding.reviewed_by = request.user
+         finding.reviewed_at = timezone.now()
+@@ -723,6 +735,7 @@ def _render_kb_table(request, project):
+ @login_required
+ @require_GET
+ def kb_panel(request, project_id: int):
++    _ensure_enabled()  # гейт флага (был пропущен — БЗ открывалась при выключенном ИИ-контуре)
+     """Вкладка «База знаний» (треб. 7): два блока + модалка загрузки.
+ 
+     «Документы проекта» — таблица с ИИ-статусом и кнопкой
+@@ -744,6 +757,7 @@ def kb_panel(request, project_id: int):
+ @login_required
+ @require_GET
+ def kb_table(request, project_id: int):
++    _ensure_enabled()  # гейт флага (был пропущен — БЗ открывалась при выключенном ИИ-контуре)
+     """HTMX-фрагмент: таблица документов базы знаний (стандарты)."""
+     project = _kb_project(request, project_id)
+     return _render_kb_table(request, project)
+@@ -752,6 +766,7 @@ def kb_table(request, project_id: int):
+ @login_required
+ @require_GET
+ def kb_projects_table(request, project_id: int):
++    _ensure_enabled()  # гейт флага (был пропущен — БЗ открывалась при выключенном ИИ-контуре)
+     """HTMX-фрагмент: таблица «Документы проекта» (треб. 7)."""
+     project = _kb_project(request, project_id)
+     return _render_kb_projects(request, project)
+@@ -760,6 +775,7 @@ def kb_projects_table(request, project_id: int):
+ @login_required
+ @require_POST
+ def kb_reindex_project_view(request, project_id: int):
++    _ensure_enabled()  # гейт флага (был пропущен — БЗ открывалась при выключенном ИИ-контуре)
+     """Кнопка «Переиндексировать проект» (треб. 5, 7)."""
+     project = _kb_project(request, project_id)
+     reindex_project(project.pk, request.user)
+@@ -769,6 +785,7 @@ def kb_reindex_project_view(request, project_id: int):
+ @login_required
+ @require_POST
+ def kb_reindex_document_view(request, project_id: int, document_id: int):
++    _ensure_enabled()  # гейт флага (был пропущен — БЗ открывалась при выключенном ИИ-контуре)
+     """Переиндексация одного документа проекта (треб. 5)."""
+     project = _kb_project(request, project_id)
+     get_object_or_404(
+@@ -782,6 +799,7 @@ def kb_reindex_document_view(request, project_id: int, document_id: int):
+ @login_required
+ @require_POST
+ def kb_upload(request, project_id: int):
++    _ensure_enabled()  # гейт флага (был пропущен — БЗ открывалась при выключенном ИИ-контуре)
+     """Загрузка PDF в базу знаний + постановка индексации в Celery."""
+     project = _kb_project(request, project_id)
+     uploaded = request.FILES.get('file')
+@@ -803,6 +821,7 @@ def kb_upload(request, project_id: int):
+ @login_required
+ @require_POST
+ def kb_reindex(request, project_id: int, pk: int):
++    _ensure_enabled()  # гейт флага (был пропущен — БЗ открывалась при выключенном ИИ-контуре)
+     """Переиндексация документа базы знаний."""
+     project, document = _kb_document(request, project_id, pk)
+     document.indexing_status = 'pending'
+@@ -814,6 +833,7 @@ def kb_reindex(request, project_id: int, pk: int):
+ @login_required
+ @require_POST
+ def kb_disable(request, project_id: int, pk: int):
++    _ensure_enabled()  # гейт флага (был пропущен — БЗ открывалась при выключенном ИИ-контуре)
+     """Мягкое удаление из базы знаний (is_active=False)."""
+     project, document = _kb_document(request, project_id, pk)
+     remove_knowledge_document(document)
+@@ -823,6 +843,7 @@ def kb_disable(request, project_id: int, pk: int):
+ @login_required
+ @require_GET
+ def kb_chunks(request, project_id: int, pk: int):
++    _ensure_enabled()  # гейт флага (был пропущен — БЗ открывалась при выключенном ИИ-контуре)
+     """Фрагмент: текст чанков документа базы знаний (первые 20)."""
+     _project, document = _kb_document(request, project_id, pk)
+     return render(request, 'ai_checks/_kb_chunks.html', {
+diff --git a/issues/templates/issues/registry.html b/issues/templates/issues/registry.html
+index 1fbb039..1e04423 100644
+--- a/issues/templates/issues/registry.html
++++ b/issues/templates/issues/registry.html
+@@ -14,7 +14,7 @@
+             <h1 class="h4 mb-0">Замечания проекта {{ project.code }}</h1>
+             <div class="small text-muted">
+                 {{ project.code }} — {{ project.name }} ·
+-                всего {{ counts.total }} замечание{{ counts.total|pluralize:"я,й" }}
++                всего {{ counts.total }} замечани{{ counts.total|plural_ru:"е,я,й" }}
+             </div>
+         </div>
+         <div class="d-flex gap-2">
+diff --git a/issues/templatetags/issue_extras.py b/issues/templatetags/issue_extras.py
+index 44227c3..17782e2 100644
+--- a/issues/templatetags/issue_extras.py
++++ b/issues/templatetags/issue_extras.py
+@@ -13,9 +13,19 @@ from datetime import date
+ from django import template
+ 
+ from storage.domain.design_colors import DEFAULT_STATUS, ISSUE_STATUS_CLASS
++from storage.domain.services import ru_plural
+ 
+ register = template.Library()
+ 
++
++@register.filter
++def plural_ru(number, forms):
++    """Русская плюрализация тремя формами: «е,я,й» ->
++    замечание / замечания / замечаний. Джанговский pluralize трёх
++    форм не поддерживает (возвращает '' при 3 аргументах)."""
++    one, few, many = (part.strip() for part in forms.split(',', 2))
++    return ru_plural(number, one, few, many)
++
+ # Живой срок показываем только по активным замечаниям:
+ # у закрытых и аннулированных дедлайн уже не давит.
+ ACTIVE_STATUSES = {"NEW", "IN_PROGRESS", "DISCUSSION", "REJECTED"}
+diff --git a/static/js/app.js b/static/js/app.js
+index d1ae075..dcd441c 100644
+--- a/static/js/app.js
++++ b/static/js/app.js
+@@ -344,9 +344,13 @@
+             var node = document.querySelector(
+                 '.folder-node[data-folder-id="' + folderId + '"]'
+             );
+-            if (node) {
++            if (node && node.dataset.sectionId) {
++                // Бэта-тест 2026-11-08: у корневых супер-папок (ИРД/ПД/РД)
++                // sectionId пуст — сервер отклонит загрузку с 400
++                // «Не выбран раздел». Возвращаем null -> пользователь
++                // получит внятную подсказку «Сначала выберите раздел».
+                 return {
+-                    sectionId: node.dataset.sectionId || '',
++                    sectionId: node.dataset.sectionId,
+                     folderId: folderId,
+                     name: node.dataset.folderName || 'выбранную папку'
+                 };
+diff --git a/storage/adapters/templates/storage/document_detail.html b/storage/adapters/templates/storage/document_detail.html
+index 82599d5..43b9f30 100644
+--- a/storage/adapters/templates/storage/document_detail.html
++++ b/storage/adapters/templates/storage/document_detail.html
+@@ -228,8 +228,8 @@
+               data-blocked="1"
+               aria-disabled="true"
+               onclick="runWorkflowAction(this)"
+-              title="Публикация заблокирована: {{ open_issues_count }} открытых замечаний — закройте замечания, чтобы отправить документ на проверку"
+-              aria-label="Отправить на проверку (заблокировано: {{ open_issues_count }} открытых замечаний)">
++              title="Публикация заблокирована: {{ open_issues_phrase }} — закройте замечания, чтобы отправить документ на проверку"
++              aria-label="Отправить на проверку (заблокировано: {{ open_issues_phrase }})">
+         Отправить на проверку
+         <span class="badge text-bg-light border ms-1" data-open-issues-count>{{ open_issues_count }}</span>
+       </button>
+diff --git a/storage/adapters/views.py b/storage/adapters/views.py
+index 7b0e647..afe199b 100644
+--- a/storage/adapters/views.py
++++ b/storage/adapters/views.py
+@@ -129,6 +129,7 @@ from storage.domain.services import (
+     reset_project_structure,
+     restore_document,
+     restore_folder,
++    ru_plural,
+     save_document_view,
+     search_documents,
+     submit_feedback,
+@@ -796,6 +797,21 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
+             ).isoformat()
+             context['default_end'] = _today.isoformat()
+ 
++        # Бэта-тест 2026-11-08: при серверном include фрагментов ai_checks
++        # из project_detail их контекст нужно собрать здесь — htmx-фрагменты
++        # (rag_history/report_panel) при полной загрузке страницы не
++        # вызываются. Без этого «Например:» пуст (нет example_questions),
++        # а «История отчётов» показывает «Отчётов ещё нет» даже при
++        # существующих отчётах (нет reports).
++        if active_tab == 'ai-search':
++            from ai_checks.views import RAG_EXAMPLE_QUESTIONS
++
++            context['example_questions'] = RAG_EXAMPLE_QUESTIONS
++        elif active_tab == 'ai-report':
++            from ai_checks.views import _gip_reports
++
++            context['reports'] = _gip_reports(project)
++
+         sections = list(get_sections_with_counts(user, project))
+         all_roots = list(get_folder_tree(user, project))
+         project_folders = [
+@@ -2424,7 +2440,20 @@ class DocumentDetailView(LoginRequiredMixin, DetailView):
+             context['issue_assignees'] = get_issue_assignees(
+                 self.request.user, self.object
+             )
+-            context['open_issues_count'] = _open_issues_count(self.object)
++            open_issues = _open_issues_count(self.object)
++            context['open_issues_count'] = open_issues
++            # Грамматика заголовка кнопки для 1/2–4/5+ (см. title в
++            # document_detail.html; бэта-тест 2026-11-08: «4 открытых
++            # замечаний» — неверно). Джанговский pluralize трёх форм
++            # не поддерживает, поэтому считаем здесь.
++            context['open_issues_phrase'] = (
++                f'{open_issues} '
++                + ru_plural(
++                    open_issues,
++                    'открытое замечание', 'открытых замечания',
++                    'открытых замечаний',
++                )
++            )
+             context['issues_registry_url'] = '{}?{}'.format(
+                 reverse('issues:issue_registry', args=[self.object.project_id]),
+                 urlencode({'q': self.object.code}),
+diff --git a/storage/domain/services.py b/storage/domain/services.py
+index 3e28c98..b440eca 100644
+--- a/storage/domain/services.py
++++ b/storage/domain/services.py
+@@ -1652,6 +1652,21 @@ def get_folder_tree(user: User, project: Project) -> list[Folder]:
+     return by_parent[None]
+ 
+ 
++def ru_plural(number, one: str, few: str, many: str) -> str:
++    """Русская плюрализация с исключением 11–14 (1 замечание, 2 замечания,
++    5 замечаний). Django-фильтр pluralize трёх форм не поддерживает
++    (возвращает '' при двух запятых в аргументе)."""
++    number = abs(int(number)) % 100
++    if 11 <= number <= 14:
++        return many
++    last = number % 10
++    if last == 1:
++        return one
++    if 2 <= last <= 4:
++        return few
++    return many
++
++
+ def get_flat_folders(user: User, project: Project):
+     """Плоский список активных папок для выбора при перемещении."""
+     _ensure_project_access(user, project)
