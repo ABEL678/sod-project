@@ -495,22 +495,7 @@ def rag_answer(
 
     answer = 'Ничего не найдено'
     if sources:
-        # Дайджест-заглушка на случай сбоя LLM (поиск важнее синтеза).
-        answer = '\n\n'.join(
-            f'[{source["document_title"]}] {source["text"][:300]}'
-            for source in sources[:3]
-        )
-
-    used_model = ''
-    if sources:
-        # LLM-синтез ответа с цитатами (модель выбирается в UI, треб. 14).
-        # Без источников LLM не вызываем: экономия токенов и честный
-        # «Ничего не найдено» (поведение Ф2 сохранено).
-        if llm_provider is None:
-            from ai_checks.adapters.llm_http import get_llm_provider
-
-            llm_provider = get_llm_provider(model=model)
-
+        # Формируем контекст для LLM-синтеза.
         source_lines = []
         for index, source in enumerate(sources, start=1):
             meta_parts = []
@@ -525,23 +510,31 @@ def rag_answer(
             )
         context_text = '\n\n'.join(source_lines)
 
+        # LLM-синтез ответа с цитатами (модель выбирается в UI, треб. 14).
+        if llm_provider is None:
+            from ai_checks.adapters.llm_http import get_llm_provider
+
+            llm_provider = get_llm_provider(model=model)
+
         try:
             response = llm_provider.complete([
                 {
                     'role': 'system',
                     'content': (
-                        'Ты — помощник инженера-проектировщика. Ответь на '
-                        'вопрос, опираясь ТОЛЬКО на приведённые фрагменты '
-                        'документов. После каждого утверждения указывай '
-                        'источник в квадратных скобках ([1], [2]…). Если '
-                        'ответа во фрагментах нет — прямо скажи об этом. '
-                        'Не выдумывай факты и числа.'
+                        'Ты — помощник ГИПа. Ответь на вопрос, используя '
+                        'ТОЛЬКО предоставленные фрагменты документов. '
+                        'Формируй связный ответ — не просто склейку цитат. '
+                        'Указывай, откуда взята информация '
+                        '(документ, лист, раздел). '
+                        'Не выдумывай факты и числа. '
+                        'Если ответа нет в фрагментах — скажи об этом.'
                     ),
                 },
                 {
                     'role': 'user',
                     'content': (
-                        f'Вопрос: {question}\n\nИсточники:\n{context_text}'
+                        f'Вопрос: {question}\n\n'
+                        f'Фрагменты документов:\n{context_text}'
                     ),
                 },
             ], model=model)
@@ -570,6 +563,7 @@ def rag_answer(
                 prompt_version=RAG_PROMPT_VERSION,
                 user=user,
             )
+            answer = LLM_ERROR_SUMMARY
 
     # Треб. 6/9: запрос попадает в историю (RagQuery) — её видят все
     # участники проекта; пользователь может быть анонимным (API) → null.

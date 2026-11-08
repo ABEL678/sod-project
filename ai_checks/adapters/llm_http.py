@@ -91,7 +91,12 @@ class HttpLLMProvider:
 
 
 class StubLLMProvider:
-    """Заглушка без API-ключа: детерминированное резюме из контекста."""
+    """Заглушка без API-ключа: формирует связный ответ из контекста.
+
+    Когда LLM недоступен, сервис форматирует найденные чанки в читаемый
+    ответ с указанием источников — не просто склейку, а структурированный
+    текст, который пользователь поймёт.
+    """
 
     name = 'stub'
 
@@ -102,19 +107,72 @@ class StubLLMProvider:
         model: str | None = None,
         json_mode: bool = False,
     ) -> LLMResponse:
-        context = ''
-        for message in reversed(messages):
-            if message.get('role') == 'user':
-                context = str(message.get('content') or '')
-                break
-        summary = 'Сводка без LLM (ключ не задан).\n' + context[:1200]
+        # Извлекаем вопрос и контекст из сообщений.
+        question = ''
+        context_text = ''
+        for message in messages:
+            role = message.get('role', '')
+            content = str(message.get('content') or '')
+            if role == 'user':
+                # Вопрос идёт первым, затем контекст.
+                if 'Вопрос:' in content:
+                    parts = content.split('Вопрос:', 1)
+                    if 'Фрагменты документов:' in parts[1]:
+                        q, ctx = parts[1].split('Фрагменты документов:', 1)
+                        question = q.strip()
+                        context_text = ctx.strip()
+                    else:
+                        question = parts[1].strip()
+                elif not question:
+                    question = content
+            elif role == 'system':
+                # Системное сообщение игнорируем для извлечения данных.
+                pass
+
+        # Формируем связный ответ из фрагментов.
+        if context_text:
+            # Парсим фрагменты [N] title:\ntext
+            fragments = []
+            current = None
+            for line in context_text.split('\n'):
+                if line.startswith('[') and '] ' in line and ':' in line:
+                    if current:
+                        fragments.append(current)
+                    current = line
+                elif current is not None:
+                    current += '\n' + line
+            if current:
+                fragments.append(current)
+
+            # Формируем читаемый ответ.
+            answer_lines = [
+                f'Ответ на вопрос: {question}',
+                '',
+                'На основе найденных документов:',
+            ]
+            for i, frag in enumerate(fragments[:3], 1):
+                # Извлекаем заголовок и текст фрагмента.
+                if '\n' in frag:
+                    title, text = frag.split('\n', 1)
+                    answer_lines.append(f'{i}. {title}:')
+                    answer_lines.append(text[:500])
+                    answer_lines.append('')
+                else:
+                    answer_lines.append(f'{i}. {frag[:500]}')
+                    answer_lines.append('')
+
+            answer = '\n'.join(answer_lines)
+        else:
+            answer = 'Ответ на вопрос: ' + question + '\n\nИнформация не найдена.'
+
+        total_tokens = sum(
+            len(str(m.get('content') or '')) for m in messages
+        )
         return LLMResponse(
-            text=summary,
+            text=answer,
             model='stub',
-            prompt_tokens=sum(
-                len(str(m.get('content') or '')) for m in messages
-            ),
-            completion_tokens=len(summary),
+            prompt_tokens=total_tokens,
+            completion_tokens=len(answer),
             latency_ms=0,
         )
 
