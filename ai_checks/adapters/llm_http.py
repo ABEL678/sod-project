@@ -114,25 +114,60 @@ class StubLLMProvider:
         )
 
 
-def get_llm_provider():
+def get_llm_provider(model: str | None = None):
     """Фабрика: GigaChat / OpenAI-совместимый HTTP / заглушка.
 
-    AI_LLM_PROVIDER=gigachat → GigaChatProvider (ключ AI_GIGACHAT_AUTH_KEY);
-    иначе при AI_LLM_API_KEY → HttpLLMProvider; без ключей — заглушка.
+    model из UI (GigaChat-*, deepseek/*, z-ai/*) определяет провайдер.
+    Если model не передан — дефолт AI_GIGACHAT_MODEL → GigaChatProvider;
+    без ключа — заглушка.
     """
-    provider = (getattr(settings, 'AI_LLM_PROVIDER', '') or '').strip().lower()
-
-    if provider == 'gigachat':
+    # Определяем провайдера по имени модели из UI.
+    if model is not None and model.startswith('GigaChat-'):
         auth_key = (
             getattr(settings, 'AI_GIGACHAT_AUTH_KEY', '') or ''
         ).strip()
         if not auth_key:
             return StubLLMProvider()
-        # Тот же бюджет, что у HttpLLMProvider (см. комментарий ниже):
-        # синхронный вызов не должен превышать таймаут воркера gunicorn.
+        # Бюджет синхронного LLM-вызова: 12 c x 2 попытки + паузы ~ 1.5 c
+        # = максимум ~25.5 c < 30 c (таймаут воркера gunicorn).
         return GigaChatProvider(
             auth_key,
-            model=getattr(settings, 'AI_GIGACHAT_MODEL', 'GigaChat-2'),
+            model=model,
+            timeout=min(
+                float(getattr(settings, 'AI_GIGACHAT_TIMEOUT', 60)), 12.0,
+            ),
+            verify_ssl=bool(
+                getattr(settings, 'AI_GIGACHAT_VERIFY_SSL', True),
+            ),
+            retries=2,
+        )
+
+    # OpenAI-совместимые провайдеры (deepseek/*, z-ai/*).
+    if model is not None and (model.startswith('deepseek/') or model.startswith('z-ai/')):
+        api_key = (getattr(settings, 'AI_LLM_API_KEY', '') or '').strip()
+        if not api_key:
+            return StubLLMProvider()
+        # Бюджет: 12 c x 2 попытки + паузы ~ 1.5 c = максимум ~25.5 c < 30 c.
+        timeout = min(float(getattr(settings, 'AI_LLM_TIMEOUT', 60)), 12.0)
+        return HttpLLMProvider(
+            api_key=api_key,
+            base_url=getattr(
+                settings, 'AI_LLM_BASE_URL', 'https://api.deepseek.com/v1',
+            ),
+            model=model,
+            timeout=timeout,
+            retries=2,
+        )
+
+    # Дефолт: GigaChat из настроек (обратная совместимость).
+    auth_key = (
+        getattr(settings, 'AI_GIGACHAT_AUTH_KEY', '') or ''
+    ).strip()
+    if auth_key:
+        default_model = model or getattr(settings, 'AI_GIGACHAT_MODEL', 'GigaChat-2')
+        return GigaChatProvider(
+            auth_key,
+            model=default_model,
             timeout=min(
                 float(getattr(settings, 'AI_GIGACHAT_TIMEOUT', 60)), 12.0,
             ),
@@ -143,24 +178,20 @@ def get_llm_provider():
         )
 
     api_key = (getattr(settings, 'AI_LLM_API_KEY', '') or '').strip()
-    if not api_key:
-        return StubLLMProvider()
-    # Бюджет синхронного LLM-вызова УМНОЖАЕТСЯ на число попыток и должен
-    # укладываться в таймаут воркера gunicorn (по умолчанию 30 с), иначе
-    # зависший API-провайдер убивает воркер -> 500 «Internal Server Error»
-    # (наблюдено 2026-11-08 на stream-cad.ru: модель z-ai/glm-5.3-flash-free
-    # не отвечает -> прежний дефолт 60 c x 3 попытки превысил лимит).
-    # 12 c x 2 попытки + паузы ~ 1.5 c = максимум ~25.5 c < 30 c.
-    timeout = min(float(getattr(settings, 'AI_LLM_TIMEOUT', 60)), 12.0)
-    return HttpLLMProvider(
-        api_key=api_key,
-        base_url=getattr(
-            settings, 'AI_LLM_BASE_URL', 'https://api.deepseek.com/v1',
-        ),
-        model=getattr(settings, 'AI_LLM_MODEL', 'deepseek-chat'),
-        timeout=timeout,
-        retries=2,
-    )
+    if api_key:
+        default_model = model or getattr(settings, 'AI_LLM_MODEL', 'deepseek-chat')
+        timeout = min(float(getattr(settings, 'AI_LLM_TIMEOUT', 60)), 12.0)
+        return HttpLLMProvider(
+            api_key=api_key,
+            base_url=getattr(
+                settings, 'AI_LLM_BASE_URL', 'https://api.deepseek.com/v1',
+            ),
+            model=default_model,
+            timeout=timeout,
+            retries=2,
+        )
+
+    return StubLLMProvider()
 
 
 class GigaChatProvider:

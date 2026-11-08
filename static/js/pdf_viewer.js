@@ -2863,4 +2863,11 @@
     if (issues.length) {
         selectIssue(issues[0].id);
     }
+
+    /* Блок 3 бэта-фиксов 2026-11-08: панель «ИИ-нормоконтроль» берёт
+       текущий лист через общий геттер — кнопка «Проверить лист» в
+       panel.html отправляет page_number текущего листа вьювера. */
+    window.PdfViewerGetCurrentPage = function () {
+        return currentPage;
+    };
 })();

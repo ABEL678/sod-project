@@ -182,8 +182,8 @@ class GipReportTests(TestCase):
         self.assertIn('GIP-DOC', text)
         self.assertIn('Ответственный', text)
         self.assertIn('Новое', text)
-        # Треб. 12: раздел «Выводы» после сводки.
-        self.assertIn('Выводы:', text)
+        # Треб. 12: раздел «Выводы» после сводки (блок 6: «Выводы и рекомендации»).
+        self.assertIn('Выводы', text)
 
     def test_export_docx(self):
         import io

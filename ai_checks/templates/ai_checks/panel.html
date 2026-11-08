@@ -1,6 +1,10 @@
-{% comment %}HTMX-фрагмент панели: статус прогона и находки.{% endcomment %}
+{% comment %}HTMX-фрагмент панели: статус прогона и находки.
+
+Бэта-фикс 2026-11-08 (блоки 2–3): селектор «Проверка по», кнопки
+«Проверить лист»/«Проверить всё», фильтр находок по листу прогона.
+{% endcomment %}
 <div class="d-flex justify-content-between align-items-center mb-1">
-  <strong class="small">ИИ-проверка листа</strong>
+  <strong class="small">ИИ-нормоконтроль (СПДС)</strong>
   {% if run %}
     <span class="badge text-bg-secondary">{{ run.get_status_display }}</span>
   {% endif %}
@@ -17,11 +21,7 @@
     Детерминированные правила СПДС: рамка листа, основная надпись,
     минимальная высота шрифта.
   </p>
-  <button type="button" class="btn btn-sm btn-primary"
-          hx-post="{% url 'ai_checks:start' document.pk %}"
-          hx-target="#aiChecksBody" hx-swap="innerHTML">
-    <i class="bi bi-play-fill" aria-hidden="true"></i> Запустить проверку
-  </button>
+  {% include 'ai_checks/_start_controls.html' %}
 {% elif run.status == 'queued' or run.status == 'running' %}
   <div class="d-flex align-items-center gap-2 small text-muted"
        hx-get="{% url 'ai_checks:panel' document.pk %}"
@@ -35,26 +35,43 @@
   <div class="alert alert-danger py-1 px-2 small mb-2">
     Прогон завершился ошибкой: {{ run.meta.error|default:'неизвестная ошибка' }}
   </div>
-  <button type="button" class="btn btn-sm btn-outline-secondary"
-          hx-post="{% url 'ai_checks:start' document.pk %}"
-          hx-target="#aiChecksBody" hx-swap="innerHTML">
-    Повторить
-  </button>
+  {% include 'ai_checks/_start_controls.html' %}
 {% else %}
   <div class="small text-muted mb-2">
     Версия {{ version.version_number }} · правил: {{ run.rules_total }} ·
-    замечаний: {{ run.findings_total }}
-    <button type="button" class="btn btn-link btn-sm p-0 ms-1"
-            hx-post="{% url 'ai_checks:start' document.pk %}"
-            hx-target="#aiChecksBody" hx-swap="innerHTML">
-      Перепроверить
-    </button>
+    замечаний: {{ findings|length }}
+    {% if run.norm_source_label %}
+      · проверка по: {{ run.norm_source_label }}
+    {% endif %}
   </div>
-  {% for finding in findings %}
+  {% if page_filter %}
+    <div class="alert alert-info py-1 px-2 small mb-2">
+      Проверен лист {{ page_filter }}: показано
+      {{ page_findings|length }} из {{ findings|length }} находок.
+      Проверьте остальное целиком:
+      <div class="mt-1">{% include 'ai_checks/_start_controls.html' %}</div>
+    </div>
+  {% else %}
+    <div class="mb-2">{% include 'ai_checks/_start_controls.html' %}</div>
+  {% endif %}
+  {% for finding in page_findings %}
     {% include 'ai_checks/_finding_row.html' with finding=finding %}
   {% empty %}
-    <div class="alert alert-success py-1 px-2 small mb-0">
-      Замечаний нет — лист прошёл проверку правилами СПДС.
-    </div>
+    {% if page_filter %}
+      <div class="alert alert-success py-1 px-2 small mb-0">
+        На листе {{ page_filter }} замечаний нет.
+      </div>
+    {% else %}
+      <div class="alert alert-success py-1 px-2 small mb-0">
+        Замечаний нет — документ прошёл проверку правилами СПДС.
+      </div>
+    {% endif %}
   {% endfor %}
 {% endif %}
+
+<div class="d-flex justify-content-end mt-2">
+  <button type="button" class="btn btn-sm btn-outline-secondary"
+          data-ai-close>
+    <i class="bi bi-x-lg" aria-hidden="true"></i> Закрыть
+  </button>
+</div>

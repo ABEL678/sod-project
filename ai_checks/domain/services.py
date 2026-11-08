@@ -46,7 +46,12 @@ from storage.domain.models import Document, DocumentVersion
 logger = logging.getLogger(__name__)
 
 # Версия набора правил/промптов прогона (CheckRun.engine_version).
-ENGINE_VERSION = 'rules@2026.11.1'
+# 2026.11.2 — блоки 1–3 бэта-фиксов: MU-зона штампа/рамки, fallback
+# текст-спанов/растра, проверка по листу, нормативный источник.
+ENGINE_VERSION = 'rules@2026.11.2'
+
+# Блок 3: подпись базового норматива (когда стандарт не выбран).
+BASE_NORM_LABEL = 'ГОСТ Р 21.101-2026 (базовый)'
 
 # Размер чанка и перекрытие (ТЗ Ф0.2: ~1000 символов, перекрытие 200).
 CHUNK_SIZE = 1000
@@ -339,6 +344,8 @@ def reindex_project(project_id: int, user=None) -> int:
 def run_rules_check(
     document_version: DocumentVersion,
     initiated_by,
+    page_number: int | None = None,
+    norm_source_id: int | None = None,
 ) -> CheckRun:
     """Прогон детерминированных правил по PDF версии (Ф1, без LLM).
 
@@ -347,12 +354,40 @@ def run_rules_check(
     PendingCheckResult (status=pending) для каждой находки.
     Записи находок и финальный статус — в transaction.atomic(); при сбое
     (битый PDF и т.п.) прогон помечается failed с текстом ошибки в meta.
+
+    Бэта-фикс 2026-11-08, блок 3: page_number — проверка одного листа
+    (1-based, вне диапазона → прогон по всем листам); norm_source_id —
+    внутренний стандарт (doc_type='internal_standard') для подписи
+    «Проверка по» (None = базовый ГОСТ Р 21.101-2026).
     """
+    run_page: int | None = None
+    if page_number is not None and str(page_number) != '':
+        try:
+            run_page = int(page_number)
+        except (TypeError, ValueError):
+            run_page = None
+        else:
+            if run_page < 1:
+                run_page = None
+
+    norm_source = None
+    if norm_source_id:
+        norm_source = InternalDocument.objects.filter(
+            pk=norm_source_id,
+            doc_type=InternalDocument.DocType.INTERNAL_STANDARD,
+            is_active=True,
+        ).first()
+
     check_run = CheckRun.objects.create(
         document_version=document_version,
         initiated_by=initiated_by,
         status=CheckRun.Status.QUEUED,
         engine_version=ENGINE_VERSION,
+        page_number=run_page,
+        norm_source=norm_source,
+        norm_source_label=(
+            norm_source.title if norm_source else BASE_NORM_LABEL
+        ),
         started_at=timezone.now(),
     )
     try:
@@ -365,7 +400,15 @@ def run_rules_check(
         findings: list[tuple[RuleDefinition, dict]] = []
         with transaction.atomic():
             with pdfium_tools.open_pdf(file_path) as pdf:
-                for index in range(len(pdf)):
+                pages_total = len(pdf)
+                if run_page is not None and run_page > pages_total:
+                    run_page = None  # лист вне диапазона — проверяем всё
+                page_indexes = (
+                    range(pages_total)
+                    if run_page is None
+                    else (run_page - 1,)
+                )
+                for index in page_indexes:
                     view = pdfium_tools.PdfPageView(pdf, index)
                     try:
                         for rule in executable:
@@ -389,11 +432,13 @@ def run_rules_check(
                 for rule, finding in findings
             ])
             check_run.status = CheckRun.Status.DONE
+            check_run.page_number = run_page
             check_run.rules_total = len(executable)
             check_run.findings_total = len(findings)
             check_run.finished_at = timezone.now()
             check_run.save(update_fields=[
-                'status', 'rules_total', 'findings_total', 'finished_at',
+                'status', 'page_number', 'rules_total', 'findings_total',
+                'finished_at',
             ])
     except Exception as exc:  # noqa: BLE001 — статус прогона важнее трейса
         logger.exception(
@@ -588,7 +633,7 @@ def rag_answer(
         if llm_provider is None:
             from ai_checks.adapters.llm_http import get_llm_provider
 
-            llm_provider = get_llm_provider()
+            llm_provider = get_llm_provider(model=model)
 
         source_lines = []
         for index, source in enumerate(sources, start=1):
@@ -806,7 +851,8 @@ def generate_gip_report(
     prioritized.sort(key=lambda item: item[:4])
 
     top_issues = []
-    for _overdue, _group, _due, _pk, issue in prioritized[:7]:
+    # Блок 6: топ-10 ключевых проблем в отчёте (было 7).
+    for _overdue, _group, _due, _pk, issue in prioritized[:10]:
         top_issues.append({
             'message': issue.description,
             'document': issue.document.code or issue.document.name,
@@ -832,7 +878,7 @@ def generate_gip_report(
     if llm_provider is None:
         from ai_checks.adapters.llm_http import get_llm_provider
 
-        llm_provider = get_llm_provider()
+        llm_provider = get_llm_provider(model=model)
 
     context_text = _gip_report_context(
         project, period_start, period_end, aggregates,
@@ -896,7 +942,8 @@ def _report_period(report) -> tuple:
 
 
 def _report_rows(report) -> list[list[str]]:
-    """Строки таблицы отчёта: №, документ, статус, срок, ответственный."""
+    """Полный список замечаний: №, документ, лист, статус, срок,
+    ответственный, текст (блок 6: приложение отчёта)."""
     period_start, period_end = _report_period(report)
     rows = []
     for index, issue in enumerate(
@@ -905,11 +952,41 @@ def _report_rows(report) -> list[list[str]]:
         rows.append([
             str(index),
             issue.document.code or issue.document.name,
+            str(issue.page_number) if issue.page_number else '—',
             ISSUE_STATUS_LABELS.get(issue.status, issue.status),
             issue.due_date.strftime('%d.%m.%Y') if issue.due_date else '—',
             _user_label(issue.assignee),
+            issue.description,
         ])
     return rows
+
+
+def _report_document_breakdown(report) -> list[dict]:
+    """Разбивка замечаний по документам со статусами (блок 6).
+
+    [{document, total, statuses}] — statuses в виде «Открыто: 2, В работе: 1».
+    """
+    period_start, period_end = _report_period(report)
+    breakdown: dict[str, dict[str, int]] = {}
+    order: list[str] = []
+    for issue in _report_issues(report.project, period_start, period_end):
+        code = issue.document.code or issue.document.name
+        if code not in breakdown:
+            breakdown[code] = {}
+            order.append(code)
+        status = ISSUE_STATUS_LABELS.get(issue.status, issue.status)
+        breakdown[code][status] = breakdown[code].get(status, 0) + 1
+    return [
+        {
+            'document': code,
+            'total': sum(breakdown[code].values()),
+            'statuses': ', '.join(
+                f'{name}: {count}'
+                for name, count in breakdown[code].items()
+            ),
+        }
+        for code in order
+    ]
 
 
 def _report_title(report) -> str:
@@ -981,191 +1058,437 @@ def _report_conclusions(report) -> list[str]:
     return conclusions
 
 
-def gip_report_pdf(report) -> bytes:
-    """PDF отчёта ГИПа (reportlab, BSD — замена PyMuPDF).
+def _register_cyrillic_font() -> tuple[str, str]:
+    """TTF-шрифт с кириллицей для экспорта отчётов (блок 5 бэта-фиксов).
 
-    Кириллица через встроенный CID-шрифт STSong-Light (Adobe-GB1 содержит
-    кириллицу) — прямой аналог 'china-s' в PyMuPDF: шрифт не встраивается,
-    вьювер подставляет свой (как и раньше).
+    Раньше использовался CID-шрифт STSong-Light (Adobe-GB1): кириллица
+    шла «разрядкой» с подстановкой глифов, шрифт не встраивался в PDF.
+    Теперь регистрируется локальный TTF (GolosText/DejaVuSans) — полный
+    кириллический набор, шрифт встраивается. Возвращает пару
+    (regular, bold); bold может совпадать с regular, если найден только
+    один файл. Если TTF не найден вовсе — прежний STSong-Light
+    (fallback, чтобы экспорт не падал до добавления шрифта в проект).
+    """
+    from pathlib import Path
+
+    from django.conf import settings as dj_settings
+
+    from reportlab.lib.fonts import addMapping
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+    from reportlab.pdfbase.ttfonts import TTFont
+
+    roots: list[Path] = []
+    base_dir = getattr(dj_settings, 'BASE_DIR', None)
+    if base_dir is not None:
+        roots.append(Path(base_dir))
+    # корень репозитория (ai_checks/domain/services.py → на 2 уровня вверх)
+    roots.append(Path(__file__).resolve().parents[2])
+
+    regular_candidates: list[tuple[str, Path]] = []
+    bold_candidates: list[tuple[str, Path]] = []
+    for root in roots:
+        fonts_dir = root / 'static' / 'fonts'
+        regular_candidates.extend([
+            ('GolosText', fonts_dir / 'GolosText-Regular.ttf'),
+            ('GolosText', fonts_dir / 'GolosText.ttf'),
+            ('DejaVuSans', fonts_dir / 'DejaVuSans.ttf'),
+        ])
+        bold_candidates.extend([
+            ('GolosText-Bold', fonts_dir / 'GolosText-Bold.ttf'),
+            ('DejaVuSans-Bold', fonts_dir / 'DejaVuSans-Bold.ttf'),
+        ])
+    system_fonts = Path('/usr/share/fonts/truetype/dejavu')
+    regular_candidates.extend([
+        ('DejaVuSans', system_fonts / 'DejaVuSans.ttf'),
+        ('DejaVuSans', system_fonts / 'DejaVuSansCondensed.ttf'),
+    ])
+    bold_candidates.append(
+        ('DejaVuSans-Bold', system_fonts / 'DejaVuSans-Bold.ttf'),
+    )
+
+    for name, path in regular_candidates:
+        if not path.exists():
+            continue
+        pdfmetrics.registerFont(TTFont(name, str(path)))
+        bold_name = name
+        for bold_name_candidate, bold_path in bold_candidates:
+            if bold_path.exists():
+                pdfmetrics.registerFont(
+                    TTFont(bold_name_candidate, str(bold_path)),
+                )
+                bold_name = bold_name_candidate
+                break
+        addMapping(name, 0, 0, name)
+        addMapping(name, 1, 0, bold_name)
+        return name, bold_name
+
+    pdfmetrics.registerFont(UnicodeCIDFont('STSong-Light'))
+    return 'STSong-Light', 'STSong-Light'
+
+
+def gip_report_pdf(report) -> bytes:
+    """PDF отчёта ГИПа (reportlab/platypus) — блоки 5–6 бэта-фиксов.
+
+    Шрифт с кириллицей (GolosText/DejaVuSans TTF, fallback STSong-Light).
+    Структура (как у отчётов Аудитора):
+    1) титульный блок (проект, период, дата, автор);
+    2) краткое резюме (LLM);
+    3) статистика (таблица по статусам + по ответственным);
+    4) детализация по документам (таблица);
+    5) ключевые проблемы (топ-10);
+    6) выводы и рекомендации;
+    7) приложение — полный список замечаний.
     """
     import io
 
-    from reportlab.pdfbase import pdfmetrics
-    from reportlab.pdfbase.cidfonts import UnicodeCIDFont
-    from reportlab.pdfgen import canvas as rl_canvas
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import ParagraphStyle
+    from reportlab.lib.units import mm
+    from reportlab.platypus import (
+        PageBreak,
+        Paragraph,
+        SimpleDocTemplate,
+        Spacer,
+        Table,
+        TableStyle,
+    )
 
-    fontname = 'STSong-Light'
-    pdfmetrics.registerFont(UnicodeCIDFont(fontname))
+    font, font_bold = _register_cyrillic_font()
+    accent = colors.HexColor('#3D5A98')
+    grid = colors.HexColor('#B9C2CC')
 
-    page_width, page_height = 595, 842
-    margin = 42
-    width = page_width - 2 * margin
-    buffer = io.BytesIO()
-    canvas = rl_canvas.Canvas(buffer, pagesize=(page_width, page_height))
-    y = margin  # курсор от верхнего края (TL-система, как в PyMuPDF)
-
-    def add_page_if_needed(needed: float) -> None:
-        nonlocal y
-        if y + needed > page_height - margin:
-            canvas.showPage()  # сбрасывает состояние — шрифт задаём заново
-            canvas.setFont(fontname, 10)
-            y = margin
-
-    def write(text: str, size: float = 11, gap: float = 6) -> None:
-        nonlocal y
-        add_page_if_needed(size * 1.6)
-        canvas.setFont(fontname, size)
-        # курсор y (TL) -> базовая линия в BL-системе reportlab
-        canvas.drawString(margin, page_height - y - size, text)
-        y += size * 1.6 + gap
-
-    def write_wrapped(text: str, size: float = 10) -> None:
-        """Перенос по словам с точным измерением ширины строки."""
-        nonlocal y
-        words = str(text).split()
-        line = ''
-        for word in words:
-            candidate = (line + ' ' + word).strip()
-            if (
-                line
-                and pdfmetrics.stringWidth(
-                    candidate, fontname, size,
-                ) > width
-            ):
-                write(line, size=size, gap=0)
-                line = word
-            else:
-                line = candidate
-        if line:
-            write(line, size=size, gap=0)
-
-    def fit_text(text, max_width: float, size: float) -> str:
-        """Обрезка текста по ширине ячейки (аналог insert_textbox clip)."""
-        text = str(text)
-        while text and pdfmetrics.stringWidth(
-            text, fontname, size,
-        ) > max_width:
-            text = text[:-1]
-        return text
-
-    write(_report_title(report), size=15, gap=14)
+    styles = {
+        'title': ParagraphStyle(
+            'title', fontName=font_bold, fontSize=15, leading=20,
+            spaceAfter=8,
+        ),
+        'meta': ParagraphStyle(
+            'meta', fontName=font, fontSize=9.5, leading=13,
+            textColor=colors.HexColor('#444444'),
+        ),
+        'h2': ParagraphStyle(
+            'h2', fontName=font_bold, fontSize=12, leading=16,
+            spaceBefore=12, spaceAfter=4,
+        ),
+        'body': ParagraphStyle(
+            'body', fontName=font, fontSize=9.5, leading=13.5,
+        ),
+        'cell': ParagraphStyle(
+            'cell', fontName=font, fontSize=8, leading=10.5,
+        ),
+        'cell_head': ParagraphStyle(
+            'cell_head', fontName=font_bold, fontSize=8, leading=10.5,
+            textColor=colors.white,
+        ),
+    }
 
     payload = report.payload or {}
-    summary_head = (
-        f'Всего замечаний: {payload.get("total_issues", 0)}. '
-        f'Просрочено: {payload.get("overdue_count", 0)}. '
-        f'Число замечаний в работе: '
-        f'{payload.get("by_status", {}).get("progress", 0)}.'
+    period_start, period_end = _report_period(report)
+    author = _user_label(report.created_by)
+
+    buffer = io.BytesIO()
+    document = SimpleDocTemplate(
+        buffer,
+        pagesize=A4,
+        leftMargin=18 * mm,
+        rightMargin=18 * mm,
+        topMargin=16 * mm,
+        bottomMargin=16 * mm,
+        title=_report_title(report),
+        author=author,
     )
-    write(summary_head, size=11, gap=2)
-    write(
-        'По статусам: ' + ', '.join(
-            f'{ISSUE_GROUP_LABELS[group]} — '
-            f'{payload.get("by_status", {}).get(group, 0)}'
-            for group in ISSUE_GROUP_ORDER
-        ),
-        size=10, gap=12,
-    )
 
-    rows = _report_rows(report)
-    columns = (30, 200, 105, 85, 95)
-    line_height = 16
-    write('Замечания:', size=12, gap=4)
-    add_page_if_needed(line_height * 2)
+    def _para(text: str, style: str) -> Paragraph:
+        return Paragraph(str(text), styles[style])
 
-    headers = ('№', 'Документ', 'Статус', 'Срок', 'Ответственный')
-    x = margin
-    for header, col_width in zip(headers, columns):
-        canvas.setFont(fontname, 9)
-        canvas.drawString(x + 2, page_height - y - 11, header)
-        x += col_width
-    y += line_height
+    def _table(data: list, widths: list) -> Table:
+        table = Table(data, colWidths=widths, repeatRows=1)
+        table.setStyle(TableStyle([
+            ('FONTNAME', (0, 0), (-1, -1), font),
+            ('FONTSIZE', (0, 0), (-1, -1), 8),
+            ('GRID', (0, 0), (-1, -1), 0.4, grid),
+            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ('BACKGROUND', (0, 0), (-1, 0), accent),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1),
+             [colors.white, colors.HexColor('#F2F5F8')]),
+            ('LEFTPADDING', (0, 0), (-1, -1), 4),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 4),
+            ('TOPPADDING', (0, 0), (-1, -1), 3),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
+        ]))
+        return table
 
-    for row in rows:
-        add_page_if_needed(line_height)
-        x = margin
-        for value, col_width in zip(row, columns):
-            canvas.setStrokeColor((0.75, 0.75, 0.75))
-            canvas.setLineWidth(0.4)
-            canvas.rect(
-                x, page_height - y - line_height,
-                col_width, line_height, stroke=1, fill=0,
-            )
-            canvas.setFont(fontname, 8.5)
-            canvas.drawString(
-                x + 2,
-                page_height - y - 3 - 8.5,
-                fit_text(value, col_width - 4, 8.5),
-            )
-            x += col_width
-        y += line_height
+    def _header_cells(headers: tuple) -> list:
+        return [_para(header, 'cell_head') for header in headers]
 
-    y += 12
-    write('Резюме (LLM):', size=12, gap=2)
-    write_wrapped(str(payload.get('summary', '')), size=10)
+    story = []
 
-    # Треб. 12: раздел «Выводы» после сводки.
-    y += 8
-    write('Выводы:', size=12, gap=2)
+    # 1) Титульный блок.
+    story.append(_para(_report_title(report), 'title'))
+    by_status = payload.get('by_status', {})
+    story.append(_para(
+        f'Проект: {report.project.name} · шифр {report.project.code}',
+        'meta',
+    ))
+    story.append(_para(
+        f'Период: {period_start.strftime("%d.%m.%Y")} — '
+        f'{period_end.strftime("%d.%m.%Y")}',
+        'meta',
+    ))
+    story.append(_para(
+        f'Дата формирования: {timezone.localdate().strftime("%d.%m.%Y")} · '
+        f'Автор: {author}',
+        'meta',
+    ))
+
+    # 2) Краткое резюме (LLM; при сбое — деградация, см. generate_gip_report).
+    story.append(_para('Краткое резюме', 'h2'))
+    summary_text = str(payload.get('summary', '')) or '—'
+    for paragraph in summary_text.split('\n'):
+        if paragraph.strip():
+            story.append(_para(paragraph.strip(), 'body'))
+
+    # 3) Статистика: по статусам + по ответственным.
+    story.append(_para('Статистика', 'h2'))
+    stats = [[
+        _para('Показатель', 'cell_head'),
+        _para('Значение', 'cell_head'),
+    ]]
+    stats.append([_para('Всего замечаний', 'body'),
+                  _para(str(payload.get('total_issues', 0)), 'body')])
+    for group in ISSUE_GROUP_ORDER:
+        stats.append([
+            _para(ISSUE_GROUP_LABELS[group], 'body'),
+            _para(str(by_status.get(group, 0)), 'body'),
+        ])
+    stats.append([_para('Просрочено', 'body'),
+                  _para(str(payload.get('overdue_count', 0)), 'body')])
+    story.append(_table(stats, [110 * mm, 30 * mm]))
+
+    if payload.get('by_assignee'):
+        story.append(Spacer(1, 6))
+        assignee_table = [[
+            _para('Ответственный', 'cell_head'),
+            _para('Замечаний', 'cell_head'),
+        ]]
+        for name, count in payload['by_assignee'].items():
+            assignee_table.append([
+                _para(name, 'body'), _para(str(count), 'body'),
+            ])
+        story.append(_table(assignee_table, [110 * mm, 30 * mm]))
+
+    # 4) Детализация по документам.
+    story.append(_para('Детализация по документам', 'h2'))
+    documents = _report_document_breakdown(report)
+    if documents:
+        document_rows = [_header_cells(
+            ('Документ', 'Замечаний', 'Статусы'),
+        )]
+        for item in documents:
+            document_rows.append([
+                _para(item['document'], 'cell'),
+                _para(item['total'], 'cell'),
+                _para(item['statuses'], 'cell'),
+            ])
+        story.append(_table(document_rows, [55 * mm, 25 * mm, 60 * mm]))
+    else:
+        story.append(_para('Замечаний за период нет.', 'body'))
+
+    # 5) Ключевые проблемы (топ-10 из payload).
+    story.append(_para('Ключевые проблемы', 'h2'))
+    top_issues = payload.get('top_issues') or []
+    if top_issues:
+        for index, issue in enumerate(top_issues[:10], start=1):
+            parts = [f"{index}. {issue.get('message', '')}"]
+            details = [issue.get('document', '')]
+            if issue.get('page'):
+                details.append(f"лист {issue['page']}")
+            if issue.get('status'):
+                details.append(issue['status'])
+            if issue.get('due_date'):
+                details.append(f"срок {issue['due_date']}")
+            if issue.get('assignee'):
+                details.append(f"ответственный: {issue['assignee']}")
+            story.append(_para(
+                ' '.join(parts) + ' — ' + '; '.join(filter(None, details)),
+                'body',
+            ))
+    else:
+        story.append(_para('Ключевых проблем не выделено.', 'body'))
+
+    # 6) Выводы и рекомендации (треб. 12; детерминированные, без LLM).
+    story.append(_para('Выводы и рекомендации', 'h2'))
     for conclusion in _report_conclusions(report):
-        write_wrapped(f'• {conclusion}', size=10)
+        story.append(_para(f'• {conclusion}', 'body'))
 
-    canvas.save()
+    # 7) Приложение: полный список замечаний.
+    rows = _report_rows(report)
+    if rows:
+        story.append(PageBreak())
+        story.append(_para('Приложение. Полный список замечаний', 'h2'))
+        appendix = [_header_cells((
+            '№', 'Документ', 'Лист', 'Статус', 'Срок',
+            'Ответственный', 'Замечание',
+        ))]
+        for row in rows:
+            appendix.append([
+                _para(value, 'cell') for value in row
+            ])
+        story.append(_table(appendix, [
+            8 * mm, 32 * mm, 12 * mm, 22 * mm, 20 * mm, 30 * mm, 48 * mm,
+        ]))
+
+    def _draw_page_number(canvas, _document) -> None:
+        canvas.saveState()
+        canvas.setFont(font, 8)
+        canvas.setFillColor(colors.HexColor('#777777'))
+        canvas.drawCentredString(
+            A4[0] / 2, 8 * mm, str(canvas.getPageNumber()),
+        )
+        canvas.restoreState()
+
+    document.build(
+        story,
+        onFirstPage=_draw_page_number,
+        onLaterPages=_draw_page_number,
+    )
     return buffer.getvalue()
 
 
 def gip_report_docx(report) -> bytes:
-    """Word-отчёт ГИПа (python-docx)."""
+    """Word-отчёт ГИПа (python-docx) — блок 6: структура как в PDF.
+
+    Титульный блок → краткое резюме (LLM) → статистика → детализация
+    по документам → ключевые проблемы → выводы и рекомендации →
+    приложение (полный список замечаний).
+    """
     import io
 
     from docx import Document as DocxDocument
     from docx.shared import Pt
 
     document = DocxDocument()
-    document.add_heading(_report_title(report), level=1)
-
     payload = report.payload or {}
-    summary = document.add_paragraph(
-        f'Всего замечаний: {payload.get("total_issues", 0)}. '
-        f'Просрочено: {payload.get("overdue_count", 0)}. '
-        f'В работе: {payload.get("by_status", {}).get("progress", 0)}.'
-    )
-    summary.runs[0].font.size = Pt(12)
+    period_start, period_end = _report_period(report)
+    author = _user_label(report.created_by)
+    by_status = payload.get('by_status', {})
 
-    statuses = ', '.join(
-        f'{ISSUE_GROUP_LABELS[group]} — '
-        f'{payload.get("by_status", {}).get(group, 0)}'
+    # Титульный блок.
+    document.add_heading(_report_title(report), level=1)
+    document.add_paragraph(
+        f'Проект: {report.project.name} · шифр {report.project.code}',
+    )
+    document.add_paragraph(
+        f'Период: {period_start.strftime("%d.%m.%Y")} — '
+        f'{period_end.strftime("%d.%m.%Y")}',
+    )
+    document.add_paragraph(
+        f'Дата формирования: {timezone.localdate().strftime("%d.%m.%Y")} · '
+        f'Автор: {author}',
+    )
+
+    # Краткое резюме (LLM).
+    document.add_heading('Резюме (LLM)', level=2)
+    summary_text = str(payload.get('summary', '')) or '—'
+    for paragraph in summary_text.split('\n'):
+        if paragraph.strip():
+            document.add_paragraph(paragraph.strip())
+
+    # Статистика: по статусам + по ответственным.
+    document.add_heading('Статистика', level=2)
+    stats = document.add_table(rows=1, cols=2)
+    stats.style = 'Table Grid'
+    for cell, header in zip(stats.rows[0].cells, ('Показатель', 'Значение')):
+        cell.text = header
+    stats_rows = [('Всего замечаний', payload.get('total_issues', 0))]
+    stats_rows.extend(
+        (ISSUE_GROUP_LABELS[group], by_status.get(group, 0))
         for group in ISSUE_GROUP_ORDER
     )
-    document.add_paragraph(f'По статусам: {statuses}')
+    stats_rows.append(('Просрочено', payload.get('overdue_count', 0)))
+    for name, count in stats_rows:
+        cells = stats.add_row().cells
+        cells[0].text = str(name)
+        cells[1].text = str(count)
+
     if payload.get('by_assignee'):
-        document.add_paragraph(
-            'По ответственным: ' + ', '.join(
-                f'{name} — {count}'
-                for name, count in payload['by_assignee'].items()
+        assignee = document.add_table(rows=1, cols=2)
+        assignee.style = 'Table Grid'
+        for cell, header in zip(
+            assignee.rows[0].cells,
+            ('Ответственный', 'Замечаний'),
+        ):
+            cell.text = header
+        for name, count in payload['by_assignee'].items():
+            cells = assignee.add_row().cells
+            cells[0].text = str(name)
+            cells[1].text = str(count)
+
+    # Детализация по документам.
+    document.add_heading('Детализация по документам', level=2)
+    documents = _report_document_breakdown(report)
+    if documents:
+        document_table = document.add_table(rows=1, cols=3)
+        document_table.style = 'Table Grid'
+        for cell, header in zip(
+            document_table.rows[0].cells,
+            ('Документ', 'Замечаний', 'Статусы'),
+        ):
+            cell.text = header
+        for item in documents:
+            cells = document_table.add_row().cells
+            cells[0].text = item['document']
+            cells[1].text = str(item['total'])
+            cells[2].text = item['statuses']
+    else:
+        document.add_paragraph('Замечаний за период нет.')
+
+    # Ключевые проблемы (топ-10 из payload).
+    document.add_heading('Ключевые проблемы', level=2)
+    top_issues = payload.get('top_issues') or []
+    if top_issues:
+        for index, issue in enumerate(top_issues[:10], start=1):
+            details = [issue.get('document', '')]
+            if issue.get('page'):
+                details.append(f"лист {issue['page']}")
+            if issue.get('status'):
+                details.append(issue['status'])
+            if issue.get('due_date'):
+                details.append(f"срок {issue['due_date']}")
+            if issue.get('assignee'):
+                details.append(f"ответственный: {issue['assignee']}")
+            paragraph = document.add_paragraph(style='List Number')
+            run = paragraph.add_run(str(issue.get('message', '')))
+            run.font.size = Pt(10)
+            document.add_paragraph(
+                '    — ' + '; '.join(filter(None, details)),
             )
-        )
+    else:
+        document.add_paragraph('Ключевых проблем не выделено.')
 
-    rows = _report_rows(report)
-    table = document.add_table(rows=1, cols=5)
-    table.style = 'Table Grid'
-    for cell, header in zip(
-        table.rows[0].cells,
-        ('№', 'Документ', 'Статус', 'Срок', 'Ответственный'),
-    ):
-        cell.text = header
-    for row in rows:
-        cells = table.add_row().cells
-        for cell, value in zip(cells, row):
-            cell.text = str(value)
-
-    document.add_heading('Резюме (LLM)', level=2)
-    document.add_paragraph(str(payload.get('summary', '')))
-
-    # Треб. 12: раздел «Выводы» после сводки.
-    document.add_heading('Выводы', level=2)
+    # Выводы и рекомендации (треб. 12).
+    document.add_heading('Выводы и рекомендации', level=2)
     for conclusion in _report_conclusions(report):
         document.add_paragraph(conclusion, style='List Bullet')
+
+    # Приложение: полный список замечаний.
+    rows = _report_rows(report)
+    if rows:
+        document.add_heading('Приложение. Полный список замечаний', level=2)
+        table = document.add_table(rows=1, cols=7)
+        table.style = 'Table Grid'
+        for cell, header in zip(
+            table.rows[0].cells,
+            ('№', 'Документ', 'Лист', 'Статус', 'Срок',
+             'Ответственный', 'Замечание'),
+        ):
+            cell.text = header
+        for row in rows:
+            cells = table.add_row().cells
+            for cell, value in zip(cells, row):
+                cell.text = str(value)
 
     buffer = io.BytesIO()
     document.save(buffer)

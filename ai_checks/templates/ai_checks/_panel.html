@@ -5,9 +5,9 @@
 {% endcomment %}
 <div class="ai-checks" id="aiChecksPanel">
   <button type="button" class="ai-checks__fab" id="aiChecksToggle"
-          title="ИИ-проверка листа (детерминированные правила)"
+          title="ИИ-нормоконтроль (СПДС) — детерминированные правила"
           aria-controls="aiChecksBody" aria-expanded="false">
-    <i class="bi bi-robot" aria-hidden="true"></i> Проверить
+    <i class="bi bi-robot" aria-hidden="true"></i> ИИ-нормоконтроль (СПДС)
   </button>
   <button type="button" class="ai-checks__close" id="aiChecksClose"
           title="Закрыть панель проверки" aria-label="Закрыть панель проверки">
@@ -116,6 +116,16 @@
   closeBtn.addEventListener('click', function () {
     closePanel();
     toggle.focus();
+  });
+
+  // Блок 3 бэта-фиксов: текстовая кнопка «Закрыть» внутри панели
+  // (panel.html, [data-ai-close]) — дублирует крестик для тех,
+  // кто не замечает маленький крестик над панелью.
+  body.addEventListener('click', function (event) {
+    if (event.target.closest('[data-ai-close]')) {
+      closePanel();
+      toggle.focus();
+    }
   });
 
   // Esc — стандартный способ закрыть всплывающую панель.

@@ -171,17 +171,17 @@ class GigaChatProviderTests(SimpleTestCase):
             result = provider.complete([{'role': 'user', 'content': 'b'}])
         self.assertEqual(result.text, 'Ответ GigaChat')
 
-    @override_settings(AI_LLM_PROVIDER='gigachat', AI_GIGACHAT_AUTH_KEY='key-1')
+    @override_settings(AI_LLM_PROVIDER='gigachat', AI_GIGACHAT_AUTH_KEY='key-1', AI_GIGACHAT_MODEL='GigaChat-2-Max')
     def test_factory_returns_gigachat(self):
         provider = get_llm_provider()
         self.assertIsInstance(provider, GigaChatProvider)
         self.assertEqual(provider.authorization_key, 'key-1')
-        self.assertEqual(provider.model, 'GigaChat-2')
+        self.assertEqual(provider.model, 'GigaChat-2-Max')
 
-    @override_settings(AI_LLM_PROVIDER='gigachat', AI_GIGACHAT_AUTH_KEY='')
+    @override_settings(AI_LLM_PROVIDER='gigachat', AI_GIGACHAT_AUTH_KEY='', AI_LLM_API_KEY='')
     def test_factory_falls_back_to_stub_without_key(self):
         self.assertIsInstance(get_llm_provider(), StubLLMProvider)
 
-    @override_settings(AI_LLM_PROVIDER='', AI_LLM_API_KEY='')
+    @override_settings(AI_LLM_PROVIDER='', AI_LLM_API_KEY='', AI_GIGACHAT_AUTH_KEY='')
     def test_factory_default_stub(self):
         self.assertIsInstance(get_llm_provider(), StubLLMProvider)

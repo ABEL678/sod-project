@@ -327,6 +327,14 @@ class RuleDefinition(models.Model):
     )
     title = models.CharField(max_length=255, verbose_name='Название')
     body = models.TextField(verbose_name='Формулировка правила')
+    # Бэта-фикс 2026-11-08, блок 2: полное нормативное обоснование
+    # («ГОСТ 21.613-2014, п. 5.2»), показывается в панели проверки.
+    norm_ref = models.CharField(
+        max_length=200,
+        blank=True,
+        default='',
+        verbose_name='Нормативное обоснование',
+    )
     rule_kind = models.CharField(
         max_length=10, choices=RuleKind.choices, verbose_name='Вид правила',
     )
@@ -607,6 +615,27 @@ class CheckRun(models.Model):
         max_length=50,
         blank=True,
         verbose_name='Версия движка (правила/промпты)',
+    )
+    # Бэта-фикс 2026-11-08, блок 3: проверка по листу и «Проверка по»
+    # (базовый ГОСТ Р 21.101-2026 или внутренний стандарт).
+    page_number = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        verbose_name='Проверенный лист',
+    )
+    norm_source = models.ForeignKey(
+        'ai_checks.InternalDocument',
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='check_runs',
+        verbose_name='Нормативный источник проверки',
+    )
+    norm_source_label = models.CharField(
+        max_length=255,
+        blank=True,
+        default='',
+        verbose_name='Проверка по (норматив) — снимок названия',
     )
     rules_total = models.PositiveIntegerField(
         default=0, verbose_name='Всего правил',

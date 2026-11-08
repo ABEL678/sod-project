@@ -394,3 +394,13 @@ LOGGING = {
         },
     },
 }
+
+# Доступные LLM-модели для UI-выбора (код → читаемое имя).
+# Порядок определяет порядок в выпадающем списке.
+AI_AVAILABLE_MODELS = [
+    ('GigaChat-2-Max', 'GigaChat-2-Max (Сбер)'),
+    ('GigaChat-3-Pro', 'GigaChat-3-Pro (Сбер)'),
+    ('GigaChat-3-Ultra', 'GigaChat-3-Ultra (Сбер)'),
+    ('deepseek/deepseek-v4.1-flash-free', 'DeepSeek V4.1 Flash (Free)'),
+    ('z-ai/glm-5.3-flash-free', 'GLM 5.3 Flash (Free)'),
+]

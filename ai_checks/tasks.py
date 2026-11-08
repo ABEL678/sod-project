@@ -6,11 +6,19 @@ from ai_checks.domain.services import run_rules_check
 
 
 @shared_task(ignore_result=True, name='ai_checks.check_document_version')
-def check_document_version_task(document_version_id: int, user_id: int) -> None:
+def check_document_version_task(
+    document_version_id: int,
+    user_id: int,
+    page_number: int | None = None,
+    norm_source_id: int | None = None,
+) -> None:
     """Прогон детерминированных правил по версии документа.
 
     В dev/тестах (CELERY_TASK_ALWAYS_EAGER=True) выполняется синхронно;
     в проде — воркером Celery через Redis.
+
+    Бэта-фикс 2026-11-08, блок 3: page_number — проверка одного листа;
+    norm_source_id — внутренний стандарт для подписи «Проверка по».
     """
     from django.contrib.auth.models import User
 
@@ -24,7 +32,12 @@ def check_document_version_task(document_version_id: int, user_id: int) -> None:
     except (DocumentVersion.DoesNotExist, User.DoesNotExist):
         return
 
-    run_rules_check(version, user)
+    run_rules_check(
+        version,
+        user,
+        page_number=page_number,
+        norm_source_id=norm_source_id,
+    )
 
 
 @shared_task(ignore_result=True, name='ai_checks.check_reminders')

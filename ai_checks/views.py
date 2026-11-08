@@ -36,12 +36,14 @@ from ai_checks import pdfium_tools
 from ai_checks.domain.models import (
     CheckRun,
     GeneratedReport,
+    InternalDocument,
     PendingCheckResult,
     RagQuery,
 )
 from ai_checks.domain.services import (
     KB_CODE_PREFIX,
     KNOWLEDGE_DOC_TYPES,
+    BASE_NORM_LABEL,
     bbox_ratios_for_rotation,
     crop_finding_image,
     generate_gip_report,
@@ -106,12 +108,33 @@ def _render_panel(request, document, run=None, error=''):
     version = document.current_version
     findings = []
     if run is not None:
-        findings = list(run.results.select_related('rule').all())
+        findings = list(
+            run.results.select_related('rule').order_by('page', 'pk').all(),
+        )
+    # Блок 3: проверка по листу — панель показывает находки этого листа.
+    page_filter = run.page_number if run is not None else None
+    page_findings = findings
+    if page_filter:
+        page_findings = [
+            finding for finding in findings
+            if finding.page == page_filter
+        ]
+    # Блок 2: селектор «Проверка по» — внутренние стандарты проекта
+    # (та же видимость, что у блока «Внутренние стандарты» в БЗ).
+    norm_standards = list(
+        knowledge_documents(document.project)
+        .filter(doc_type=InternalDocument.DocType.INTERNAL_STANDARD)
+        .order_by('title')
+    )
     return render(request, 'ai_checks/panel.html', {
         'document': document,
         'version': version,
         'run': run,
         'findings': findings,
+        'page_filter': page_filter,
+        'page_findings': page_findings,
+        'norm_standards': norm_standards,
+        'norm_base_label': BASE_NORM_LABEL,
         'error': error,
     })
 
@@ -136,7 +159,13 @@ def panel(request, document_id: int):
 @login_required
 @require_POST
 def start_check(request, document_id: int):
-    """Запуск прогона (Celery; в dev — синхронно через eager-режим)."""
+    """Запуск прогона (Celery; в dev — синхронно через eager-режим).
+
+    Бэта-фикс 2026-11-08, блок 3: принимает page_number (проверка
+    одного листа) и norm_source_id (селектор «Проверка по»);
+    невалидные значения молча приводятся к None (полный прогон
+    по базовому ГОСТ Р 21.101-2026).
+    """
     _ensure_enabled()
     document = _document_for(request.user, document_id)
     version = document.current_version
@@ -144,7 +173,34 @@ def start_check(request, document_id: int):
         return _render_panel(
             request, document, error='У документа нет текущей версии.',
         )
-    check_document_version_task.delay(version.pk, request.user.pk)
+
+    page_number = request.POST.get('page_number') or None
+    if page_number is not None:
+        try:
+            page_number = max(1, int(page_number))
+        except (TypeError, ValueError):
+            page_number = None
+
+    norm_source_id = request.POST.get('norm_source_id') or None
+    if norm_source_id is not None:
+        try:
+            norm_source_id = int(norm_source_id)
+        except (TypeError, ValueError):
+            norm_source_id = None
+        else:
+            if not InternalDocument.objects.filter(
+                pk=norm_source_id,
+                doc_type=InternalDocument.DocType.INTERNAL_STANDARD,
+                is_active=True,
+            ).exists():
+                norm_source_id = None
+
+    check_document_version_task.delay(
+        version.pk,
+        request.user.pk,
+        page_number=page_number,
+        norm_source_id=norm_source_id,
+    )
     version, run = _latest_run(document)
     return _render_panel(request, document, run=run)
 

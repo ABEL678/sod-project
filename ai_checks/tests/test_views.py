@@ -74,7 +74,12 @@ class AiChecksUiTests(MediaIsolationMixin, TestCase):
             reverse('ai_checks:panel', args=[self.document.pk]),
         )
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, 'Запустить проверку')
+        # Блок 3 бэта-фиксов: кнопки «Проверить лист»/«Проверить всё»
+        # и селектор «Проверка по» вместо одной кнопки запуска.
+        self.assertContains(response, 'Проверить лист')
+        self.assertContains(response, 'Проверить всё')
+        self.assertContains(response, 'aiNormSource')
+        self.assertContains(response, 'ГОСТ Р 21.101-2026 (базовый)')
 
     @override_settings(AI_CHECKS_ENABLED=True)
     def test_start_runs_check_eagerly_and_shows_findings(self):

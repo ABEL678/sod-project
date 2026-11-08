@@ -247,6 +247,24 @@ class PdfPageView:
         left, bottom, right, top = self._page.get_mediabox()
         return Rect(left, bottom, right, top)
 
+    @property
+    def mu_rect(self) -> Rect:
+        """Прямоугольник страницы в MU-координатах (система геометрии правил).
+
+        Бэта-фикс 2026-11-08, блок 1 (SPDS.STAMP/RAME): правила сравнивают
+        геометрию iter_line_segments()/iter_rects()/get_text(clip), которая
+        отдаётся в неповёрнутой TL-системе относительно CropBox, а прежний
+        page.rect — отображаемая (с /Rotate) система. При /Rotate 90/270
+        они подменяют стороны и зона штампа уезжала.
+
+        page.mediabox — BL-система с абсолютными координатами, поэтому
+        в правилах используется именно MU-прямоугольник: для MediaBox с
+        нулевым началом ширина/высота совпадают с MediaBox, но оси — как
+        у геометрии (y вниз). См. преобразование _to_mu().
+        """
+        left, bottom, right, top = self._cropbox
+        return Rect(0.0, 0.0, right - left, top - bottom)
+
     def close(self):
         if self._textpage is not None:
             self._textpage.close()
@@ -335,6 +353,56 @@ class PdfPageView:
         x0, y0 = self._to_mu(*a)
         x1, y1 = self._to_mu(*b)
         return (x0, y0, x1, y1)
+
+    def iter_images(self):
+        """Растровые объекты страницы в MU-координатах (FPDFPageObj_GetBounds).
+
+        Бэта-фикс 2026-11-08, блок 1: штамп может быть растровым (скан
+        листа, экспорт «штампа в растр») — path-объекты и текст его не
+        видят. Границы объекта отдаются в неповёрнутом user-пространстве
+        (BL, абсолютные) — конвертируются в MU, как сегменты путей.
+        """
+        for obj in self._page.get_objects(
+            filter=[pdfium_raw.FPDF_PAGEOBJ_IMAGE], max_depth=15,
+        ):
+            left, bottom, right, top = (
+                c_float(), c_float(), c_float(), c_float(),
+            )
+            if pdfium_raw.FPDFPageObj_GetBounds(
+                obj, byref(left), byref(bottom), byref(right), byref(top),
+            ):
+                x0, y1 = self._to_mu(left.value, bottom.value)
+                x1, y0 = self._to_mu(right.value, top.value)
+                yield Rect(
+                    min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1),
+                )
+            obj.close()
+
+    def iter_object_bounds(self):
+        """Границы ВСЕХ top-level объектов страницы в MU-координатах.
+
+        Бэта-фикс 2026-11-08, блок 1: часть CAD-экспортов рисует весь
+        лист shading-объектами/кривыми (файл 4400_ОВ из бэта-теста:
+        14 447 shading-объектов, path — ноль), поэтому path-фильтр
+        get_objects() и текстовый слой штамп не видят. Здесь просто
+        перечисляются границы объектов через FPDFPageObj_GetBounds
+        (user BL → MU TL), без разбора геометрии — для подсчёта объектов,
+        целиком лежащих в зоне штампа.
+        """
+        page_raw = self._page.raw
+        for index in range(pdfium_raw.FPDFPage_CountObjects(page_raw)):
+            obj = pdfium_raw.FPDFPage_GetObject(page_raw, index)
+            left, bottom, right, top = (
+                c_float(), c_float(), c_float(), c_float(),
+            )
+            if pdfium_raw.FPDFPageObj_GetBounds(
+                obj, byref(left), byref(bottom), byref(right), byref(top),
+            ):
+                x0, y1 = self._to_mu(left.value, bottom.value)
+                x1, y0 = self._to_mu(right.value, top.value)
+                yield Rect(
+                    min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1),
+                )
 
     # --- текст ------------------------------------------------------------------
 
