@@ -1,11 +1,14 @@
 """Модели ИИ-контура (Этап 19, ARCHITECTURE.md 3.2).
 
 Только добавление: существующие модели storage/issues не изменяются.
-Ф0.1: LLMCallLog и CheckRun (CheckRun — обязательная FK-цель для
-LLMCallLog.check_run). Ф0.2: InternalDocument и InternalChunk
-(источники знаний, tenant_scope по 8.2). Остальные модели — в Ф1.
-Финальная архитектура ИИ-контура: ProjectDocumentChunk (чанки PDF-версий
-документов проекта, треб. 1) и RagQuery (история ИИ-поиска, треб. 2).
+Ф0.2: InternalDocument и InternalChunk (источники знаний, tenant_scope
+по 8.2). Финальная архитектура ИИ-контура: ProjectDocumentChunk (чанки
+PDF-версий документов проекта, треб. 1) и RagQuery (история ИИ-поиска,
+треб. 2), GeneratedReport (отчёт ГИПу) и LLMCallLog (журнал вызовов).
+
+Зачистка 2026-11-09: ИИ-нормоконтроль СПДС выведен из эксплуатации —
+модели RuleDefinition, CheckRun, PendingCheckResult и ReminderRule
+удалены (миграция 0013); остался RAG-поиск, база знаний и отчёт ГИПу.
 """
 
 from __future__ import annotations
@@ -302,203 +305,6 @@ class RagQuery(models.Model):
         return f'RagQuery #{self.pk} ({self.question[:40]})'
 
 
-class RuleDefinition(models.Model):
-    """Правило проверки (ARCHITECTURE.md 3.2, этап Ф1).
-
-    В MVP правила глобальные (tenant_scope=global); tenant-поля заложены
-    сразу по 8.2. Structural-правила (pypdfium2: рамка/штамп/шрифт)
-    исполняются движком по коду из ai_checks/domain/rules.py; rule_kind
-    хранит спековую классификацию источника правила (regex/keyword/manual).
-    """
-
-    class RuleKind(models.TextChoices):
-        REGEX = 'regex', 'Регулярное выражение'
-        KEYWORD = 'keyword', 'Ключевые слова'
-        MANUAL = 'manual', 'Ручное/структурное'
-
-    class Severity(models.TextChoices):
-        BLOCKER = 'blocker', 'Блокирующее'
-        MAJOR = 'major', 'Значительное'
-        MINOR = 'minor', 'Незначительное'
-        INFO = 'info', 'Информация'
-
-    code = models.CharField(
-        max_length=100, unique=True, verbose_name='Код правила',
-    )
-    title = models.CharField(max_length=255, verbose_name='Название')
-    body = models.TextField(verbose_name='Формулировка правила')
-    # Бэта-фикс 2026-11-08, блок 2: полное нормативное обоснование
-    # («ГОСТ 21.613-2014, п. 5.2»), показывается в панели проверки.
-    norm_ref = models.CharField(
-        max_length=200,
-        blank=True,
-        default='',
-        verbose_name='Нормативное обоснование',
-    )
-    rule_kind = models.CharField(
-        max_length=10, choices=RuleKind.choices, verbose_name='Вид правила',
-    )
-    pattern = models.JSONField(
-        null=True, blank=True, verbose_name='Regex/ключевые слова',
-    )
-    category = models.CharField(
-        max_length=50, blank=True, verbose_name='Группа',
-    )
-    severity = models.CharField(
-        max_length=10, choices=Severity.choices, verbose_name='Критичность',
-    )
-    is_active = models.BooleanField(default=True, verbose_name='Активно')
-    version = models.PositiveIntegerField(
-        default=1, verbose_name='Версия формулировки',
-    )
-    tenant_scope = models.CharField(
-        max_length=10,
-        choices=InternalDocument.TenantScope.choices,
-        default=InternalDocument.TenantScope.GLOBAL,
-        verbose_name='Уровень видимости',
-    )
-    company = models.ForeignKey(
-        'storage.Company',
-        null=True,
-        blank=True,
-        on_delete=models.CASCADE,
-        related_name='ai_rule_definitions',
-        verbose_name='Компания',
-    )
-    project = models.ForeignKey(
-        'storage.Project',
-        null=True,
-        blank=True,
-        on_delete=models.CASCADE,
-        related_name='ai_rule_definitions',
-        verbose_name='Проект',
-    )
-    created_by = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
-        null=True,
-        blank=True,
-        on_delete=models.SET_NULL,
-        related_name='ai_rule_definitions',
-        verbose_name='Создал',
-    )
-    created_at = models.DateTimeField(
-        auto_now_add=True, verbose_name='Создан',
-    )
-    updated_at = models.DateTimeField(
-        auto_now=True, verbose_name='Обновлён',
-    )
-
-    class Meta:
-        verbose_name = 'Правило проверки'
-        verbose_name_plural = 'Правила проверки'
-        ordering = ['code']
-        constraints = [
-            # Как у InternalDocument (8.2): обязательные поля по tenant_scope.
-            models.CheckConstraint(
-                condition=(
-                    models.Q(tenant_scope='global')
-                    & models.Q(company__isnull=True)
-                    & models.Q(project__isnull=True)
-                ) | (
-                    models.Q(tenant_scope='company')
-                    & models.Q(company__isnull=False)
-                    & models.Q(project__isnull=True)
-                ) | (
-                    models.Q(tenant_scope='project')
-                    & models.Q(project__isnull=False)
-                ),
-                name='ai_rule_definition_tenant_scope',
-            ),
-        ]
-
-    def __str__(self) -> str:
-        return f'{self.code} — {self.title}'
-
-
-class PendingCheckResult(models.Model):
-    """Находка прогона проверки (ARCHITECTURE.md 3.2, этап Ф1)."""
-
-    class Status(models.TextChoices):
-        PENDING = 'pending', 'На проверке'
-        CONFIRMED = 'confirmed', 'Подтверждена'
-        REJECTED = 'rejected', 'Отклонена'
-        EDITED = 'edited', 'Отредактирована'
-
-    check_run = models.ForeignKey(
-        'CheckRun',
-        on_delete=models.CASCADE,
-        related_name='results',
-        verbose_name='Прогон',
-    )
-    rule = models.ForeignKey(
-        RuleDefinition,
-        null=True,
-        blank=True,
-        on_delete=models.PROTECT,
-        related_name='pending_results',
-        verbose_name='Правило',
-    )
-    status = models.CharField(
-        max_length=10,
-        choices=Status.choices,
-        default=Status.PENDING,
-        verbose_name='Статус',
-    )
-    severity = models.CharField(
-        max_length=10,
-        choices=RuleDefinition.Severity.choices,
-        verbose_name='Критичность (снимок)',
-    )
-    confidence = models.DecimalField(
-        max_digits=3,
-        decimal_places=2,
-        null=True,
-        blank=True,
-        verbose_name='Уверенность',
-    )
-    page = models.PositiveIntegerField(
-        null=True, blank=True, verbose_name='Страница',
-    )
-    bbox = models.JSONField(
-        null=True, blank=True, verbose_name='Координаты [x0, y0, x1, y1]',
-    )
-    message = models.TextField(verbose_name='Что найдено')
-    evidence = models.TextField(blank=True, verbose_name='Цитата-основание')
-    model_name = models.CharField(
-        max_length=100, blank=True, verbose_name='Модель',
-    )
-    prompt_version = models.CharField(
-        max_length=100, blank=True, verbose_name='Версия промпта',
-    )
-    llm_call = models.ForeignKey(
-        'LLMCallLog',
-        null=True,
-        blank=True,
-        on_delete=models.SET_NULL,
-        related_name='pending_results',
-        verbose_name='Вызов LLM',
-    )
-    reviewed_by = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
-        null=True,
-        blank=True,
-        on_delete=models.SET_NULL,
-        related_name='reviewed_check_results',
-        verbose_name='Провалидировал',
-    )
-    reviewed_at = models.DateTimeField(
-        null=True, blank=True, verbose_name='Когда провалидировал',
-    )
-
-    class Meta:
-        verbose_name = 'Находка проверки'
-        verbose_name_plural = 'Находки проверки'
-        ordering = ['check_run', 'id']
-
-    def __str__(self) -> str:
-        return f'Находка #{self.pk} ({self.get_status_display()})'
-
-
 class GeneratedReport(models.Model):
     """Сгенерированный отчёт для ГИПа (ARCHITECTURE.md, дополнение к 7).
 
@@ -548,123 +354,6 @@ class GeneratedReport(models.Model):
         return f'Отчёт #{self.pk} ({self.period})'
 
 
-class ReminderRule(models.Model):
-    """Правило напоминаний по незавершённым находкам (дополнение к 7)."""
-
-    class Audience(models.TextChoices):
-        GIP = 'gip', 'ГИП проекта'
-        ADMIN = 'admin', 'Администратор компании'
-
-    code = models.CharField(
-        max_length=100, unique=True, verbose_name='Код правила',
-    )
-    offset_days = models.PositiveIntegerField(
-        default=7, verbose_name='Через сколько дней напоминать',
-    )
-    audience = models.CharField(
-        max_length=10,
-        choices=Audience.choices,
-        default=Audience.GIP,
-        verbose_name='Кому',
-    )
-    is_active = models.BooleanField(default=True, verbose_name='Активно')
-
-    class Meta:
-        verbose_name = 'Правило напоминаний'
-        verbose_name_plural = 'Правила напоминаний'
-        ordering = ['code']
-
-    def __str__(self) -> str:
-        return f'{self.code} (+{self.offset_days} дн.)'
-
-
-class CheckRun(models.Model):
-    """Прогон проверки версии документа (ARCHITECTURE.md 3.2, Ф1).
-
-    В Ф0.1 модель создаётся как инфраструктурная зависимость LLMCallLog;
-    движок правил появится в Ф1. Мультитенантность наследуется от
-    document_version → document → project (собственных tenant-полей нет).
-    """
-
-    class Status(models.TextChoices):
-        QUEUED = 'queued', 'В очереди'
-        RUNNING = 'running', 'Выполняется'
-        DONE = 'done', 'Завершён'
-        FAILED = 'failed', 'Ошибка'
-        CANCELED = 'canceled', 'Отменён'
-
-    document_version = models.ForeignKey(
-        'storage.DocumentVersion',
-        on_delete=models.PROTECT,
-        related_name='check_runs',
-        verbose_name='Версия документа',
-    )
-    initiated_by = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
-        on_delete=models.PROTECT,
-        related_name='check_runs',
-        verbose_name='Инициатор',
-    )
-    status = models.CharField(
-        max_length=10,
-        choices=Status.choices,
-        default=Status.QUEUED,
-        verbose_name='Статус',
-    )
-    engine_version = models.CharField(
-        max_length=50,
-        blank=True,
-        verbose_name='Версия движка (правила/промпты)',
-    )
-    # Бэта-фикс 2026-11-08, блок 3: проверка по листу и «Проверка по»
-    # (базовый ГОСТ Р 21.101-2026 или внутренний стандарт).
-    page_number = models.PositiveIntegerField(
-        null=True,
-        blank=True,
-        verbose_name='Проверенный лист',
-    )
-    norm_source = models.ForeignKey(
-        'ai_checks.InternalDocument',
-        null=True,
-        blank=True,
-        on_delete=models.SET_NULL,
-        related_name='check_runs',
-        verbose_name='Нормативный источник проверки',
-    )
-    norm_source_label = models.CharField(
-        max_length=255,
-        blank=True,
-        default='',
-        verbose_name='Проверка по (норматив) — снимок названия',
-    )
-    rules_total = models.PositiveIntegerField(
-        default=0, verbose_name='Всего правил',
-    )
-    findings_total = models.PositiveIntegerField(
-        default=0, verbose_name='Всего находок',
-    )
-    meta = models.JSONField(
-        default=dict, blank=True, verbose_name='Параметры прогона',
-    )
-    started_at = models.DateTimeField(
-        null=True, blank=True, verbose_name='Начат',
-    )
-    finished_at = models.DateTimeField(
-        null=True, blank=True, verbose_name='Завершён',
-    )
-    created_at = models.DateTimeField(
-        auto_now_add=True, verbose_name='Создан',
-    )
-
-    class Meta:
-        verbose_name = 'Прогон проверки'
-        verbose_name_plural = 'Прогоны проверок'
-        ordering = ['-created_at']
-
-    def __str__(self) -> str:
-        return f'CheckRun #{self.pk} ({self.get_status_display()})'
-
-
 class LLMCallLog(models.Model):
     """Журнал вызовов LLM (ARCHITECTURE.md 3.2, Этап 19).
 
@@ -673,7 +362,6 @@ class LLMCallLog(models.Model):
     """
 
     class Purpose(models.TextChoices):
-        CHECK_EXPLAIN = 'check_explain', 'Объяснение находки'
         RAG_ANSWER = 'rag_answer', 'Ответ RAG'
         GIP_REPORT = 'gip_report', 'Отчёт ГИПа'
 
@@ -719,14 +407,6 @@ class LLMCallLog(models.Model):
     )
     prompt_version = models.CharField(
         max_length=50, blank=True, verbose_name='Версия промпта',
-    )
-    check_run = models.ForeignKey(
-        CheckRun,
-        null=True,
-        blank=True,
-        on_delete=models.SET_NULL,
-        related_name='llm_calls',
-        verbose_name='Прогон',
     )
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,

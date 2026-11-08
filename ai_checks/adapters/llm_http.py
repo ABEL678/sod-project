@@ -1,8 +1,13 @@
-"""HTTP-адаптер LLMProvider (Этап 19, Ф4) + заглушка без API-ключа.
+"""HTTP-адаптеры LLMProvider (Этап 19, Ф4) + заглушка без API-ключа.
 
-Провайдер — OpenAI-совместимый chat/completions (DeepSeek по умолчанию).
-Тексты промптов/ответов в БД не пишутся (приватность) — только метаданные
-в LLMCallLog. Retry ×3, таймаут 60 с (ARCHITECTURE.md 5.3).
+Два рабочих провайдера (зачистка 2026-11-09, блок «настроить LLM»):
+- OrcaRouter — OpenAI-совместимый шлюз https://api.orcarouter.ai/v1
+  (deepseek/*, z-ai/*, …); ключ — AI_LLM_API_KEY;
+- GigaChat (Сбер, работа из РФ) — OAuth + OpenAI-совместимый API.
+
+Тексты промптов/ответов в БД не пишутся (приватность) — только
+метаданные в LLMCallLog. Retry ×2, таймаут ≤ 12 с (ARCHITECTURE.md 5.3,
+бюджет синхронного вызова < 30 с воркера gunicorn).
 """
 
 from __future__ import annotations
@@ -18,9 +23,9 @@ from ai_checks.ports.llm import LLMResponse
 
 
 class HttpLLMProvider:
-    """OpenAI-совместимый HTTP-провайдер (DeepSeek/OpenRouter)."""
+    """OpenAI-совместимый HTTP-провайдер (OrcaRouter/DeepSeek/OpenRouter)."""
 
-    name = 'deepseek'
+    name = 'orcarouter'
 
     def __init__(
         self,
@@ -115,14 +120,24 @@ class StubLLMProvider:
 
 
 def get_llm_provider(model: str | None = None):
-    """Фабрика: GigaChat / OpenAI-совместимый HTTP / заглушка.
+    """Фабрика провайдера по имени модели (зачистка 2026-11-09).
 
-    model из UI (GigaChat-*, deepseek/*, z-ai/*) определяет провайдер.
-    Если model не передан — дефолт AI_GIGACHAT_MODEL → GigaChatProvider;
-    без ключа — заглушка.
+    Правила маршрутизации:
+    - model начинается с 'GigaChat-' → GigaChatProvider (Сбер, РФ);
+    - иначе (deepseek/*, z-ai/*, …) → HttpLLMProvider (OrcaRouter);
+    - model не задан → провайдер из AI_LLM_PROVIDER ('gigachat' →
+      GigaChatProvider, иначе OrcaRouter);
+    - нет ключа у выбранного провайдера → заглушка StubLLMProvider.
     """
-    # Определяем провайдера по имени модели из UI.
-    if model is not None and model.startswith('GigaChat-'):
+    use_gigachat = bool(
+        (model or '').startswith('GigaChat-')
+        or (
+            model is None
+            and (getattr(settings, 'AI_LLM_PROVIDER', '') or '') == 'gigachat'
+        )
+    )
+
+    if use_gigachat:
         auth_key = (
             getattr(settings, 'AI_GIGACHAT_AUTH_KEY', '') or ''
         ).strip()
@@ -132,7 +147,9 @@ def get_llm_provider(model: str | None = None):
         # = максимум ~25.5 c < 30 c (таймаут воркера gunicorn).
         return GigaChatProvider(
             auth_key,
-            model=model,
+            model=model or getattr(
+                settings, 'AI_GIGACHAT_MODEL', 'GigaChat-2',
+            ),
             timeout=min(
                 float(getattr(settings, 'AI_GIGACHAT_TIMEOUT', 60)), 12.0,
             ),
@@ -142,56 +159,19 @@ def get_llm_provider(model: str | None = None):
             retries=2,
         )
 
-    # OpenAI-совместимые провайдеры (deepseek/*, z-ai/*).
-    if model is not None and (model.startswith('deepseek/') or model.startswith('z-ai/')):
-        api_key = (getattr(settings, 'AI_LLM_API_KEY', '') or '').strip()
-        if not api_key:
-            return StubLLMProvider()
-        # Бюджет: 12 c x 2 попытки + паузы ~ 1.5 c = максимум ~25.5 c < 30 c.
-        timeout = min(float(getattr(settings, 'AI_LLM_TIMEOUT', 60)), 12.0)
-        return HttpLLMProvider(
-            api_key=api_key,
-            base_url=getattr(
-                settings, 'AI_LLM_BASE_URL', 'https://api.deepseek.com/v1',
-            ),
-            model=model,
-            timeout=timeout,
-            retries=2,
-        )
-
-    # Дефолт: GigaChat из настроек (обратная совместимость).
-    auth_key = (
-        getattr(settings, 'AI_GIGACHAT_AUTH_KEY', '') or ''
-    ).strip()
-    if auth_key:
-        default_model = model or getattr(settings, 'AI_GIGACHAT_MODEL', 'GigaChat-2')
-        return GigaChatProvider(
-            auth_key,
-            model=default_model,
-            timeout=min(
-                float(getattr(settings, 'AI_GIGACHAT_TIMEOUT', 60)), 12.0,
-            ),
-            verify_ssl=bool(
-                getattr(settings, 'AI_GIGACHAT_VERIFY_SSL', True),
-            ),
-            retries=2,
-        )
-
+    # OpenAI-совместимые провайдеры (OrcaRouter: deepseek/*, z-ai/*, …).
     api_key = (getattr(settings, 'AI_LLM_API_KEY', '') or '').strip()
-    if api_key:
-        default_model = model or getattr(settings, 'AI_LLM_MODEL', 'deepseek-chat')
-        timeout = min(float(getattr(settings, 'AI_LLM_TIMEOUT', 60)), 12.0)
-        return HttpLLMProvider(
-            api_key=api_key,
-            base_url=getattr(
-                settings, 'AI_LLM_BASE_URL', 'https://api.deepseek.com/v1',
-            ),
-            model=default_model,
-            timeout=timeout,
-            retries=2,
-        )
-
-    return StubLLMProvider()
+    if not api_key:
+        return StubLLMProvider()
+    return HttpLLMProvider(
+        api_key=api_key,
+        base_url=getattr(
+            settings, 'AI_LLM_BASE_URL', 'https://api.orcarouter.ai/v1',
+        ),
+        model=model or getattr(settings, 'AI_LLM_MODEL', 'deepseek-chat'),
+        timeout=min(float(getattr(settings, 'AI_LLM_TIMEOUT', 60)), 12.0),
+        retries=2,
+    )
 
 
 class GigaChatProvider:

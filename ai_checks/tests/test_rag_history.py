@@ -212,9 +212,9 @@ class ProjectChunkFactory:
         from storage.domain.models import DocumentVersion as DV
 
         if embedding_service is None:
-            from ai_checks.adapters.embedding_onnx import BgeM3OnnxEmbedding
+            from ai_checks.tests.mocks import MockEmbeddingService
 
-            embedding_service = BgeM3OnnxEmbedding()
+            embedding_service = MockEmbeddingService(dim=1024)
         if version is None:
             version = document.current_version
             if version is None:

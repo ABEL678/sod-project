@@ -6,13 +6,7 @@ from django.contrib.auth.models import User
 from django.test import TestCase, override_settings
 from django.utils import timezone
 
-from ai_checks.domain.models import (
-    CheckRun,
-    InternalChunk,
-    InternalDocument,
-    PendingCheckResult,
-    RuleDefinition,
-)
+from ai_checks.domain.models import InternalChunk, InternalDocument
 from ai_checks.domain.services import generate_gip_report, rag_answer
 from ai_checks.ports.llm import LLMResponse
 from ai_checks.tests.mocks import MockEmbeddingService, MockVectorBackend

@@ -1,51 +1,13 @@
-"""Celery-задачи ИИ-контура (Этап 19, Ф1)."""
+"""Celery-задачи ИИ-контура.
+
+После зачистки нормоконтроля (2026-11-09) остались только задачи
+индексации RAG: база знаний (InternalChunk) и документы проекта
+(ProjectDocumentChunk). Задачи прогона правил (check_document_version)
+и напоминаний по находкам (check_reminders) удалены вместе с моделями
+CheckRun / PendingCheckResult / ReminderRule (миграция 0013).
+"""
 
 from celery import shared_task
-
-from ai_checks.domain.services import run_rules_check
-
-
-@shared_task(ignore_result=True, name='ai_checks.check_document_version')
-def check_document_version_task(
-    document_version_id: int,
-    user_id: int,
-    page_number: int | None = None,
-    norm_source_id: int | None = None,
-) -> None:
-    """Прогон детерминированных правил по версии документа.
-
-    В dev/тестах (CELERY_TASK_ALWAYS_EAGER=True) выполняется синхронно;
-    в проде — воркером Celery через Redis.
-
-    Бэта-фикс 2026-11-08, блок 3: page_number — проверка одного листа;
-    norm_source_id — внутренний стандарт для подписи «Проверка по».
-    """
-    from django.contrib.auth.models import User
-
-    from storage.domain.models import DocumentVersion
-
-    try:
-        version = DocumentVersion.objects.select_related('document').get(
-            pk=document_version_id,
-        )
-        user = User.objects.get(pk=user_id)
-    except (DocumentVersion.DoesNotExist, User.DoesNotExist):
-        return
-
-    run_rules_check(
-        version,
-        user,
-        page_number=page_number,
-        norm_source_id=norm_source_id,
-    )
-
-
-@shared_task(ignore_result=True, name='ai_checks.check_reminders')
-def check_reminders_task() -> int:
-    """Ежедневные напоминания по незавершённым проверкам (Ф4, без LLM)."""
-    from ai_checks.domain.services import send_pending_reminders
-
-    return send_pending_reminders()
 
 
 @shared_task(ignore_result=True, name='ai_checks.index_knowledge_document')

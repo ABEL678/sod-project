@@ -1,24 +1,26 @@
-"""Домен ИИ-контура: бизнес-логика Ф0.2 — индексация источников знаний.
+"""Домен ИИ-контура: индексация, RAG-поиск, база знаний, отчёт ГИПу.
 
 Контракт (ARCHITECTURE.md 8.4): pypdfium2 извлекает текст и страницы,
-текст режется на чанки с перекрытием, векторы пишутся в InternalChunk.
-Сервис не знает про HTTP/UI/Celery — только домен и ORM.
+текст режется на чанки с перекрытием, векторы пишутся в InternalChunk /
+ProjectDocumentChunk (bge-m3, 1024, L2). Сервис не знает про HTTP/UI/
+Celery — только домен и ORM.
 
-Финальная архитектура ИИ-контура (этап 20):
-- index_project_document() — индексация PDF-версий документов проекта в
-  ProjectDocumentChunk (треб. 1, 4), статусы на DocumentVersion
-  (pending → processing → done/error, треб. 3);
+Состав (этап 20, после зачистки нормоконтроля 2026-11-09):
+- index_document() / index_project_document() — индексация базы знаний и
+  PDF-версий документов проекта (треб. 1, 3, 4);
 - reindex_project() / reindex_document() — резервная индексация (треб. 5);
 - rag_answer() — сквозной RAG по документам проекта и базе знаний с
   сохранением истории RagQuery (треб. 6, 9);
-- экспорт отчёта ГИПа дополнен разделом «Выводы» (треб. 12).
+- generate_gip_report() + экспорт PDF/Word с разделом «Выводы» (треб. 12);
+- база знаний: upload/remove/knowledge_documents (UX-аудит stage 2).
+ИИ-нормоконтроль СПДС (rules.py, run_rules_check, прогоны CheckRun)
+выведен из эксплуатации и удалён — см. миграцию 0013.
 """
 
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import timedelta
 
 from django.core.exceptions import PermissionDenied
 from django.db import models as db_models
@@ -27,31 +29,18 @@ from django.utils import timezone
 
 from ai_checks import pdfium_tools
 from ai_checks.domain.models import (
-    CheckRun,
     GeneratedReport,
     IndexingStatus,
     InternalChunk,
     InternalDocument,
     LLMCallLog,
-    PendingCheckResult,
     ProjectDocumentChunk,
     RagQuery,
-    ReminderRule,
-    RuleDefinition,
 )
-from ai_checks.domain.rules import RULE_CHECKS
 from ai_checks.ports.embedding import EmbeddingService
 from storage.domain.models import Document, DocumentVersion
 
 logger = logging.getLogger(__name__)
-
-# Версия набора правил/промптов прогона (CheckRun.engine_version).
-# 2026.11.2 — блоки 1–3 бэта-фиксов: MU-зона штампа/рамки, fallback
-# текст-спанов/растра, проверка по листу, нормативный источник.
-ENGINE_VERSION = 'rules@2026.11.2'
-
-# Блок 3: подпись базового норматива (когда стандарт не выбран).
-BASE_NORM_LABEL = 'ГОСТ Р 21.101-2026 (базовый)'
 
 # Размер чанка и перекрытие (ТЗ Ф0.2: ~1000 символов, перекрытие 200).
 CHUNK_SIZE = 1000
@@ -339,119 +328,6 @@ def reindex_project(project_id: int, user=None) -> int:
     for version in versions:
         index_project_document_task.delay(version.pk)
     return len(versions)
-
-
-def run_rules_check(
-    document_version: DocumentVersion,
-    initiated_by,
-    page_number: int | None = None,
-    norm_source_id: int | None = None,
-) -> CheckRun:
-    """Прогон детерминированных правил по PDF версии (Ф1, без LLM).
-
-    Создаёт CheckRun (queued → running → done/failed), прогоняет активные
-    RuleDefinition на каждой странице через RULE_CHECKS и сохраняет
-    PendingCheckResult (status=pending) для каждой находки.
-    Записи находок и финальный статус — в transaction.atomic(); при сбое
-    (битый PDF и т.п.) прогон помечается failed с текстом ошибки в meta.
-
-    Бэта-фикс 2026-11-08, блок 3: page_number — проверка одного листа
-    (1-based, вне диапазона → прогон по всем листам); norm_source_id —
-    внутренний стандарт (doc_type='internal_standard') для подписи
-    «Проверка по» (None = базовый ГОСТ Р 21.101-2026).
-    """
-    run_page: int | None = None
-    if page_number is not None and str(page_number) != '':
-        try:
-            run_page = int(page_number)
-        except (TypeError, ValueError):
-            run_page = None
-        else:
-            if run_page < 1:
-                run_page = None
-
-    norm_source = None
-    if norm_source_id:
-        norm_source = InternalDocument.objects.filter(
-            pk=norm_source_id,
-            doc_type=InternalDocument.DocType.INTERNAL_STANDARD,
-            is_active=True,
-        ).first()
-
-    check_run = CheckRun.objects.create(
-        document_version=document_version,
-        initiated_by=initiated_by,
-        status=CheckRun.Status.QUEUED,
-        engine_version=ENGINE_VERSION,
-        page_number=run_page,
-        norm_source=norm_source,
-        norm_source_label=(
-            norm_source.title if norm_source else BASE_NORM_LABEL
-        ),
-        started_at=timezone.now(),
-    )
-    try:
-        file_path = document_version.file.path
-        rules = list(
-            RuleDefinition.objects.filter(is_active=True).order_by('code')
-        )
-        executable = [rule for rule in rules if rule.code in RULE_CHECKS]
-
-        findings: list[tuple[RuleDefinition, dict]] = []
-        with transaction.atomic():
-            with pdfium_tools.open_pdf(file_path) as pdf:
-                pages_total = len(pdf)
-                if run_page is not None and run_page > pages_total:
-                    run_page = None  # лист вне диапазона — проверяем всё
-                page_indexes = (
-                    range(pages_total)
-                    if run_page is None
-                    else (run_page - 1,)
-                )
-                for index in page_indexes:
-                    view = pdfium_tools.PdfPageView(pdf, index)
-                    try:
-                        for rule in executable:
-                            checker = RULE_CHECKS[rule.code]
-                            for finding in checker(view):
-                                findings.append((rule, finding))
-                    finally:
-                        view.close()
-
-            PendingCheckResult.objects.bulk_create([
-                PendingCheckResult(
-                    check_run=check_run,
-                    rule=rule,
-                    status=PendingCheckResult.Status.PENDING,
-                    severity=rule.severity,
-                    page=finding['page'],
-                    bbox=finding['bbox'],
-                    message=finding['message'],
-                    evidence=finding['evidence'],
-                )
-                for rule, finding in findings
-            ])
-            check_run.status = CheckRun.Status.DONE
-            check_run.page_number = run_page
-            check_run.rules_total = len(executable)
-            check_run.findings_total = len(findings)
-            check_run.finished_at = timezone.now()
-            check_run.save(update_fields=[
-                'status', 'page_number', 'rules_total', 'findings_total',
-                'finished_at',
-            ])
-    except Exception as exc:  # noqa: BLE001 — статус прогона важнее трейса
-        logger.exception(
-            'AI-проверка версии %s упала: %s', document_version.pk, exc,
-        )
-        check_run.status = CheckRun.Status.FAILED
-        check_run.findings_total = 0
-        check_run.meta = {'error': str(exc)}
-        check_run.finished_at = timezone.now()
-        check_run.save(update_fields=[
-            'status', 'findings_total', 'meta', 'finished_at',
-        ])
-    return check_run
 
 
 def rag_answer(
@@ -1059,15 +935,16 @@ def _report_conclusions(report) -> list[str]:
 
 
 def _register_cyrillic_font() -> tuple[str, str]:
-    """TTF-шрифт с кириллицей для экспорта отчётов (блок 5 бэта-фиксов).
+    """TTF-шрифт с кириллицей для экспорта отчётов (блок 3 зачистки).
 
     Раньше использовался CID-шрифт STSong-Light (Adobe-GB1): кириллица
-    шла «разрядкой» с подстановкой глифов, шрифт не встраивался в PDF.
-    Теперь регистрируется локальный TTF (GolosText/DejaVuSans) — полный
-    кириллический набор, шрифт встраивается. Возвращает пару
-    (regular, bold); bold может совпадать с regular, если найден только
-    один файл. Если TTF не найден вовсе — прежний STSong-Light
-    (fallback, чтобы экспорт не падал до добавления шрифта в проект).
+    шла «разрядкой» с подстановкой глифов, шрифт не встраивался в PDF —
+    это был дефект бэта-теста. Порядок поиска (строго по ТЗ):
+    static/fonts/GolosText-Regular.ttf → static/fonts/DejaVuSans.ttf →
+    системный DejaVuSans. Возвращает пару (regular, bold); bold может
+    совпадать с regular, если найден только один файл. Если TTF с
+    кириллицей нет нигде — RuntimeError с понятной ошибкой (битая
+    кириллица в PDF хуже честного сбоя экспорта).
     """
     from pathlib import Path
 
@@ -1075,7 +952,6 @@ def _register_cyrillic_font() -> tuple[str, str]:
 
     from reportlab.lib.fonts import addMapping
     from reportlab.pdfbase import pdfmetrics
-    from reportlab.pdfbase.cidfonts import UnicodeCIDFont
     from reportlab.pdfbase.ttfonts import TTFont
 
     roots: list[Path] = []
@@ -1123,14 +999,25 @@ def _register_cyrillic_font() -> tuple[str, str]:
         addMapping(name, 1, 0, bold_name)
         return name, bold_name
 
-    pdfmetrics.registerFont(UnicodeCIDFont('STSong-Light'))
-    return 'STSong-Light', 'STSong-Light'
+    # Блок 3 зачистки: заглушки STSong-Light больше нет — она давала
+    # битую кириллицу («разрядка», подстановочные глифы). Честная ошибка.
+    searched = '\n'.join(
+        f'  - {path}' for _name, path in regular_candidates
+    )
+    raise RuntimeError(
+        'Экспорт PDF недоступен: не найден TTF-шрифт с кириллицей. '
+        'Положите GolosText-Regular.ttf или DejaVuSans.ttf в '
+        'static/fonts/ (bold: GolosText-Bold.ttf / DejaVuSans-Bold.ttf) '
+        'либо установите системный DejaVuSans. Проверенные пути:\n'
+        f'{searched}'
+    )
 
 
 def gip_report_pdf(report) -> bytes:
     """PDF отчёта ГИПа (reportlab/platypus) — блоки 5–6 бэта-фиксов.
 
-    Шрифт с кириллицей (GolosText/DejaVuSans TTF, fallback STSong-Light).
+    Шрифт с кириллицей (GolosText/DejaVuSans TTF; без них — понятная
+    ошибка, блок 3 зачистки).
     Структура (как у отчётов Аудитора):
     1) титульный блок (проект, период, дата, автор);
     2) краткое резюме (LLM);
@@ -1493,84 +1380,6 @@ def gip_report_docx(report) -> bytes:
     buffer = io.BytesIO()
     document.save(buffer)
     return buffer.getvalue()
-
-
-def _reminder_recipients(project, audience: str):
-    """Получатели напоминаний: ГИП проекта или админы компании."""
-    from django.contrib.auth.models import User
-
-    recipients: dict[int, User] = {}
-    if audience == ReminderRule.Audience.ADMIN:
-        from storage.domain.models import UserProfile
-
-        for profile in UserProfile.objects.filter(
-            company=project.company, role='admin',
-        ).select_related('user'):
-            recipients[profile.user_id] = profile.user
-        return list(recipients.values())
-
-    if project.gip_id is not None:
-        recipients[project.gip_id] = project.gip
-    for membership in project.memberships.filter(
-        role_in_project='gip',
-    ).select_related('user'):
-        recipients[membership.user_id] = membership.user
-    return list(recipients.values())
-
-
-def send_pending_reminders(now=None) -> int:
-    """Напоминания по незавершённым находкам (Ф4, без LLM).
-
-    Для каждого активного ReminderRule: pending-находки, у которых
-    прогон старше offset_days и нет reviewed_at → уведомление получателю
-    (ГИП проекта / админ компании). Дубли отсекаются по url. Возвращает
-    число созданных уведомлений.
-    """
-    from django.urls import reverse
-    from issues.models import Notification
-    from issues.notify import create_notification
-
-    now = now or timezone.now()
-    created = 0
-    pending = (
-        PendingCheckResult.objects
-        .filter(
-            status=PendingCheckResult.Status.PENDING,
-            reviewed_at__isnull=True,
-        )
-        .select_related('check_run__document_version__document__project')
-    )
-
-    for rule in ReminderRule.objects.filter(is_active=True):
-        threshold = now - timedelta(days=rule.offset_days)
-        for finding in pending.filter(check_run__created_at__lte=threshold):
-            check_run = finding.check_run
-            document = check_run.document_version.document
-            project = document.project
-            url = reverse(
-                'storage:document_detail', args=[document.pk],
-            ) + f'#ai-finding-{finding.pk}'
-            message = (
-                f'Незавершённая ИИ-проверка: «{finding.message}» '
-                f'({document.code})'
-            )[:300]
-            for recipient in _reminder_recipients(project, rule.audience):
-                if Notification.objects.filter(
-                    recipient=recipient, url=url,
-                ).exists():
-                    continue
-                notification = create_notification(
-                    recipient=recipient,
-                    actor=None,
-                    verb='ai_reminder',
-                    document=document,
-                    project=project,
-                    message=message,
-                    url=url,
-                )
-                if notification is not None:
-                    created += 1
-    return created
 
 
 import base64

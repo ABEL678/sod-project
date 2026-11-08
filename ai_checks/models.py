@@ -1,27 +1,25 @@
-"""Ре-экспорт доменных моделей ИИ-контура (паттерн storage)."""
+"""Ре-экспорт доменных моделей ИИ-контура (паттерн storage).
+
+Зачистка 2026-11-09: RuleDefinition / CheckRun / PendingCheckResult /
+ReminderRule удалены вместе с ИИ-нормоконтролем (миграция 0013).
+"""
 
 from ai_checks.domain.models import (
-    CheckRun,
+    GeneratedReport,
     IndexingStatus,
     InternalChunk,
     InternalDocument,
     LLMCallLog,
-    PendingCheckResult,
     ProjectDocumentChunk,
     RagQuery,
-    ReminderRule,
-    RuleDefinition,
 )
 
 __all__ = [
-    'CheckRun',
+    'GeneratedReport',
     'IndexingStatus',
     'InternalChunk',
     'InternalDocument',
     'LLMCallLog',
-    'PendingCheckResult',
     'ProjectDocumentChunk',
     'RagQuery',
-    'ReminderRule',
-    'RuleDefinition',
 ]

@@ -493,7 +493,7 @@
 <script src="{% static 'js/pdf_viewer.js' %}?v=20261112-t8"></script>
 <script src="{% static 'js/splitter.js' %}?v=20261109-h6"></script>
 <script src="{% static 'js/palette.js' %}?v=20261109-h6" defer></script>
-{# Этап 19 (Ф1): HTMX для панели ИИ-проверки (флаг AI_CHECKS_ENABLED) #}
+{# Этап 19: HTMX для ИИ-вкладок проекта (поиск/отчёт/база знаний) #}
 <script src="{% static 'js/vendor/htmx.min.js' %}" defer></script>
 {% include 'storage/_palette.html' %}
 {% if user.is_authenticated %}{% include 'storage/_feedback_modal.html' %}{% endif %}

@@ -7,8 +7,27 @@
 from __future__ import annotations
 
 import hashlib
+from unittest import mock
 
 from ai_checks.ports.llm import LLMResponse
+
+
+def mock_bge_adapter(testcase, dim: int = 1024) -> None:
+    """Подменяет строгий BgeM3OnnxEmbedding на MockEmbeddingService.
+
+    Блок 2 зачистки 2026-11-09: боевой адаптер падает с RuntimeError,
+    если model.onnx не скачан (fail-fast вместо заглушки). Тестам,
+    где индексация запускается через задачи/вьюхи без DI
+    (upload_document, reindex_*, kb_upload), реальная модель не нужна —
+    векторный бэкенд тоже мокается (MockVectorBackend) или не участвует.
+    Вызывать из setUp: mock_bge_adapter(self).
+    """
+    patcher = mock.patch(
+        'ai_checks.adapters.embedding_onnx.BgeM3OnnxEmbedding',
+        return_value=MockEmbeddingService(dim=dim),
+    )
+    patcher.start()
+    testcase.addCleanup(patcher.stop)
 
 
 class MockLLMProvider:

@@ -11,6 +11,7 @@ from django.urls import reverse
 
 from ai_checks.domain.models import GeneratedReport, RagQuery
 from ai_checks.tests.base import MediaIsolationMixin
+from ai_checks.tests.mocks import mock_bge_adapter
 from ai_checks.tests.test_project_indexing import make_pdf
 from issues.models import Issue
 from storage.domain.models import Company, Project, Section
@@ -57,6 +58,8 @@ class KnowledgeBaseViewTests(MediaIsolationMixin, TestCase):
         self.section = Section.objects.create(
             project=self.project, code='ОВ', name='ОВ', order=1,
         )
+        # Eager-задачи upload_document идут без DI — мокаем строгий адаптер.
+        mock_bge_adapter(self)
         self.client.force_login(self.gip)
 
     def test_kb_panel_has_both_blocks(self):

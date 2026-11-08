@@ -120,18 +120,27 @@ CELERY_TASK_ALWAYS_EAGER = env_bool('CELERY_TASK_ALWAYS_EAGER', True)
 CELERY_TASK_EAGER_PROPAGATES = True
 CELERY_TASK_IGNORE_RESULT = True
 
-# Этап 19 (Ф4): LLM для отчётов ГИПа (DeepSeek/OpenRouter, OpenAI-совместимый).
-# Без ключа используется заглушка (StubLLMProvider) — контур работает локально.
+# Этап 19 (Ф4): LLM для отчётов ГИПа и RAG-синтеза.
+# По умолчанию — OrcaRouter (OpenAI-совместимый шлюз, free-tier модели);
+# ключ AI_LLM_API_KEY, для работы из РФ — GigaChat (AI_GIGACHAT_*).
+# Без ключей используется заглушка (StubLLMProvider) — контур работает локально.
 AI_LLM_API_KEY = os.environ.get('AI_LLM_API_KEY', '')
-AI_LLM_BASE_URL = os.environ.get('AI_LLM_BASE_URL', 'https://api.deepseek.com/v1')
+AI_LLM_BASE_URL = os.environ.get(
+    'AI_LLM_BASE_URL', 'https://api.orcarouter.ai/v1',
+)
 AI_LLM_MODEL = os.environ.get('AI_LLM_MODEL', 'deepseek-chat')
 AI_LLM_TIMEOUT = int(os.environ.get('AI_LLM_TIMEOUT', '60'))
 
-# Модели, доступные для выбора в UI ИИ-контура (OrcaRouter, free-tier).
-# Выбранная модель уходит в LLMProvider.complete(model=...).
+# Модели, доступные для выбора в UI ИИ-контура (OrcaRouter + GigaChat).
+# Выбранная модель уходит в LLMProvider.complete(model=...): префикс
+# 'GigaChat-' маршрутизируется в GigaChatProvider, остальное — в
+# HttpLLMProvider (OrcaRouter). Порядок определяет порядок в выпадающем
+# списке (зачистка 2026-11-09: один список, дубль в конце файла удалён).
 AI_AVAILABLE_MODELS = [
-    ('deepseek/deepseek-v4.1-flash-free', 'DeepSeek V4.1 Flash (Free)'),
-    ('z-ai/glm-5.3-flash-free', 'GLM 5.3 Flash (Free)'),
+    ('deepseek/deepseek-v4.1-flash-free', 'DeepSeek V4.1 Flash'),
+    ('z-ai/glm-5.3-flash-free', 'GLM 5.3 Flash'),
+    ('GigaChat-2-Max', 'GigaChat-2-Max (Сбер)'),
+    ('GigaChat-3-Pro', 'GigaChat-3-Pro (Сбер)'),
 ]
 
 # GigaChat (Сбер, работа из РФ): AI_LLM_PROVIDER=gigachat включает
@@ -144,19 +153,17 @@ AI_GIGACHAT_TIMEOUT = int(os.environ.get('AI_GIGACHAT_TIMEOUT', '60'))
 # AI_GIGACHAT_VERIFY_SSL=false (осознанно, для dev).
 AI_GIGACHAT_VERIFY_SSL = env_bool('AI_GIGACHAT_VERIFY_SSL', True)
 
-# Этап 19 (Ф4): ежедневные напоминания по незавершённым проверкам.
-# django-celery-beat несовместим с Django 6.1 (требует Django<6.1), поэтому
-# расписание — статическое (встроенный beat). Запуск воркера/beat:
-#   celery -A sod_core worker -l info
-#   celery -A sod_core beat -l info
-from celery.schedules import crontab
+# Этап 19 (Ф4): ежедневные напоминания по незавершённым проверкам —
+# ВЫВЕДЕНЫ (зачистка 2026-11-09): напоминания строились на находках
+# ИИ-нормоконтроля (PendingCheckResult); вместе с моделью удалены задача
+# ai_checks.check_reminders и CELERY_BEAT_SCHEDULE.
 
-CELERY_BEAT_SCHEDULE = {
-    'ai-checks-reminders-daily': {
-        'task': 'ai_checks.check_reminders',
-        'schedule': crontab(hour=8, minute=0),
-    },
-}
+# Эмбеддинги bge-m3 (блок 2 зачистки): локальная папка экспорта
+# (model.onnx + файлы токенизатора). Без модели адаптер падает с
+# понятной ошибкой — SHA-256-заглушки больше нет.
+AI_EMBEDDING_MODEL_DIR = os.environ.get(
+    'AI_EMBEDDING_MODEL_DIR', str(BASE_DIR / 'ml_models' / 'bge-m3'),
+)
 
 
 REST_FRAMEWORK = {
@@ -395,12 +402,3 @@ LOGGING = {
     },
 }
 
-# Доступные LLM-модели для UI-выбора (код → читаемое имя).
-# Порядок определяет порядок в выпадающем списке.
-AI_AVAILABLE_MODELS = [
-    ('GigaChat-2-Max', 'GigaChat-2-Max (Сбер)'),
-    ('GigaChat-3-Pro', 'GigaChat-3-Pro (Сбер)'),
-    ('GigaChat-3-Ultra', 'GigaChat-3-Ultra (Сбер)'),
-    ('deepseek/deepseek-v4.1-flash-free', 'DeepSeek V4.1 Flash (Free)'),
-    ('z-ai/glm-5.3-flash-free', 'GLM 5.3 Flash (Free)'),
-]

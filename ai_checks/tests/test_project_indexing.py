@@ -16,7 +16,6 @@ from django.test import TestCase, override_settings
 from reportlab.lib.utils import simpleSplit
 from reportlab.pdfgen import canvas as rl_canvas
 
-from ai_checks.adapters.embedding_onnx import BgeM3OnnxEmbedding
 from ai_checks.domain.models import ProjectDocumentChunk
 from ai_checks.domain.services import (
     index_project_document,
@@ -24,6 +23,7 @@ from ai_checks.domain.services import (
     reindex_project,
 )
 from ai_checks.tests.base import MediaIsolationMixin
+from ai_checks.tests.mocks import MockEmbeddingService, mock_bge_adapter
 from ai_checks.tests.pdfgen import cyr_font
 from storage.domain.models import (
     Company,
@@ -76,7 +76,9 @@ class ProjectDocumentIndexingTests(MediaIsolationMixin, TestCase):
             project=self.project, code='ОВ', name='Отопление и вентиляция',
             order=1,
         )
-        self.embedding = BgeM3OnnxEmbedding()
+        self.embedding = MockEmbeddingService(dim=1024)
+        # Eager-задачи upload_document идут без DI — мокаем строгий адаптер.
+        mock_bge_adapter(self)
 
     def _upload_pdf(self, pages_text, code='ОВ-01', section=None):
         return upload_document(
@@ -198,6 +200,8 @@ class ReindexTests(MediaIsolationMixin, TestCase):
     """Резервная индексация: reindex_document / reindex_project (треб. 5)."""
 
     def setUp(self):
+        # Мок ДО _make_document: upload уже запускает eager-индексацию.
+        mock_bge_adapter(self)
         self.user = User.objects.create_superuser(
             username='reindex_user', email='ri@example.com',
             password='TestPass123',

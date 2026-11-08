@@ -19,7 +19,7 @@ from django.conf import settings
 from django.contrib.auth.decorators import login_required
 from django.core.paginator import Paginator
 from django.db.models import Count, F
-from django.http import Http404
+from django.http import Http404, HttpResponse
 from django.shortcuts import get_object_or_404, render
 from django.utils import timezone
 from django.views.decorators.cache import never_cache
@@ -32,7 +32,6 @@ from ai_checks.domain.models import (
 )
 from ai_checks.domain.services import (
     KB_CODE_PREFIX,
-    BASE_NORM_LABEL,
     generate_gip_report,
     gip_report_docx,
     gip_report_pdf,
@@ -139,6 +138,11 @@ def rag_search(request, project_id: int):
                 'Векторный поиск доступен только на PostgreSQL. '
                 'Поднимите dev-стек: docker compose -f docker-compose.dev.yml up -d.'
             )
+        except RuntimeError as exc:
+            # Блок 2 зачистки 2026-11-09: адаптер эмбеддингов строгий —
+            # без модели bge-m3/зависимостей он падает с понятной ошибкой
+            # вместо заглушки; показываем её в панели поиска (не 500).
+            error = str(exc)
 
     response = render(request, 'ai_checks/_rag_results.html', {
         'project': project,
@@ -377,7 +381,7 @@ def _report_for_download(request, pk: int):
 @login_required
 @require_GET
 def report_pdf(request, pk: int):
-    """Скачивание отчёта ГИПа в PDF (PyMuPDF)."""
+    """Скачивание отчёта ГИПа в PDF (reportlab, шрифт с кириллицей)."""
     report = _report_for_download(request, pk)
     response = HttpResponse(
         gip_report_pdf(report), content_type='application/pdf',

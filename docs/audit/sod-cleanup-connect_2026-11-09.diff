@@ -1,0 +1,2618 @@
+diff --git a/.env.example b/.env.example
+index ad43136..5be1429 100644
+--- a/.env.example
++++ b/.env.example
+@@ -22,3 +22,27 @@ DJANGO_SECURE_SSL_REDIRECT=True
+ # POSTGRES_PASSWORD=replace-with-a-strong-password
+ # POSTGRES_HOST=127.0.0.1
+ # POSTGRES_PORT=5432
++
++# ИИ-контур (RAG-поиск, база знаний, отчёт ГИПу).
++# Фича-флаг: False — контур выключен (вкладки скрыты, вьюхи отдают 404).
++AI_CHECKS_ENABLED=False
++
++# LLM: OrcaRouter (OpenAI-совместимый шлюз, deepseek/*, z-ai/*) или
++# GigaChat (Сбер, работа из РФ). Модель из UI с префиксом 'GigaChat-'
++# уходит в GigaChatProvider, остальное — в HttpLLMProvider (OrcaRouter).
++# Без ключей работает заглушка StubLLMProvider (контур не падает).
++AI_LLM_API_KEY=
++AI_LLM_BASE_URL=https://api.orcarouter.ai/v1
++AI_LLM_MODEL=deepseek-chat
++AI_LLM_TIMEOUT=60
++# Дефолт-провайдер без явной модели: пусто → OrcaRouter, 'gigachat' → GigaChat.
++AI_LLM_PROVIDER=
++# GigaChat: Authorization Key (Base64), таймаут, TLS (НУЦ Минцифры или false).
++AI_GIGACHAT_AUTH_KEY=
++AI_GIGACHAT_MODEL=GigaChat-2
++AI_GIGACHAT_TIMEOUT=60
++AI_GIGACHAT_VERIFY_SSL=True
++
++# Эмбеддинги bge-m3 (ONNX): папка с model.onnx и токенизатором.
++# Без модели индексация/RAG падают с понятной ошибкой (заглушки нет).
++AI_EMBEDDING_MODEL_DIR=
+diff --git a/.env.production.example b/.env.production.example
+index d1cf5d4..12a2253 100644
+--- a/.env.production.example
++++ b/.env.production.example
+@@ -14,3 +14,12 @@ POSTGRES_USER=sod
+ POSTGRES_PASSWORD=replace-with-a-strong-password
+ POSTGRES_HOST=127.0.0.1
+ POSTGRES_PORT=5432
++
++# ИИ-контур (RAG, база знаний, отчёт ГИПу). См. .env.example.
++AI_CHECKS_ENABLED=False
++AI_LLM_API_KEY=
++AI_LLM_BASE_URL=https://api.orcarouter.ai/v1
++AI_LLM_PROVIDER=
++AI_GIGACHAT_AUTH_KEY=
++AI_GIGACHAT_VERIFY_SSL=True
++AI_EMBEDDING_MODEL_DIR=
+diff --git a/ai_checks/adapters/embedding_onnx.py b/ai_checks/adapters/embedding_onnx.py
+index 9b17b1b..339edbe 100644
+--- a/ai_checks/adapters/embedding_onnx.py
++++ b/ai_checks/adapters/embedding_onnx.py
+@@ -1,25 +1,24 @@
+ """BgeM3OnnxEmbedding — адаптер EmbeddingService (Этап 19, Ф0.2).
+ 
+-Блок 4 бэта-фиксов 2026-11-08: вместо заглушки SHA-256 — реальный
+-ONNX-инференс bge-m3 (dense-представление, 1024, CLS-pooling +
+-L2-нормализация; onnxruntime CPU + токенизатор transformers).
++Блок 2 патча зачистки 2026-11-09: SHA-256-заглушка полностью удалена —
++эмбеддинги считаются только реальным ONNX-инференсом bge-m3 (dense,
++1024, CLS-pooling + L2-нормализация; onnxruntime CPU + токенизатор
++transformers). Векторы заглушки были несравнимы с bge-m3 и портили
++RAG-поиск: смешивание stub- и onnx-чанков в одном индексе давало
++нерелевантные попадания, поэтому «тихая» деградация запрещена.
+ 
+ Модель ожидается локальной папкой (settings.AI_EMBEDDING_MODEL_DIR,
+ по умолчанию <BASE_DIR>/ml_models/bge-m3):
+ - model.onnx              — экспорт BAAI/bge-m3 (ONNX, int8/fp16 опт.);
+ - tokenizer.json и прочие — файлы токенизатора HuggingFace.
+ 
+-Пока папки с моделью нет (или onnxruntime/transformers не установлены),
+-адаптер возвращает прежнюю детерминированную заглушку SHA-256 и логирует
+-warning — контур остаётся работоспособным до скачивания модели. Важно:
+-векторы заглушки и bge-m3 несравнимы — после включения реальной модели
+-нужна переиндексация («Переиндексировать проект»), model_version в БД
+-('bge-m3-stub-v1' / 'bge-m3-onnx-v1') показывает, чем считался чанк.
++Если модель или зависимости (onnxruntime, transformers) недоступны —
++конструктор падает с понятной ошибкой (RuntimeError) вместо тихой
++заглушки: индексация и RAG-поиск требуют реальных векторов bge-m3.
+ """
+ 
+ from __future__ import annotations
+ 
+-import hashlib
+ import logging
+ import os
+ from pathlib import Path
+@@ -39,24 +38,27 @@ MAX_SEQ_TOKENS = 512
+ 
+ 
+ class BgeM3OnnxEmbedding(EmbeddingServicePort):
+-    """bge-m3 (ONNX, CPU): CLS-pooling + L2; fallback — SHA-256 заглушка."""
++    """bge-m3 (ONNX, CPU): CLS-pooling + L2-нормализация, 1024.
++
++    Fail-fast: без model.onnx / onnxruntime / transformers — RuntimeError
++    с инструкцией по установке (никаких детерминированных заглушек).
++    """
+ 
+     def __init__(self, dim: int = 1024, model_dir: str | None = None) -> None:
+         self._dim = dim
+-        self._session = None
+         self._input_names: tuple[str, ...] = ()
+         self._output_name = ''
+         self._tokenizer = None
+-        self._model_ready = False
++        self._session = None
+         self._model_dir = self._resolve_model_dir(model_dir)
+         self._load_model()
+ 
+     # --- контракт EmbeddingService -----------------------------------------
+ 
+     def embed_texts(self, texts: list[str]) -> list[list[float]]:
+-        if self._model_ready:
+-            return self._embed_onnx(texts)
+-        return [self._vector_stub(text) for text in texts]
++        if not texts:
++            return []
++        return self._embed_onnx(texts)
+ 
+     @property
+     def dim(self) -> int:
+@@ -64,7 +66,7 @@ class BgeM3OnnxEmbedding(EmbeddingServicePort):
+ 
+     @property
+     def model_version(self) -> str:
+-        return 'bge-m3-onnx-v1' if self._model_ready else 'bge-m3-stub-v1'
++        return 'bge-m3-onnx-v1'
+ 
+     # --- загрузка модели ------------------------------------------------------
+ 
+@@ -79,31 +81,33 @@ class BgeM3OnnxEmbedding(EmbeddingServicePort):
+         return Path(base_dir) / DEFAULT_MODEL_DIRNAME
+ 
+     def _load_model(self) -> None:
+-        """Ленивая загрузка ONNX-модели и токенизатора (без сети).
++        """Загрузка ONNX-модели и токенизатора; без них — понятная ошибка.
+ 
+-        Любая проблема (нет файла, нет зависимостей, ошибка загрузки)
+-        — это warning и работа на заглушке, не падение процесса.
++        Fail-fast (блок 2): отсутствие модели/зависимостей — это
++        RuntimeError при создании адаптера, а не молчаливая заглушка.
++        Ленивый импорт onnxruntime/transformers сохранён: Django
++        стартует без них, ошибка возникает только при реальном
++        обращении к ИИ-контуру.
+         """
+         model_path = self._model_dir / 'model.onnx'
+         if not model_path.exists():
+-            logger.warning(
+-                'BgeM3OnnxEmbedding: модель bge-m3 не найдена (%s) — '
+-                'используется SHA-256 заглушка. Скачайте экспорт '
+-                'BAAI/bge-m3 в ONNX (см. README блока 4), иначе RAG-поиск '
+-                'будет некачественным.',
+-                model_path,
++            raise RuntimeError(
++                'Эмбеддинги bge-m3 не настроены: не найден '
++                f'{model_path}. Скачайте экспорт BAAI/bge-m3 в ONNX '
++                '(model.onnx + файлы токенизатора) в эту папку или '
++                'укажите путь в переменной AI_EMBEDDING_MODEL_DIR. '
++                'После установки модели переиндексируйте документы '
++                'проекта и базу знаний («Переиндексировать проект»).'
+             )
+-            return
+         try:
+             import onnxruntime as ort
+             from transformers import AutoTokenizer
+         except ImportError as exc:
+-            logger.warning(
+-                'BgeM3OnnxEmbedding: %s — используется SHA-256 заглушка '
+-                '(нужны onnxruntime и transformers из requirements.txt).',
+-                exc,
+-            )
+-            return
++            raise RuntimeError(
++                'Эмбеддинги bge-m3 не настроены: не установлены '
++                f'зависимости ({exc.name}). Выполните '
++                'pip install onnxruntime transformers (см. requirements.txt).'
++            ) from exc
+         try:
+             options = ort.SessionOptions()
+             options.intra_op_num_threads = max(2, int(os.cpu_count() or 2))
+@@ -115,19 +119,20 @@ class BgeM3OnnxEmbedding(EmbeddingServicePort):
+             tokenizer = AutoTokenizer.from_pretrained(
+                 str(self._model_dir), use_fast=True,
+             )
+-        except Exception as exc:  # noqa: BLE001 — деградация лучше падения
+-            logger.warning(
+-                'BgeM3OnnxEmbedding: не удалось загрузить модель (%s): %s',
+-                model_path, exc,
+-            )
+-            return
++        except Exception as exc:  # noqa: BLE001 — оборачиваем в понятную ошибку
++            raise RuntimeError(
++                'Эмбеддинги bge-m3 не загрузились из '
++                f'{self._model_dir}: {exc}. Проверьте целостность '
++                'экспорта (model.onnx совместим с установленным '
++                'onnxruntime, tokenizer.json на месте).'
++            ) from exc
++
+         self._session = session
+         self._output_name = session.get_outputs()[0].name
+         self._input_names = tuple(
+             item.name for item in session.get_inputs()
+         )
+         self._tokenizer = tokenizer
+-        self._model_ready = True
+         logger.info(
+             'BgeM3OnnxEmbedding: модель загружена (%s), выход %s',
+             model_path, self._output_name,
+@@ -176,14 +181,3 @@ class BgeM3OnnxEmbedding(EmbeddingServicePort):
+                 f'ожидалась {self._dim} (проверьте экспорт модели)'
+             )
+         return vectors
+-
+-    # --- прежняя заглушка (fallback) ---------------------------------------------
+-
+-    def _vector_stub(self, text: str) -> list[float]:
+-        """Детерминированный вектор из SHA-256 (значения в [-1, 1])."""
+-        seed = hashlib.sha256(text.encode('utf-8')).digest()
+-        values = []
+-        for index in range(self._dim):
+-            byte = seed[index % len(seed)]
+-            values.append(round((byte / 127.5) - 1.0, 6))
+-        return values
+diff --git a/ai_checks/adapters/llm_http.py b/ai_checks/adapters/llm_http.py
+index 6c8cfae..5580742 100644
+--- a/ai_checks/adapters/llm_http.py
++++ b/ai_checks/adapters/llm_http.py
+@@ -1,8 +1,13 @@
+-"""HTTP-адаптер LLMProvider (Этап 19, Ф4) + заглушка без API-ключа.
++"""HTTP-адаптеры LLMProvider (Этап 19, Ф4) + заглушка без API-ключа.
+ 
+-Провайдер — OpenAI-совместимый chat/completions (DeepSeek по умолчанию).
+-Тексты промптов/ответов в БД не пишутся (приватность) — только метаданные
+-в LLMCallLog. Retry ×3, таймаут 60 с (ARCHITECTURE.md 5.3).
++Два рабочих провайдера (зачистка 2026-11-09, блок «настроить LLM»):
++- OrcaRouter — OpenAI-совместимый шлюз https://api.orcarouter.ai/v1
++  (deepseek/*, z-ai/*, …); ключ — AI_LLM_API_KEY;
++- GigaChat (Сбер, работа из РФ) — OAuth + OpenAI-совместимый API.
++
++Тексты промптов/ответов в БД не пишутся (приватность) — только
++метаданные в LLMCallLog. Retry ×2, таймаут ≤ 12 с (ARCHITECTURE.md 5.3,
++бюджет синхронного вызова < 30 с воркера gunicorn).
+ """
+ 
+ from __future__ import annotations
+@@ -18,9 +23,9 @@ from ai_checks.ports.llm import LLMResponse
+ 
+ 
+ class HttpLLMProvider:
+-    """OpenAI-совместимый HTTP-провайдер (DeepSeek/OpenRouter)."""
++    """OpenAI-совместимый HTTP-провайдер (OrcaRouter/DeepSeek/OpenRouter)."""
+ 
+-    name = 'deepseek'
++    name = 'orcarouter'
+ 
+     def __init__(
+         self,
+@@ -115,14 +120,24 @@ class StubLLMProvider:
+ 
+ 
+ def get_llm_provider(model: str | None = None):
+-    """Фабрика: GigaChat / OpenAI-совместимый HTTP / заглушка.
+-
+-    model из UI (GigaChat-*, deepseek/*, z-ai/*) определяет провайдер.
+-    Если model не передан — дефолт AI_GIGACHAT_MODEL → GigaChatProvider;
+-    без ключа — заглушка.
++    """Фабрика провайдера по имени модели (зачистка 2026-11-09).
++
++    Правила маршрутизации:
++    - model начинается с 'GigaChat-' → GigaChatProvider (Сбер, РФ);
++    - иначе (deepseek/*, z-ai/*, …) → HttpLLMProvider (OrcaRouter);
++    - model не задан → провайдер из AI_LLM_PROVIDER ('gigachat' →
++      GigaChatProvider, иначе OrcaRouter);
++    - нет ключа у выбранного провайдера → заглушка StubLLMProvider.
+     """
+-    # Определяем провайдера по имени модели из UI.
+-    if model is not None and model.startswith('GigaChat-'):
++    use_gigachat = bool(
++        (model or '').startswith('GigaChat-')
++        or (
++            model is None
++            and (getattr(settings, 'AI_LLM_PROVIDER', '') or '') == 'gigachat'
++        )
++    )
++
++    if use_gigachat:
+         auth_key = (
+             getattr(settings, 'AI_GIGACHAT_AUTH_KEY', '') or ''
+         ).strip()
+@@ -132,42 +147,9 @@ def get_llm_provider(model: str | None = None):
+         # = максимум ~25.5 c < 30 c (таймаут воркера gunicorn).
+         return GigaChatProvider(
+             auth_key,
+-            model=model,
+-            timeout=min(
+-                float(getattr(settings, 'AI_GIGACHAT_TIMEOUT', 60)), 12.0,
++            model=model or getattr(
++                settings, 'AI_GIGACHAT_MODEL', 'GigaChat-2',
+             ),
+-            verify_ssl=bool(
+-                getattr(settings, 'AI_GIGACHAT_VERIFY_SSL', True),
+-            ),
+-            retries=2,
+-        )
+-
+-    # OpenAI-совместимые провайдеры (deepseek/*, z-ai/*).
+-    if model is not None and (model.startswith('deepseek/') or model.startswith('z-ai/')):
+-        api_key = (getattr(settings, 'AI_LLM_API_KEY', '') or '').strip()
+-        if not api_key:
+-            return StubLLMProvider()
+-        # Бюджет: 12 c x 2 попытки + паузы ~ 1.5 c = максимум ~25.5 c < 30 c.
+-        timeout = min(float(getattr(settings, 'AI_LLM_TIMEOUT', 60)), 12.0)
+-        return HttpLLMProvider(
+-            api_key=api_key,
+-            base_url=getattr(
+-                settings, 'AI_LLM_BASE_URL', 'https://api.deepseek.com/v1',
+-            ),
+-            model=model,
+-            timeout=timeout,
+-            retries=2,
+-        )
+-
+-    # Дефолт: GigaChat из настроек (обратная совместимость).
+-    auth_key = (
+-        getattr(settings, 'AI_GIGACHAT_AUTH_KEY', '') or ''
+-    ).strip()
+-    if auth_key:
+-        default_model = model or getattr(settings, 'AI_GIGACHAT_MODEL', 'GigaChat-2')
+-        return GigaChatProvider(
+-            auth_key,
+-            model=default_model,
+             timeout=min(
+                 float(getattr(settings, 'AI_GIGACHAT_TIMEOUT', 60)), 12.0,
+             ),
+@@ -177,21 +159,19 @@ def get_llm_provider(model: str | None = None):
+             retries=2,
+         )
+ 
++    # OpenAI-совместимые провайдеры (OrcaRouter: deepseek/*, z-ai/*, …).
+     api_key = (getattr(settings, 'AI_LLM_API_KEY', '') or '').strip()
+-    if api_key:
+-        default_model = model or getattr(settings, 'AI_LLM_MODEL', 'deepseek-chat')
+-        timeout = min(float(getattr(settings, 'AI_LLM_TIMEOUT', 60)), 12.0)
+-        return HttpLLMProvider(
+-            api_key=api_key,
+-            base_url=getattr(
+-                settings, 'AI_LLM_BASE_URL', 'https://api.deepseek.com/v1',
+-            ),
+-            model=default_model,
+-            timeout=timeout,
+-            retries=2,
+-        )
+-
+-    return StubLLMProvider()
++    if not api_key:
++        return StubLLMProvider()
++    return HttpLLMProvider(
++        api_key=api_key,
++        base_url=getattr(
++            settings, 'AI_LLM_BASE_URL', 'https://api.orcarouter.ai/v1',
++        ),
++        model=model or getattr(settings, 'AI_LLM_MODEL', 'deepseek-chat'),
++        timeout=min(float(getattr(settings, 'AI_LLM_TIMEOUT', 60)), 12.0),
++        retries=2,
++    )
+ 
+ 
+ class GigaChatProvider:
+diff --git a/ai_checks/domain/models.py b/ai_checks/domain/models.py
+index 2d34ec3..474206e 100644
+--- a/ai_checks/domain/models.py
++++ b/ai_checks/domain/models.py
+@@ -1,11 +1,14 @@
+ """Модели ИИ-контура (Этап 19, ARCHITECTURE.md 3.2).
+ 
+ Только добавление: существующие модели storage/issues не изменяются.
+-Ф0.1: LLMCallLog и CheckRun (CheckRun — обязательная FK-цель для
+-LLMCallLog.check_run). Ф0.2: InternalDocument и InternalChunk
+-(источники знаний, tenant_scope по 8.2). Остальные модели — в Ф1.
+-Финальная архитектура ИИ-контура: ProjectDocumentChunk (чанки PDF-версий
+-документов проекта, треб. 1) и RagQuery (история ИИ-поиска, треб. 2).
++Ф0.2: InternalDocument и InternalChunk (источники знаний, tenant_scope
++по 8.2). Финальная архитектура ИИ-контура: ProjectDocumentChunk (чанки
++PDF-версий документов проекта, треб. 1) и RagQuery (история ИИ-поиска,
++треб. 2), GeneratedReport (отчёт ГИПу) и LLMCallLog (журнал вызовов).
++
++Зачистка 2026-11-09: ИИ-нормоконтроль СПДС выведен из эксплуатации —
++модели RuleDefinition, CheckRun, PendingCheckResult и ReminderRule
++удалены (миграция 0013); остался RAG-поиск, база знаний и отчёт ГИПу.
+ """
+ 
+ from __future__ import annotations
+@@ -302,203 +305,6 @@ class RagQuery(models.Model):
+         return f'RagQuery #{self.pk} ({self.question[:40]})'
+ 
+ 
+-class RuleDefinition(models.Model):
+-    """Правило проверки (ARCHITECTURE.md 3.2, этап Ф1).
+-
+-    В MVP правила глобальные (tenant_scope=global); tenant-поля заложены
+-    сразу по 8.2. Structural-правила (pypdfium2: рамка/штамп/шрифт)
+-    исполняются движком по коду из ai_checks/domain/rules.py; rule_kind
+-    хранит спековую классификацию источника правила (regex/keyword/manual).
+-    """
+-
+-    class RuleKind(models.TextChoices):
+-        REGEX = 'regex', 'Регулярное выражение'
+-        KEYWORD = 'keyword', 'Ключевые слова'
+-        MANUAL = 'manual', 'Ручное/структурное'
+-
+-    class Severity(models.TextChoices):
+-        BLOCKER = 'blocker', 'Блокирующее'
+-        MAJOR = 'major', 'Значительное'
+-        MINOR = 'minor', 'Незначительное'
+-        INFO = 'info', 'Информация'
+-
+-    code = models.CharField(
+-        max_length=100, unique=True, verbose_name='Код правила',
+-    )
+-    title = models.CharField(max_length=255, verbose_name='Название')
+-    body = models.TextField(verbose_name='Формулировка правила')
+-    # Бэта-фикс 2026-11-08, блок 2: полное нормативное обоснование
+-    # («ГОСТ 21.613-2014, п. 5.2»), показывается в панели проверки.
+-    norm_ref = models.CharField(
+-        max_length=200,
+-        blank=True,
+-        default='',
+-        verbose_name='Нормативное обоснование',
+-    )
+-    rule_kind = models.CharField(
+-        max_length=10, choices=RuleKind.choices, verbose_name='Вид правила',
+-    )
+-    pattern = models.JSONField(
+-        null=True, blank=True, verbose_name='Regex/ключевые слова',
+-    )
+-    category = models.CharField(
+-        max_length=50, blank=True, verbose_name='Группа',
+-    )
+-    severity = models.CharField(
+-        max_length=10, choices=Severity.choices, verbose_name='Критичность',
+-    )
+-    is_active = models.BooleanField(default=True, verbose_name='Активно')
+-    version = models.PositiveIntegerField(
+-        default=1, verbose_name='Версия формулировки',
+-    )
+-    tenant_scope = models.CharField(
+-        max_length=10,
+-        choices=InternalDocument.TenantScope.choices,
+-        default=InternalDocument.TenantScope.GLOBAL,
+-        verbose_name='Уровень видимости',
+-    )
+-    company = models.ForeignKey(
+-        'storage.Company',
+-        null=True,
+-        blank=True,
+-        on_delete=models.CASCADE,
+-        related_name='ai_rule_definitions',
+-        verbose_name='Компания',
+-    )
+-    project = models.ForeignKey(
+-        'storage.Project',
+-        null=True,
+-        blank=True,
+-        on_delete=models.CASCADE,
+-        related_name='ai_rule_definitions',
+-        verbose_name='Проект',
+-    )
+-    created_by = models.ForeignKey(
+-        settings.AUTH_USER_MODEL,
+-        null=True,
+-        blank=True,
+-        on_delete=models.SET_NULL,
+-        related_name='ai_rule_definitions',
+-        verbose_name='Создал',
+-    )
+-    created_at = models.DateTimeField(
+-        auto_now_add=True, verbose_name='Создан',
+-    )
+-    updated_at = models.DateTimeField(
+-        auto_now=True, verbose_name='Обновлён',
+-    )
+-
+-    class Meta:
+-        verbose_name = 'Правило проверки'
+-        verbose_name_plural = 'Правила проверки'
+-        ordering = ['code']
+-        constraints = [
+-            # Как у InternalDocument (8.2): обязательные поля по tenant_scope.
+-            models.CheckConstraint(
+-                condition=(
+-                    models.Q(tenant_scope='global')
+-                    & models.Q(company__isnull=True)
+-                    & models.Q(project__isnull=True)
+-                ) | (
+-                    models.Q(tenant_scope='company')
+-                    & models.Q(company__isnull=False)
+-                    & models.Q(project__isnull=True)
+-                ) | (
+-                    models.Q(tenant_scope='project')
+-                    & models.Q(project__isnull=False)
+-                ),
+-                name='ai_rule_definition_tenant_scope',
+-            ),
+-        ]
+-
+-    def __str__(self) -> str:
+-        return f'{self.code} — {self.title}'
+-
+-
+-class PendingCheckResult(models.Model):
+-    """Находка прогона проверки (ARCHITECTURE.md 3.2, этап Ф1)."""
+-
+-    class Status(models.TextChoices):
+-        PENDING = 'pending', 'На проверке'
+-        CONFIRMED = 'confirmed', 'Подтверждена'
+-        REJECTED = 'rejected', 'Отклонена'
+-        EDITED = 'edited', 'Отредактирована'
+-
+-    check_run = models.ForeignKey(
+-        'CheckRun',
+-        on_delete=models.CASCADE,
+-        related_name='results',
+-        verbose_name='Прогон',
+-    )
+-    rule = models.ForeignKey(
+-        RuleDefinition,
+-        null=True,
+-        blank=True,
+-        on_delete=models.PROTECT,
+-        related_name='pending_results',
+-        verbose_name='Правило',
+-    )
+-    status = models.CharField(
+-        max_length=10,
+-        choices=Status.choices,
+-        default=Status.PENDING,
+-        verbose_name='Статус',
+-    )
+-    severity = models.CharField(
+-        max_length=10,
+-        choices=RuleDefinition.Severity.choices,
+-        verbose_name='Критичность (снимок)',
+-    )
+-    confidence = models.DecimalField(
+-        max_digits=3,
+-        decimal_places=2,
+-        null=True,
+-        blank=True,
+-        verbose_name='Уверенность',
+-    )
+-    page = models.PositiveIntegerField(
+-        null=True, blank=True, verbose_name='Страница',
+-    )
+-    bbox = models.JSONField(
+-        null=True, blank=True, verbose_name='Координаты [x0, y0, x1, y1]',
+-    )
+-    message = models.TextField(verbose_name='Что найдено')
+-    evidence = models.TextField(blank=True, verbose_name='Цитата-основание')
+-    model_name = models.CharField(
+-        max_length=100, blank=True, verbose_name='Модель',
+-    )
+-    prompt_version = models.CharField(
+-        max_length=100, blank=True, verbose_name='Версия промпта',
+-    )
+-    llm_call = models.ForeignKey(
+-        'LLMCallLog',
+-        null=True,
+-        blank=True,
+-        on_delete=models.SET_NULL,
+-        related_name='pending_results',
+-        verbose_name='Вызов LLM',
+-    )
+-    reviewed_by = models.ForeignKey(
+-        settings.AUTH_USER_MODEL,
+-        null=True,
+-        blank=True,
+-        on_delete=models.SET_NULL,
+-        related_name='reviewed_check_results',
+-        verbose_name='Провалидировал',
+-    )
+-    reviewed_at = models.DateTimeField(
+-        null=True, blank=True, verbose_name='Когда провалидировал',
+-    )
+-
+-    class Meta:
+-        verbose_name = 'Находка проверки'
+-        verbose_name_plural = 'Находки проверки'
+-        ordering = ['check_run', 'id']
+-
+-    def __str__(self) -> str:
+-        return f'Находка #{self.pk} ({self.get_status_display()})'
+-
+-
+ class GeneratedReport(models.Model):
+     """Сгенерированный отчёт для ГИПа (ARCHITECTURE.md, дополнение к 7).
+ 
+@@ -548,123 +354,6 @@ class GeneratedReport(models.Model):
+         return f'Отчёт #{self.pk} ({self.period})'
+ 
+ 
+-class ReminderRule(models.Model):
+-    """Правило напоминаний по незавершённым находкам (дополнение к 7)."""
+-
+-    class Audience(models.TextChoices):
+-        GIP = 'gip', 'ГИП проекта'
+-        ADMIN = 'admin', 'Администратор компании'
+-
+-    code = models.CharField(
+-        max_length=100, unique=True, verbose_name='Код правила',
+-    )
+-    offset_days = models.PositiveIntegerField(
+-        default=7, verbose_name='Через сколько дней напоминать',
+-    )
+-    audience = models.CharField(
+-        max_length=10,
+-        choices=Audience.choices,
+-        default=Audience.GIP,
+-        verbose_name='Кому',
+-    )
+-    is_active = models.BooleanField(default=True, verbose_name='Активно')
+-
+-    class Meta:
+-        verbose_name = 'Правило напоминаний'
+-        verbose_name_plural = 'Правила напоминаний'
+-        ordering = ['code']
+-
+-    def __str__(self) -> str:
+-        return f'{self.code} (+{self.offset_days} дн.)'
+-
+-
+-class CheckRun(models.Model):
+-    """Прогон проверки версии документа (ARCHITECTURE.md 3.2, Ф1).
+-
+-    В Ф0.1 модель создаётся как инфраструктурная зависимость LLMCallLog;
+-    движок правил появится в Ф1. Мультитенантность наследуется от
+-    document_version → document → project (собственных tenant-полей нет).
+-    """
+-
+-    class Status(models.TextChoices):
+-        QUEUED = 'queued', 'В очереди'
+-        RUNNING = 'running', 'Выполняется'
+-        DONE = 'done', 'Завершён'
+-        FAILED = 'failed', 'Ошибка'
+-        CANCELED = 'canceled', 'Отменён'
+-
+-    document_version = models.ForeignKey(
+-        'storage.DocumentVersion',
+-        on_delete=models.PROTECT,
+-        related_name='check_runs',
+-        verbose_name='Версия документа',
+-    )
+-    initiated_by = models.ForeignKey(
+-        settings.AUTH_USER_MODEL,
+-        on_delete=models.PROTECT,
+-        related_name='check_runs',
+-        verbose_name='Инициатор',
+-    )
+-    status = models.CharField(
+-        max_length=10,
+-        choices=Status.choices,
+-        default=Status.QUEUED,
+-        verbose_name='Статус',
+-    )
+-    engine_version = models.CharField(
+-        max_length=50,
+-        blank=True,
+-        verbose_name='Версия движка (правила/промпты)',
+-    )
+-    # Бэта-фикс 2026-11-08, блок 3: проверка по листу и «Проверка по»
+-    # (базовый ГОСТ Р 21.101-2026 или внутренний стандарт).
+-    page_number = models.PositiveIntegerField(
+-        null=True,
+-        blank=True,
+-        verbose_name='Проверенный лист',
+-    )
+-    norm_source = models.ForeignKey(
+-        'ai_checks.InternalDocument',
+-        null=True,
+-        blank=True,
+-        on_delete=models.SET_NULL,
+-        related_name='check_runs',
+-        verbose_name='Нормативный источник проверки',
+-    )
+-    norm_source_label = models.CharField(
+-        max_length=255,
+-        blank=True,
+-        default='',
+-        verbose_name='Проверка по (норматив) — снимок названия',
+-    )
+-    rules_total = models.PositiveIntegerField(
+-        default=0, verbose_name='Всего правил',
+-    )
+-    findings_total = models.PositiveIntegerField(
+-        default=0, verbose_name='Всего находок',
+-    )
+-    meta = models.JSONField(
+-        default=dict, blank=True, verbose_name='Параметры прогона',
+-    )
+-    started_at = models.DateTimeField(
+-        null=True, blank=True, verbose_name='Начат',
+-    )
+-    finished_at = models.DateTimeField(
+-        null=True, blank=True, verbose_name='Завершён',
+-    )
+-    created_at = models.DateTimeField(
+-        auto_now_add=True, verbose_name='Создан',
+-    )
+-
+-    class Meta:
+-        verbose_name = 'Прогон проверки'
+-        verbose_name_plural = 'Прогоны проверок'
+-        ordering = ['-created_at']
+-
+-    def __str__(self) -> str:
+-        return f'CheckRun #{self.pk} ({self.get_status_display()})'
+-
+-
+ class LLMCallLog(models.Model):
+     """Журнал вызовов LLM (ARCHITECTURE.md 3.2, Этап 19).
+ 
+@@ -673,7 +362,6 @@ class LLMCallLog(models.Model):
+     """
+ 
+     class Purpose(models.TextChoices):
+-        CHECK_EXPLAIN = 'check_explain', 'Объяснение находки'
+         RAG_ANSWER = 'rag_answer', 'Ответ RAG'
+         GIP_REPORT = 'gip_report', 'Отчёт ГИПа'
+ 
+@@ -720,14 +408,6 @@ class LLMCallLog(models.Model):
+     prompt_version = models.CharField(
+         max_length=50, blank=True, verbose_name='Версия промпта',
+     )
+-    check_run = models.ForeignKey(
+-        CheckRun,
+-        null=True,
+-        blank=True,
+-        on_delete=models.SET_NULL,
+-        related_name='llm_calls',
+-        verbose_name='Прогон',
+-    )
+     user = models.ForeignKey(
+         settings.AUTH_USER_MODEL,
+         null=True,
+diff --git a/ai_checks/domain/rules.py b/ai_checks/domain/rules.py
+deleted file mode 100644
+index 55ea9d4..0000000
+--- a/ai_checks/domain/rules.py
++++ /dev/null
+@@ -1,436 +0,0 @@
+-"""Детерминированные правила проверки листов (этап Ф1, без LLM).
+-
+-Каждое правило — функция от обёртки страницы pypdfium2
+-(ai_checks.pdfium_tools.PdfPageView), возвращающая список
+-находок-словарей: {page, bbox, message, severity, evidence}.
+-bbox — координаты в пунктах [x0, y0, x1, y1] по ARCHITECTURE 3.2
+-(неповёрнутая система, TL-начало — как в PyMuPDF, ради вьювера).
+-
+-Движок (services.run_rules_check) сопоставляет RuleDefinition.code →
+-функция из RULE_CHECKS. Structural-правила (рамка/штамп/шрифт) — код;
+-rule_kind в БД хранит спековую классификацию (regex/keyword/manual).
+-"""
+-
+-from __future__ import annotations
+-
+-from typing import Callable
+-
+-from ai_checks.pdfium_tools import Rect
+-
+-# 2.5 мм в пунктах (1 pt = 25.4 / 72 мм).
+-MIN_FONT_MM = 2.5
+-MIN_FONT_PT = MIN_FONT_MM * 72.0 / 25.4  # ≈ 7.087 pt
+-
+-# Доли страницы для зоны основной надписи (правый нижний угол).
+-STAMP_ZONE_X = 0.6
+-STAMP_ZONE_Y = 0.7
+-
+-# Доля площади зоны штампа, которую должно закрыть растровое
+-# изображение, чтобы правило сочло штамп «растровым» (блок 1: скан
+-# листа/штампа не даёт ни векторной геометрии, ни текста).
+-STAMP_RASTER_COVERAGE = 0.8
+-
+-# Допуск для линий рамки и границы краёв (доли страницы).
+-FRAME_EDGE_TOLERANCE = 0.08
+-LINE_TOLERANCE_PT = 1.5
+-
+-
+-def _page_finding(page, bbox, message, severity, evidence='') -> dict:
+-    return {
+-        'page': page.number + 1,
+-        'bbox': (
+-            [round(float(value), 2) for value in bbox]
+-            if bbox is not None else None
+-        ),
+-        'message': message,
+-        'severity': severity,
+-        'evidence': evidence,
+-    }
+-
+-
+-def check_frame(page) -> list[dict]:
+-    """SPDS.RAME: наличие внешней рамки листа.
+-
+-    Рамка считается найденной, если есть длинная горизонтальная линия
+-    у верхнего И нижнего края и длинная вертикальная — у левого И правого.
+-
+-    Бэта-фикс 2026-11-08, блок 1: зона считается по mu_rect (MediaBox в
+-    MU-координатах геометрии), а не по page.rect — при /Rotate 90/270
+-    отображаемые размеры подменяют стороны, и рамка «терялась».
+-    """
+-    rect = page.mu_rect
+-    width = max(rect.width, 1.0)
+-    height = max(rect.height, 1.0)
+-    edge_x = width * FRAME_EDGE_TOLERANCE
+-    edge_y = height * FRAME_EDGE_TOLERANCE
+-    min_horizontal = width * 0.8
+-    min_vertical = height * 0.8
+-
+-    top = bottom = left = right = False
+-    for x0, y0, x1, y1 in page.iter_line_segments():
+-        if abs(y1 - y0) <= LINE_TOLERANCE_PT and abs(x1 - x0) >= min_horizontal:
+-            edge = (y0 + y1) / 2.0
+-            if edge <= rect.y0 + edge_y:
+-                top = True
+-            if edge >= rect.y1 - edge_y:
+-                bottom = True
+-        if abs(x1 - x0) <= LINE_TOLERANCE_PT and abs(y1 - y0) >= min_vertical:
+-            edge = (x0 + x1) / 2.0
+-            if edge <= rect.x0 + edge_x:
+-                left = True
+-            if edge >= rect.x1 - edge_x:
+-                right = True
+-
+-    # Блок 1: часть CAD-экспортов собирает лист клипом из композиции с
+-    # координатами за пределами MediaBox — рамка есть визуально, но её
+-    # линии в path-геометрии «уезжают» за край или лежат вне листа
+-    # (файл 4400_ОВ, лист 3: линия длиной 9331 pt при ширине листа
+-    # 1191 pt, x до 9810). Если path-геометрия выходит за пределы
+-    # листа, рамку достоверно оценить нельзя — не помечаем (fail-open,
+-    # как растровый штамп).
+-    offscale = False
+-    if not (top and bottom and left and right):
+-        margin = max(rect.width, rect.height) * 0.1
+-        for x0, y0, x1, y1 in page.iter_line_segments():
+-            if (
+-                x0 < rect.x0 - margin or x1 > rect.x1 + margin
+-                or y0 < rect.y0 - margin or y1 > rect.y1 + margin
+-            ):
+-                offscale = True
+-                break
+-        if not offscale:
+-            for box in page.iter_rects():
+-                if (
+-                    box.x0 < rect.x0 - margin or box.x1 > rect.x1 + margin
+-                    or box.y0 < rect.y0 - margin
+-                    or box.y1 > rect.y1 + margin
+-                ):
+-                    offscale = True
+-                    break
+-        if offscale:
+-            return []
+-
+-    if top and bottom and left and right:
+-        return []
+-    missing = [
+-        name for name, found in (
+-            ('верх', top), ('низ', bottom),
+-            ('лево', left), ('право', right),
+-        ) if not found
+-    ]
+-    # bbox = None: рамка — свойство всего листа, выделять прямоугольником
+-    # всю страницу не нужно (находка уровня страницы; пин встанет в центр).
+-    return [_page_finding(
+-        page,
+-        None,
+-        'Не найдена рамка листа (СПДС)',
+-        'major',
+-        evidence='Отсутствуют линии: ' + ', '.join(missing),
+-    )]
+-
+-
+-# Характерные надписи ГОСТ-штампа (документация реальных чертежей:
+-# текст «Основная надпись» в штампе не встречается — это его название).
+-# «кол.уч»/«№док»/«подп.» — колонки формы 3 (титульные листы).
+-STAMP_LABELS = (
+-    'стадия',
+-    'лист',
+-    'листов',
+-    'масштаб',
+-    'разраб',
+-    'пров',
+-    'н.контр',
+-    'нормоконтр',
+-    'гип',
+-    'утв',
+-    'шифр',
+-    'изм.',
+-    'кол.уч',
+-    '№док',
+-    'подп.',
+-)
+-
+-# Минимумы структуры таблицы штампа (тонкие линии, ГОСТ 21.101).
+-STAMP_MIN_H_LINES = 6
+-STAMP_MIN_V_LINES = 4
+-
+-# Блок 1: минимум объектов страницы, целиком лежащих в зоне штампа
+-# (границы ячеек таблицы штампа лежат внутри зоны, а рамка листа и
+-# линии чертежа её пересекают). Catch-all для экспортов, где штамп
+-# нарисован shading-объектами/кривыми, невидимыми для path-фильтра.
+-STAMP_MIN_INNER_OBJECTS = 6
+-
+-
+-def _segment_hits_zone(x0, y0, x1, y1, zone) -> bool:
+-    """Пересечение сегмента с зоной (интервалы; сегменты нулевой толщины)."""
+-    seg_x0, seg_x1 = min(x0, x1), max(x0, x1)
+-    seg_y0, seg_y1 = min(y0, y1), max(y0, y1)
+-    return (
+-        seg_x1 >= zone.x0 and seg_x0 <= zone.x1
+-        and seg_y1 >= zone.y0 and seg_y0 <= zone.y1
+-    )
+-
+-
+-def _rect_intersection_area(a: Rect, b: Rect) -> float:
+-    """Площадь пересечения двух оси-выровненных прямоугольников."""
+-    width = min(a.x1, b.x1) - max(a.x0, b.x0)
+-    height = min(a.y1, b.y1) - max(a.y0, b.y0)
+-    if width <= 0 or height <= 0:
+-        return 0.0
+-    return width * height
+-
+-
+-def _zone_labels_via_runs(page, zone: Rect) -> set[str]:
+-    """Меток штампа по текстовым спанам в зоне (блок 1, fallback).
+-
+-    GigaCode: iter_line_segments()/iter_rects() видят только top-level
+-    PATH-объекты; текст же штампа может лежать в Form XObject или
+-    контент-стриме, а get_text(clip) требует полного попадания границ
+-    в clip. Спаны из iter_text_runs() перебираются с допуском 5% стороны
+-    листа: частично выступающий за зону спан «Стадия» — не повод
+-    для ложного срабатывания.
+-    """
+-    labels: set[str] = set()
+-    rect = page.mu_rect
+-    loose = Rect(
+-        zone.x0 - rect.width * 0.05,
+-        zone.y0 - rect.height * 0.05,
+-        zone.x1 + rect.width * 0.05,
+-        zone.y1 + rect.height * 0.05,
+-    )
+-    for run in page.iter_text_runs():
+-        text = ' '.join(
+-            (run['text'] or '').replace('\xa0', ' ').split(),
+-        ).casefold()
+-        if not text:
+-            continue
+-        x0, y0, x1, y1 = run['bbox']
+-        if x1 < loose.x0 or x0 > loose.x1 or y1 < loose.y0 or y0 > loose.y1:
+-            continue
+-        for label in STAMP_LABELS:
+-            if label in text:
+-                labels.add(label)
+-    return labels
+-
+-
+-def _zone_raster_stamp(page, zone: Rect) -> bool:
+-    """Растровый штамп: изображение закрывает зону (блок 1, fallback).
+-
+-    Скан листа или штамп «в растр» не дают ни геометрии, ни текста —
+-    единственный видимый объект в зоне растровое изображение.
+-    """
+-    zone_area = zone.width * zone.height
+-    if zone_area <= 0:
+-        return False
+-    for image in page.iter_images():
+-        overlap = _rect_intersection_area(image, zone)
+-        if overlap / zone_area >= STAMP_RASTER_COVERAGE:
+-            return True
+-    return False
+-
+-
+-def _displayed_point_to_mu(page, x_disp: float, y_disp: float) -> tuple[float, float]:
+-    """Точка ОТОБРАЖАЕМОГО листа (пункты) → MU-координаты (блок 1).
+-
+-    Обратное преобразование к повороту страницы: штамп ищется в правом
+-    нижнем углу ОТОБРАЖАЕМОГО листа, а геометрия/текст живут в
+-    неповёрнутой (MU) системе — при /Rotate 90/180/270 угол не совпадает.
+-    """
+-    mu = page.mu_rect
+-    rotation = int(page.rotation or 0) % 360
+-    if rotation == 90:
+-        return (y_disp, mu.height - x_disp)
+-    if rotation == 180:
+-        return (mu.width - x_disp, mu.height - y_disp)
+-    if rotation == 270:
+-        return (mu.width - y_disp, x_disp)
+-    return (x_disp, y_disp)
+-
+-
+-def _displayed_zone_to_mu(
+-    page, x0_frac: float, y0_frac: float, x1_frac: float, y1_frac: float,
+-) -> Rect:
+-    """Зона в долях ОТОБРАЖАЕМОГО листа → MU-координаты (блок 1)."""
+-    disp = page.rect
+-    ax, ay = _displayed_point_to_mu(
+-        page, disp.width * x0_frac, disp.height * y0_frac,
+-    )
+-    bx, by = _displayed_point_to_mu(
+-        page, disp.width * x1_frac, disp.height * y1_frac,
+-    )
+-    return Rect(
+-        min(ax, bx), min(ay, by), max(ax, bx), max(ay, by),
+-    )
+-
+-
+-def _zone_inner_objects(page, zone: Rect) -> int:
+-    """Объектов страницы, целиком лежащих в зоне штампа (блок 1).
+-
+-    Стоп после STAMP_MIN_INNER_OBJECTS — кропотливый полный подсчёт
+-    не нужен, страница с таблицей штампа даёт сотни объектов внутри
+-    зоны (4400_ОВ, лист 4: 1299).
+-    """
+-    count = 0
+-    for bounds in page.iter_object_bounds():
+-        if (
+-            bounds.x0 >= zone.x0 and bounds.x1 <= zone.x1
+-            and bounds.y0 >= zone.y0 and bounds.y1 <= zone.y1
+-        ):
+-            count += 1
+-            if count >= STAMP_MIN_INNER_OBJECTS:
+-                return count
+-    return count
+-
+-
+-def check_stamp(page) -> list[dict]:
+-    """SPDS.STAMP: наличие основной надписи (штамп СПДС).
+-
+-    Штамп реального чертежа — таблица тонких линий в правом нижнем углу
+-    (часто нарисованных прямоугольниками-штрихами), с полями «Стадия»,
+-    «Лист», «Листов», «Масштаб» и т.п. Признаки (любой):
+-    1) исторический текст «Основная надпись»;
+-    2) ≥2 характерные надписи ГОСТ-штампа в зоне;
+-    3) структура таблицы: ≥6 горизонтальных и ≥4 вертикальных тонких
+-       линий в зоне;
+-    4) рамка штампа, примыкающая к правому нижнему углу листа.
+-
+-    Бэта-фикс 2026-11-08, блок 1 (ложные срабатывания):
+-    - зона считается в MU-координатах через поворот страницы — правый
+-      нижний угол ОТОБРАЖАЕМОГО листа (page.rect зона уезжала);
+-    - если векторная геометрия штамп не подтверждает, применяются
+-      fallback: текстовые спаны в зоне (iter_text_runs), растровое
+-      изображение, закрывающее зону (скан/экспорт в растр), объекты,
+-      целиком лежащие в зоне (штамп shading-объектами/кривыми), и
+-      форма 3 титульного листа (штамп в левом нижнем углу).
+-    """
+-    rect = page.mu_rect
+-    zone = _displayed_zone_to_mu(
+-        page, STAMP_ZONE_X, STAMP_ZONE_Y, 1.0, 1.0,
+-    )
+-
+-    text = page.get_text(clip=zone) or ''
+-    # pdfium может отдавать неразрывные пробелы (\xa0) — нормализуем.
+-    normalized = ' '.join(text.replace('\xa0', ' ').split()).casefold()
+-    if 'основная надпись' in normalized:
+-        return []
+-
+-    matched_labels = {label for label in STAMP_LABELS if label in normalized}
+-    if len(matched_labels) >= 2:
+-        return []
+-
+-    horizontal = vertical = 0
+-    attached_box = False
+-    min_box_width = rect.width * 0.25
+-    min_box_height = rect.height * 0.03
+-    max_box_height = rect.height * 0.35
+-    edge_tolerance = rect.width * 0.05
+-    # Правый нижний угол ОТОБРАЖАЕМОГО листа в MU-координатах (блок 1):
+-    # рамка штампа должна примыкать к нему независимо от /Rotate.
+-    corner_x, corner_y = _displayed_point_to_mu(
+-        page, page.rect.width, page.rect.height,
+-    )
+-
+-    for x0, y0, x1, y1 in page.iter_line_segments():
+-        if not _segment_hits_zone(x0, y0, x1, y1, zone):
+-            continue
+-        if abs(y1 - y0) <= LINE_TOLERANCE_PT and abs(x1 - x0) >= 20:
+-            horizontal += 1
+-        elif abs(x1 - x0) <= LINE_TOLERANCE_PT and abs(y1 - y0) >= 20:
+-            vertical += 1
+-
+-    for box in page.iter_rects():
+-        if (
+-            box.width >= min_box_width
+-            and min_box_height <= box.height <= max_box_height
+-            and box.x0 - edge_tolerance <= corner_x <= box.x1 + edge_tolerance
+-            and box.y0 - edge_tolerance <= corner_y <= box.y1 + edge_tolerance
+-        ):
+-            attached_box = True
+-
+-    if horizontal >= STAMP_MIN_H_LINES and vertical >= STAMP_MIN_V_LINES:
+-        return []
+-    if attached_box:
+-        return []
+-
+-    # Fallback (блок 1): геометрия штамп не подтверждает — ищем текст
+-    # спанами, растровое изображение и объекты, целиком лежащие в зоне
+-    # (штамп, нарисованный shading-объектами/кривыми).
+-    run_labels = _zone_labels_via_runs(page, zone)
+-    if len(matched_labels | run_labels) >= 2:
+-        return []
+-    if _zone_raster_stamp(page, zone):
+-        return []
+-
+-    inner_count = _zone_inner_objects(page, zone)
+-    if inner_count >= STAMP_MIN_INNER_OBJECTS:
+-        return []
+-
+-    # Форма 3 титульного листа (блок 1): основная надпись на титульных
+-    # листах располагается в ЛЕВОМ нижнем углу. Второй шанс — только
+-    # текстовые метки (без catch-all по объектам: плотный чертёж слева
+-    # внизу не должен проходить за штамп).
+-    left_zone = _displayed_zone_to_mu(
+-        page, 0.0, STAMP_ZONE_Y, 1 - STAMP_ZONE_X, 1.0,
+-    )
+-    left_text = page.get_text(clip=left_zone) or ''
+-    left_norm = ' '.join(left_text.replace('\xa0', ' ').split()).casefold()
+-    if 'основная надпись' in left_norm:
+-        return []
+-    left_labels = {label for label in STAMP_LABELS if label in left_norm}
+-    left_labels |= _zone_labels_via_runs(page, left_zone)
+-    if len(left_labels) >= 2:
+-        return []
+-
+-    return [_page_finding(
+-        page,
+-        [zone.x0, zone.y0, zone.x1, zone.y1],
+-        'Не найдена основная надпись (штамп)',
+-        'major',
+-        evidence=(
+-            'В правом нижнем углу нет штампа СПДС '
+-            f'(надписей: {len(matched_labels | run_labels)}, '
+-            f'линий: {horizontal}/{vertical}, '
+-            f'объектов в зоне: {inner_count}; '
+-            'форма 3 титульного листа (левый угол) тоже не найдена)'
+-        ),
+-    )]
+-
+-
+-def check_font(page) -> list[dict]:
+-    """SPDS.FONT: минимальная высота шрифта основного текста ≥ 2.5 мм.
+-
+-    Штамп (правый нижний угол) исключается — его надписи регламентируются
+-    отдельно; проверяются прозаические текстовые спаны.
+-    """
+-    rect = page.mu_rect  # MU-система координат спанов (см. check_frame)
+-    stamp_x0 = rect.x0 + rect.width * STAMP_ZONE_X
+-    stamp_y0 = rect.y0 + rect.height * STAMP_ZONE_Y
+-
+-    findings: list[dict] = []
+-    for run in page.iter_text_runs():
+-        text = (run['text'] or '').strip()
+-        if not text:
+-            continue
+-        x0, y0, x1, y1 = run['bbox']
+-        if x0 >= stamp_x0 and y0 >= stamp_y0:
+-            continue
+-        size = float(run['size'] or 0.0)
+-        if size and size < MIN_FONT_PT - 0.01:
+-            millimeters = size * 25.4 / 72.0
+-            findings.append(_page_finding(
+-                page,
+-                [x0, y0, x1, y1],
+-                f'Высота шрифта {millimeters:.1f} мм меньше '
+-                f'{MIN_FONT_MM} мм (СПДС)',
+-                'minor',
+-                evidence=text[:120],
+-            ))
+-    return findings
+-
+-
+-# Реестр правил: RuleDefinition.code → проверка страницы.
+-RULE_CHECKS: dict[str, Callable] = {
+-    'SPDS.RAME': check_frame,
+-    'SPDS.STAMP': check_stamp,
+-    'SPDS.FONT': check_font,
+-}
+diff --git a/ai_checks/domain/services.py b/ai_checks/domain/services.py
+index 5c54871..ae01fa9 100644
+--- a/ai_checks/domain/services.py
++++ b/ai_checks/domain/services.py
+@@ -1,24 +1,26 @@
+-"""Домен ИИ-контура: бизнес-логика Ф0.2 — индексация источников знаний.
++"""Домен ИИ-контура: индексация, RAG-поиск, база знаний, отчёт ГИПу.
+ 
+ Контракт (ARCHITECTURE.md 8.4): pypdfium2 извлекает текст и страницы,
+-текст режется на чанки с перекрытием, векторы пишутся в InternalChunk.
+-Сервис не знает про HTTP/UI/Celery — только домен и ORM.
++текст режется на чанки с перекрытием, векторы пишутся в InternalChunk /
++ProjectDocumentChunk (bge-m3, 1024, L2). Сервис не знает про HTTP/UI/
++Celery — только домен и ORM.
+ 
+-Финальная архитектура ИИ-контура (этап 20):
+-- index_project_document() — индексация PDF-версий документов проекта в
+-  ProjectDocumentChunk (треб. 1, 4), статусы на DocumentVersion
+-  (pending → processing → done/error, треб. 3);
++Состав (этап 20, после зачистки нормоконтроля 2026-11-09):
++- index_document() / index_project_document() — индексация базы знаний и
++  PDF-версий документов проекта (треб. 1, 3, 4);
+ - reindex_project() / reindex_document() — резервная индексация (треб. 5);
+ - rag_answer() — сквозной RAG по документам проекта и базе знаний с
+   сохранением истории RagQuery (треб. 6, 9);
+-- экспорт отчёта ГИПа дополнен разделом «Выводы» (треб. 12).
++- generate_gip_report() + экспорт PDF/Word с разделом «Выводы» (треб. 12);
++- база знаний: upload/remove/knowledge_documents (UX-аудит stage 2).
++ИИ-нормоконтроль СПДС (rules.py, run_rules_check, прогоны CheckRun)
++выведен из эксплуатации и удалён — см. миграцию 0013.
+ """
+ 
+ from __future__ import annotations
+ 
+ import logging
+ from dataclasses import dataclass
+-from datetime import timedelta
+ 
+ from django.core.exceptions import PermissionDenied
+ from django.db import models as db_models
+@@ -27,32 +29,19 @@ from django.utils import timezone
+ 
+ from ai_checks import pdfium_tools
+ from ai_checks.domain.models import (
+-    CheckRun,
+     GeneratedReport,
+     IndexingStatus,
+     InternalChunk,
+     InternalDocument,
+     LLMCallLog,
+-    PendingCheckResult,
+     ProjectDocumentChunk,
+     RagQuery,
+-    ReminderRule,
+-    RuleDefinition,
+ )
+-from ai_checks.domain.rules import RULE_CHECKS
+ from ai_checks.ports.embedding import EmbeddingService
+ from storage.domain.models import Document, DocumentVersion
+ 
+ logger = logging.getLogger(__name__)
+ 
+-# Версия набора правил/промптов прогона (CheckRun.engine_version).
+-# 2026.11.2 — блоки 1–3 бэта-фиксов: MU-зона штампа/рамки, fallback
+-# текст-спанов/растра, проверка по листу, нормативный источник.
+-ENGINE_VERSION = 'rules@2026.11.2'
+-
+-# Блок 3: подпись базового норматива (когда стандарт не выбран).
+-BASE_NORM_LABEL = 'ГОСТ Р 21.101-2026 (базовый)'
+-
+ # Размер чанка и перекрытие (ТЗ Ф0.2: ~1000 символов, перекрытие 200).
+ CHUNK_SIZE = 1000
+ CHUNK_OVERLAP = 200
+@@ -341,119 +330,6 @@ def reindex_project(project_id: int, user=None) -> int:
+     return len(versions)
+ 
+ 
+-def run_rules_check(
+-    document_version: DocumentVersion,
+-    initiated_by,
+-    page_number: int | None = None,
+-    norm_source_id: int | None = None,
+-) -> CheckRun:
+-    """Прогон детерминированных правил по PDF версии (Ф1, без LLM).
+-
+-    Создаёт CheckRun (queued → running → done/failed), прогоняет активные
+-    RuleDefinition на каждой странице через RULE_CHECKS и сохраняет
+-    PendingCheckResult (status=pending) для каждой находки.
+-    Записи находок и финальный статус — в transaction.atomic(); при сбое
+-    (битый PDF и т.п.) прогон помечается failed с текстом ошибки в meta.
+-
+-    Бэта-фикс 2026-11-08, блок 3: page_number — проверка одного листа
+-    (1-based, вне диапазона → прогон по всем листам); norm_source_id —
+-    внутренний стандарт (doc_type='internal_standard') для подписи
+-    «Проверка по» (None = базовый ГОСТ Р 21.101-2026).
+-    """
+-    run_page: int | None = None
+-    if page_number is not None and str(page_number) != '':
+-        try:
+-            run_page = int(page_number)
+-        except (TypeError, ValueError):
+-            run_page = None
+-        else:
+-            if run_page < 1:
+-                run_page = None
+-
+-    norm_source = None
+-    if norm_source_id:
+-        norm_source = InternalDocument.objects.filter(
+-            pk=norm_source_id,
+-            doc_type=InternalDocument.DocType.INTERNAL_STANDARD,
+-            is_active=True,
+-        ).first()
+-
+-    check_run = CheckRun.objects.create(
+-        document_version=document_version,
+-        initiated_by=initiated_by,
+-        status=CheckRun.Status.QUEUED,
+-        engine_version=ENGINE_VERSION,
+-        page_number=run_page,
+-        norm_source=norm_source,
+-        norm_source_label=(
+-            norm_source.title if norm_source else BASE_NORM_LABEL
+-        ),
+-        started_at=timezone.now(),
+-    )
+-    try:
+-        file_path = document_version.file.path
+-        rules = list(
+-            RuleDefinition.objects.filter(is_active=True).order_by('code')
+-        )
+-        executable = [rule for rule in rules if rule.code in RULE_CHECKS]
+-
+-        findings: list[tuple[RuleDefinition, dict]] = []
+-        with transaction.atomic():
+-            with pdfium_tools.open_pdf(file_path) as pdf:
+-                pages_total = len(pdf)
+-                if run_page is not None and run_page > pages_total:
+-                    run_page = None  # лист вне диапазона — проверяем всё
+-                page_indexes = (
+-                    range(pages_total)
+-                    if run_page is None
+-                    else (run_page - 1,)
+-                )
+-                for index in page_indexes:
+-                    view = pdfium_tools.PdfPageView(pdf, index)
+-                    try:
+-                        for rule in executable:
+-                            checker = RULE_CHECKS[rule.code]
+-                            for finding in checker(view):
+-                                findings.append((rule, finding))
+-                    finally:
+-                        view.close()
+-
+-            PendingCheckResult.objects.bulk_create([
+-                PendingCheckResult(
+-                    check_run=check_run,
+-                    rule=rule,
+-                    status=PendingCheckResult.Status.PENDING,
+-                    severity=rule.severity,
+-                    page=finding['page'],
+-                    bbox=finding['bbox'],
+-                    message=finding['message'],
+-                    evidence=finding['evidence'],
+-                )
+-                for rule, finding in findings
+-            ])
+-            check_run.status = CheckRun.Status.DONE
+-            check_run.page_number = run_page
+-            check_run.rules_total = len(executable)
+-            check_run.findings_total = len(findings)
+-            check_run.finished_at = timezone.now()
+-            check_run.save(update_fields=[
+-                'status', 'page_number', 'rules_total', 'findings_total',
+-                'finished_at',
+-            ])
+-    except Exception as exc:  # noqa: BLE001 — статус прогона важнее трейса
+-        logger.exception(
+-            'AI-проверка версии %s упала: %s', document_version.pk, exc,
+-        )
+-        check_run.status = CheckRun.Status.FAILED
+-        check_run.findings_total = 0
+-        check_run.meta = {'error': str(exc)}
+-        check_run.finished_at = timezone.now()
+-        check_run.save(update_fields=[
+-            'status', 'findings_total', 'meta', 'finished_at',
+-        ])
+-    return check_run
+-
+-
+ def rag_answer(
+     question: str,
+     project_id: int | None = None,
+@@ -1059,15 +935,16 @@ def _report_conclusions(report) -> list[str]:
+ 
+ 
+ def _register_cyrillic_font() -> tuple[str, str]:
+-    """TTF-шрифт с кириллицей для экспорта отчётов (блок 5 бэта-фиксов).
++    """TTF-шрифт с кириллицей для экспорта отчётов (блок 3 зачистки).
+ 
+     Раньше использовался CID-шрифт STSong-Light (Adobe-GB1): кириллица
+-    шла «разрядкой» с подстановкой глифов, шрифт не встраивался в PDF.
+-    Теперь регистрируется локальный TTF (GolosText/DejaVuSans) — полный
+-    кириллический набор, шрифт встраивается. Возвращает пару
+-    (regular, bold); bold может совпадать с regular, если найден только
+-    один файл. Если TTF не найден вовсе — прежний STSong-Light
+-    (fallback, чтобы экспорт не падал до добавления шрифта в проект).
++    шла «разрядкой» с подстановкой глифов, шрифт не встраивался в PDF —
++    это был дефект бэта-теста. Порядок поиска (строго по ТЗ):
++    static/fonts/GolosText-Regular.ttf → static/fonts/DejaVuSans.ttf →
++    системный DejaVuSans. Возвращает пару (regular, bold); bold может
++    совпадать с regular, если найден только один файл. Если TTF с
++    кириллицей нет нигде — RuntimeError с понятной ошибкой (битая
++    кириллица в PDF хуже честного сбоя экспорта).
+     """
+     from pathlib import Path
+ 
+@@ -1075,7 +952,6 @@ def _register_cyrillic_font() -> tuple[str, str]:
+ 
+     from reportlab.lib.fonts import addMapping
+     from reportlab.pdfbase import pdfmetrics
+-    from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+     from reportlab.pdfbase.ttfonts import TTFont
+ 
+     roots: list[Path] = []
+@@ -1123,14 +999,25 @@ def _register_cyrillic_font() -> tuple[str, str]:
+         addMapping(name, 1, 0, bold_name)
+         return name, bold_name
+ 
+-    pdfmetrics.registerFont(UnicodeCIDFont('STSong-Light'))
+-    return 'STSong-Light', 'STSong-Light'
++    # Блок 3 зачистки: заглушки STSong-Light больше нет — она давала
++    # битую кириллицу («разрядка», подстановочные глифы). Честная ошибка.
++    searched = '\n'.join(
++        f'  - {path}' for _name, path in regular_candidates
++    )
++    raise RuntimeError(
++        'Экспорт PDF недоступен: не найден TTF-шрифт с кириллицей. '
++        'Положите GolosText-Regular.ttf или DejaVuSans.ttf в '
++        'static/fonts/ (bold: GolosText-Bold.ttf / DejaVuSans-Bold.ttf) '
++        'либо установите системный DejaVuSans. Проверенные пути:\n'
++        f'{searched}'
++    )
+ 
+ 
+ def gip_report_pdf(report) -> bytes:
+     """PDF отчёта ГИПа (reportlab/platypus) — блоки 5–6 бэта-фиксов.
+ 
+-    Шрифт с кириллицей (GolosText/DejaVuSans TTF, fallback STSong-Light).
++    Шрифт с кириллицей (GolosText/DejaVuSans TTF; без них — понятная
++    ошибка, блок 3 зачистки).
+     Структура (как у отчётов Аудитора):
+     1) титульный блок (проект, период, дата, автор);
+     2) краткое резюме (LLM);
+@@ -1495,84 +1382,6 @@ def gip_report_docx(report) -> bytes:
+     return buffer.getvalue()
+ 
+ 
+-def _reminder_recipients(project, audience: str):
+-    """Получатели напоминаний: ГИП проекта или админы компании."""
+-    from django.contrib.auth.models import User
+-
+-    recipients: dict[int, User] = {}
+-    if audience == ReminderRule.Audience.ADMIN:
+-        from storage.domain.models import UserProfile
+-
+-        for profile in UserProfile.objects.filter(
+-            company=project.company, role='admin',
+-        ).select_related('user'):
+-            recipients[profile.user_id] = profile.user
+-        return list(recipients.values())
+-
+-    if project.gip_id is not None:
+-        recipients[project.gip_id] = project.gip
+-    for membership in project.memberships.filter(
+-        role_in_project='gip',
+-    ).select_related('user'):
+-        recipients[membership.user_id] = membership.user
+-    return list(recipients.values())
+-
+-
+-def send_pending_reminders(now=None) -> int:
+-    """Напоминания по незавершённым находкам (Ф4, без LLM).
+-
+-    Для каждого активного ReminderRule: pending-находки, у которых
+-    прогон старше offset_days и нет reviewed_at → уведомление получателю
+-    (ГИП проекта / админ компании). Дубли отсекаются по url. Возвращает
+-    число созданных уведомлений.
+-    """
+-    from django.urls import reverse
+-    from issues.models import Notification
+-    from issues.notify import create_notification
+-
+-    now = now or timezone.now()
+-    created = 0
+-    pending = (
+-        PendingCheckResult.objects
+-        .filter(
+-            status=PendingCheckResult.Status.PENDING,
+-            reviewed_at__isnull=True,
+-        )
+-        .select_related('check_run__document_version__document__project')
+-    )
+-
+-    for rule in ReminderRule.objects.filter(is_active=True):
+-        threshold = now - timedelta(days=rule.offset_days)
+-        for finding in pending.filter(check_run__created_at__lte=threshold):
+-            check_run = finding.check_run
+-            document = check_run.document_version.document
+-            project = document.project
+-            url = reverse(
+-                'storage:document_detail', args=[document.pk],
+-            ) + f'#ai-finding-{finding.pk}'
+-            message = (
+-                f'Незавершённая ИИ-проверка: «{finding.message}» '
+-                f'({document.code})'
+-            )[:300]
+-            for recipient in _reminder_recipients(project, rule.audience):
+-                if Notification.objects.filter(
+-                    recipient=recipient, url=url,
+-                ).exists():
+-                    continue
+-                notification = create_notification(
+-                    recipient=recipient,
+-                    actor=None,
+-                    verb='ai_reminder',
+-                    document=document,
+-                    project=project,
+-                    message=message,
+-                    url=url,
+-                )
+-                if notification is not None:
+-                    created += 1
+-    return created
+-
+-
+ import base64
+ 
+ 
+diff --git a/ai_checks/migrations/0013_remove_normocontrol_models.py b/ai_checks/migrations/0013_remove_normocontrol_models.py
+new file mode 100644
+index 0000000..9da81de
+--- /dev/null
++++ b/ai_checks/migrations/0013_remove_normocontrol_models.py
+@@ -0,0 +1,65 @@
++"""Зачистка 2026-11-09: удаление моделей ИИ-нормоконтроля СПДС.
++
++GigaCode удалил UI нормоконтроля (шаблоны, вьюхи, URL, FAB) — этот
++коммит завершает зачистку: убираются модели и их таблицы:
++- RuleDefinition — правила проверок (движок ai_checks/domain/rules.py);
++- CheckRun — прогоны проверки версий;
++- PendingCheckResult — находки прогона;
++- ReminderRule — напоминания по незавершённым находкам (Ф4).
++
++Связанные поля/настройки тоже сняты:
++- LLMCallLog.check_run (FK на удаляемый CheckRun) и
++  LLMCallLog.purpose='check_explain' (назначение было только у находок);
++- CELERY_BEAT_SCHEDULE['ai-checks-reminders-daily'] в settings.py.
++
++Остаются рабочими: RAG-поиск (RagQuery, ProjectDocumentChunk),
++база знаний (InternalDocument/InternalChunk), отчёт ГИПу
++(GeneratedReport) и журнал вызовов LLM (LLMCallLog).
++
++Порядок операций важен: сначала снимается FK LLMCallLog.check_run,
++затем удаляется PendingCheckResult (FK на CheckRun и RuleDefinition),
++потом RuleDefinition, CheckRun и ReminderRule. Данные не сохраняются —
++таблицы нормоконтроля опустошаются вместе с содержимым.
++"""
++
++from django.db import migrations, models
++
++
++class Migration(migrations.Migration):
++
++    dependencies = [
++        ('ai_checks', '0012_seed_discipline_standards'),
++    ]
++
++    operations = [
++        # FK на удаляемый CheckRun снимаем первой.
++        migrations.RemoveField(
++            model_name='llmcalllog',
++            name='check_run',
++        ),
++        migrations.AlterField(
++            model_name='llmcalllog',
++            name='purpose',
++            field=models.CharField(
++                choices=[
++                    ('rag_answer', 'Ответ RAG'),
++                    ('gip_report', 'Отчёт ГИПа'),
++                ],
++                max_length=30,
++                verbose_name='Назначение',
++            ),
++        ),
++        # Находки ссылаются на CheckRun и RuleDefinition — раньше их.
++        migrations.DeleteModel(
++            name='PendingCheckResult',
++        ),
++        migrations.DeleteModel(
++            name='RuleDefinition',
++        ),
++        migrations.DeleteModel(
++            name='CheckRun',
++        ),
++        migrations.DeleteModel(
++            name='ReminderRule',
++        ),
++    ]
+diff --git a/ai_checks/models.py b/ai_checks/models.py
+index 926c953..06da8dd 100644
+--- a/ai_checks/models.py
++++ b/ai_checks/models.py
+@@ -1,27 +1,25 @@
+-"""Ре-экспорт доменных моделей ИИ-контура (паттерн storage)."""
++"""Ре-экспорт доменных моделей ИИ-контура (паттерн storage).
++
++Зачистка 2026-11-09: RuleDefinition / CheckRun / PendingCheckResult /
++ReminderRule удалены вместе с ИИ-нормоконтролем (миграция 0013).
++"""
+ 
+ from ai_checks.domain.models import (
+-    CheckRun,
++    GeneratedReport,
+     IndexingStatus,
+     InternalChunk,
+     InternalDocument,
+     LLMCallLog,
+-    PendingCheckResult,
+     ProjectDocumentChunk,
+     RagQuery,
+-    ReminderRule,
+-    RuleDefinition,
+ )
+ 
+ __all__ = [
+-    'CheckRun',
++    'GeneratedReport',
+     'IndexingStatus',
+     'InternalChunk',
+     'InternalDocument',
+     'LLMCallLog',
+-    'PendingCheckResult',
+     'ProjectDocumentChunk',
+     'RagQuery',
+-    'ReminderRule',
+-    'RuleDefinition',
+ ]
+diff --git a/ai_checks/tasks.py b/ai_checks/tasks.py
+index 5367bd2..46fbc46 100644
+--- a/ai_checks/tasks.py
++++ b/ai_checks/tasks.py
+@@ -1,51 +1,13 @@
+-"""Celery-задачи ИИ-контура (Этап 19, Ф1)."""
++"""Celery-задачи ИИ-контура.
+ 
+-from celery import shared_task
+-
+-from ai_checks.domain.services import run_rules_check
+-
+-
+-@shared_task(ignore_result=True, name='ai_checks.check_document_version')
+-def check_document_version_task(
+-    document_version_id: int,
+-    user_id: int,
+-    page_number: int | None = None,
+-    norm_source_id: int | None = None,
+-) -> None:
+-    """Прогон детерминированных правил по версии документа.
+-
+-    В dev/тестах (CELERY_TASK_ALWAYS_EAGER=True) выполняется синхронно;
+-    в проде — воркером Celery через Redis.
+-
+-    Бэта-фикс 2026-11-08, блок 3: page_number — проверка одного листа;
+-    norm_source_id — внутренний стандарт для подписи «Проверка по».
+-    """
+-    from django.contrib.auth.models import User
++После зачистки нормоконтроля (2026-11-09) остались только задачи
++индексации RAG: база знаний (InternalChunk) и документы проекта
++(ProjectDocumentChunk). Задачи прогона правил (check_document_version)
++и напоминаний по находкам (check_reminders) удалены вместе с моделями
++CheckRun / PendingCheckResult / ReminderRule (миграция 0013).
++"""
+ 
+-    from storage.domain.models import DocumentVersion
+-
+-    try:
+-        version = DocumentVersion.objects.select_related('document').get(
+-            pk=document_version_id,
+-        )
+-        user = User.objects.get(pk=user_id)
+-    except (DocumentVersion.DoesNotExist, User.DoesNotExist):
+-        return
+-
+-    run_rules_check(
+-        version,
+-        user,
+-        page_number=page_number,
+-        norm_source_id=norm_source_id,
+-    )
+-
+-
+-@shared_task(ignore_result=True, name='ai_checks.check_reminders')
+-def check_reminders_task() -> int:
+-    """Ежедневные напоминания по незавершённым проверкам (Ф4, без LLM)."""
+-    from ai_checks.domain.services import send_pending_reminders
+-
+-    return send_pending_reminders()
++from celery import shared_task
+ 
+ 
+ @shared_task(ignore_result=True, name='ai_checks.index_knowledge_document')
+diff --git a/ai_checks/tests/mocks.py b/ai_checks/tests/mocks.py
+index 04a4db8..72bd285 100644
+--- a/ai_checks/tests/mocks.py
++++ b/ai_checks/tests/mocks.py
+@@ -7,10 +7,29 @@
+ from __future__ import annotations
+ 
+ import hashlib
++from unittest import mock
+ 
+ from ai_checks.ports.llm import LLMResponse
+ 
+ 
++def mock_bge_adapter(testcase, dim: int = 1024) -> None:
++    """Подменяет строгий BgeM3OnnxEmbedding на MockEmbeddingService.
++
++    Блок 2 зачистки 2026-11-09: боевой адаптер падает с RuntimeError,
++    если model.onnx не скачан (fail-fast вместо заглушки). Тестам,
++    где индексация запускается через задачи/вьюхи без DI
++    (upload_document, reindex_*, kb_upload), реальная модель не нужна —
++    векторный бэкенд тоже мокается (MockVectorBackend) или не участвует.
++    Вызывать из setUp: mock_bge_adapter(self).
++    """
++    patcher = mock.patch(
++        'ai_checks.adapters.embedding_onnx.BgeM3OnnxEmbedding',
++        return_value=MockEmbeddingService(dim=dim),
++    )
++    patcher.start()
++    testcase.addCleanup(patcher.stop)
++
++
+ class MockLLMProvider:
+     """Мок LLMProvider: отдаёт заранее заданные ответы по очереди.
+ 
+diff --git a/ai_checks/tests/test_indexing.py b/ai_checks/tests/test_indexing.py
+index fc59eb0..dbc7cbf 100644
+--- a/ai_checks/tests/test_indexing.py
++++ b/ai_checks/tests/test_indexing.py
+@@ -9,7 +9,6 @@ from django.test import TestCase, override_settings
+ from reportlab.lib.utils import simpleSplit
+ from reportlab.pdfgen import canvas as rl_canvas
+ 
+-from ai_checks.adapters.embedding_onnx import BgeM3OnnxEmbedding
+ from ai_checks.domain.models import InternalChunk, InternalDocument
+ from ai_checks.domain.services import (
+     CHUNK_OVERLAP,
+@@ -152,16 +151,15 @@ class InternalDocumentIndexingTests(MediaIsolationMixin, TestCase):
+         self.assertFalse(first_ids & second_ids)
+         self.assertEqual(self.internal_doc.chunks.count(), second_count)
+ 
+-    def test_default_adapter_is_bge_m3_stub(self):
+-        count = index_document(self.internal_doc, self.version.file.path)
+-        self.assertGreater(count, 0)
+-        chunk = self.internal_doc.chunks.order_by('seq').first()
+-        self.assertEqual(len(chunk.embedding), 1024)
+-        self.internal_doc.refresh_from_db()
+-        # Блок 4 бэта-фиксов: без файлов модели адаптер работает на
+-        # SHA-256 заглушке и честно подписывает чанки версией 'bge-m3-stub-v1'
+-        # (после скачивания bge-m3 в ml_models/bge-m3 — 'bge-m3-onnx-v1').
+-        self.assertEqual(self.internal_doc.embedding_model, 'bge-m3-stub-v1')
++    def test_default_adapter_requires_bge_m3_model(self):
++        # Блок 2 зачистки 2026-11-09: SHA-256-заглушка удалена — без
++        # локальной модели bge-m3 (ml_models/bge-m3/model.onnx) адаптер
++        # падает с понятной ошибкой, индексация не создаёт чанков
++        # с нерелевантными векторами.
++        with self.assertRaises(RuntimeError) as ctx:
++            index_document(self.internal_doc, self.version.file.path)
++        self.assertIn('bge-m3', str(ctx.exception))
++        self.assertEqual(self.internal_doc.chunks.count(), 0)
+ 
+     def test_empty_pdf_returns_zero_chunks(self):
+         empty_pdf = make_pdf([''])
+diff --git a/ai_checks/tests/test_knowledge.py b/ai_checks/tests/test_knowledge.py
+index dc72abb..127fa44 100644
+--- a/ai_checks/tests/test_knowledge.py
++++ b/ai_checks/tests/test_knowledge.py
+@@ -21,6 +21,7 @@ from storage.domain.models import (
+ )
+ from ai_checks.tests import pdfgen
+ from ai_checks.tests.base import MediaIsolationMixin
++from ai_checks.tests.mocks import mock_bge_adapter
+ 
+ 
+ def make_pdf_bytes(text='Smoke sheet', font_size=10) -> bytes:
+@@ -45,6 +46,8 @@ class KnowledgeBaseServiceTests(MediaIsolationMixin, TestCase):
+         self.section = Section.objects.create(
+             project=self.project, code='АР', name='Архитектура', order=1,
+         )
++        # Строгий bge-m3-адаптер → мок (реальная модель в тестах не нужна).
++        mock_bge_adapter(self)
+ 
+     def _upload(self, scope='project', doc_type='internal_standard'):
+         return upload_knowledge_document(
+@@ -144,6 +147,8 @@ class KnowledgeBaseViewTests(MediaIsolationMixin, TestCase):
+         Section.objects.create(
+             project=self.project, code='АР', name='АР', order=1,
+         )
++        # Celery eager: kb_upload индексирует сразу — мокаем адаптер.
++        mock_bge_adapter(self)
+         self.client.force_login(self.user)
+ 
+     def test_kb_panel_renders(self):
+diff --git a/ai_checks/tests/test_model_selection.py b/ai_checks/tests/test_model_selection.py
+index 13ba68d..9e0c84e 100644
+--- a/ai_checks/tests/test_model_selection.py
++++ b/ai_checks/tests/test_model_selection.py
+@@ -6,13 +6,7 @@ from django.contrib.auth.models import User
+ from django.test import TestCase, override_settings
+ from django.utils import timezone
+ 
+-from ai_checks.domain.models import (
+-    CheckRun,
+-    InternalChunk,
+-    InternalDocument,
+-    PendingCheckResult,
+-    RuleDefinition,
+-)
++from ai_checks.domain.models import InternalChunk, InternalDocument
+ from ai_checks.domain.services import generate_gip_report, rag_answer
+ from ai_checks.ports.llm import LLMResponse
+ from ai_checks.tests.mocks import MockEmbeddingService, MockVectorBackend
+diff --git a/ai_checks/tests/test_project_indexing.py b/ai_checks/tests/test_project_indexing.py
+index f0ef3ca..a5caab8 100644
+--- a/ai_checks/tests/test_project_indexing.py
++++ b/ai_checks/tests/test_project_indexing.py
+@@ -16,7 +16,6 @@ from django.test import TestCase, override_settings
+ from reportlab.lib.utils import simpleSplit
+ from reportlab.pdfgen import canvas as rl_canvas
+ 
+-from ai_checks.adapters.embedding_onnx import BgeM3OnnxEmbedding
+ from ai_checks.domain.models import ProjectDocumentChunk
+ from ai_checks.domain.services import (
+     index_project_document,
+@@ -24,6 +23,7 @@ from ai_checks.domain.services import (
+     reindex_project,
+ )
+ from ai_checks.tests.base import MediaIsolationMixin
++from ai_checks.tests.mocks import MockEmbeddingService, mock_bge_adapter
+ from ai_checks.tests.pdfgen import cyr_font
+ from storage.domain.models import (
+     Company,
+@@ -76,7 +76,9 @@ class ProjectDocumentIndexingTests(MediaIsolationMixin, TestCase):
+             project=self.project, code='ОВ', name='Отопление и вентиляция',
+             order=1,
+         )
+-        self.embedding = BgeM3OnnxEmbedding()
++        self.embedding = MockEmbeddingService(dim=1024)
++        # Eager-задачи upload_document идут без DI — мокаем строгий адаптер.
++        mock_bge_adapter(self)
+ 
+     def _upload_pdf(self, pages_text, code='ОВ-01', section=None):
+         return upload_document(
+@@ -198,6 +200,8 @@ class ReindexTests(MediaIsolationMixin, TestCase):
+     """Резервная индексация: reindex_document / reindex_project (треб. 5)."""
+ 
+     def setUp(self):
++        # Мок ДО _make_document: upload уже запускает eager-индексацию.
++        mock_bge_adapter(self)
+         self.user = User.objects.create_superuser(
+             username='reindex_user', email='ri@example.com',
+             password='TestPass123',
+diff --git a/ai_checks/tests/test_rag_history.py b/ai_checks/tests/test_rag_history.py
+index 5ae96de..b2b402b 100644
+--- a/ai_checks/tests/test_rag_history.py
++++ b/ai_checks/tests/test_rag_history.py
+@@ -212,9 +212,9 @@ class ProjectChunkFactory:
+         from storage.domain.models import DocumentVersion as DV
+ 
+         if embedding_service is None:
+-            from ai_checks.adapters.embedding_onnx import BgeM3OnnxEmbedding
++            from ai_checks.tests.mocks import MockEmbeddingService
+ 
+-            embedding_service = BgeM3OnnxEmbedding()
++            embedding_service = MockEmbeddingService(dim=1024)
+         if version is None:
+             version = document.current_version
+             if version is None:
+diff --git a/ai_checks/tests/test_reminders.py b/ai_checks/tests/test_reminders.py
+deleted file mode 100644
+index 2a93f31..0000000
+--- a/ai_checks/tests/test_reminders.py
++++ /dev/null
+@@ -1,136 +0,0 @@
+-"""Ф4: точечные тесты напоминаний (check_reminders_task, дубли)."""
+-
+-from datetime import timedelta
+-
+-from django.contrib.auth.models import User
+-from django.test import TestCase
+-from django.utils import timezone
+-
+-from ai_checks.domain.models import (
+-    CheckRun,
+-    PendingCheckResult,
+-    ReminderRule,
+-    RuleDefinition,
+-)
+-from ai_checks.tasks import check_reminders_task
+-from issues.models import Notification
+-from storage.domain.models import (
+-    Company,
+-    Document,
+-    DocumentVersion,
+-    Project,
+-    ProjectMembership,
+-    Section,
+-)
+-
+-
+-class CheckRemindersTests(TestCase):
+-    def setUp(self):
+-        self.gip = User.objects.create_user(
+-            username='proj_gip', password='TestPass123',
+-        )
+-        self.gip.userprofile.role = 'gip'
+-        self.gip.userprofile.save()
+-        self.company = Company.objects.create(name='Напоминания-Компания')
+-        self.project = Project.objects.create(
+-            company=self.company, code='REM-1', name='Проект напоминаний',
+-            status='active', created_by=self.gip, gip=self.gip,
+-        )
+-        self.section = Section.objects.create(
+-            project=self.project, code='АР', name='Архитектура', order=1,
+-        )
+-        self.document = Document.objects.create(
+-            project=self.project, section=self.section,
+-            code='REM-DOC', name='Лист напоминаний',
+-            doc_type='drawing', status='draft', created_by=self.gip,
+-        )
+-        self.version = DocumentVersion.objects.create(
+-            document=self.document,
+-            version_number=1,
+-            file='documents/test/rem.pdf',
+-            file_size=100,
+-            uploaded_by=self.gip,
+-        )
+-        self.rule = RuleDefinition.objects.get(code='SPDS.RAME')
+-
+-    def _finding(self, age_days: int, status='pending'):
+-        check_run = CheckRun.objects.create(
+-            document_version=self.version,
+-            initiated_by=self.gip,
+-            status=CheckRun.Status.DONE,
+-        )
+-        # created_at — auto_now_add: сдвигаем назад queryset-ом.
+-        CheckRun.objects.filter(pk=check_run.pk).update(
+-            created_at=timezone.now() - timedelta(days=age_days),
+-        )
+-        finding = PendingCheckResult.objects.create(
+-            check_run=check_run,
+-            rule=self.rule,
+-            status=status,
+-            severity=self.rule.severity,
+-            page=1,
+-            message='Незавершённая находка',
+-        )
+-        return finding
+-
+-    def tearDown(self):
+-        pass
+-
+-    def test_rule_seeded(self):
+-        self.assertTrue(
+-            ReminderRule.objects.filter(code='CHECK_PENDING_7').exists(),
+-        )
+-
+-    def test_old_pending_finding_notifies_gip(self):
+-        finding = self._finding(age_days=10)
+-        created = check_reminders_task()
+-        self.assertEqual(created, 1)
+-        notification = Notification.objects.get(recipient=self.gip)
+-        self.assertEqual(notification.verb, 'ai_reminder')
+-        self.assertIn('Незавершённая ИИ-проверка', notification.message)
+-        self.assertIn(
+-            f'#ai-finding-{finding.pk}', notification.url,
+-        )
+-        self.assertEqual(notification.project, self.project)
+-        self.assertEqual(notification.document, self.document)
+-
+-    def test_fresh_finding_not_notified(self):
+-        self._finding(age_days=1)
+-        self.assertEqual(check_reminders_task(), 0)
+-        self.assertEqual(Notification.objects.count(), 0)
+-
+-    def test_reviewed_or_confirmed_not_notified(self):
+-        self._finding(age_days=10, status='rejected')
+-        self._finding(age_days=10, status='confirmed')
+-        self.assertEqual(check_reminders_task(), 0)
+-        self.assertEqual(Notification.objects.count(), 0)
+-
+-    def test_no_duplicates_on_repeat_run(self):
+-        self._finding(age_days=10)
+-        first = check_reminders_task()
+-        second = check_reminders_task()
+-        self.assertEqual(first, 1)
+-        self.assertEqual(second, 0)
+-        self.assertEqual(Notification.objects.count(), 1)
+-
+-    def test_inactive_rule_skips(self):
+-        ReminderRule.objects.filter(code='CHECK_PENDING_7').update(
+-            is_active=False,
+-        )
+-        self._finding(age_days=10)
+-        self.assertEqual(check_reminders_task(), 0)
+-
+-    def test_membership_gip_also_notified(self):
+-        self.project.gip = None
+-        self.project.save(update_fields=['gip'])
+-        second_gip = User.objects.create_user(
+-            username='member_gip', password='TestPass123',
+-        )
+-        ProjectMembership.objects.create(
+-            project=self.project, user=second_gip, role_in_project='gip',
+-        )
+-        self._finding(age_days=10)
+-        self.assertEqual(check_reminders_task(), 1)
+-        self.assertTrue(
+-            Notification.objects.filter(recipient=second_gip).exists(),
+-        )
+diff --git a/ai_checks/tests/test_rules.py b/ai_checks/tests/test_rules.py
+deleted file mode 100644
+index c3060d9..0000000
+--- a/ai_checks/tests/test_rules.py
++++ /dev/null
+@@ -1,127 +0,0 @@
+-"""Ф1: точечные тесты детерминированных правил (domain/rules.py)."""
+-
+-from unittest import skipUnless
+-
+-from django.test import SimpleTestCase
+-
+-from ai_checks import pdfium_tools
+-from ai_checks.tests.base import find_cyrillic_font
+-from ai_checks.tests.pdfgen import make_pdf_bytes
+-
+-CYRILLIC_FONT = find_cyrillic_font()
+-
+-from ai_checks.domain.rules import (
+-    MIN_FONT_PT,
+-    check_font,
+-    check_frame,
+-    check_stamp,
+-)
+-
+-
+-PAGE_W, PAGE_H = 595, 842  # A4 portrait, пункты
+-
+-
+-def make_page(rects=(), lines=(), texts=()):
+-    """Создаёт PDF из одной страницы и отдаёт (doc, view) для правил.
+-
+-    Элементы задаются в TL-координатах PyMuPDF (см. tests/pdfgen.py);
+-    doc закрывается вызывающим тестом (doc.close()).
+-    """
+-    data = make_pdf_bytes(rects=rects, lines=lines, texts=texts)
+-    doc = pdfium_tools.open_pdf(data)
+-    return doc, pdfium_tools.PdfPageView(doc, 0)
+-
+-
+-class FrameRuleTests(SimpleTestCase):
+-    def test_frame_present_no_findings(self):
+-        doc, page = make_page(rects=[(20, 20, PAGE_W - 20, PAGE_H - 20)])
+-        self.assertEqual(check_frame(page), [])
+-        doc.close()
+-
+-    def test_frame_missing_finding(self):
+-        doc, page = make_page()
+-        findings = check_frame(page)
+-        self.assertEqual(len(findings), 1)
+-        finding = findings[0]
+-        self.assertEqual(finding['page'], 1)
+-        self.assertEqual(finding['severity'], 'major')
+-        self.assertIn('рамка', finding['message'])
+-        # bbox = None: не выделяем красным весь лист (замечание владельца).
+-        self.assertIsNone(finding['bbox'])
+-        doc.close()
+-
+-
+-class StampRuleTests(SimpleTestCase):
+-    @skipUnless(CYRILLIC_FONT, 'Нужен шрифт с кириллицей для PDF')
+-    def test_stamp_by_legacy_text_no_findings(self):
+-        doc, page = make_page(
+-            texts=[('Основная надпись', 8, (400, 720))],
+-        )
+-        self.assertEqual(check_stamp(page), [])
+-        doc.close()
+-
+-    @skipUnless(CYRILLIC_FONT, 'Нужен шрифт с кириллицей для PDF')
+-    def test_stamp_by_gost_labels_no_findings(self):
+-        # Реальный ГОСТ-штамп: «Основной надписи» в тексте нет — есть поля.
+-        doc, page = make_page(
+-            texts=[('Стадия Лист Листов', 8, (400, 720))],
+-        )
+-        self.assertEqual(check_stamp(page), [])
+-        doc.close()
+-
+-    def test_stamp_by_table_lines_no_findings(self):
+-        lines = [
+-            (370, 600 + index * 12, 580, 600 + index * 12)
+-            for index in range(6)
+-        ] + [
+-            (380 + index * 40, 595, 380 + index * 40, 700)
+-            for index in range(5)
+-        ]
+-
+-        doc, page = make_page(lines=lines)
+-        self.assertEqual(check_stamp(page), [])
+-        doc.close()
+-
+-    def test_stamp_box_at_corner_no_findings(self):
+-        doc, page = make_page(rects=[(400, 780, 575, 825)])
+-        self.assertEqual(check_stamp(page), [])
+-        doc.close()
+-
+-    def test_stamp_missing_finding(self):
+-        doc, page = make_page()
+-        findings = check_stamp(page)
+-        self.assertEqual(len(findings), 1)
+-        self.assertEqual(findings[0]['severity'], 'major')
+-        self.assertIn('основная надпись', findings[0]['message'].casefold())
+-        doc.close()
+-
+-
+-class FontRuleTests(SimpleTestCase):
+-    def test_normal_font_no_findings(self):
+-        doc, page = make_page(texts=[('Текст 10 pt', 10, (72, 100))])
+-        self.assertEqual(check_font(page), [])
+-        doc.close()
+-
+-    @skipUnless(CYRILLIC_FONT, 'Нужен шрифт с кириллицей для PDF')
+-    def test_small_font_finding(self):
+-        doc, page = make_page(texts=[('Мелкий текст', 5, (72, 100))])
+-        findings = check_font(page)
+-        self.assertEqual(len(findings), 1)
+-        finding = findings[0]
+-        self.assertEqual(finding['severity'], 'minor')
+-        self.assertIn('Высота шрифта', finding['message'])
+-        self.assertIn('Мелкий', finding['evidence'].replace('\xa0', ' '))
+-        doc.close()
+-
+-    def test_threshold_between_5pt_and_10pt(self):
+-        self.assertGreater(MIN_FONT_PT, 7.0)
+-        self.assertLess(MIN_FONT_PT, 7.2)
+-        doc, page = make_page(texts=[('Ровно 7 pt', 7, (72, 100))])
+-        self.assertEqual(len(check_font(page)), 1)
+-        doc.close()
+-
+-    def test_stamp_zone_text_is_ignored(self):
+-        # Мелкий текст в зоне штампа правилом шрифта не проверяется.
+-        doc, page = make_page(texts=[('штамп 5pt', 5, (400, 720))])
+-        self.assertEqual(check_font(page), [])
+-        doc.close()
+diff --git a/ai_checks/tests/test_run_rules.py b/ai_checks/tests/test_run_rules.py
+deleted file mode 100644
+index 5939020..0000000
+--- a/ai_checks/tests/test_run_rules.py
++++ /dev/null
+@@ -1,129 +0,0 @@
+-"""Ф1: точечные тесты run_rules_check (CheckRun + PendingCheckResult)."""
+-
+-from django.contrib.auth.models import User
+-from django.core.files.base import ContentFile
+-from django.test import TestCase
+-
+-from ai_checks.domain.models import (
+-    CheckRun,
+-    PendingCheckResult,
+-    RuleDefinition,
+-)
+-from ai_checks.domain.services import ENGINE_VERSION, run_rules_check
+-from ai_checks.tests.base import MediaIsolationMixin
+-from ai_checks.tests.pdfgen import make_pdf_bytes
+-from storage.domain.models import (
+-    Company,
+-    Document,
+-    DocumentVersion,
+-    Project,
+-    Section,
+-)
+-
+-
+-def make_pdf(*, with_frame=False, with_stamp=False, font_size=10) -> bytes:
+-    rects = []
+-    if with_frame:
+-        rects.append((20, 20, 575, 822))
+-    if with_stamp:
+-        # Штамп, примыкающий к правому нижнему углу листа (новое правило).
+-        rects.append((400, 780, 575, 825))
+-    return make_pdf_bytes(
+-        rects=rects,
+-        texts=[('Текст листа', font_size, (72, 100))],
+-    )
+-
+-
+-class RunRulesCheckTests(MediaIsolationMixin, TestCase):
+-    def setUp(self):
+-        self.user = User.objects.create_superuser(
+-            username='ai_rules', email='rules@example.com',
+-            password='TestPass123',
+-        )
+-        self.company = Company.objects.create(name='Правила-Тест')
+-        self.project = Project.objects.create(
+-            company=self.company, code='RULE-1', name='Проект правил',
+-            status='active', created_by=self.user,
+-        )
+-        self.section = Section.objects.create(
+-            project=self.project, code='АР', name='Архитектура', order=1,
+-        )
+-        self.document = Document.objects.create(
+-            project=self.project, section=self.section,
+-            code='RULE-DOC', name='Лист с ошибками',
+-            doc_type='drawing', status='draft', created_by=self.user,
+-        )
+-
+-    def _version(self, pdf_bytes, number=1):
+-        version = DocumentVersion.objects.create(
+-            document=self.document,
+-            version_number=number,
+-            file=ContentFile(pdf_bytes, name=f'rule_{number}.pdf'),
+-            file_size=len(pdf_bytes),
+-            uploaded_by=self.user,
+-        )
+-        return version
+-
+-    def test_seeded_rules_exist(self):
+-        codes = set(
+-            RuleDefinition.objects.filter(is_active=True)
+-            .values_list('code', flat=True)
+-        )
+-        self.assertTrue({'SPDS.RAME', 'SPDS.STAMP', 'SPDS.FONT'} <= codes)
+-
+-    def test_bad_page_produces_pending_findings(self):
+-        version = self._version(make_pdf(font_size=5))
+-        run = run_rules_check(version, self.user)
+-
+-        self.assertEqual(run.status, CheckRun.Status.DONE)
+-        self.assertEqual(run.engine_version, ENGINE_VERSION)
+-        self.assertGreaterEqual(run.rules_total, 3)
+-        findings = list(run.results.select_related('rule'))
+-        self.assertEqual(run.findings_total, len(findings))
+-        self.assertGreaterEqual(len(findings), 3)
+-        codes = {finding.rule.code for finding in findings}
+-        self.assertTrue({'SPDS.RAME', 'SPDS.STAMP', 'SPDS.FONT'} <= codes)
+-        for finding in findings:
+-            self.assertEqual(finding.status, PendingCheckResult.Status.PENDING)
+-            self.assertIsNotNone(finding.page)
+-            if finding.rule.code == 'SPDS.RAME':
+-                # Рамка: находка уровня страницы, bbox пуст (не выделяем
+-                # красным весь лист).
+-                self.assertIsNone(finding.bbox)
+-            else:
+-                self.assertIsNotNone(finding.bbox)
+-                self.assertEqual(len(finding.bbox), 4)
+-        severities = {
+-            finding.rule.code: finding.severity for finding in findings
+-        }
+-        self.assertEqual(severities['SPDS.RAME'], 'major')
+-        self.assertEqual(severities['SPDS.FONT'], 'minor')
+-        self.assertIsNotNone(run.started_at)
+-        self.assertIsNotNone(run.finished_at)
+-
+-    def test_good_page_has_no_findings(self):
+-        version = self._version(make_pdf(
+-            with_frame=True, with_stamp=True, font_size=10,
+-        ))
+-        run = run_rules_check(version, self.user)
+-        self.assertEqual(run.status, CheckRun.Status.DONE)
+-        self.assertEqual(run.findings_total, 0)
+-        self.assertEqual(run.results.count(), 0)
+-
+-    def test_corrupt_pdf_marks_run_failed(self):
+-        version = self._version(b'%PDF-1.4 broken')
+-        run = run_rules_check(version, self.user)
+-        self.assertEqual(run.status, CheckRun.Status.FAILED)
+-        self.assertEqual(run.findings_total, 0)
+-        self.assertIn('error', run.meta)
+-        self.assertIsNotNone(run.finished_at)
+-
+-    def test_inactive_rule_is_skipped(self):
+-        RuleDefinition.objects.filter(code='SPDS.FONT').update(is_active=False)
+-        version = self._version(make_pdf(font_size=5))
+-        run = run_rules_check(version, self.user)
+-        self.assertEqual(run.status, CheckRun.Status.DONE)
+-        codes = set(
+-            run.results.values_list('rule__code', flat=True)
+-        )
+-        self.assertNotIn('SPDS.FONT', codes)
+diff --git a/ai_checks/tests/test_views.py b/ai_checks/tests/test_views.py
+deleted file mode 100644
+index 57efdf6..0000000
+--- a/ai_checks/tests/test_views.py
++++ /dev/null
+@@ -1,167 +0,0 @@
+-"""Ф1: тесты UI ИИ-контура (флаг, запуск, подтверждение/отклонение)."""
+-
+-from django.contrib.auth.models import User
+-from django.core.files.base import ContentFile
+-from django.test import TestCase, override_settings
+-from django.urls import reverse
+-
+-from ai_checks.domain.models import CheckRun, PendingCheckResult
+-from ai_checks.domain.services import run_rules_check
+-from ai_checks.tests.base import MediaIsolationMixin
+-from ai_checks.tests.pdfgen import make_pdf_bytes
+-from issues.models import Issue
+-from storage.domain.models import (
+-    Company,
+-    Document,
+-    DocumentVersion,
+-    Project,
+-    Section,
+-)
+-
+-
+-def make_bad_pdf() -> bytes:
+-    return make_pdf_bytes(texts=[('Текст', 5, (72, 100))])
+-
+-
+-def make_clean_pdf() -> bytes:
+-    return make_pdf_bytes(
+-        rects=[(20, 20, 575, 822), (400, 780, 575, 825)],
+-        texts=[('Текст', 10, (72, 100))],
+-    )
+-
+-
+-class AiChecksUiTests(MediaIsolationMixin, TestCase):
+-    def setUp(self):
+-        self.user = User.objects.create_superuser(
+-            username='ai_ui', email='ui@example.com', password='TestPass123',
+-        )
+-        self.company = Company.objects.create(name='UI-Тест')
+-        self.project = Project.objects.create(
+-            company=self.company, code='UI-1', name='Проект UI',
+-            status='active', created_by=self.user,
+-        )
+-        self.section = Section.objects.create(
+-            project=self.project, code='АР', name='Архитектура', order=1,
+-        )
+-        self.document = Document.objects.create(
+-            project=self.project, section=self.section,
+-            code='UI-DOC', name='Лист UI', doc_type='drawing',
+-            status='draft', created_by=self.user,
+-        )
+-        pdf_bytes = make_bad_pdf()
+-        self.version = DocumentVersion.objects.create(
+-            document=self.document,
+-            version_number=1,
+-            file=ContentFile(pdf_bytes, name='ui.pdf'),
+-            file_size=len(pdf_bytes),
+-            uploaded_by=self.user,
+-        )
+-        self.document.current_version = self.version
+-        self.document.save(update_fields=['current_version'])
+-        self.client.force_login(self.user)
+-
+-    def test_flag_off_returns_404(self):
+-        # Явно выключаем: дефолт может быть перекрыт .env на машине.
+-        with override_settings(AI_CHECKS_ENABLED=False):
+-            response = self.client.get(
+-                reverse('ai_checks:panel', args=[self.document.pk]),
+-            )
+-        self.assertEqual(response.status_code, 404)
+-
+-    @override_settings(AI_CHECKS_ENABLED=True)
+-    def test_panel_before_run_offers_start(self):
+-        response = self.client.get(
+-            reverse('ai_checks:panel', args=[self.document.pk]),
+-        )
+-        self.assertEqual(response.status_code, 200)
+-        # Блок 3 бэта-фиксов: кнопки «Проверить лист»/«Проверить всё»
+-        # и селектор «Проверка по» вместо одной кнопки запуска.
+-        self.assertContains(response, 'Проверить лист')
+-        self.assertContains(response, 'Проверить всё')
+-        self.assertContains(response, 'aiNormSource')
+-        self.assertContains(response, 'ГОСТ Р 21.101-2026 (базовый)')
+-
+-    @override_settings(AI_CHECKS_ENABLED=True)
+-    def test_start_runs_check_eagerly_and_shows_findings(self):
+-        response = self.client.post(
+-            reverse('ai_checks:start', args=[self.document.pk]),
+-        )
+-        self.assertEqual(response.status_code, 200)
+-        run = CheckRun.objects.get(document_version=self.version)
+-        self.assertEqual(run.status, CheckRun.Status.DONE)
+-        self.assertGreater(run.findings_total, 0)
+-        self.assertContains(response, 'Подтвердить')
+-        self.assertContains(response, 'Отклонить')
+-        self.assertContains(response, 'Лист 1')
+-
+-    @override_settings(AI_CHECKS_ENABLED=True)
+-    def test_confirm_finding_creates_issue(self):
+-        run = run_rules_check(self.version, self.user)
+-        # Координаты хранятся в каноническом пространстве (rotation=0);
+-        # пересчёт под текущий поворот вьювера делает отрисовка.
+-        finding = (
+-            run.results.select_related('rule')
+-            .exclude(bbox__isnull=True)
+-            .first()
+-        )
+-        response = self.client.post(
+-            reverse('ai_checks:confirm', args=[finding.pk]),
+-        )
+-        self.assertEqual(response.status_code, 200)
+-        self.assertEqual(
+-            response['HX-Trigger'], 'ai-finding-confirmed',
+-        )
+-        finding.refresh_from_db()
+-        self.assertEqual(finding.status, PendingCheckResult.Status.CONFIRMED)
+-        self.assertEqual(finding.reviewed_by, self.user)
+-        issue = Issue.objects.get(document=self.document)
+-        self.assertTrue(issue.description.startswith('[ИИ]'))
+-        self.assertEqual(issue.page_number, finding.page)
+-        # Канонические ratios (неповёрнутый лист), упорядочены.
+-        self.assertIsNotNone(issue.x1_ratio)
+-        self.assertIsNotNone(issue.x2_ratio)
+-        self.assertLess(issue.x1_ratio, issue.x2_ratio)
+-        self.assertLess(issue.y1_ratio, issue.y2_ratio)
+-        # Скриншот (кроп bbox) приложен к Issue.
+-        self.assertTrue(issue.crop_image)
+-        self.assertIn('issue_crop_', issue.crop_image.name)
+-
+-    @override_settings(AI_CHECKS_ENABLED=True)
+-    def test_reject_finding(self):
+-        run = run_rules_check(self.version, self.user)
+-        finding = run.results.first()
+-        response = self.client.post(
+-            reverse('ai_checks:reject', args=[finding.pk]),
+-        )
+-        self.assertEqual(response.status_code, 200)
+-        finding.refresh_from_db()
+-        self.assertEqual(finding.status, PendingCheckResult.Status.REJECTED)
+-        self.assertEqual(Issue.objects.count(), 0)
+-
+-    @override_settings(AI_CHECKS_ENABLED=True)
+-    def test_preview_returns_png(self):
+-        run = run_rules_check(self.version, self.user)
+-        finding = run.results.first()
+-        response = self.client.get(
+-            reverse('ai_checks:preview', args=[finding.pk]),
+-        )
+-        self.assertEqual(response.status_code, 200)
+-        self.assertEqual(response['Content-Type'], 'image/png')
+-        self.assertGreater(len(response.content), 100)
+-
+-    @override_settings(AI_CHECKS_ENABLED=True)
+-    def test_clean_document_shows_no_findings(self):
+-        pdf_bytes = make_clean_pdf()
+-        version = DocumentVersion.objects.create(
+-            document=self.document,
+-            version_number=2,
+-            file=ContentFile(pdf_bytes, name='clean.pdf'),
+-            file_size=len(pdf_bytes),
+-            uploaded_by=self.user,
+-        )
+-        self.document.current_version = version
+-        self.document.save(update_fields=['current_version'])
+-        response = self.client.post(
+-            reverse('ai_checks:start', args=[self.document.pk]),
+-        )
+-        self.assertContains(response, 'Замечаний нет')
+diff --git a/ai_checks/tests/test_views_stage20.py b/ai_checks/tests/test_views_stage20.py
+index d7778bc..033c03f 100644
+--- a/ai_checks/tests/test_views_stage20.py
++++ b/ai_checks/tests/test_views_stage20.py
+@@ -11,6 +11,7 @@ from django.urls import reverse
+ 
+ from ai_checks.domain.models import GeneratedReport, RagQuery
+ from ai_checks.tests.base import MediaIsolationMixin
++from ai_checks.tests.mocks import mock_bge_adapter
+ from ai_checks.tests.test_project_indexing import make_pdf
+ from issues.models import Issue
+ from storage.domain.models import Company, Project, Section
+@@ -57,6 +58,8 @@ class KnowledgeBaseViewTests(MediaIsolationMixin, TestCase):
+         self.section = Section.objects.create(
+             project=self.project, code='ОВ', name='ОВ', order=1,
+         )
++        # Eager-задачи upload_document идут без DI — мокаем строгий адаптер.
++        mock_bge_adapter(self)
+         self.client.force_login(self.gip)
+ 
+     def test_kb_panel_has_both_blocks(self):
+diff --git a/ai_checks/views.py b/ai_checks/views.py
+index b36ca16..1d766fb 100644
+--- a/ai_checks/views.py
++++ b/ai_checks/views.py
+@@ -19,7 +19,7 @@ from django.conf import settings
+ from django.contrib.auth.decorators import login_required
+ from django.core.paginator import Paginator
+ from django.db.models import Count, F
+-from django.http import Http404
++from django.http import Http404, HttpResponse
+ from django.shortcuts import get_object_or_404, render
+ from django.utils import timezone
+ from django.views.decorators.cache import never_cache
+@@ -32,7 +32,6 @@ from ai_checks.domain.models import (
+ )
+ from ai_checks.domain.services import (
+     KB_CODE_PREFIX,
+-    BASE_NORM_LABEL,
+     generate_gip_report,
+     gip_report_docx,
+     gip_report_pdf,
+@@ -139,6 +138,11 @@ def rag_search(request, project_id: int):
+                 'Векторный поиск доступен только на PostgreSQL. '
+                 'Поднимите dev-стек: docker compose -f docker-compose.dev.yml up -d.'
+             )
++        except RuntimeError as exc:
++            # Блок 2 зачистки 2026-11-09: адаптер эмбеддингов строгий —
++            # без модели bge-m3/зависимостей он падает с понятной ошибкой
++            # вместо заглушки; показываем её в панели поиска (не 500).
++            error = str(exc)
+ 
+     response = render(request, 'ai_checks/_rag_results.html', {
+         'project': project,
+@@ -377,7 +381,7 @@ def _report_for_download(request, pk: int):
+ @login_required
+ @require_GET
+ def report_pdf(request, pk: int):
+-    """Скачивание отчёта ГИПа в PDF (PyMuPDF)."""
++    """Скачивание отчёта ГИПа в PDF (reportlab, шрифт с кириллицей)."""
+     report = _report_for_download(request, pk)
+     response = HttpResponse(
+         gip_report_pdf(report), content_type='application/pdf',
+diff --git a/sod_core/settings.py b/sod_core/settings.py
+index 3b25564..0acff5b 100644
+--- a/sod_core/settings.py
++++ b/sod_core/settings.py
+@@ -120,18 +120,27 @@ CELERY_TASK_ALWAYS_EAGER = env_bool('CELERY_TASK_ALWAYS_EAGER', True)
+ CELERY_TASK_EAGER_PROPAGATES = True
+ CELERY_TASK_IGNORE_RESULT = True
+ 
+-# Этап 19 (Ф4): LLM для отчётов ГИПа (DeepSeek/OpenRouter, OpenAI-совместимый).
+-# Без ключа используется заглушка (StubLLMProvider) — контур работает локально.
++# Этап 19 (Ф4): LLM для отчётов ГИПа и RAG-синтеза.
++# По умолчанию — OrcaRouter (OpenAI-совместимый шлюз, free-tier модели);
++# ключ AI_LLM_API_KEY, для работы из РФ — GigaChat (AI_GIGACHAT_*).
++# Без ключей используется заглушка (StubLLMProvider) — контур работает локально.
+ AI_LLM_API_KEY = os.environ.get('AI_LLM_API_KEY', '')
+-AI_LLM_BASE_URL = os.environ.get('AI_LLM_BASE_URL', 'https://api.deepseek.com/v1')
++AI_LLM_BASE_URL = os.environ.get(
++    'AI_LLM_BASE_URL', 'https://api.orcarouter.ai/v1',
++)
+ AI_LLM_MODEL = os.environ.get('AI_LLM_MODEL', 'deepseek-chat')
+ AI_LLM_TIMEOUT = int(os.environ.get('AI_LLM_TIMEOUT', '60'))
+ 
+-# Модели, доступные для выбора в UI ИИ-контура (OrcaRouter, free-tier).
+-# Выбранная модель уходит в LLMProvider.complete(model=...).
++# Модели, доступные для выбора в UI ИИ-контура (OrcaRouter + GigaChat).
++# Выбранная модель уходит в LLMProvider.complete(model=...): префикс
++# 'GigaChat-' маршрутизируется в GigaChatProvider, остальное — в
++# HttpLLMProvider (OrcaRouter). Порядок определяет порядок в выпадающем
++# списке (зачистка 2026-11-09: один список, дубль в конце файла удалён).
+ AI_AVAILABLE_MODELS = [
+-    ('deepseek/deepseek-v4.1-flash-free', 'DeepSeek V4.1 Flash (Free)'),
+-    ('z-ai/glm-5.3-flash-free', 'GLM 5.3 Flash (Free)'),
++    ('deepseek/deepseek-v4.1-flash-free', 'DeepSeek V4.1 Flash'),
++    ('z-ai/glm-5.3-flash-free', 'GLM 5.3 Flash'),
++    ('GigaChat-2-Max', 'GigaChat-2-Max (Сбер)'),
++    ('GigaChat-3-Pro', 'GigaChat-3-Pro (Сбер)'),
+ ]
+ 
+ # GigaChat (Сбер, работа из РФ): AI_LLM_PROVIDER=gigachat включает
+@@ -144,19 +153,17 @@ AI_GIGACHAT_TIMEOUT = int(os.environ.get('AI_GIGACHAT_TIMEOUT', '60'))
+ # AI_GIGACHAT_VERIFY_SSL=false (осознанно, для dev).
+ AI_GIGACHAT_VERIFY_SSL = env_bool('AI_GIGACHAT_VERIFY_SSL', True)
+ 
+-# Этап 19 (Ф4): ежедневные напоминания по незавершённым проверкам.
+-# django-celery-beat несовместим с Django 6.1 (требует Django<6.1), поэтому
+-# расписание — статическое (встроенный beat). Запуск воркера/beat:
+-#   celery -A sod_core worker -l info
+-#   celery -A sod_core beat -l info
+-from celery.schedules import crontab
+-
+-CELERY_BEAT_SCHEDULE = {
+-    'ai-checks-reminders-daily': {
+-        'task': 'ai_checks.check_reminders',
+-        'schedule': crontab(hour=8, minute=0),
+-    },
+-}
++# Этап 19 (Ф4): ежедневные напоминания по незавершённым проверкам —
++# ВЫВЕДЕНЫ (зачистка 2026-11-09): напоминания строились на находках
++# ИИ-нормоконтроля (PendingCheckResult); вместе с моделью удалены задача
++# ai_checks.check_reminders и CELERY_BEAT_SCHEDULE.
++
++# Эмбеддинги bge-m3 (блок 2 зачистки): локальная папка экспорта
++# (model.onnx + файлы токенизатора). Без модели адаптер падает с
++# понятной ошибкой — SHA-256-заглушки больше нет.
++AI_EMBEDDING_MODEL_DIR = os.environ.get(
++    'AI_EMBEDDING_MODEL_DIR', str(BASE_DIR / 'ml_models' / 'bge-m3'),
++)
+ 
+ 
+ REST_FRAMEWORK = {
+@@ -395,12 +402,3 @@ LOGGING = {
+     },
+ }
+ 
+-# Доступные LLM-модели для UI-выбора (код → читаемое имя).
+-# Порядок определяет порядок в выпадающем списке.
+-AI_AVAILABLE_MODELS = [
+-    ('GigaChat-2-Max', 'GigaChat-2-Max (Сбер)'),
+-    ('GigaChat-3-Pro', 'GigaChat-3-Pro (Сбер)'),
+-    ('GigaChat-3-Ultra', 'GigaChat-3-Ultra (Сбер)'),
+-    ('deepseek/deepseek-v4.1-flash-free', 'DeepSeek V4.1 Flash (Free)'),
+-    ('z-ai/glm-5.3-flash-free', 'GLM 5.3 Flash (Free)'),
+-]
+diff --git a/storage/adapters/templates/storage/document_detail.html b/storage/adapters/templates/storage/document_detail.html
+index 14e775f..fa535b2 100644
+--- a/storage/adapters/templates/storage/document_detail.html
++++ b/storage/adapters/templates/storage/document_detail.html
+@@ -493,7 +493,7 @@
+ <script src="{% static 'js/pdf_viewer.js' %}?v=20261112-t8"></script>
+ <script src="{% static 'js/splitter.js' %}?v=20261109-h6"></script>
+ <script src="{% static 'js/palette.js' %}?v=20261109-h6" defer></script>
+-{# Этап 19 (Ф1): HTMX для панели ИИ-проверки (флаг AI_CHECKS_ENABLED) #}
++{# Этап 19: HTMX для ИИ-вкладок проекта (поиск/отчёт/база знаний) #}
+ <script src="{% static 'js/vendor/htmx.min.js' %}" defer></script>
+ {% include 'storage/_palette.html' %}
+ {% if user.is_authenticated %}{% include 'storage/_feedback_modal.html' %}{% endif %}

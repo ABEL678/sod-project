@@ -21,6 +21,7 @@ from storage.domain.models import (
 )
 from ai_checks.tests import pdfgen
 from ai_checks.tests.base import MediaIsolationMixin
+from ai_checks.tests.mocks import mock_bge_adapter
 
 
 def make_pdf_bytes(text='Smoke sheet', font_size=10) -> bytes:
@@ -45,6 +46,8 @@ class KnowledgeBaseServiceTests(MediaIsolationMixin, TestCase):
         self.section = Section.objects.create(
             project=self.project, code='АР', name='Архитектура', order=1,
         )
+        # Строгий bge-m3-адаптер → мок (реальная модель в тестах не нужна).
+        mock_bge_adapter(self)
 
     def _upload(self, scope='project', doc_type='internal_standard'):
         return upload_knowledge_document(
@@ -144,6 +147,8 @@ class KnowledgeBaseViewTests(MediaIsolationMixin, TestCase):
         Section.objects.create(
             project=self.project, code='АР', name='АР', order=1,
         )
+        # Celery eager: kb_upload индексирует сразу — мокаем адаптер.
+        mock_bge_adapter(self)
         self.client.force_login(self.user)
 
     def test_kb_panel_renders(self):

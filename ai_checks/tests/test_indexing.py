@@ -9,7 +9,6 @@ from django.test import TestCase, override_settings
 from reportlab.lib.utils import simpleSplit
 from reportlab.pdfgen import canvas as rl_canvas
 
-from ai_checks.adapters.embedding_onnx import BgeM3OnnxEmbedding
 from ai_checks.domain.models import InternalChunk, InternalDocument
 from ai_checks.domain.services import (
     CHUNK_OVERLAP,
@@ -152,16 +151,15 @@ class InternalDocumentIndexingTests(MediaIsolationMixin, TestCase):
         self.assertFalse(first_ids & second_ids)
         self.assertEqual(self.internal_doc.chunks.count(), second_count)
 
-    def test_default_adapter_is_bge_m3_stub(self):
-        count = index_document(self.internal_doc, self.version.file.path)
-        self.assertGreater(count, 0)
-        chunk = self.internal_doc.chunks.order_by('seq').first()
-        self.assertEqual(len(chunk.embedding), 1024)
-        self.internal_doc.refresh_from_db()
-        # Блок 4 бэта-фиксов: без файлов модели адаптер работает на
-        # SHA-256 заглушке и честно подписывает чанки версией 'bge-m3-stub-v1'
-        # (после скачивания bge-m3 в ml_models/bge-m3 — 'bge-m3-onnx-v1').
-        self.assertEqual(self.internal_doc.embedding_model, 'bge-m3-stub-v1')
+    def test_default_adapter_requires_bge_m3_model(self):
+        # Блок 2 зачистки 2026-11-09: SHA-256-заглушка удалена — без
+        # локальной модели bge-m3 (ml_models/bge-m3/model.onnx) адаптер
+        # падает с понятной ошибкой, индексация не создаёт чанков
+        # с нерелевантными векторами.
+        with self.assertRaises(RuntimeError) as ctx:
+            index_document(self.internal_doc, self.version.file.path)
+        self.assertIn('bge-m3', str(ctx.exception))
+        self.assertEqual(self.internal_doc.chunks.count(), 0)
 
     def test_empty_pdf_returns_zero_chunks(self):
         empty_pdf = make_pdf([''])
