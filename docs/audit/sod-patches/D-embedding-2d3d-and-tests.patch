@@ -1,0 +1,71 @@
+# Патч D — реальная поддержка 2D/3D-выхода bge-m3 ONNX (D1) + ремонт
+# тестов 840cffc (D2): моки не проходили fail-fast guard
+# (feeds без input_ids/attention_mask → ValueError до сессии),
+# а нулевой вектор после L2-нормализации оставался нулём (норма ≠ 1.0).
+# После применения все 5 тестов ai_checks/tests/test_embedding_onnx_2d.py зелёные.
+# Применение: git apply D-embedding-2d3d-and-tests.patch
+diff --git a/ai_checks/adapters/embedding_onnx.py b/ai_checks/adapters/embedding_onnx.py
+index 339edbe..4b6478e 100644
+--- a/ai_checks/adapters/embedding_onnx.py
++++ b/ai_checks/adapters/embedding_onnx.py
+@@ -162,7 +162,21 @@ class BgeM3OnnxEmbedding(EmbeddingServicePort):
+                 f'(входы: {self._input_names})'
+             )
+         hidden = self._session.run([self._output_name], feeds)[0]
+-        cls = np.asarray(hidden)[:, 0, :].astype(np.float32)
++        hidden_arr = np.asarray(hidden)
++        if hidden_arr.ndim == 3:
++            # (batch, seq, hidden) — классический выход трансформера,
++            # берём CLS-токен (первый токен последовательности).
++            cls = hidden_arr[:, 0, :].astype(np.float32)
++        elif hidden_arr.ndim == 2:
++            # (batch, hidden) — экспорт уже со встроенным пулингом
++            # (CLS/mean): редукция по seq не нужна (заявлено в 840cffc).
++            cls = hidden_arr.astype(np.float32)
++        else:
++            raise ValueError(
++                'bge-m3 ONNX: неожиданная форма выхода '
++                f'{hidden_arr.shape}: ожидались (batch, hidden) или '
++                '(batch, seq, hidden)'
++            )
+         norms = np.linalg.norm(cls, axis=1, keepdims=True)
+         norms[norms == 0] = 1.0
+         cls = cls / norms
+diff --git a/ai_checks/tests/test_embedding_onnx_2d.py b/ai_checks/tests/test_embedding_onnx_2d.py
+index 3e00c8c..6d86df6 100644
+--- a/ai_checks/tests/test_embedding_onnx_2d.py
++++ b/ai_checks/tests/test_embedding_onnx_2d.py
+@@ -21,19 +21,27 @@ class BgeM3OnnxEmbedding2DTest(unittest.TestCase):
+ 
+         adapter = BgeM3OnnxEmbedding.__new__(BgeM3OnnxEmbedding)
+         adapter._dim = 1024
+-        adapter._tokenizer = mock.MagicMock()
+         adapter._session = mock.MagicMock()
+         adapter._output_name = 'output'
+         adapter._input_names = ('input_ids', 'attention_mask')
+ 
+-        # Токенизатор возвращает пустые словари — feeds формируются
+-        # только из input_names, которых нет в batch, поэтому feeds = {}.
+-        # Это не влияет: мокаем сессию, которая игнорирует feeds.
+-        adapter._tokenizer.return_value = {}
++        # Токенизатор возвращает минимальный батч input_ids/attention_mask:
++        # _embed_onnx собирает feeds по self._input_names и до вызова
++        # сессии падает с ValueError, если этих ключей нет (fail-fast).
++        def _fake_tokenize(texts, **kwargs):
++            size = len(texts)
++            return {
++                'input_ids': np.zeros((size, 8), dtype=np.int64),
++                'attention_mask': np.ones((size, 8), dtype=np.int64),
++            }
++
++        adapter._tokenizer = mock.MagicMock(side_effect=_fake_tokenize)
+ 
+         # ONNX-сессия возвращает заданную форму
+         adapter._session.run.return_value = [
+-            np.zeros(output_shape, dtype=output_dtype),
++            # Единицы, а не нули: нулевой вектор после L2-нормализации
++            # остаётся нулём (guard norms==0), норма ≠ 1.0.
++            np.ones(output_shape, dtype=output_dtype),
+         ]
+         return adapter
+ 

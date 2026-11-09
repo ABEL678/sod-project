@@ -1,0 +1,518 @@
+diff --git a/.env.example b/.env.example
+index 5be1429..aad9572 100644
+--- a/.env.example
++++ b/.env.example
+@@ -43,6 +43,11 @@ AI_GIGACHAT_MODEL=GigaChat-2
+ AI_GIGACHAT_TIMEOUT=60
+ AI_GIGACHAT_VERIFY_SSL=True
+ 
+-# Эмбеддинги bge-m3 (ONNX): папка с model.onnx и токенизатором.
++# Эмбеддинги bge-m3 — два режима (фабрика get_embedding_service()).
++# Ключ задан → облачный API Cloud.ru Foundation Models (OpenAI-
++# совместимый протокол, модель BAAI/bge-m3, dense 1024; локальная
++# модель 2.2 ГБ не нужна — режим прод-сервера/VDS).
++AI_EMBEDDING_API_KEY=
++# Ключ пуст → локальная ONNX-модель: папка с model.onnx и токенизатором.
+ # Без модели индексация/RAG падают с понятной ошибкой (заглушки нет).
+ AI_EMBEDDING_MODEL_DIR=
+diff --git a/.env.production.example b/.env.production.example
+index 12a2253..55a9637 100644
+--- a/.env.production.example
++++ b/.env.production.example
+@@ -22,4 +22,8 @@ AI_LLM_BASE_URL=https://api.orcarouter.ai/v1
+ AI_LLM_PROVIDER=
+ AI_GIGACHAT_AUTH_KEY=
+ AI_GIGACHAT_VERIFY_SSL=True
++# Облачные эмбеддинги bge-m3 (Cloud.ru Foundation Models, ключ обязателен
++# для прод-сервера): локальная ONNX-модель 2.2 ГБ не грузится в RAM —
++# на VDS с малым объёмом памяти OOM Killer убивал Gunicorn.
++AI_EMBEDDING_API_KEY=
+ AI_EMBEDDING_MODEL_DIR=
+diff --git a/ai_checks/adapters/embedding_onnx.py b/ai_checks/adapters/embedding_onnx.py
+index 339edbe..c18fb58 100644
+--- a/ai_checks/adapters/embedding_onnx.py
++++ b/ai_checks/adapters/embedding_onnx.py
+@@ -1,27 +1,39 @@
+-"""BgeM3OnnxEmbedding — адаптер EmbeddingService (Этап 19, Ф0.2).
++"""Адаптеры EmbeddingService: локальный ONNX и облако Cloud.ru.
+ 
+ Блок 2 патча зачистки 2026-11-09: SHA-256-заглушка полностью удалена —
+-эмбеддинги считаются только реальным ONNX-инференсом bge-m3 (dense,
+-1024, CLS-pooling + L2-нормализация; onnxruntime CPU + токенизатор
+-transformers). Векторы заглушки были несравнимы с bge-m3 и портили
++эмбеддинги считаются только реальным инференсом bge-m3 (dense, 1024,
++L2-нормализация). Векторы заглушки были несравнимы с bge-m3 и портили
+ RAG-поиск: смешивание stub- и onnx-чанков в одном индексе давало
+ нерелевантные попадания, поэтому «тихая» деградация запрещена.
+ 
+-Модель ожидается локальной папкой (settings.AI_EMBEDDING_MODEL_DIR,
+-по умолчанию <BASE_DIR>/ml_models/bge-m3):
+-- model.onnx              — экспорт BAAI/bge-m3 (ONNX, int8/fp16 опт.);
+-- tokenizer.json и прочие — файлы токенизатора HuggingFace.
++Два адаптера (выбор — фабрика get_embedding_service(), патч
++2026-11-10 «переход на облачные эмбеддинги»):
+ 
+-Если модель или зависимости (onnxruntime, transformers) недоступны —
+-конструктор падает с понятной ошибкой (RuntimeError) вместо тихой
+-заглушки: индексация и RAG-поиск требуют реальных векторов bge-m3.
++- BgeM3OnnxEmbedding — локальный ONNX-инференс (CPU). Модель ожидается
++  папкой (settings.AI_EMBEDDING_MODEL_DIR, по умолчанию
++  <BASE_DIR>/ml_models/bge-m3): model.onnx + файлы токенизатора
++  HuggingFace. Режим dev/офлайн; без модели или зависимостей
++  (onnxruntime, transformers) конструктор падает с понятной ошибкой
++  (RuntimeError) вместо тихой заглушки.
++
++- CloudRuEmbedding — облачный API Cloud.ru Foundation Models
++  (OpenAI-совместимый протокол, модель BAAI/bge-m3, dense 1024).
++  Режим прод-сервера: локальная модель 2.2 ГБ не грузится в RAM —
++  на VDS с малым объёмом памяти OOM Killer убивал Gunicorn при
++  индексации/поиске. Ключ — env AI_EMBEDDING_API_KEY; без ключа
++  адаптер не создаётся (fail-fast, RuntimeError).
++
++Оба адаптера возвращают векторы в одном пространстве (bge-m3 dense,
++L2) — чанки, проиндексированные локально и в облаке, сравнимы.
+ """
+ 
+ from __future__ import annotations
+ 
+ import logging
++import math
+ import os
+ from pathlib import Path
++from typing import Any
+ 
+ from django.conf import settings
+ 
+@@ -36,6 +48,20 @@ DEFAULT_MODEL_DIRNAME = 'ml_models/bge-m3'
+ # достаточно и заметно быстрее на CPU (у bge-m3 лимит 8192).
+ MAX_SEQ_TOKENS = 512
+ 
++# --- облачный адаптер (Cloud.ru Foundation Models) -------------------------
++
++# Переменная окружения с API-ключом Cloud.ru Foundation Models.
++CLOUD_EMBEDDING_API_KEY_ENV = 'AI_EMBEDDING_API_KEY'
++
++# OpenAI-совместимый эндпоинт и модель Cloud.ru (ТЗ патча 2026-11-10).
++DEFAULT_CLOUD_BASE_URL = 'https://foundation-models.api.cloud.ru/v1'
++DEFAULT_CLOUD_MODEL = 'BAAI/bge-m3'
++
++# Текстов в одном запросе к API: чанки индексации ~1000 символов,
++# 32 текста безопасны по размеру payload и таймауту; большие индексы
++# автоматически разбиваются на несколько последовательных запросов.
++CLOUD_MAX_BATCH_TEXTS = 32
++
+ 
+ class BgeM3OnnxEmbedding(EmbeddingServicePort):
+     """bge-m3 (ONNX, CPU): CLS-pooling + L2-нормализация, 1024.
+@@ -181,3 +207,132 @@ class BgeM3OnnxEmbedding(EmbeddingServicePort):
+                 f'ожидалась {self._dim} (проверьте экспорт модели)'
+             )
+         return vectors
++
++
++class CloudRuEmbedding(EmbeddingServicePort):
++    """bge-m3 через Cloud.ru Foundation Models (OpenAI-совместимый API).
++
++    Режим прод-сервера: векторы считает облачный API, локальная
++    ONNX-модель (2.2 ГБ) не нужна — на VDS с малым объёмом RAM она
++    вызывала OOM Killer (Gunicorn погибал при индексации/поиске).
++    Протокол тот же, что у локального адаптера: dense 1024,
++    L2-нормализация — векторы обоих адаптеров сравнимы в одном индексе.
++
++    Fail-fast: без API-ключа (env AI_EMBEDDING_API_KEY) конструктор
++    падает с понятной ошибкой RuntimeError — тихой деградации нет.
++    """
++
++    def __init__(
++        self,
++        api_key: str | None = None,
++        base_url: str = DEFAULT_CLOUD_BASE_URL,
++        model: str = DEFAULT_CLOUD_MODEL,
++        dim: int = 1024,
++        timeout: float = 30.0,
++        client: Any | None = None,
++    ) -> None:
++        """api_key/client — точки подмены для тестов; в бою оба по умолчанию.
++
++        client — готовый OpenAI-совместимый клиент (DI вместо
++        openai.OpenAI, полезно в тестах без сети). timeout — лимит на
++        один запрос API: дефолт SDK (600 с) не годится для вьюх и
++        Celery-воркеров — зависший запрос держит Gunicorn-воркер.
++        """
++        resolved_key = (
++            api_key or os.environ.get(CLOUD_EMBEDDING_API_KEY_ENV, '')
++        ).strip()
++        if not resolved_key:
++            raise RuntimeError(
++                'Облачные эмбеддинги Cloud.ru не настроены: не задан '
++                f'{CLOUD_EMBEDDING_API_KEY_ENV}. Укажите API-ключ Cloud.ru '
++                'Foundation Models в окружении или .env '
++                '(AI_EMBEDDING_API_KEY=...); если облако не нужно, удалите '
++                'переменную — тогда используется локальная ONNX-модель '
++                'bge-m3 (AI_EMBEDDING_MODEL_DIR).'
++            )
++        self._dim = dim
++        self._model = model
++        if client is None:
++            try:
++                from openai import OpenAI
++            except ImportError as exc:
++                raise RuntimeError(
++                    'Облачные эмбеддинги Cloud.ru: не установлен пакет '
++                    f'openai ({exc.name}). Выполните pip install openai '
++                    '(см. requirements.txt).'
++                ) from exc
++            client = OpenAI(
++                api_key=resolved_key, base_url=base_url, timeout=timeout,
++            )
++        self._client = client
++        logger.info(
++            'CloudRuEmbedding: клиент готов (%s, модель %s)', base_url, model,
++        )
++
++    # --- контракт EmbeddingService -----------------------------------------
++
++    def embed_texts(self, texts: list[str]) -> list[list[float]]:
++        """Векторы для каждого текста: батчи по 32 → API → L2-нормализация."""
++        if not texts:
++            return []
++        vectors: list[list[float]] = []
++        for start in range(0, len(texts), CLOUD_MAX_BATCH_TEXTS):
++            batch = list(texts[start:start + CLOUD_MAX_BATCH_TEXTS])
++            response = self._client.embeddings.create(
++                model=self._model, input=batch,
++            )
++            items = sorted(response.data, key=lambda item: item.index)
++            if len(items) != len(batch):
++                raise ValueError(
++                    'Cloud.ru эмбеддинги: API вернул неверное число '
++                    f'векторов {len(items)} != {len(batch)}'
++                )
++            vectors.extend(
++                self._normalize([float(value) for value in item.embedding])
++                for item in items
++            )
++        if len(vectors) != len(texts):
++            raise ValueError(
++                'Cloud.ru эмбеддинги: число векторов '
++                f'{len(vectors)} != число текстов {len(texts)}'
++            )
++        if vectors and len(vectors[0]) != self._dim:
++            raise ValueError(
++                'Cloud.ru эмбеддинги: размерность '
++                f'{len(vectors[0])} != ожидалась {self._dim} '
++                '(проверьте модель — нужна BAAI/bge-m3, dense 1024)'
++            )
++        return vectors
++
++    @property
++    def dim(self) -> int:
++        return self._dim
++
++    @property
++    def model_version(self) -> str:
++        return 'bge-m3-cloudru-v1'
++
++    # --- служебное ----------------------------------------------------------
++
++    @staticmethod
++    def _normalize(vector: list[float]) -> list[float]:
++        """L2-нормализация: единичная длина, как у bge-m3 (CLS-pooling)."""
++        norm = math.sqrt(sum(value * value for value in vector))
++        if norm == 0:
++            return vector
++        return [round(value / norm, 6) for value in vector]
++
++
++def get_embedding_service() -> EmbeddingServicePort:
++    """Фабрика адаптера эмбеддингов по окружению.
++
++    AI_EMBEDDING_API_KEY задан → CloudRuEmbedding (облачный API,
++    режим прод-сервера без локальной модели); иначе — локальный
++    BgeM3OnnxEmbedding (dev/офлайн). Переменная читается при вызове,
++    а не при импорте модуля: python-dotenv наполняет os.environ на
++    старте Django, а тесты подменяют окружение динамически.
++    """
++    api_key = (os.environ.get(CLOUD_EMBEDDING_API_KEY_ENV) or '').strip()
++    if api_key:
++        return CloudRuEmbedding(api_key=api_key)
++    return BgeM3OnnxEmbedding()
+diff --git a/ai_checks/domain/services.py b/ai_checks/domain/services.py
+index af9c9b3..7a6e5ee 100644
+--- a/ai_checks/domain/services.py
++++ b/ai_checks/domain/services.py
+@@ -135,9 +135,12 @@ def index_document(
+ 
+     if embedding_service is None:
+         # Ленивый импорт: домен не зависит от конкретного адаптера.
+-        from ai_checks.adapters.embedding_onnx import BgeM3OnnxEmbedding
++        # Фабрика сама выбирает адаптер по окружению: задан
++        # AI_EMBEDDING_API_KEY — облачный Cloud.ru, иначе локальный ONNX
++        # (см. embedding_onnx.py) — патч «облачные эмбеддинги» 2026-11-10.
++        from ai_checks.adapters.embedding_onnx import get_embedding_service
+ 
+-        embedding_service = BgeM3OnnxEmbedding()
++        embedding_service = get_embedding_service()
+ 
+     chunks = split_into_chunks(extract_pages(file_path))
+     if not chunks:
+@@ -209,9 +212,11 @@ def index_project_document(
+     try:
+         if embedding_service is None:
+             # Ленивый импорт: домен не зависит от конкретного адаптера.
+-            from ai_checks.adapters.embedding_onnx import BgeM3OnnxEmbedding
++            # Фабрика сама выбирает адаптер по окружению (облако/ONNX):
++            # см. embedding_onnx.py, патч «облачные эмбеддинги» 2026-11-10.
++            from ai_checks.adapters.embedding_onnx import get_embedding_service
+ 
+-            embedding_service = BgeM3OnnxEmbedding()
++            embedding_service = get_embedding_service()
+ 
+         chunks = split_into_chunks(extract_pages(version.file.path))
+         vectors: list[list[float]] = []
+@@ -370,9 +375,12 @@ def rag_answer(
+ 
+     if embedding_service is None:
+         # Ленивый импорт: домен не зависит от конкретного адаптера.
+-        from ai_checks.adapters.embedding_onnx import BgeM3OnnxEmbedding
++        # Фабрика сама выбирает адаптер по окружению: задан
++        # AI_EMBEDDING_API_KEY — облачный Cloud.ru, иначе локальный ONNX
++        # (см. embedding_onnx.py) — патч «облачные эмбеддинги» 2026-11-10.
++        from ai_checks.adapters.embedding_onnx import get_embedding_service
+ 
+-        embedding_service = BgeM3OnnxEmbedding()
++        embedding_service = get_embedding_service()
+ 
+     # company_id: явный аргумент (совместимость со старыми вызовами) или
+     # компания проекта — для tenant-фильтра базы знаний (8.2).
+diff --git a/ai_checks/ports/embedding.py b/ai_checks/ports/embedding.py
+index 9b0d48e..8f374c2 100644
+--- a/ai_checks/ports/embedding.py
++++ b/ai_checks/ports/embedding.py
+@@ -1,7 +1,10 @@
+ """Порт сервиса эмбеддингов (ARCHITECTURE.md 5.4, Этап 19).
+ 
+-Реализация MVP: ``BgeM3OnnxEmbedding`` (ONNX int8, CPU, локально);
+-внешние embedding-API не используются.
++Реализации: ``BgeM3OnnxEmbedding`` (ONNX int8, CPU, локально) и
++``CloudRuEmbedding`` (облачный API Cloud.ru Foundation Models,
++OpenAI-совместимый протокол, модель BAAI/bge-m3). Выбор — фабрика
++``get_embedding_service()``: задан ключ AI_EMBEDDING_API_KEY → облако,
++иначе локальная модель (патч «облачные эмбеддинги» 2026-11-10).
+ """
+ 
+ from __future__ import annotations
+diff --git a/ai_checks/tests/mocks.py b/ai_checks/tests/mocks.py
+index 72bd285..05560e5 100644
+--- a/ai_checks/tests/mocks.py
++++ b/ai_checks/tests/mocks.py
+@@ -13,21 +13,28 @@ from ai_checks.ports.llm import LLMResponse
+ 
+ 
+ def mock_bge_adapter(testcase, dim: int = 1024) -> None:
+-    """Подменяет строгий BgeM3OnnxEmbedding на MockEmbeddingService.
++    """Подменяет боевые эмбеддинги (ONNX и облако) на MockEmbeddingService.
+ 
+     Блок 2 зачистки 2026-11-09: боевой адаптер падает с RuntimeError,
+     если model.onnx не скачан (fail-fast вместо заглушки). Тестам,
+     где индексация запускается через задачи/вьюхи без DI
+     (upload_document, reindex_*, kb_upload), реальная модель не нужна —
+     векторный бэкенд тоже мокается (MockVectorBackend) или не участвует.
++
++    Патч «облачные эмбеддинги» 2026-11-10: вместе с классом
++    BgeM3OnnxEmbedding мокается и фабрика get_embedding_service() —
++    иначе на машине с заданным AI_EMBEDDING_API_KEY (прод-сервер)
++    тесты уходили бы в облачный API Cloud.ru вместо мока.
+     Вызывать из setUp: mock_bge_adapter(self).
+     """
+-    patcher = mock.patch(
++    service = MockEmbeddingService(dim=dim)
++    for target in (
+         'ai_checks.adapters.embedding_onnx.BgeM3OnnxEmbedding',
+-        return_value=MockEmbeddingService(dim=dim),
+-    )
+-    patcher.start()
+-    testcase.addCleanup(patcher.stop)
++        'ai_checks.adapters.embedding_onnx.get_embedding_service',
++    ):
++        patcher = mock.patch(target, return_value=service)
++        patcher.start()
++        testcase.addCleanup(patcher.stop)
+ 
+ 
+ class MockLLMProvider:
+diff --git a/ai_checks/tests/test_cloud_embedding.py b/ai_checks/tests/test_cloud_embedding.py
+new file mode 100644
+index 0000000..5ae1844
+--- /dev/null
++++ b/ai_checks/tests/test_cloud_embedding.py
+@@ -0,0 +1,154 @@
++"""Облачный адаптер эмбеддингов Cloud.ru (патч «облачные эмбеддинги»).
++
++Проверяем контракт EmbeddingService у CloudRuEmbedding: fail-fast без
++ключа, L2-нормализация, размерность, порядок и число векторов,
++батчирование по 32 текста, выбор адаптера фабрикой
++get_embedding_service(). Сеть не используется — вместо openai.OpenAI
++подставляется фейковый OpenAI-совместимый клиент (DI через client=).
++"""
++
++from __future__ import annotations
++
++import math
++import unittest
++from types import SimpleNamespace
++from unittest import mock
++
++from ai_checks.adapters.embedding_onnx import (
++    CLOUD_EMBEDDING_API_KEY_ENV,
++    DEFAULT_CLOUD_BASE_URL,
++    DEFAULT_CLOUD_MODEL,
++    CloudRuEmbedding,
++    get_embedding_service,
++)
++
++
++class FakeEmbeddingsAPI:
++    """Фейковый OpenAI-совместимый клиент (только embeddings.create).
++
++    Отдаёт ненормализованный вектор [3, 0, 0, ...] длины dim для
++    каждого текста — тест видит, что адаптер сам делает L2-нормализацию
++    (результат [1, 0, 0, ...]). count_delta имитирует недобросовестный
++    ответ API (для проверки валидации числа векторов); create_calls
++    записывает параметры каждого запроса (проверка модели и батчей).
++    """
++
++    def __init__(self, dim: int = 4, count_delta: int = 0) -> None:
++        self._dim = dim
++        self._count_delta = count_delta
++        self.create_calls: list[dict] = []
++        # Как в openai.OpenAI: метод create живёт на client.embeddings.
++        self.embeddings = SimpleNamespace(create=self._create)
++
++    def _create(self, *, model: str, input: list[str]):  # noqa: A002 — как в SDK
++        self.create_calls.append({'model': model, 'input': list(input)})
++        raw = [3.0] + [0.0] * (self._dim - 1)
++        count = max(0, len(input) + self._count_delta)
++        data = [
++            SimpleNamespace(embedding=raw, index=index)
++            for index in range(count)
++        ]
++        return SimpleNamespace(data=data)
++
++
++def _cloud_adapter(dim: int = 4, **kwargs):
++    """CloudRuEmbedding с фейковым клиентом: без сети, ключ фиксированный."""
++    client = FakeEmbeddingsAPI(dim=dim)
++    return (
++        CloudRuEmbedding(api_key='test-key', dim=dim, client=client, **kwargs),
++        client,
++    )
++
++
++class CloudRuEmbeddingContractTest(unittest.TestCase):
++    """CloudRuEmbedding: fail-fast, нормализация, батчи, валидация."""
++
++    def test_fail_fast_without_key(self):
++        """Без AI_EMBEDDING_API_KEY конструктор падает с RuntimeError."""
++        for env_value in ('', '   '):
++            with self.subTest(env_value=env_value):
++                with mock.patch.dict(
++                    'os.environ', {CLOUD_EMBEDDING_API_KEY_ENV: env_value},
++                ):
++                    with self.assertRaises(RuntimeError) as ctx:
++                        CloudRuEmbedding()
++                self.assertIn('AI_EMBEDDING_API_KEY', str(ctx.exception))
++
++    def test_embed_texts_normalizes_and_keeps_order(self):
++        """L2-нормализация, сохранение порядка и метаданные контракта."""
++        adapter, client = _cloud_adapter()
++        vectors = adapter.embed_texts(['текст один', 'текст два'])
++        self.assertEqual(len(vectors), 2)
++        for vector in vectors:
++            norm = math.sqrt(sum(value * value for value in vector))
++            self.assertAlmostEqual(norm, 1.0, places=5)
++        self.assertEqual(vectors[0][0], 1.0)
++        self.assertEqual(adapter.dim, 4)
++        self.assertEqual(adapter.model_version, 'bge-m3-cloudru-v1')
++        self.assertEqual(client.create_calls[0]['model'], 'BAAI/bge-m3')
++
++    def test_embed_texts_empty_input(self):
++        """Пустой список → пустой ответ, без обращения к API."""
++        adapter, client = _cloud_adapter()
++        self.assertEqual(adapter.embed_texts([]), [])
++        self.assertEqual(client.create_calls, [])
++
++    def test_large_input_is_batched(self):
++        """40 текстов → 2 запроса (батч 32 + 8), порядок сохранён."""
++        adapter, client = _cloud_adapter()
++        texts = [f'текст {index}' for index in range(40)]
++        vectors = adapter.embed_texts(texts)
++        self.assertEqual(len(vectors), 40)
++        self.assertEqual(len(client.create_calls), 2)
++        self.assertEqual(len(client.create_calls[0]['input']), 32)
++        self.assertEqual(client.create_calls[1]['input'], texts[32:])
++
++    def test_api_wrong_count_raises(self):
++        """API вернул не все векторы → ValueError (fail-fast)."""
++        client = FakeEmbeddingsAPI(dim=4, count_delta=-1)
++        adapter = CloudRuEmbedding(
++            api_key='test-key', dim=4, client=client,
++        )
++        with self.assertRaises(ValueError):
++            adapter.embed_texts(['а', 'б'])
++
++    def test_api_wrong_dim_raises(self):
++        """Размерность вектора не 1024 → ValueError (fail-fast)."""
++        client = FakeEmbeddingsAPI(dim=3)  # адаптер ждёт 1024 (dim по умолчанию)
++        adapter = CloudRuEmbedding(api_key='test-key', client=client)
++        with self.assertRaises(ValueError):
++            adapter.embed_texts(['а'])
++
++    def test_defaults_match_cloud_ru_spec(self):
++        """Эндпоинт и модель по умолчанию — по ТЗ Cloud.ru Foundation Models."""
++        self.assertEqual(
++            DEFAULT_CLOUD_BASE_URL,
++            'https://foundation-models.api.cloud.ru/v1',
++        )
++        self.assertEqual(DEFAULT_CLOUD_MODEL, 'BAAI/bge-m3')
++
++
++class GetEmbeddingServiceTest(unittest.TestCase):
++    """Фабрика get_embedding_service(): облако по ключу, иначе ONNX."""
++
++    def test_with_key_returns_cloud_adapter(self):
++        """AI_EMBEDDING_API_KEY задан → CloudRuEmbedding(api_key=...)."""
++        env = {CLOUD_EMBEDDING_API_KEY_ENV: 'key-from-env'}
++        with mock.patch.dict('os.environ', env):
++            with mock.patch(
++                'ai_checks.adapters.embedding_onnx.CloudRuEmbedding',
++            ) as cloud_cls:
++                service = get_embedding_service()
++        self.assertIs(service, cloud_cls.return_value)
++        cloud_cls.assert_called_once_with(api_key='key-from-env')
++
++    def test_without_key_returns_onnx_adapter(self):
++        """Ключ пуст → локальный BgeM3OnnxEmbedding (dev-режим)."""
++        env = {CLOUD_EMBEDDING_API_KEY_ENV: ''}
++        with mock.patch.dict('os.environ', env):
++            with mock.patch(
++                'ai_checks.adapters.embedding_onnx.BgeM3OnnxEmbedding',
++            ) as onnx_cls:
++                service = get_embedding_service()
++        self.assertIs(service, onnx_cls.return_value)
++        onnx_cls.assert_called_once_with()
+diff --git a/requirements.txt b/requirements.txt
+index 341ddf2..36ba047 100644
+--- a/requirements.txt
++++ b/requirements.txt
+@@ -15,6 +15,10 @@ numpy==2.5.4
+ onnxruntime==1.31.1
+ # Блок 4 бэта-фиксов: токенизатор bge-m3 для реальных эмбеддингов.
+ transformers>=4.51,<6
++# Облачные эмбеддинги Cloud.ru Foundation Models (OpenAI-совместимый
++# API, модель BAAI/bge-m3). Клиент используется только при заданном
++# AI_EMBEDDING_API_KEY; без ключа индексация идёт локальным ONNX.
++openai==3.48.0
+ openpyxl==3.1.5
+ packaging==26.3
+ pillow==13.0.0

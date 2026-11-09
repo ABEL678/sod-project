@@ -1,0 +1,19 @@
+# Патч C — хотфикс регрессии 0951fd8: UnboundLocalError: used_model
+# в rag_answer при пустой выдаче поиска (sources == []). Закрывает
+# красный test_rag.test_empty_result и 500 на вкладке ИИ-поиска.
+# База: upstream main @ 0951fd8. Применение: git apply C-used-model-hotfix-0951fd8.patch
+diff --git a/ai_checks/domain/services.py b/ai_checks/domain/services.py
+index af9c9b3..affcf20 100644
+--- a/ai_checks/domain/services.py
++++ b/ai_checks/domain/services.py
+@@ -494,6 +494,10 @@ def rag_answer(
+             })
+ 
+     answer = 'Ничего не найдено'
++    # Регрессия 0951fd8: used_model присваивается только внутри ветки
++    # «if sources:» — при пустой выдаче RagQuery.objects.create ниже
++    # падал с UnboundLocalError (test_empty_result красный).
++    used_model = ''
+     if sources:
+         # Формируем контекст для LLM-синтеза.
+         source_lines = []

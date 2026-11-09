@@ -1,0 +1,17 @@
+# Патч B (ИСТОРИЧЕСКИЙ) — хотфикс UnboundLocalError: used_model в rag_answer.
+# ВАЖНО: этот дифф собран против структуры services.py ДО коммита 0951fd8.
+# На текущем HEAD 0951fd8 его применять НЕ нужно и нельзя (конфликт):
+# ровно этот баг на HEAD закрывает патч C-used-model-hotfix-0951fd8.patch.
+# Оставлен для записи/воспроизведения на старой базе (840cffc и ранее).
+--- a/ai_checks/domain/services.py
++++ b/ai_checks/domain/services.py
+@@ (rag_answer: между дайджест-блоком и вторым «if sources:»)
+         answer = '\n\n'.join(
+             f'[{source["document_title"]}] {source["text"][:300]}'
+             for source in sources[:3]
+         )
+ 
++    # Хотфикс: used_model используется ниже безусловно
++    # (RagQuery.objects.create) — при пустой выдаче был UnboundLocalError.
++    used_model = ''
+     if sources:

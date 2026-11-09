@@ -1,0 +1,18 @@
+# Патч E (гигиена) — удалить отладочный скрипт из корня репозитория:
+# грузит 2.2 ГБ ONNX-модель при запуске (OOM-проблема VDS), обходит
+# фабрику, в тест-раннер не входит. Роль выполняет
+# ai_checks/tests/test_embedding_onnx_2d.py.
+# Применение: git apply E-remove-test-embed-script.patch
+diff --git a/_test_embed.py b/_test_embed.py
+deleted file mode 100644
+index f8b59da..0000000
+--- a/_test_embed.py
++++ /dev/null
+@@ -1,7 +0,0 @@
+-from ai_checks.adapters.embedding_onnx import BgeM3OnnxEmbedding
+-
+-emb = BgeM3OnnxEmbedding()
+-result = emb.embed_texts(['проверка связи'])
+-print(f'вектор: {len(result[0])} измерений')
+-norm = sum(v * v for v in result[0]) ** 0.5
+-print(f'L2-норма: {norm:.6f}')

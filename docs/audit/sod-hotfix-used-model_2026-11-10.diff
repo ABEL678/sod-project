@@ -1,0 +1,17 @@
+diff --git a/ai_checks/domain/services.py b/ai_checks/domain/services.py
+index af9c9b3..c5ac6ea 100644
+--- a/ai_checks/domain/services.py
++++ b/ai_checks/domain/services.py
+@@ -494,6 +494,12 @@ def rag_answer(
+             })
+ 
+     answer = 'Ничего не найдено'
++    # Модель для истории (RagQuery.model): LLM вызывается только при
++    # наличии источников, поэтому used_model инициализируем сразу —
++    # запрошенной моделью (UI, треб. 14). Иначе пустой результат поиска
++    # падал с UnboundLocalError на used_model[:100] при сохранении
++    # RagQuery (регрессия коммита 0951fd8, хотфикс 2026-11-10).
++    used_model = model or ''
+     if sources:
+         # Формируем контекст для LLM-синтеза.
+         source_lines = []
