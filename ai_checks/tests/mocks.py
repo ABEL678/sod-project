@@ -13,21 +13,24 @@ from ai_checks.ports.llm import LLMResponse
 
 
 def mock_bge_adapter(testcase, dim: int = 1024) -> None:
-    """Подменяет строгий BgeM3OnnxEmbedding на MockEmbeddingService.
+    """Подменяет боевые эмбеддинги (GigaChat и ONNX) на MockEmbeddingService.
 
-    Блок 2 зачистки 2026-11-09: боевой адаптер падает с RuntimeError,
-    если model.onnx не скачан (fail-fast вместо заглушки). Тестам,
-    где индексация запускается через задачи/вьюхи без DI
-    (upload_document, reindex_*, kb_upload), реальная модель не нужна —
-    векторный бэкенд тоже мокается (MockVectorBackend) или не участвует.
+    Патчим в источнике (ai_checks.adapters.embedding_gigachat) —
+    функции в services.py импортируют get_embedding_service внутри
+    тела функций, поэтому мока срабатывает при каждом вызове,
+    включая Celery-задачи (CELERY_TASK_ALWAYS_EAGER=True).
+    Одновременно мокается и BgeM3OnnxEmbedding
+    (офлайн-фолбэк) на случай AI_EMBEDDING_PROVIDER=onnx.
     Вызывать из setUp: mock_bge_adapter(self).
     """
-    patcher = mock.patch(
+    service = MockEmbeddingService(dim=dim)
+    for target in (
+        'ai_checks.adapters.embedding_gigachat.get_embedding_service',
         'ai_checks.adapters.embedding_onnx.BgeM3OnnxEmbedding',
-        return_value=MockEmbeddingService(dim=dim),
-    )
-    patcher.start()
-    testcase.addCleanup(patcher.stop)
+    ):
+        patcher = mock.patch(target, return_value=service)
+        patcher.start()
+        testcase.addCleanup(patcher.stop)
 
 
 class MockLLMProvider:

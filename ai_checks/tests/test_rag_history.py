@@ -26,7 +26,7 @@ from storage.domain.models import Company, Document, Project, Section
 
 
 @override_settings(
-    AI_LLM_PROVIDER='', AI_LLM_API_KEY='', AI_GIGACHAT_AUTH_KEY='',
+    AI_GIGACHAT_AUTH_KEY='',
 )
 class CrossSourceRagTests(TestCase):
     """Треб. 6: объединение проектных чанков и базы знаний."""
@@ -173,7 +173,7 @@ class CrossSourceRagTests(TestCase):
             self.question,
             self.project.pk,
             self.user,
-            model='z-ai/glm-5.3-flash-free',
+            model='GigaChat-2-Max',
             embedding_service=self.embedding,
             vector_backend=self.backend,
             project_backend=self.project_backend,
@@ -183,7 +183,7 @@ class CrossSourceRagTests(TestCase):
         self.assertEqual(query.user, self.user)
         self.assertEqual(query.question, self.question)
         self.assertTrue(query.sources)
-        self.assertEqual(query.model, 'z-ai/glm-5.3-flash-free')
+        self.assertEqual(query.model, 'GigaChat-2-Max')
 
     def test_rag_query_saved_on_empty_result(self):
         """Пустой результат тоже попадает в историю."""
@@ -238,7 +238,7 @@ class ProjectChunkFactory:
 
 
 @override_settings(
-    AI_LLM_PROVIDER='', AI_LLM_API_KEY='', AI_GIGACHAT_AUTH_KEY='',
+    AI_GIGACHAT_AUTH_KEY='',
     AI_CHECKS_ENABLED=True,
 )
 class RagHistoryViewTests(TestCase):
@@ -351,7 +351,7 @@ class RagHistoryViewTests(TestCase):
     def test_history_item_detail(self):
         """Треб. 9: клик по строке — ответ и источники."""
         query = self._log_query(
-            'Вопрос с источником', self.user, model='deepseek/deepseek-v4.1-flash-free',
+            'Вопрос с источником', self.user, model='GigaChat-2-Max',
         )
         RagQuery.objects.filter(pk=query.pk).update(
             sources=[{
@@ -369,4 +369,4 @@ class RagHistoryViewTests(TestCase):
         )
         self.assertContains(response, 'ОВ-05 — Отопление')
         self.assertContains(response, 'лист 3')
-        self.assertContains(response, 'deepseek/deepseek-v4.1-flash-free')
+        self.assertContains(response, 'GigaChat-2-Max')

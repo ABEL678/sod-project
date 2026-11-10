@@ -18,7 +18,7 @@ from ai_checks.domain.services import (
 )
 from ai_checks.tests.base import MediaIsolationMixin
 from ai_checks.tests.pdfgen import cyr_font
-from ai_checks.tests.mocks import MockEmbeddingService
+from ai_checks.tests.mocks import MockEmbeddingService, mock_bge_adapter
 from storage.domain.models import (
     Company,
     Document,
@@ -97,13 +97,14 @@ class InternalDocumentIndexingTests(MediaIsolationMixin, TestCase):
         self.version = version
         self.internal_doc = InternalDocument.objects.create(
             tenant_scope=InternalDocument.TenantScope.COMPANY,
-            company=self.company,
             project=None,  # 8.2: для company-scope project = NULL
+            company=self.company,
             source_document=self.document,
             doc_type=InternalDocument.DocType.INTERNAL_STANDARD,
             title='Внутренний стандарт',
             created_by=self.user,
         )
+        mock_bge_adapter(self)
 
     def test_index_creates_chunks_with_vectors(self):
         count = index_document(
@@ -151,15 +152,12 @@ class InternalDocumentIndexingTests(MediaIsolationMixin, TestCase):
         self.assertFalse(first_ids & second_ids)
         self.assertEqual(self.internal_doc.chunks.count(), second_count)
 
-    def test_default_adapter_requires_bge_m3_model(self):
-        # Блок 2 зачистки 2026-11-09: SHA-256-заглушка удалена — без
-        # локальной модели bge-m3 (ml_models/bge-m3/model.onnx) адаптер
-        # падает с понятной ошибкой, индексация не создаёт чанков
-        # с нерелевантными векторами.
-        with self.assertRaises(RuntimeError) as ctx:
-            index_document(self.internal_doc, self.version.file.path)
-        self.assertIn('bge-m3', str(ctx.exception))
-        self.assertEqual(self.internal_doc.chunks.count(), 0)
+    def test_default_adapter_uses_mock(self):
+        # mock_bge_adapter применён в setUp — default-адаптер мокается,
+        # индексация проходит успешно через MockEmbeddingService.
+        count = index_document(self.internal_doc, self.version.file.path)
+        self.assertGreater(count, 0)
+        self.assertEqual(self.internal_doc.chunks.count(), count)
 
     def test_empty_pdf_returns_zero_chunks(self):
         empty_pdf = make_pdf([''])

@@ -1,9 +1,11 @@
 """HTTP-адаптеры LLMProvider (Этап 19, Ф4) + заглушка без API-ключа.
 
-Два рабочих провайдера (зачистка 2026-11-09, блок «настроить LLM»):
-- OrcaRouter — OpenAI-совместимый шлюз https://api.orcarouter.ai/v1
-  (deepseek/*, z-ai/*, …); ключ — AI_LLM_API_KEY;
-- GigaChat (Сбер, работа из РФ) — OAuth + OpenAI-совместимый API.
+Рабочий провайдер один (зачистка 2026-11-10, «только экосистема Сбера»):
+- GigaChat (Сбер, работа из РФ) — OAuth + OpenAI-совместимый API;
+  ключ — AI_GIGACHAT_AUTH_KEY (Authorization Key, Base64).
+OrcaRouter и прочие сторонние шлюзы удалены вместе с настройками
+AI_LLM_* — любая модель из AI_AVAILABLE_MODELS уходит в GigaChatProvider.
+Эмбеддинги того же контура — ai_checks/adapters/embedding_gigachat.py.
 
 Тексты промптов/ответов в БД не пишутся (приватность) — только
 метаданные в LLMCallLog. Retry ×2, таймаут ≤ 12 с (ARCHITECTURE.md 5.3,
@@ -20,74 +22,6 @@ import httpx
 from django.conf import settings
 
 from ai_checks.ports.llm import LLMResponse
-
-
-class HttpLLMProvider:
-    """OpenAI-совместимый HTTP-провайдер (OrcaRouter/DeepSeek/OpenRouter)."""
-
-    name = 'orcarouter'
-
-    def __init__(
-        self,
-        api_key: str,
-        base_url: str = 'https://api.deepseek.com/v1',
-        model: str = 'deepseek-chat',
-        timeout: float = 60.0,
-        retries: int = 3,
-    ) -> None:
-        self.api_key = api_key
-        self.base_url = base_url.rstrip('/')
-        self.model = model
-        self.timeout = timeout
-        self.retries = retries
-
-    def complete(
-        self,
-        messages: list[dict],
-        *,
-        model: str | None = None,
-        json_mode: bool = False,
-    ) -> LLMResponse:
-        payload = {
-            'model': model or self.model,
-            'messages': messages,
-        }
-        if json_mode:
-            payload['response_format'] = {'type': 'json_object'}
-
-        last_error: Exception | None = None
-        for attempt in range(self.retries):
-            started = time.monotonic()
-            try:
-                with httpx.Client(timeout=self.timeout) as client:
-                    response = client.post(
-                        f'{self.base_url}/chat/completions',
-                        headers={
-                            'Authorization': f'Bearer {self.api_key}',
-                            'Content-Type': 'application/json',
-                        },
-                        json=payload,
-                    )
-                    response.raise_for_status()
-                    data = response.json()
-                latency_ms = int((time.monotonic() - started) * 1000)
-                content = data['choices'][0]['message']['content']
-                usage = data.get('usage') or {}
-                return LLMResponse(
-                    text=content,
-                    model=data.get('model') or payload['model'],
-                    prompt_tokens=int(usage.get('prompt_tokens') or 0),
-                    completion_tokens=int(
-                        usage.get('completion_tokens') or 0
-                    ),
-                    latency_ms=latency_ms,
-                    raw={'id': data.get('id')},
-                )
-            except (httpx.HTTPError, KeyError, ValueError, TypeError) as exc:
-                last_error = exc
-                if attempt < self.retries - 1:
-                    time.sleep(0.5 * (attempt + 1))
-        raise RuntimeError(f'LLM-запрос не удался: {last_error}')
 
 
 class StubLLMProvider:
@@ -178,56 +112,31 @@ class StubLLMProvider:
 
 
 def get_llm_provider(model: str | None = None):
-    """Фабрика провайдера по имени модели (зачистка 2026-11-09).
+    """Фабрика провайдера (зачистка 2026-11-10: только GigaChat).
 
-    Правила маршрутизации:
-    - model начинается с 'GigaChat-' → GigaChatProvider (Сбер, РФ);
-    - иначе (deepseek/*, z-ai/*, …) → HttpLLMProvider (OrcaRouter);
-    - model не задан → провайдер из AI_LLM_PROVIDER ('gigachat' →
-      GigaChatProvider, иначе OrcaRouter);
-    - нет ключа у выбранного провайдера → заглушка StubLLMProvider.
+    Любая модель из AI_AVAILABLE_MODELS уходит в GigaChatProvider
+    (Сбер, РФ); model=None → модель из AI_GIGACHAT_MODEL.
+    Нет ключа AI_GIGACHAT_AUTH_KEY → заглушка StubLLMProvider
+    (контур не падает, ответ синтезируется из найденных фрагментов).
     """
-    use_gigachat = bool(
-        (model or '').startswith('GigaChat-')
-        or (
-            model is None
-            and (getattr(settings, 'AI_LLM_PROVIDER', '') or '') == 'gigachat'
-        )
-    )
-
-    if use_gigachat:
-        auth_key = (
-            getattr(settings, 'AI_GIGACHAT_AUTH_KEY', '') or ''
-        ).strip()
-        if not auth_key:
-            return StubLLMProvider()
-        # Бюджет синхронного LLM-вызова: 12 c x 2 попытки + паузы ~ 1.5 c
-        # = максимум ~25.5 c < 30 c (таймаут воркера gunicorn).
-        return GigaChatProvider(
-            auth_key,
-            model=model or getattr(
-                settings, 'AI_GIGACHAT_MODEL', 'GigaChat-2',
-            ),
-            timeout=min(
-                float(getattr(settings, 'AI_GIGACHAT_TIMEOUT', 60)), 12.0,
-            ),
-            verify_ssl=bool(
-                getattr(settings, 'AI_GIGACHAT_VERIFY_SSL', True),
-            ),
-            retries=2,
-        )
-
-    # OpenAI-совместимые провайдеры (OrcaRouter: deepseek/*, z-ai/*, …).
-    api_key = (getattr(settings, 'AI_LLM_API_KEY', '') or '').strip()
-    if not api_key:
+    auth_key = (
+        getattr(settings, 'AI_GIGACHAT_AUTH_KEY', '') or ''
+    ).strip()
+    if not auth_key:
         return StubLLMProvider()
-    return HttpLLMProvider(
-        api_key=api_key,
-        base_url=getattr(
-            settings, 'AI_LLM_BASE_URL', 'https://api.orcarouter.ai/v1',
+    # Бюджет синхронного LLM-вызова: 12 c x 2 попытки + паузы ~ 1.5 c
+    # = максимум ~25.5 c < 30 c (таймаут воркера gunicorn).
+    return GigaChatProvider(
+        auth_key,
+        model=model or getattr(
+            settings, 'AI_GIGACHAT_MODEL', 'GigaChat-2-Max',
         ),
-        model=model or getattr(settings, 'AI_LLM_MODEL', 'deepseek-chat'),
-        timeout=min(float(getattr(settings, 'AI_LLM_TIMEOUT', 60)), 12.0),
+        timeout=min(
+            float(getattr(settings, 'AI_GIGACHAT_TIMEOUT', 60)), 12.0,
+        ),
+        verify_ssl=bool(
+            getattr(settings, 'AI_GIGACHAT_VERIFY_SSL', True),
+        ),
         retries=2,
     )
 
@@ -250,7 +159,7 @@ class GigaChatProvider:
     def __init__(
         self,
         authorization_key: str,
-        model: str = 'GigaChat-2',
+        model: str = 'GigaChat-2-Max',
         timeout: float = 60.0,
         retries: int = 3,
         verify_ssl: bool = True,
@@ -260,12 +169,22 @@ class GigaChatProvider:
         self.timeout = timeout
         self.retries = retries
         self.verify_ssl = verify_ssl
+        # Базовый URL OpenAI-совместимого API: AI_GIGACHAT_API_BASE_URL,
+        # по умолчанию — публичный контур api.giga.chat/v1.
+        self.api_base_url = (
+            getattr(settings, 'AI_GIGACHAT_API_BASE_URL', '')
+            or self.API_BASE_URL
+        ).rstrip('/')
         self._access_token: str | None = None
         self._token_expires_at: float = 0.0
         self._token_lock = threading.Lock()
 
-    def _get_token(self) -> str:
-        """OAuth-токен: из кэша (25 мин) или новый запрос."""
+    def get_token(self) -> str:
+        """OAuth-токен: из кэша (25 мин) или новый запрос.
+
+        Публичный метод: используется и эмбеддингами GigaChat
+        (embedding_gigachat.py) — ключ авторизации один на контур.
+        """
         with self._token_lock:
             now = time.monotonic()
             if self._access_token and now < self._token_expires_at:
@@ -288,7 +207,7 @@ class GigaChatProvider:
             self._token_expires_at = now + self.TOKEN_TTL_SECONDS
             return token
 
-    def _invalidate_token(self) -> None:
+    def invalidate_token(self) -> None:
         with self._token_lock:
             self._access_token = None
             self._token_expires_at = 0.0
@@ -311,12 +230,12 @@ class GigaChatProvider:
         for attempt in range(self.retries):
             started = time.monotonic()
             try:
-                token = self._get_token()
+                token = self.get_token()
                 with httpx.Client(
                     timeout=self.timeout, verify=self.verify_ssl,
                 ) as client:
                     response = client.post(
-                        f'{self.API_BASE_URL}/chat/completions',
+                        f'{self.api_base_url}/chat/completions',
                         headers={
                             'Authorization': f'Bearer {token}',
                             'Content-Type': 'application/json',
@@ -325,8 +244,7 @@ class GigaChatProvider:
                     )
                     if response.status_code == 401:
                         # Токен отозван/истёк раньше — сбрасываем кэш.
-                        self._invalidate_token()
-                        response.raise_for_status()
+                        self.invalidate_token()
                     response.raise_for_status()
                     data = response.json()
                 latency_ms = int((time.monotonic() - started) * 1000)

@@ -1,0 +1,1217 @@
+diff --git a/.env.example b/.env.example
+index 5be1429..c5f417d 100644
+--- a/.env.example
++++ b/.env.example
+@@ -27,22 +27,31 @@ DJANGO_SECURE_SSL_REDIRECT=True
+ # Фича-флаг: False — контур выключен (вкладки скрыты, вьюхи отдают 404).
+ AI_CHECKS_ENABLED=False
+ 
+-# LLM: OrcaRouter (OpenAI-совместимый шлюз, deepseek/*, z-ai/*) или
+-# GigaChat (Сбер, работа из РФ). Модель из UI с префиксом 'GigaChat-'
+-# уходит в GigaChatProvider, остальное — в HttpLLMProvider (OrcaRouter).
+-# Без ключей работает заглушка StubLLMProvider (контур не падает).
+-AI_LLM_API_KEY=
+-AI_LLM_BASE_URL=https://api.orcarouter.ai/v1
+-AI_LLM_MODEL=deepseek-chat
+-AI_LLM_TIMEOUT=60
+-# Дефолт-провайдер без явной модели: пусто → OrcaRouter, 'gigachat' → GigaChat.
+-AI_LLM_PROVIDER=
+-# GigaChat: Authorization Key (Base64), таймаут, TLS (НУЦ Минцифры или false).
++# LLM: только GigaChat (Сбер, работа из РФ). OrcaRouter удалён
++# (зачистка 2026-11-10, «только экосистема Сбера»). Authorization Key
++# из личного кабинета GigaChat (Base64). Без ключа работает заглушка
++# StubLLMProvider (контур не падает, ответ синтезируется из фрагментов).
+ AI_GIGACHAT_AUTH_KEY=
+-AI_GIGACHAT_MODEL=GigaChat-2
++# Модель по умолчанию, если в UI не выбрана (GigaChat-2-Max проверен).
++AI_GIGACHAT_MODEL=GigaChat-2-Max
+ AI_GIGACHAT_TIMEOUT=60
++# TLS: НУЦ Минцифры установлен → True; иначе False (осознанно, dev).
+ AI_GIGACHAT_VERIFY_SSL=True
++# Базовый URL OpenAI-совместимого API GigaChat (обычно менять не нужно).
++AI_GIGACHAT_API_BASE_URL=https://api.giga.chat/v1
+ 
+-# Эмбеддинги bge-m3 (ONNX): папка с model.onnx и токенизатором.
+-# Без модели индексация/RAG падают с понятной ошибкой (заглушки нет).
++# Эмбеддинги: облако Сбера (AI_EMBEDDING_PROVIDER=gigachat) или
++# офлайн-фолбэк bge-m3 (onnx). Выбор модели GigaChat: Embeddings,
++# Embeddings-2, Embeddings-3B-2025-09, EmbeddingsGigaR.
++# ВАЖНО: смена модели эмбеддингов = полная переиндексация документов
++# («Переиндексировать проект» + перезагрузка базы знаний).
++AI_EMBEDDING_PROVIDER=gigachat
++AI_EMBEDDING_MODEL=Embeddings
++# Размерность вектора (колонки pgvector — 1024). Если выбранная модель
++# выдаёт другую размерность, адаптер упадёт с понятной ошибкой.
++AI_EMBEDDING_DIM=1024
++AI_EMBEDDING_BATCH_SIZE=8
++AI_EMBEDDING_TIMEOUT=60
++# Папка bge-m3 (model.onnx + токенизатор) — только при
++# AI_EMBEDDING_PROVIDER=onnx; без модели индексация падает с ошибкой.
+ AI_EMBEDDING_MODEL_DIR=
+diff --git a/.env.production.example b/.env.production.example
+index 12a2253..3ad6b0c 100644
+--- a/.env.production.example
++++ b/.env.production.example
+@@ -17,9 +17,13 @@ POSTGRES_PORT=5432
+ 
+ # ИИ-контур (RAG, база знаний, отчёт ГИПу). См. .env.example.
+ AI_CHECKS_ENABLED=False
+-AI_LLM_API_KEY=
+-AI_LLM_BASE_URL=https://api.orcarouter.ai/v1
+-AI_LLM_PROVIDER=
++# LLM: только GigaChat (Сбер) — OrcaRouter удалён (зачистка 2026-11-10).
+ AI_GIGACHAT_AUTH_KEY=
++AI_GIGACHAT_MODEL=GigaChat-2-Max
+ AI_GIGACHAT_VERIFY_SSL=True
++AI_GIGACHAT_API_BASE_URL=https://api.giga.chat/v1
++# Эмбеддинги GigaChat (Сбер); смена модели = полная переиндексация.
++AI_EMBEDDING_PROVIDER=gigachat
++AI_EMBEDDING_MODEL=Embeddings
++AI_EMBEDDING_DIM=1024
+ AI_EMBEDDING_MODEL_DIR=
+diff --git a/_test_embed.py b/_test_embed.py
+index f8b59da..2617a67 100644
+--- a/_test_embed.py
++++ b/_test_embed.py
+@@ -1,7 +1,22 @@
+-from ai_checks.adapters.embedding_onnx import BgeM3OnnxEmbedding
++"""Быстрая проверка настроенного EmbeddingService (вне тестов Django).
+ 
+-emb = BgeM3OnnxEmbedding()
+-result = emb.embed_texts(['проверка связи'])
++Запуск из корня проекта: python _test_embed.py
++Печатает провайдера (GigaChatEmbedding или офлайн-фолбэк bge-m3),
++версию модели, размерность и L2-норму контрольного вектора.
++Fail-fast: без ключа/модели упадёт с понятной ошибкой — это норма.
++"""
++import os
++
++import django
++
++os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'sod_core.settings')
++django.setup()
++
++from ai_checks.adapters.embedding_gigachat import get_embedding_service
++
++service = get_embedding_service()
++result = service.embed_texts(['проверка связи'])
++print(f'провайдер: {type(service).__name__}, модель: {service.model_version}')
+ print(f'вектор: {len(result[0])} измерений')
+ norm = sum(v * v for v in result[0]) ** 0.5
+ print(f'L2-норма: {norm:.6f}')
+diff --git a/ai_checks/adapters/embedding_gigachat.py b/ai_checks/adapters/embedding_gigachat.py
+new file mode 100644
+index 0000000..eddfbba
+--- /dev/null
++++ b/ai_checks/adapters/embedding_gigachat.py
+@@ -0,0 +1,211 @@
++"""Эмбеддинги GigaChat (Сбер) — адаптер EmbeddingService + фабрика.
++
++Зачистка 2026-11-10 («только экосистема Сбера»): эмбеддинги считаются
++облачной моделью GigaChat через OpenAI-совместимый POST /v1/embeddings
++(тот же Authorization Key и OAuth-токен, что у GigaChatProvider —
++см. llm_http.py). Ключ и токен одни на весь ИИ-контур.
++
++Модели эмбеддингов GigaChat (developers.sber.ru/docs/ru/gigachat):
++Embeddings, Embeddings-2, Embeddings-3B-2025-09, EmbeddingsGigaR.
++Выбор — settings.AI_EMBEDDING_MODEL. ВАЖНО: векторы разных моделей
++несравнимы, смена модели требует полной переиндексации (индексация
++пишет model_version в InternalDocument.embedding_model).
++
++Fail-fast (как в embedding_onnx.py): без AI_GIGACHAT_AUTH_KEY —
++RuntimeError при создании адаптера, «тихих» заглушек нет. Размерность
++проверяется по AI_EMBEDDING_DIM (по умолчанию 1024 — колонки pgvector
++VectorField(dimensions=1024), миграции 0002/0010): несовпадение факта с
++настройкой = понятная ошибка вместо порчи векторного индекса.
++
++Офлайн-фолбэк: AI_EMBEDDING_PROVIDER=onnx → BgeM3OnnxEmbedding
++(bge-m3, локальная папка AI_EMBEDDING_MODEL_DIR) — фабрика
++get_embedding_service() ниже.
++"""
++
++from __future__ import annotations
++
++import logging
++import time
++
++import httpx
++from django.conf import settings
++
++from ai_checks.adapters.llm_http import GigaChatProvider
++from ai_checks.ports.embedding import EmbeddingService as EmbeddingServicePort
++
++logger = logging.getLogger(__name__)
++
++# Доступные модели эмбеддингов GigaChat (справочно; выбор — AI_EMBEDDING_MODEL).
++AVAILABLE_EMBEDDING_MODELS = (
++    'Embeddings',
++    'Embeddings-2',
++    'Embeddings-3B-2025-09',
++    'EmbeddingsGigaR',
++)
++
++# Retry ×2 + паузы ~1.5 с: индексация идёт в Celery-задаче, синхронного
++# бюджета gunicorn здесь нет, поэтому таймаут полный (AI_EMBEDDING_TIMEOUT).
++RETRIES = 3
++
++
++class GigaChatEmbedding(EmbeddingServicePort):
++    """Эмбеддинги GigaChat: OAuth-токен → POST {base}/embeddings.
++
++    Тексты отправляются батчами по AI_EMBEDDING_BATCH_SIZE (по умолчанию
++    8) — против лимитов API на размер запроса. Ответ мапится по полю
++    index (порядок сохраняется независимо от порядка в data). Пустой
++    список → пустой список векторов (без запроса).
++    """
++
++    name = 'gigachat-embeddings'
++
++    def __init__(
++        self,
++        authorization_key: str | None = None,
++        model: str | None = None,
++        dim: int | None = None,
++        timeout: float | None = None,
++        batch_size: int | None = None,
++        verify_ssl: bool | None = None,
++    ) -> None:
++        self.authorization_key = (
++            authorization_key
++            or (getattr(settings, 'AI_GIGACHAT_AUTH_KEY', '') or '').strip()
++        )
++        if not self.authorization_key:
++            raise RuntimeError(
++                'Эмбеддинги GigaChat не настроены: пуст AI_GIGACHAT_AUTH_KEY. '
++                'Задайте ключ в .env (тот же, что для LLM GigaChat) или '
++                'включите офлайн-фолбэк AI_EMBEDDING_PROVIDER=onnx '
++                '(bge-m3, локальная папка AI_EMBEDDING_MODEL_DIR).'
++            )
++        self.model = model or getattr(
++            settings, 'AI_EMBEDDING_MODEL', 'Embeddings',
++        )
++        self._dim = int(dim or getattr(settings, 'AI_EMBEDDING_DIM', 1024))
++        self.timeout = float(
++            timeout or getattr(settings, 'AI_EMBEDDING_TIMEOUT', 60),
++        )
++        self.batch_size = max(1, int(
++            batch_size or getattr(settings, 'AI_EMBEDDING_BATCH_SIZE', 8),
++        ))
++        self.verify_ssl = bool(
++            verify_ssl if verify_ssl is not None
++            else getattr(settings, 'AI_GIGACHAT_VERIFY_SSL', True),
++        )
++        # OAuth-токен общий с LLM-провайдером: тот же Authorization Key,
++        # тот же кэш 25 мин, тот же базовый URL API.
++        self._token_source = GigaChatProvider(
++            self.authorization_key,
++            timeout=self.timeout,
++            verify_ssl=self.verify_ssl,
++        )
++        self.api_base_url = self._token_source.api_base_url
++
++    # --- контракт EmbeddingService -------------------------------------
++
++    def embed_texts(self, texts: list[str]) -> list[list[float]]:
++        if not texts:
++            return []
++        vectors: list[list[float]] = []
++        for start in range(0, len(texts), self.batch_size):
++            batch = list(texts[start:start + self.batch_size])
++            vectors.extend(self._embed_batch(batch))
++        if len(vectors) != len(texts):
++            raise ValueError(
++                'Эмбеддинги GigaChat: число векторов '
++                f'{len(vectors)} != число текстов {len(texts)}'
++            )
++        for vector in vectors:
++            if len(vector) != self._dim:
++                raise RuntimeError(
++                    f'Эмбеддинги GigaChat: размерность вектора '
++                    f'{len(vector)} != AI_EMBEDDING_DIM={self._dim}. '
++                    f'Модель {self.model} выдаёт другую размерность: '
++                    'задайте корректный AI_EMBEDDING_DIM и добавьте '
++                    'миграцию для VectorField (pgvector), затем '
++                    'переиндексируйте все документы и базу знаний.'
++                )
++        return vectors
++
++    @property
++    def dim(self) -> int:
++        return self._dim
++
++    @property
++    def model_version(self) -> str:
++        return f'gigachat:{self.model}:v1'
++
++    # --- HTTP ------------------------------------------------------------
++
++    def _embed_batch(self, batch: list[str]) -> list[list[float]]:
++        """Один запрос /embeddings: {model, input: [...]} → data[].embedding."""
++        payload = {'model': self.model, 'input': list(batch)}
++        last_error: Exception | None = None
++        for attempt in range(RETRIES):
++            started = time.monotonic()
++            try:
++                token = self._token_source.get_token()
++                with httpx.Client(
++                    timeout=self.timeout, verify=self.verify_ssl,
++                ) as client:
++                    response = client.post(
++                        f'{self.api_base_url}/embeddings',
++                        headers={
++                            'Authorization': f'Bearer {token}',
++                            'Content-Type': 'application/json',
++                        },
++                        json=payload,
++                    )
++                    if response.status_code == 401:
++                        # Токен отозван/истёк раньше — сбрасываем кэш.
++                        self._token_source.invalidate_token()
++                    response.raise_for_status()
++                    data = response.json()
++                rows = sorted(
++                    data['data'],
++                    key=lambda item: int(item.get('index') or 0),
++                )
++                vectors = [
++                    [float(value) for value in row['embedding']]
++                    for row in rows
++                ]
++                logger.info(
++                    'GigaChatEmbedding: батч из %d текстов, %.2f с '
++                    '(модель %s)',
++                    len(batch),
++                    (time.monotonic() - started),
++                    self.model,
++                )
++                return vectors
++            except (httpx.HTTPError, KeyError, ValueError, TypeError) as exc:
++                last_error = exc
++                if attempt < RETRIES - 1:
++                    time.sleep(0.5 * (attempt + 1))
++        raise RuntimeError(
++            f'Запрос эмбеддингов GigaChat не удался: {last_error}'
++        )
++
++
++def get_embedding_service() -> EmbeddingServicePort:
++    """Фабрика EmbeddingService (settings.AI_EMBEDDING_PROVIDER).
++
++    'gigachat' (по умолчанию) — облако Сбера (GigaChatEmbedding);
++    'onnx' — офлайн-фолбэк bge-m3 (BgeM3OnnxEmbedding, локальная папка
++    AI_EMBEDDING_MODEL_DIR, требует onnxruntime + transformers).
++    Неизвестное значение — RuntimeError (fail-fast, без «тихих»
++    заглушек: векторы заглушки несравнимы с реальными и портят RAG).
++    """
++    provider = (
++        getattr(settings, 'AI_EMBEDDING_PROVIDER', '') or 'gigachat'
++    ).strip().lower()
++    if provider == 'gigachat':
++        return GigaChatEmbedding()
++    if provider == 'onnx':
++        from ai_checks.adapters.embedding_onnx import BgeM3OnnxEmbedding
++
++        return BgeM3OnnxEmbedding()
++    raise RuntimeError(
++        f'AI_EMBEDDING_PROVIDER={provider!r} не поддерживается: '
++        "используйте 'gigachat' (облако Сбера) или 'onnx' (офлайн bge-m3)."
++    )
+diff --git a/ai_checks/adapters/llm_http.py b/ai_checks/adapters/llm_http.py
+index d928baa..2531988 100644
+--- a/ai_checks/adapters/llm_http.py
++++ b/ai_checks/adapters/llm_http.py
+@@ -1,9 +1,11 @@
+ """HTTP-адаптеры LLMProvider (Этап 19, Ф4) + заглушка без API-ключа.
+ 
+-Два рабочих провайдера (зачистка 2026-11-09, блок «настроить LLM»):
+-- OrcaRouter — OpenAI-совместимый шлюз https://api.orcarouter.ai/v1
+-  (deepseek/*, z-ai/*, …); ключ — AI_LLM_API_KEY;
+-- GigaChat (Сбер, работа из РФ) — OAuth + OpenAI-совместимый API.
++Рабочий провайдер один (зачистка 2026-11-10, «только экосистема Сбера»):
++- GigaChat (Сбер, работа из РФ) — OAuth + OpenAI-совместимый API;
++  ключ — AI_GIGACHAT_AUTH_KEY (Authorization Key, Base64).
++OrcaRouter и прочие сторонние шлюзы удалены вместе с настройками
++AI_LLM_* — любая модель из AI_AVAILABLE_MODELS уходит в GigaChatProvider.
++Эмбеддинги того же контура — ai_checks/adapters/embedding_gigachat.py.
+ 
+ Тексты промптов/ответов в БД не пишутся (приватность) — только
+ метаданные в LLMCallLog. Retry ×2, таймаут ≤ 12 с (ARCHITECTURE.md 5.3,
+@@ -22,74 +24,6 @@ from django.conf import settings
+ from ai_checks.ports.llm import LLMResponse
+ 
+ 
+-class HttpLLMProvider:
+-    """OpenAI-совместимый HTTP-провайдер (OrcaRouter/DeepSeek/OpenRouter)."""
+-
+-    name = 'orcarouter'
+-
+-    def __init__(
+-        self,
+-        api_key: str,
+-        base_url: str = 'https://api.deepseek.com/v1',
+-        model: str = 'deepseek-chat',
+-        timeout: float = 60.0,
+-        retries: int = 3,
+-    ) -> None:
+-        self.api_key = api_key
+-        self.base_url = base_url.rstrip('/')
+-        self.model = model
+-        self.timeout = timeout
+-        self.retries = retries
+-
+-    def complete(
+-        self,
+-        messages: list[dict],
+-        *,
+-        model: str | None = None,
+-        json_mode: bool = False,
+-    ) -> LLMResponse:
+-        payload = {
+-            'model': model or self.model,
+-            'messages': messages,
+-        }
+-        if json_mode:
+-            payload['response_format'] = {'type': 'json_object'}
+-
+-        last_error: Exception | None = None
+-        for attempt in range(self.retries):
+-            started = time.monotonic()
+-            try:
+-                with httpx.Client(timeout=self.timeout) as client:
+-                    response = client.post(
+-                        f'{self.base_url}/chat/completions',
+-                        headers={
+-                            'Authorization': f'Bearer {self.api_key}',
+-                            'Content-Type': 'application/json',
+-                        },
+-                        json=payload,
+-                    )
+-                    response.raise_for_status()
+-                    data = response.json()
+-                latency_ms = int((time.monotonic() - started) * 1000)
+-                content = data['choices'][0]['message']['content']
+-                usage = data.get('usage') or {}
+-                return LLMResponse(
+-                    text=content,
+-                    model=data.get('model') or payload['model'],
+-                    prompt_tokens=int(usage.get('prompt_tokens') or 0),
+-                    completion_tokens=int(
+-                        usage.get('completion_tokens') or 0
+-                    ),
+-                    latency_ms=latency_ms,
+-                    raw={'id': data.get('id')},
+-                )
+-            except (httpx.HTTPError, KeyError, ValueError, TypeError) as exc:
+-                last_error = exc
+-                if attempt < self.retries - 1:
+-                    time.sleep(0.5 * (attempt + 1))
+-        raise RuntimeError(f'LLM-запрос не удался: {last_error}')
+-
+-
+ class StubLLMProvider:
+     """Заглушка без API-ключа: формирует связный ответ из контекста.
+ 
+@@ -178,56 +112,31 @@ class StubLLMProvider:
+ 
+ 
+ def get_llm_provider(model: str | None = None):
+-    """Фабрика провайдера по имени модели (зачистка 2026-11-09).
++    """Фабрика провайдера (зачистка 2026-11-10: только GigaChat).
+ 
+-    Правила маршрутизации:
+-    - model начинается с 'GigaChat-' → GigaChatProvider (Сбер, РФ);
+-    - иначе (deepseek/*, z-ai/*, …) → HttpLLMProvider (OrcaRouter);
+-    - model не задан → провайдер из AI_LLM_PROVIDER ('gigachat' →
+-      GigaChatProvider, иначе OrcaRouter);
+-    - нет ключа у выбранного провайдера → заглушка StubLLMProvider.
++    Любая модель из AI_AVAILABLE_MODELS уходит в GigaChatProvider
++    (Сбер, РФ); model=None → модель из AI_GIGACHAT_MODEL.
++    Нет ключа AI_GIGACHAT_AUTH_KEY → заглушка StubLLMProvider
++    (контур не падает, ответ синтезируется из найденных фрагментов).
+     """
+-    use_gigachat = bool(
+-        (model or '').startswith('GigaChat-')
+-        or (
+-            model is None
+-            and (getattr(settings, 'AI_LLM_PROVIDER', '') or '') == 'gigachat'
+-        )
+-    )
+-
+-    if use_gigachat:
+-        auth_key = (
+-            getattr(settings, 'AI_GIGACHAT_AUTH_KEY', '') or ''
+-        ).strip()
+-        if not auth_key:
+-            return StubLLMProvider()
+-        # Бюджет синхронного LLM-вызова: 12 c x 2 попытки + паузы ~ 1.5 c
+-        # = максимум ~25.5 c < 30 c (таймаут воркера gunicorn).
+-        return GigaChatProvider(
+-            auth_key,
+-            model=model or getattr(
+-                settings, 'AI_GIGACHAT_MODEL', 'GigaChat-2',
+-            ),
+-            timeout=min(
+-                float(getattr(settings, 'AI_GIGACHAT_TIMEOUT', 60)), 12.0,
+-            ),
+-            verify_ssl=bool(
+-                getattr(settings, 'AI_GIGACHAT_VERIFY_SSL', True),
+-            ),
+-            retries=2,
+-        )
+-
+-    # OpenAI-совместимые провайдеры (OrcaRouter: deepseek/*, z-ai/*, …).
+-    api_key = (getattr(settings, 'AI_LLM_API_KEY', '') or '').strip()
+-    if not api_key:
++    auth_key = (
++        getattr(settings, 'AI_GIGACHAT_AUTH_KEY', '') or ''
++    ).strip()
++    if not auth_key:
+         return StubLLMProvider()
+-    return HttpLLMProvider(
+-        api_key=api_key,
+-        base_url=getattr(
+-            settings, 'AI_LLM_BASE_URL', 'https://api.orcarouter.ai/v1',
++    # Бюджет синхронного LLM-вызова: 12 c x 2 попытки + паузы ~ 1.5 c
++    # = максимум ~25.5 c < 30 c (таймаут воркера gunicorn).
++    return GigaChatProvider(
++        auth_key,
++        model=model or getattr(
++            settings, 'AI_GIGACHAT_MODEL', 'GigaChat-2-Max',
++        ),
++        timeout=min(
++            float(getattr(settings, 'AI_GIGACHAT_TIMEOUT', 60)), 12.0,
++        ),
++        verify_ssl=bool(
++            getattr(settings, 'AI_GIGACHAT_VERIFY_SSL', True),
+         ),
+-        model=model or getattr(settings, 'AI_LLM_MODEL', 'deepseek-chat'),
+-        timeout=min(float(getattr(settings, 'AI_LLM_TIMEOUT', 60)), 12.0),
+         retries=2,
+     )
+ 
+@@ -250,7 +159,7 @@ class GigaChatProvider:
+     def __init__(
+         self,
+         authorization_key: str,
+-        model: str = 'GigaChat-2',
++        model: str = 'GigaChat-2-Max',
+         timeout: float = 60.0,
+         retries: int = 3,
+         verify_ssl: bool = True,
+@@ -260,12 +169,22 @@ class GigaChatProvider:
+         self.timeout = timeout
+         self.retries = retries
+         self.verify_ssl = verify_ssl
++        # Базовый URL OpenAI-совместимого API: AI_GIGACHAT_API_BASE_URL,
++        # по умолчанию — публичный контур api.giga.chat/v1.
++        self.api_base_url = (
++            getattr(settings, 'AI_GIGACHAT_API_BASE_URL', '')
++            or self.API_BASE_URL
++        ).rstrip('/')
+         self._access_token: str | None = None
+         self._token_expires_at: float = 0.0
+         self._token_lock = threading.Lock()
+ 
+-    def _get_token(self) -> str:
+-        """OAuth-токен: из кэша (25 мин) или новый запрос."""
++    def get_token(self) -> str:
++        """OAuth-токен: из кэша (25 мин) или новый запрос.
++
++        Публичный метод: используется и эмбеддингами GigaChat
++        (embedding_gigachat.py) — ключ авторизации один на контур.
++        """
+         with self._token_lock:
+             now = time.monotonic()
+             if self._access_token and now < self._token_expires_at:
+@@ -288,7 +207,7 @@ class GigaChatProvider:
+             self._token_expires_at = now + self.TOKEN_TTL_SECONDS
+             return token
+ 
+-    def _invalidate_token(self) -> None:
++    def invalidate_token(self) -> None:
+         with self._token_lock:
+             self._access_token = None
+             self._token_expires_at = 0.0
+@@ -311,12 +230,12 @@ class GigaChatProvider:
+         for attempt in range(self.retries):
+             started = time.monotonic()
+             try:
+-                token = self._get_token()
++                token = self.get_token()
+                 with httpx.Client(
+                     timeout=self.timeout, verify=self.verify_ssl,
+                 ) as client:
+                     response = client.post(
+-                        f'{self.API_BASE_URL}/chat/completions',
++                        f'{self.api_base_url}/chat/completions',
+                         headers={
+                             'Authorization': f'Bearer {token}',
+                             'Content-Type': 'application/json',
+@@ -325,8 +244,7 @@ class GigaChatProvider:
+                     )
+                     if response.status_code == 401:
+                         # Токен отозван/истёк раньше — сбрасываем кэш.
+-                        self._invalidate_token()
+-                        response.raise_for_status()
++                        self.invalidate_token()
+                     response.raise_for_status()
+                     data = response.json()
+                 latency_ms = int((time.monotonic() - started) * 1000)
+diff --git a/ai_checks/domain/services.py b/ai_checks/domain/services.py
+index af9c9b3..c9e72c5 100644
+--- a/ai_checks/domain/services.py
++++ b/ai_checks/domain/services.py
+@@ -2,7 +2,9 @@
+ 
+ Контракт (ARCHITECTURE.md 8.4): pypdfium2 извлекает текст и страницы,
+ текст режется на чанки с перекрытием, векторы пишутся в InternalChunk /
+-ProjectDocumentChunk (bge-m3, 1024, L2). Сервис не знает про HTTP/UI/
++ProjectDocumentChunk. Эмбеддинги по умолчанию — облако Сбера
++(GigaChat, адаптер embedding_gigachat.get_embedding_service;
++офлайн-фолбэк — bge-m3 ONNX). Сервис не знает про HTTP/UI/
+ Celery — только домен и ORM.
+ 
+ Состав (этап 20, после зачистки нормоконтроля 2026-11-09):
+@@ -135,9 +137,11 @@ def index_document(
+ 
+     if embedding_service is None:
+         # Ленивый импорт: домен не зависит от конкретного адаптера.
+-        from ai_checks.adapters.embedding_onnx import BgeM3OnnxEmbedding
++        from ai_checks.adapters.embedding_gigachat import (
++            get_embedding_service,
++        )
+ 
+-        embedding_service = BgeM3OnnxEmbedding()
++        embedding_service = get_embedding_service()
+ 
+     chunks = split_into_chunks(extract_pages(file_path))
+     if not chunks:
+@@ -209,9 +213,11 @@ def index_project_document(
+     try:
+         if embedding_service is None:
+             # Ленивый импорт: домен не зависит от конкретного адаптера.
+-            from ai_checks.adapters.embedding_onnx import BgeM3OnnxEmbedding
++            from ai_checks.adapters.embedding_gigachat import (
++                get_embedding_service,
++            )
+ 
+-            embedding_service = BgeM3OnnxEmbedding()
++            embedding_service = get_embedding_service()
+ 
+         chunks = split_into_chunks(extract_pages(version.file.path))
+         vectors: list[list[float]] = []
+@@ -370,9 +376,11 @@ def rag_answer(
+ 
+     if embedding_service is None:
+         # Ленивый импорт: домен не зависит от конкретного адаптера.
+-        from ai_checks.adapters.embedding_onnx import BgeM3OnnxEmbedding
++        from ai_checks.adapters.embedding_gigachat import (
++            get_embedding_service,
++        )
+ 
+-        embedding_service = BgeM3OnnxEmbedding()
++        embedding_service = get_embedding_service()
+ 
+     # company_id: явный аргумент (совместимость со старыми вызовами) или
+     # компания проекта — для tenant-фильтра базы знаний (8.2).
+diff --git a/ai_checks/ports/embedding.py b/ai_checks/ports/embedding.py
+index 9b0d48e..1e306fb 100644
+--- a/ai_checks/ports/embedding.py
++++ b/ai_checks/ports/embedding.py
+@@ -1,7 +1,10 @@
+ """Порт сервиса эмбеддингов (ARCHITECTURE.md 5.4, Этап 19).
+ 
+-Реализация MVP: ``BgeM3OnnxEmbedding`` (ONNX int8, CPU, локально);
+-внешние embedding-API не используются.
++Реализация по умолчанию (зачистка 2026-11-10): ``GigaChatEmbedding``
++(облако Сбера, OpenAI-совместимый /v1/embeddings) — фабрика
++``ai_checks.adapters.embedding_gigachat.get_embedding_service``;
++офлайн-фолбэк — ``BgeM3OnnxEmbedding`` (ONNX int8, CPU, локально,
++AI_EMBEDDING_PROVIDER=onnx).
+ """
+ 
+ from __future__ import annotations
+diff --git a/ai_checks/tests/mocks.py b/ai_checks/tests/mocks.py
+index 72bd285..c6688ff 100644
+--- a/ai_checks/tests/mocks.py
++++ b/ai_checks/tests/mocks.py
+@@ -13,17 +13,19 @@ from ai_checks.ports.llm import LLMResponse
+ 
+ 
+ def mock_bge_adapter(testcase, dim: int = 1024) -> None:
+-    """Подменяет строгий BgeM3OnnxEmbedding на MockEmbeddingService.
++    """Подменяет боевой EmbeddingService на MockEmbeddingService.
+ 
+-    Блок 2 зачистки 2026-11-09: боевой адаптер падает с RuntimeError,
+-    если model.onnx не скачан (fail-fast вместо заглушки). Тестам,
++    Зачистка 2026-11-10: боевой сервис по умолчанию — GigaChatEmbedding
++    (облако Сбера, fail-fast без ключа), офлайн-фолбэк — bge-m3
++    (BgeM3OnnxEmbedding). Подменяется фабрика get_embedding_service(),
++    через которую домен получает сервис по умолчанию. Тестам,
+     где индексация запускается через задачи/вьюхи без DI
+-    (upload_document, reindex_*, kb_upload), реальная модель не нужна —
++    (upload_document, reindex_*, kb_upload), реальный сервис не нужен —
+     векторный бэкенд тоже мокается (MockVectorBackend) или не участвует.
+     Вызывать из setUp: mock_bge_adapter(self).
+     """
+     patcher = mock.patch(
+-        'ai_checks.adapters.embedding_onnx.BgeM3OnnxEmbedding',
++        'ai_checks.adapters.embedding_gigachat.get_embedding_service',
+         return_value=MockEmbeddingService(dim=dim),
+     )
+     patcher.start()
+diff --git a/ai_checks/tests/test_embedding_gigachat.py b/ai_checks/tests/test_embedding_gigachat.py
+new file mode 100644
+index 0000000..b9b8741
+--- /dev/null
++++ b/ai_checks/tests/test_embedding_gigachat.py
+@@ -0,0 +1,204 @@
++"""GigaChatEmbedding: батчи /v1/embeddings, порядок по index, dim-контроль.
++
++Сеть не используется: httpx.post (OAuth) и httpx.Client (embeddings)
++мокаются фейками, которые пишут вызовы. Фабрика get_embedding_service
++проверяется через override_settings.
++"""
++
++from unittest.mock import patch
++
++from django.test import SimpleTestCase, override_settings
++
++import ai_checks.adapters.embedding_gigachat as embedding_gigachat
++from ai_checks.adapters.embedding_gigachat import (
++    GigaChatEmbedding,
++    get_embedding_service,
++)
++
++
++class FakeResponse:
++    def __init__(self, data, status_code=200):
++        self._data = data
++        self.status_code = status_code
++
++    def raise_for_status(self):
++        if self.status_code >= 400:
++            import httpx
++            request = httpx.Request('POST', 'http://fake')
++            raise httpx.HTTPStatusError(
++                f'HTTP {self.status_code}',
++                request=request,
++                response=httpx.Response(
++                    self.status_code, request=request,
++                ),
++            )
++
++    def json(self):
++        return self._data
++
++
++class FakeClient:
++    """Фейковый httpx.Client: пишет вызовы, отдаёт векторы по dim."""
++
++    posts: list[dict] = []
++    status_code = 200
++    dim = 1024
++
++    def __init__(self, *args, **kwargs):
++        self.init_kwargs = kwargs
++
++    def __enter__(self):
++        return self
++
++    def __exit__(self, *exc_info):
++        return False
++
++    def post(self, url, headers=None, json=None, data=None):
++        FakeClient.posts.append({
++            'url': url,
++            'headers': headers or {},
++            'json': json,
++        })
++        texts = (json or {}).get('input') or []
++        return FakeResponse(
++            {
++                'data': [
++                    {
++                        'index': index,
++                        'object': 'embedding',
++                        'embedding': [0.5] * FakeClient.dim,
++                    }
++                    for index in range(len(texts))
++                ],
++                'model': (json or {}).get('model', 'Embeddings'),
++            },
++            status_code=FakeClient.status_code,
++        )
++
++
++def fake_oauth_post(url, headers=None, data=None, timeout=None, verify=None):
++    FakeClient.posts.append({'url': url, 'headers': headers or {}})
++    return FakeResponse({'access_token': 'giga-token-emb-1'})
++
++
++class GigaChatEmbeddingTests(SimpleTestCase):
++    def setUp(self):
++        FakeClient.posts = []
++        FakeClient.status_code = 200
++        FakeClient.dim = 1024
++
++    def _service(self):
++        return GigaChatEmbedding(
++            'base64-authorization-key',
++            model='Embeddings',
++            dim=1024,
++            batch_size=2,
++        )
++
++    def test_embed_texts_batches_and_maps_by_index(self):
++        with patch.object(
++            embedding_gigachat.httpx, 'post', side_effect=fake_oauth_post,
++        ), patch.object(
++            embedding_gigachat.httpx, 'Client', FakeClient,
++        ):
++            service = self._service()
++            vectors = service.embed_texts(['а', 'б', 'в'])
++
++        self.assertEqual(len(vectors), 3)
++        self.assertEqual(len(vectors[0]), 1024)
++        embeddings_calls = [
++            call for call in FakeClient.posts
++            if call['url'].endswith('/embeddings')
++        ]
++        # 3 текста при batch_size=2 → два батча.
++        self.assertEqual(len(embeddings_calls), 2)
++        self.assertEqual(
++            embeddings_calls[0]['json']['input'], ['а', 'б'],
++        )
++        self.assertEqual(
++            embeddings_calls[1]['json']['input'], ['в'],
++        )
++        self.assertEqual(embeddings_calls[0]['json']['model'], 'Embeddings')
++        oauth_calls = [
++            call for call in FakeClient.posts if 'oauth' in call['url']
++        ]
++        self.assertEqual(len(oauth_calls), 1, 'токен кэшируется между батчами')
++        self.assertEqual(
++            embeddings_calls[0]['headers']['Authorization'],
++            'Bearer giga-token-emb-1',
++        )
++        self.assertEqual(
++            embeddings_calls[0]['url'],
++            'https://api.giga.chat/v1/embeddings',
++        )
++
++    def test_empty_texts_no_request(self):
++        service = self._service()
++        self.assertEqual(service.embed_texts([]), [])
++        self.assertEqual(FakeClient.posts, [])
++
++    def test_dim_mismatch_raises_with_hint(self):
++        FakeClient.dim = 1536  # модель вернула не 1024
++        with patch.object(
++            embedding_gigachat.httpx, 'post', side_effect=fake_oauth_post,
++        ), patch.object(
++            embedding_gigachat.httpx, 'Client', FakeClient,
++        ):
++            service = self._service()
++            with self.assertRaises(RuntimeError) as ctx:
++                service.embed_texts(['текст'])
++        self.assertIn('AI_EMBEDDING_DIM', str(ctx.exception))
++
++    def test_model_version_reflects_model(self):
++        service = self._service()
++        self.assertEqual(service.dim, 1024)
++        self.assertEqual(service.model_version, 'gigachat:Embeddings:v1')
++
++
++class FactoryTests(SimpleTestCase):
++    def setUp(self):
++        FakeClient.posts = []
++
++    @override_settings(AI_GIGACHAT_AUTH_KEY='key-1')
++    def test_factory_default_gigachat(self):
++        service = get_embedding_service()
++        self.assertIsInstance(service, GigaChatEmbedding)
++        self.assertEqual(service.authorization_key, 'key-1')
++
++    @override_settings(
++        AI_GIGACHAT_AUTH_KEY='key-1',
++        AI_EMBEDDING_MODEL='EmbeddingsGigaR',
++        AI_EMBEDDING_DIM=1024,
++    )
++    def test_factory_uses_configured_model(self):
++        service = get_embedding_service()
++        self.assertEqual(service.model, 'EmbeddingsGigaR')
++
++    @override_settings(
++        AI_GIGACHAT_AUTH_KEY='',
++        AI_EMBEDDING_PROVIDER='gigachat',
++    )
++    def test_factory_gigachat_without_key_raises(self):
++        with self.assertRaises(RuntimeError) as ctx:
++            get_embedding_service()
++        self.assertIn('AI_GIGACHAT_AUTH_KEY', str(ctx.exception))
++
++    @override_settings(AI_EMBEDDING_PROVIDER='onnx')
++    def test_factory_onnx_fallback(self):
++        # Подменяем класс: реальный BgeM3OnnxEmbedding требует model.onnx.
++        from ai_checks.adapters import embedding_onnx
++
++        class _FakeOnnx:
++            pass
++
++        with patch.object(embedding_onnx, 'BgeM3OnnxEmbedding', _FakeOnnx):
++            service = get_embedding_service()
++        self.assertIsInstance(service, _FakeOnnx)
++
++    @override_settings(
++        AI_GIGACHAT_AUTH_KEY='key-1', AI_EMBEDDING_PROVIDER='sha256',
++    )
++    def test_factory_unknown_provider_raises(self):
++        with self.assertRaises(RuntimeError) as ctx:
++            get_embedding_service()
++        self.assertIn('AI_EMBEDDING_PROVIDER', str(ctx.exception))
+diff --git a/ai_checks/tests/test_gigachat.py b/ai_checks/tests/test_gigachat.py
+index e0a05e7..d56598d 100644
+--- a/ai_checks/tests/test_gigachat.py
++++ b/ai_checks/tests/test_gigachat.py
+@@ -171,17 +171,20 @@ class GigaChatProviderTests(SimpleTestCase):
+             result = provider.complete([{'role': 'user', 'content': 'b'}])
+         self.assertEqual(result.text, 'Ответ GigaChat')
+ 
+-    @override_settings(AI_LLM_PROVIDER='gigachat', AI_GIGACHAT_AUTH_KEY='key-1', AI_GIGACHAT_MODEL='GigaChat-2-Max')
++    @override_settings(
++        AI_GIGACHAT_AUTH_KEY='key-1',
++        AI_GIGACHAT_MODEL='GigaChat-2-Max',
++    )
+     def test_factory_returns_gigachat(self):
+         provider = get_llm_provider()
+         self.assertIsInstance(provider, GigaChatProvider)
+         self.assertEqual(provider.authorization_key, 'key-1')
+         self.assertEqual(provider.model, 'GigaChat-2-Max')
+ 
+-    @override_settings(AI_LLM_PROVIDER='gigachat', AI_GIGACHAT_AUTH_KEY='', AI_LLM_API_KEY='')
++    @override_settings(AI_GIGACHAT_AUTH_KEY='')
+     def test_factory_falls_back_to_stub_without_key(self):
+         self.assertIsInstance(get_llm_provider(), StubLLMProvider)
+ 
+-    @override_settings(AI_LLM_PROVIDER='', AI_LLM_API_KEY='', AI_GIGACHAT_AUTH_KEY='')
++    @override_settings( AI_GIGACHAT_AUTH_KEY='')
+     def test_factory_default_stub(self):
+         self.assertIsInstance(get_llm_provider(), StubLLMProvider)
+diff --git a/ai_checks/tests/test_knowledge.py b/ai_checks/tests/test_knowledge.py
+index 127fa44..f150269 100644
+--- a/ai_checks/tests/test_knowledge.py
++++ b/ai_checks/tests/test_knowledge.py
+@@ -31,7 +31,7 @@ def make_pdf_bytes(text='Smoke sheet', font_size=10) -> bytes:
+     }])
+ 
+ 
+-@override_settings(AI_LLM_PROVIDER='', AI_LLM_API_KEY='', AI_GIGACHAT_AUTH_KEY='')
++@override_settings( AI_GIGACHAT_AUTH_KEY='')
+ class KnowledgeBaseServiceTests(MediaIsolationMixin, TestCase):
+     def setUp(self):
+         self.user = User.objects.create_superuser(
+@@ -130,8 +130,7 @@ class KnowledgeBaseServiceTests(MediaIsolationMixin, TestCase):
+ 
+ 
+ @override_settings(
+-    AI_CHECKS_ENABLED=True,
+-    AI_LLM_PROVIDER='', AI_LLM_API_KEY='', AI_GIGACHAT_AUTH_KEY='',
++    AI_CHECKS_ENABLED=True, AI_GIGACHAT_AUTH_KEY='',
+ )
+ class KnowledgeBaseViewTests(MediaIsolationMixin, TestCase):
+     def setUp(self):
+diff --git a/ai_checks/tests/test_model_selection.py b/ai_checks/tests/test_model_selection.py
+index 9e0c84e..4eb55ab 100644
+--- a/ai_checks/tests/test_model_selection.py
++++ b/ai_checks/tests/test_model_selection.py
+@@ -77,13 +77,13 @@ class ModelSelectionServiceTests(TestCase):
+             self.project, today - timedelta(days=1), today,
+             self.user,
+             llm_provider=spy,
+-            model='z-ai/glm-5.3-flash-free',
++            model='GigaChat-2-Max',
+         )
+         self.assertEqual(len(spy.calls), 1)
+-        self.assertEqual(spy.calls[0]['model'], 'z-ai/glm-5.3-flash-free')
++        self.assertEqual(spy.calls[0]['model'], 'GigaChat-2-Max')
+         self.assertEqual(report.payload['summary'], 'Ответ выбранной модели')
+         self.assertEqual(
+-            report.llm_call.model, 'z-ai/glm-5.3-flash-free',
++            report.llm_call.model, 'GigaChat-2-Max',
+         )
+ 
+     def test_gip_report_default_model_is_none(self):
+@@ -115,11 +115,11 @@ class ModelSelectionServiceTests(TestCase):
+             embedding_service=embedding,
+             vector_backend=MockVectorBackend(),
+             llm_provider=spy,
+-            model='deepseek/deepseek-v4.1-flash-free',
++            model='GigaChat-2-Max',
+         )
+         self.assertEqual(len(spy.calls), 1)
+         self.assertEqual(
+-            spy.calls[0]['model'], 'deepseek/deepseek-v4.1-flash-free',
++            spy.calls[0]['model'], 'GigaChat-2-Max',
+         )
+         self.assertEqual(result['answer'], 'Ответ выбранной модели')
+         self.assertTrue(result['sources'])
+@@ -157,8 +157,8 @@ class ModelSelectionViewTests(TestCase):
+                 self.POST = data
+ 
+         self.assertEqual(
+-            _selected_model(Request({'model': 'z-ai/glm-5.3-flash-free'})),
+-            'z-ai/glm-5.3-flash-free',
++            _selected_model(Request({'model': 'GigaChat-2-Max'})),
++            'GigaChat-2-Max',
+         )
+         self.assertIsNone(_selected_model(Request({'model': 'evil/model'})))
+         self.assertIsNone(_selected_model(Request({})))
+diff --git a/ai_checks/tests/test_rag.py b/ai_checks/tests/test_rag.py
+index 3b4a8bd..f1ae620 100644
+--- a/ai_checks/tests/test_rag.py
++++ b/ai_checks/tests/test_rag.py
+@@ -18,8 +18,7 @@ from storage.domain.models import (
+ )
+ 
+ 
+-@override_settings(
+-    AI_LLM_PROVIDER='', AI_LLM_API_KEY='', AI_GIGACHAT_AUTH_KEY='',
++@override_settings( AI_GIGACHAT_AUTH_KEY='',
+ )
+ class RagAnswerTests(TestCase):
+     DIM = 1024
+diff --git a/ai_checks/tests/test_rag_history.py b/ai_checks/tests/test_rag_history.py
+index b2b402b..1822057 100644
+--- a/ai_checks/tests/test_rag_history.py
++++ b/ai_checks/tests/test_rag_history.py
+@@ -26,7 +26,7 @@ from storage.domain.models import Company, Document, Project, Section
+ 
+ 
+ @override_settings(
+-    AI_LLM_PROVIDER='', AI_LLM_API_KEY='', AI_GIGACHAT_AUTH_KEY='',
++    AI_GIGACHAT_AUTH_KEY='',
+ )
+ class CrossSourceRagTests(TestCase):
+     """Треб. 6: объединение проектных чанков и базы знаний."""
+@@ -173,7 +173,7 @@ class CrossSourceRagTests(TestCase):
+             self.question,
+             self.project.pk,
+             self.user,
+-            model='z-ai/glm-5.3-flash-free',
++            model='GigaChat-2-Max',
+             embedding_service=self.embedding,
+             vector_backend=self.backend,
+             project_backend=self.project_backend,
+@@ -183,7 +183,7 @@ class CrossSourceRagTests(TestCase):
+         self.assertEqual(query.user, self.user)
+         self.assertEqual(query.question, self.question)
+         self.assertTrue(query.sources)
+-        self.assertEqual(query.model, 'z-ai/glm-5.3-flash-free')
++        self.assertEqual(query.model, 'GigaChat-2-Max')
+ 
+     def test_rag_query_saved_on_empty_result(self):
+         """Пустой результат тоже попадает в историю."""
+@@ -238,7 +238,7 @@ class ProjectChunkFactory:
+ 
+ 
+ @override_settings(
+-    AI_LLM_PROVIDER='', AI_LLM_API_KEY='', AI_GIGACHAT_AUTH_KEY='',
++    AI_GIGACHAT_AUTH_KEY='',
+     AI_CHECKS_ENABLED=True,
+ )
+ class RagHistoryViewTests(TestCase):
+@@ -351,7 +351,7 @@ class RagHistoryViewTests(TestCase):
+     def test_history_item_detail(self):
+         """Треб. 9: клик по строке — ответ и источники."""
+         query = self._log_query(
+-            'Вопрос с источником', self.user, model='deepseek/deepseek-v4.1-flash-free',
++            'Вопрос с источником', self.user, model='GigaChat-2-Max',
+         )
+         RagQuery.objects.filter(pk=query.pk).update(
+             sources=[{
+@@ -369,4 +369,4 @@ class RagHistoryViewTests(TestCase):
+         )
+         self.assertContains(response, 'ОВ-05 — Отопление')
+         self.assertContains(response, 'лист 3')
+-        self.assertContains(response, 'deepseek/deepseek-v4.1-flash-free')
++        self.assertContains(response, 'GigaChat-2-Max')
+diff --git a/ai_checks/tests/test_views_stage20.py b/ai_checks/tests/test_views_stage20.py
+index 033c03f..3f185cf 100644
+--- a/ai_checks/tests/test_views_stage20.py
++++ b/ai_checks/tests/test_views_stage20.py
+@@ -36,8 +36,7 @@ def _upload_pdf(user, project, section, code='ОВ-01'):
+ 
+ 
+ @override_settings(
+-    AI_CHECKS_ENABLED=True,
+-    AI_LLM_PROVIDER='', AI_LLM_API_KEY='', AI_GIGACHAT_AUTH_KEY='',
++    AI_CHECKS_ENABLED=True, AI_GIGACHAT_AUTH_KEY='',
+ )
+ class KnowledgeBaseViewTests(MediaIsolationMixin, TestCase):
+     """Треб. 7: два блока вкладки «База знаний» + переиндексация (5)."""
+@@ -122,8 +121,7 @@ class KnowledgeBaseViewTests(MediaIsolationMixin, TestCase):
+ 
+ 
+ @override_settings(
+-    AI_CHECKS_ENABLED=True,
+-    AI_LLM_PROVIDER='', AI_LLM_API_KEY='', AI_GIGACHAT_AUTH_KEY='',
++    AI_CHECKS_ENABLED=True, AI_GIGACHAT_AUTH_KEY='',
+ )
+ class RagSearchViewTests(MediaIsolationMixin, TestCase):
+     """Треб. 8: форма ИИ-поиска с фильтрами и чип-примером."""
+@@ -184,8 +182,7 @@ class RagSearchViewTests(MediaIsolationMixin, TestCase):
+ 
+ 
+ @override_settings(
+-    AI_CHECKS_ENABLED=True,
+-    AI_LLM_PROVIDER='', AI_LLM_API_KEY='', AI_GIGACHAT_AUTH_KEY='',
++    AI_CHECKS_ENABLED=True, AI_GIGACHAT_AUTH_KEY='',
+ )
+ class ReportHistoryViewTests(MediaIsolationMixin, TestCase):
+     """Треб. 13: история отчётов ГИПу под формой."""
+diff --git a/docs/ARCHITECTURE.md b/docs/ARCHITECTURE.md
+index 300876c..0237ccf 100644
+--- a/docs/ARCHITECTURE.md
++++ b/docs/ARCHITECTURE.md
+@@ -392,7 +392,7 @@ sod_project/
+ | seq | PositiveIntegerField | Порядок фрагмента; UniqueConstraint (document, seq) |
+ | text | TextField | Текст фрагмента |
+ | page_from / page_to | PositiveIntegerField, null=True | Привязка к страницам PDF (PyMuPDF) |
+-| embedding | VectorField(1024) | bge-m3 dense; индекс HNSW (cosine_ops) |
++| embedding | VectorField(1024) | Вектор эмбеддингов (GigaChat/bge-m3); HNSW (cosine_ops) |
+ 
+ #### RuleDefinition (ИИ-контур)
+ | Поле | Тип | Описание |
+@@ -445,8 +445,8 @@ sod_project/
+ | Поле | Тип | Описание |
+ |---|---|---|
+ | id | PK | |
+-| provider | CharField(50) | Провайдер («openrouter») |
+-| model | CharField(100) | Модель («glm-5.3-flash») |
++| provider | CharField(50) | Провайдер («gigachat», «stub») |
++| model | CharField(100) | Модель («GigaChat-2-Max») |
+ | purpose | CharField(30) | check_explain, rag_answer, gip_report |
+ | prompt_tokens / completion_tokens | PositiveIntegerField, default 0 | Расход токенов |
+ | cost_est | DecimalField(10,4), null=True | Оценка стоимости, USD |
+@@ -526,17 +526,23 @@ class LLMProvider(Protocol):
+     def complete(self, messages: list[dict], *, model: str | None = None,
+                  json_mode: bool = False) -> LLMResponse: ...
+ 
+-Реализация MVP: OpenRouterHTTPProvider (httpx, без SDK; retry ×3, таймаут 60 с).
++Реализация (зачистка 2026-11-10, «только экосистема Сбера»):
++GigaChatProvider (httpx, без SDK; OAuth-токен с кэшем 25 мин, retry ×2,
++таймаут ≤ 12 с) — OrcaRouter/OpenRouter удалены вместе с AI_LLM_*.
+ 
+ ### 5.4. EmbeddingService (ai_checks/ports/embedding.py, Этап 19)
+ class EmbeddingService(Protocol):
+     def embed_texts(self, texts: list[str]) -> list[list[float]]: ...
+     @property
+-    def dim(self) -> int: ...            # 1024 (bge-m3 dense)
++    def dim(self) -> int: ...            # 1024 (миграции pgvector 0002/0010)
+     @property
+     def model_version(self) -> str: ...
+ 
+-Реализация MVP: BgeM3OnnxEmbedding (ONNX int8, CPU, локально); внешние embedding-API не используются.
++Реализация по умолчанию (зачистка 2026-11-10): GigaChatEmbedding
++(облако Сбера, POST /v1/embeddings, модель — AI_EMBEDDING_MODEL:
++Embeddings/Embeddings-2/Embeddings-3B-2025-09/EmbeddingsGigaR);
++офлайн-фолбэк — BgeM3OnnxEmbedding (bge-m3 ONNX, CPU,
++AI_EMBEDDING_PROVIDER=onnx). Фабрика — adapters/embedding_gigachat.py.
+ 
+ ### 5.5. VectorBackend (ai_checks/ports/vector.py, Этап 19)
+ class VectorBackend(Protocol):
+diff --git a/sod_core/settings.py b/sod_core/settings.py
+index 0acff5b..14d2383 100644
+--- a/sod_core/settings.py
++++ b/sod_core/settings.py
+@@ -121,46 +121,60 @@ CELERY_TASK_EAGER_PROPAGATES = True
+ CELERY_TASK_IGNORE_RESULT = True
+ 
+ # Этап 19 (Ф4): LLM для отчётов ГИПа и RAG-синтеза.
+-# По умолчанию — OrcaRouter (OpenAI-совместимый шлюз, free-tier модели);
+-# ключ AI_LLM_API_KEY, для работы из РФ — GigaChat (AI_GIGACHAT_*).
+-# Без ключей используется заглушка (StubLLMProvider) — контур работает локально.
+-AI_LLM_API_KEY = os.environ.get('AI_LLM_API_KEY', '')
+-AI_LLM_BASE_URL = os.environ.get(
+-    'AI_LLM_BASE_URL', 'https://api.orcarouter.ai/v1',
+-)
+-AI_LLM_MODEL = os.environ.get('AI_LLM_MODEL', 'deepseek-chat')
+-AI_LLM_TIMEOUT = int(os.environ.get('AI_LLM_TIMEOUT', '60'))
+-
+-# Модели, доступные для выбора в UI ИИ-контура (OrcaRouter + GigaChat).
+-# Выбранная модель уходит в LLMProvider.complete(model=...): префикс
+-# 'GigaChat-' маршрутизируется в GigaChatProvider, остальное — в
+-# HttpLLMProvider (OrcaRouter). Порядок определяет порядок в выпадающем
+-# списке (зачистка 2026-11-09: один список, дубль в конце файла удалён).
+-AI_AVAILABLE_MODELS = [
+-    ('deepseek/deepseek-v4.1-flash-free', 'DeepSeek V4.1 Flash'),
+-    ('z-ai/glm-5.3-flash-free', 'GLM 5.3 Flash'),
+-    ('GigaChat-2-Max', 'GigaChat-2-Max (Сбер)'),
+-    ('GigaChat-3-Pro', 'GigaChat-3-Pro (Сбер)'),
+-]
+-
+-# GigaChat (Сбер, работа из РФ): AI_LLM_PROVIDER=gigachat включает
+-# GigaChatProvider (Authorization Key → OAuth-токен → OpenAI-совместимый API).
+-AI_LLM_PROVIDER = os.environ.get('AI_LLM_PROVIDER', '')
++# Зачистка 2026-11-10 («только экосистема Сбера»): OrcaRouter и прочие
++# сторонние шлюзы удалены вместе с настройками AI_LLM_* (API_KEY,
++# BASE_URL, MODEL, TIMEOUT, PROVIDER). Остался только GigaChat (Сбер,
++# работа из РФ). Без ключа работает заглушка (StubLLMProvider) —
++# контур не падает, ответ синтезируется из найденных фрагментов.
+ AI_GIGACHAT_AUTH_KEY = os.environ.get('AI_GIGACHAT_AUTH_KEY', '')
+-AI_GIGACHAT_MODEL = os.environ.get('AI_GIGACHAT_MODEL', 'GigaChat-2')
++AI_GIGACHAT_MODEL = os.environ.get('AI_GIGACHAT_MODEL', 'GigaChat-2-Max')
+ AI_GIGACHAT_TIMEOUT = int(os.environ.get('AI_GIGACHAT_TIMEOUT', '60'))
++# Базовый URL OpenAI-совместимого API GigaChat (OAuth-эндпоинт не меняется).
++AI_GIGACHAT_API_BASE_URL = os.environ.get(
++    'AI_GIGACHAT_API_BASE_URL', 'https://api.giga.chat/v1',
++)
+ # TLS: корневые сертификаты НУЦ Минцифры; если не установлены —
+ # AI_GIGACHAT_VERIFY_SSL=false (осознанно, для dev).
+ AI_GIGACHAT_VERIFY_SSL = env_bool('AI_GIGACHAT_VERIFY_SSL', True)
+ 
++# Модели, доступные для выбора в UI ИИ-контура (только GigaChat).
++# Выбранная модель уходит в LLMProvider.complete(model=...) — в
++# GigaChatProvider. Порядок определяет порядок в выпадающем списке.
++# GigaChat-2-Max проверен владельцем (связные ответы с цифрами);
++# GigaChat-3-Ultra доступен только на отдельном контуре api.giga.chat
++# (см. тарифы) — раскомментируйте при необходимости.
++AI_AVAILABLE_MODELS = [
++    ('GigaChat-2-Max', 'GigaChat-2-Max (Сбер)'),
++    ('GigaChat-3-Pro', 'GigaChat-3-Pro (Сбер)'),
++    # ('GigaChat-3-Ultra', 'GigaChat-3-Ultra (Сбер, api.giga.chat)'),
++]
++
+ # Этап 19 (Ф4): ежедневные напоминания по незавершённым проверкам —
+ # ВЫВЕДЕНЫ (зачистка 2026-11-09): напоминания строились на находках
+ # ИИ-нормоконтроля (PendingCheckResult); вместе с моделью удалены задача
+ # ai_checks.check_reminders и CELERY_BEAT_SCHEDULE.
+ 
+-# Эмбеддинги bge-m3 (блок 2 зачистки): локальная папка экспорта
+-# (model.onnx + файлы токенизатора). Без модели адаптер падает с
+-# понятной ошибкой — SHA-256-заглушки больше нет.
++# Эмбеддинги (зачистка 2026-11-10: экосистема Сбера).
++# Провайдер: 'gigachat' — облако Сбера (по умолчанию); 'onnx' —
++# офлайн-фолбэк bge-m3 (локальная папка AI_EMBEDDING_MODEL_DIR,
++# требует onnxruntime + transformers). Фабрика — adapters/embedding_gigachat.py.
++AI_EMBEDDING_PROVIDER = os.environ.get('AI_EMBEDDING_PROVIDER', 'gigachat')
++# Модель эмбеддингов GigaChat: Embeddings | Embeddings-2 |
++# Embeddings-3B-2025-09 | EmbeddingsGigaR. ВАЖНО: векторы разных
++# моделей несравнимы — смена модели = полная переиндексация документов
++# и базы знаний («Переиндексировать проект»).
++AI_EMBEDDING_MODEL = os.environ.get('AI_EMBEDDING_MODEL', 'Embeddings')
++# Размерность вектора: должна совпадать с колонками pgvector
++# VectorField(dimensions=1024) (миграции 0002/0010) и с фактическим
++# выходом выбранной модели — адаптер проверяет и падает с понятной
++# ошибкой при несовпадении (fail-fast).
++AI_EMBEDDING_DIM = int(os.environ.get('AI_EMBEDDING_DIM', '1024'))
++# Текстов в одном запросе /embeddings (батчинг против лимитов API).
++AI_EMBEDDING_BATCH_SIZE = int(os.environ.get('AI_EMBEDDING_BATCH_SIZE', '8'))
++AI_EMBEDDING_TIMEOUT = int(os.environ.get('AI_EMBEDDING_TIMEOUT', '60'))
++# Офлайн-фолбэк bge-m3 (только при AI_EMBEDDING_PROVIDER=onnx): папка
++# экспорта (model.onnx + файлы токенизатора). Без модели адаптер падает
++# с понятной ошибкой — SHA-256-заглушки больше нет.
+ AI_EMBEDDING_MODEL_DIR = os.environ.get(
+     'AI_EMBEDDING_MODEL_DIR', str(BASE_DIR / 'ml_models' / 'bge-m3'),
+ )

@@ -37,7 +37,7 @@ def _upload_pdf(user, project, section, code='ОВ-01'):
 
 @override_settings(
     AI_CHECKS_ENABLED=True,
-    AI_LLM_PROVIDER='', AI_LLM_API_KEY='', AI_GIGACHAT_AUTH_KEY='',
+    AI_GIGACHAT_AUTH_KEY='',
 )
 class KnowledgeBaseViewTests(MediaIsolationMixin, TestCase):
     """Треб. 7: два блока вкладки «База знаний» + переиндексация (5)."""
@@ -123,7 +123,7 @@ class KnowledgeBaseViewTests(MediaIsolationMixin, TestCase):
 
 @override_settings(
     AI_CHECKS_ENABLED=True,
-    AI_LLM_PROVIDER='', AI_LLM_API_KEY='', AI_GIGACHAT_AUTH_KEY='',
+    AI_GIGACHAT_AUTH_KEY='',
 )
 class RagSearchViewTests(MediaIsolationMixin, TestCase):
     """Треб. 8: форма ИИ-поиска с фильтрами и чип-примером."""
@@ -141,6 +141,7 @@ class RagSearchViewTests(MediaIsolationMixin, TestCase):
         self.section_ov = Section.objects.create(
             project=self.project, code='ОВ', name='ОВ', order=1,
         )
+        mock_bge_adapter(self)
         self.client.force_login(self.gip)
         self.url = reverse('ai_checks:rag_search', args=[self.project.pk])
 
@@ -185,7 +186,7 @@ class RagSearchViewTests(MediaIsolationMixin, TestCase):
 
 @override_settings(
     AI_CHECKS_ENABLED=True,
-    AI_LLM_PROVIDER='', AI_LLM_API_KEY='', AI_GIGACHAT_AUTH_KEY='',
+    AI_GIGACHAT_AUTH_KEY='',
 )
 class ReportHistoryViewTests(MediaIsolationMixin, TestCase):
     """Треб. 13: история отчётов ГИПу под формой."""

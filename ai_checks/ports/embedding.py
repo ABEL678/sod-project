@@ -1,7 +1,10 @@
 """Порт сервиса эмбеддингов (ARCHITECTURE.md 5.4, Этап 19).
 
-Реализация MVP: ``BgeM3OnnxEmbedding`` (ONNX int8, CPU, локально);
-внешние embedding-API не используются.
+Реализация по умолчанию (зачистка 2026-11-10): ``GigaChatEmbedding``
+(облако Сбера, OpenAI-совместимый /v1/embeddings) — фабрика
+``ai_checks.adapters.embedding_gigachat.get_embedding_service``;
+офлайн-фолбэк — ``BgeM3OnnxEmbedding`` (ONNX int8, CPU, локально,
+AI_EMBEDDING_PROVIDER=onnx).
 """
 
 from __future__ import annotations

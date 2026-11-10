@@ -12,6 +12,12 @@ from unittest import mock
 import numpy as np
 
 
+def _random_batched(shape):
+    """Случайный массив с ненулевой L2-нормой по последней оси."""
+    arr = np.random.randn(*shape).astype(np.float32)
+    return arr
+
+
 class BgeM3OnnxEmbedding2DTest(unittest.TestCase):
     """Мокаем ONNX-сессию: проверяем embed_texts с 2D-выходом."""
 
@@ -21,20 +27,28 @@ class BgeM3OnnxEmbedding2DTest(unittest.TestCase):
 
         adapter = BgeM3OnnxEmbedding.__new__(BgeM3OnnxEmbedding)
         adapter._dim = 1024
-        adapter._tokenizer = mock.MagicMock()
         adapter._session = mock.MagicMock()
         adapter._output_name = 'output'
         adapter._input_names = ('input_ids', 'attention_mask')
 
-        # Токенизатор возвращает пустые словари — feeds формируются
-        # только из input_names, которых нет в batch, поэтому feeds = {}.
-        # Это не влияет: мокаем сессию, которая игнорирует feeds.
-        adapter._tokenizer.return_value = {}
+        # Токенизатор: возвращает dict с input_ids/attention_mask
+        # формы (batch_size, seq_len)
+        def _tokenize(texts, **kwargs):
+            batch_size = len(texts)
+            return {
+                'input_ids': np.zeros((batch_size, 10), dtype=np.int64),
+                'attention_mask': np.ones((batch_size, 10), dtype=np.int64),
+            }
+        adapter._tokenizer = mock.MagicMock(side_effect=_tokenize)
 
-        # ONNX-сессия возвращает заданную форму
-        adapter._session.run.return_value = [
-            np.zeros(output_shape, dtype=output_dtype),
-        ]
+        # ONNX-сессия: моканый .run() возвращает случайные векторы
+        # с ненулевой L2-нормой для проверки L2-нормализации
+        def _run_fn(output_names, feeds):
+            batch_size = feeds['input_ids'].shape[0]
+            new_shape = (batch_size,) + output_shape[1:]
+            return [_random_batched(new_shape)]
+        adapter._session.run = mock.MagicMock(side_effect=_run_fn)
+
         return adapter
 
     def test_embed_texts_2d_output_single_text(self):
@@ -84,6 +98,13 @@ class BgeM3OnnxEmbedding2DTest(unittest.TestCase):
             self.assertEqual(len(vec), 1024)
             norm = sum(v * v for v in vec) ** 0.5
             self.assertAlmostEqual(norm, 1.0, places=5)
+
+    def test_embed_texts_bad_ndim(self):
+        """4D+ → RuntimeError."""
+        adapter = self._make_adapter((1, 2, 3, 4))
+        with self.assertRaises(RuntimeError) as ctx:
+            adapter.embed_texts(['bad'])
+        self.assertIn('4', str(ctx.exception))
 
     def test_embed_texts_empty(self):
         """Пустой список → пустой результат."""

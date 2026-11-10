@@ -31,7 +31,7 @@ def make_pdf_bytes(text='Smoke sheet', font_size=10) -> bytes:
     }])
 
 
-@override_settings(AI_LLM_PROVIDER='', AI_LLM_API_KEY='', AI_GIGACHAT_AUTH_KEY='')
+@override_settings(AI_GIGACHAT_AUTH_KEY='')
 class KnowledgeBaseServiceTests(MediaIsolationMixin, TestCase):
     def setUp(self):
         self.user = User.objects.create_superuser(
@@ -131,7 +131,7 @@ class KnowledgeBaseServiceTests(MediaIsolationMixin, TestCase):
 
 @override_settings(
     AI_CHECKS_ENABLED=True,
-    AI_LLM_PROVIDER='', AI_LLM_API_KEY='', AI_GIGACHAT_AUTH_KEY='',
+    AI_GIGACHAT_AUTH_KEY='',
 )
 class KnowledgeBaseViewTests(MediaIsolationMixin, TestCase):
     def setUp(self):

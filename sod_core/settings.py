@@ -121,46 +121,45 @@ CELERY_TASK_EAGER_PROPAGATES = True
 CELERY_TASK_IGNORE_RESULT = True
 
 # Этап 19 (Ф4): LLM для отчётов ГИПа и RAG-синтеза.
-# По умолчанию — OrcaRouter (OpenAI-совместимый шлюз, free-tier модели);
-# ключ AI_LLM_API_KEY, для работы из РФ — GigaChat (AI_GIGACHAT_*).
-# Без ключей используется заглушка (StubLLMProvider) — контур работает локально.
-AI_LLM_API_KEY = os.environ.get('AI_LLM_API_KEY', '')
-AI_LLM_BASE_URL = os.environ.get(
-    'AI_LLM_BASE_URL', 'https://api.orcarouter.ai/v1',
-)
-AI_LLM_MODEL = os.environ.get('AI_LLM_MODEL', 'deepseek-chat')
-AI_LLM_TIMEOUT = int(os.environ.get('AI_LLM_TIMEOUT', '60'))
-
-# Модели, доступные для выбора в UI ИИ-контура (OrcaRouter + GigaChat).
-# Выбранная модель уходит в LLMProvider.complete(model=...): префикс
-# 'GigaChat-' маршрутизируется в GigaChatProvider, остальное — в
-# HttpLLMProvider (OrcaRouter). Порядок определяет порядок в выпадающем
-# списке (зачистка 2026-11-09: один список, дубль в конце файла удалён).
-AI_AVAILABLE_MODELS = [
-    ('deepseek/deepseek-v4.1-flash-free', 'DeepSeek V4.1 Flash'),
-    ('z-ai/glm-5.3-flash-free', 'GLM 5.3 Flash'),
-    ('GigaChat-2-Max', 'GigaChat-2-Max (Сбер)'),
-    ('GigaChat-3-Pro', 'GigaChat-3-Pro (Сбер)'),
-]
-
-# GigaChat (Сбер, работа из РФ): AI_LLM_PROVIDER=gigachat включает
-# GigaChatProvider (Authorization Key → OAuth-токен → OpenAI-совместимый API).
-AI_LLM_PROVIDER = os.environ.get('AI_LLM_PROVIDER', '')
+# Только GigaChat (Сбер, работа из РФ). Без ключа — заглушка
+# (StubLLMProvider) — контур работает локально.
 AI_GIGACHAT_AUTH_KEY = os.environ.get('AI_GIGACHAT_AUTH_KEY', '')
-AI_GIGACHAT_MODEL = os.environ.get('AI_GIGACHAT_MODEL', 'GigaChat-2')
+AI_GIGACHAT_MODEL = os.environ.get('AI_GIGACHAT_MODEL', 'GigaChat-2-Max')
 AI_GIGACHAT_TIMEOUT = int(os.environ.get('AI_GIGACHAT_TIMEOUT', '60'))
 # TLS: корневые сертификаты НУЦ Минцифры; если не установлены —
 # AI_GIGACHAT_VERIFY_SSL=false (осознанно, для dev).
 AI_GIGACHAT_VERIFY_SSL = env_bool('AI_GIGACHAT_VERIFY_SSL', True)
+# Базовый URL OpenAI-совместимого API GigaChat.
+AI_GIGACHAT_API_BASE_URL = os.environ.get(
+    'AI_GIGACHAT_API_BASE_URL', 'https://api.giga.chat/v1',
+)
+
+# Модели, доступные для выбора в UI ИИ-контура.
+# Все модели уходят в GigaChatProvider.
+AI_AVAILABLE_MODELS = [
+    ('GigaChat-2-Max', 'GigaChat-2-Max (Сбер)'),
+    ('GigaChat-3-Pro', 'GigaChat-3-Pro (Сбер)'),
+]
 
 # Этап 19 (Ф4): ежедневные напоминания по незавершённым проверкам —
 # ВЫВЕДЕНЫ (зачистка 2026-11-09): напоминания строились на находках
 # ИИ-нормоконтроля (PendingCheckResult); вместе с моделью удалены задача
 # ai_checks.check_reminders и CELERY_BEAT_SCHEDULE.
 
-# Эмбеддинги bge-m3 (блок 2 зачистки): локальная папка экспорта
-# (model.onnx + файлы токенизатора). Без модели адаптер падает с
-# понятной ошибкой — SHA-256-заглушки больше нет.
+# Эмбеддинги: облако Сбера (AI_EMBEDDING_PROVIDER=gigachat) или
+# офлайн-фолбэк bge-m3 (onnx). Выбор модели GigaChat: Embeddings,
+# Embeddings-2, Embeddings-3B-2025-09, EmbeddingsGigaR.
+# ВАЖНО: смена модели эмбеддингов = полная переиндексация документов
+# («Переиндексировать проект» + перезагрузка базы знаний).
+AI_EMBEDDING_PROVIDER = os.environ.get('AI_EMBEDDING_PROVIDER', 'gigachat')
+AI_EMBEDDING_MODEL = os.environ.get('AI_EMBEDDING_MODEL', 'Embeddings')
+# Размерность вектора (колонки pgvector — 1024).
+AI_EMBEDDING_DIM = int(os.environ.get('AI_EMBEDDING_DIM', '1024'))
+AI_EMBEDDING_BATCH_SIZE = int(os.environ.get('AI_EMBEDDING_BATCH_SIZE', '8'))
+AI_EMBEDDING_TIMEOUT = int(os.environ.get('AI_EMBEDDING_TIMEOUT', '60'))
+
+# Папка bge-m3 (model.onnx + токенизатор) — только при
+# AI_EMBEDDING_PROVIDER=onnx; без модели индексация падает с ошибкой.
 AI_EMBEDDING_MODEL_DIR = os.environ.get(
     'AI_EMBEDDING_MODEL_DIR', str(BASE_DIR / 'ml_models' / 'bge-m3'),
 )

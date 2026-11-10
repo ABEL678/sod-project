@@ -1,7 +1,0 @@
-fix(ai_checks): PDF fallback via pypdf and sticky controls
-
-- open_pdf(): catch real exception for _repair_due check
-- Added pypdf re-encode fallback (attempt 3)
-- _panel.html: added .ai-checks__controls-sticky CSS (position: sticky)
-- _start_controls.html: wrapper with sticky class
-- test_pdfium_open.py: new OpenPdfPyPdfFallbackTests (3 tests)

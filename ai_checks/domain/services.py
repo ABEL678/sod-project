@@ -2,7 +2,9 @@
 
 Контракт (ARCHITECTURE.md 8.4): pypdfium2 извлекает текст и страницы,
 текст режется на чанки с перекрытием, векторы пишутся в InternalChunk /
-ProjectDocumentChunk (bge-m3, 1024, L2). Сервис не знает про HTTP/UI/
+ProjectDocumentChunk. Эмбеддинги по умолчанию — облако Сбера
+(GigaChat, адаптер embedding_gigachat.get_embedding_service;
+офлайн-фолбэк — bge-m3 ONNX). Сервис не знает про HTTP/UI/
 Celery — только домен и ORM.
 
 Состав (этап 20, после зачистки нормоконтроля 2026-11-09):
@@ -135,9 +137,11 @@ def index_document(
 
     if embedding_service is None:
         # Ленивый импорт: домен не зависит от конкретного адаптера.
-        from ai_checks.adapters.embedding_onnx import BgeM3OnnxEmbedding
+        from ai_checks.adapters.embedding_gigachat import (
+            get_embedding_service,
+        )
 
-        embedding_service = BgeM3OnnxEmbedding()
+        embedding_service = get_embedding_service()
 
     chunks = split_into_chunks(extract_pages(file_path))
     if not chunks:
@@ -209,9 +213,11 @@ def index_project_document(
     try:
         if embedding_service is None:
             # Ленивый импорт: домен не зависит от конкретного адаптера.
-            from ai_checks.adapters.embedding_onnx import BgeM3OnnxEmbedding
+            from ai_checks.adapters.embedding_gigachat import (
+                get_embedding_service,
+            )
 
-            embedding_service = BgeM3OnnxEmbedding()
+            embedding_service = get_embedding_service()
 
         chunks = split_into_chunks(extract_pages(version.file.path))
         vectors: list[list[float]] = []
@@ -370,9 +376,11 @@ def rag_answer(
 
     if embedding_service is None:
         # Ленивый импорт: домен не зависит от конкретного адаптера.
-        from ai_checks.adapters.embedding_onnx import BgeM3OnnxEmbedding
+        from ai_checks.adapters.embedding_gigachat import (
+            get_embedding_service,
+        )
 
-        embedding_service = BgeM3OnnxEmbedding()
+        embedding_service = get_embedding_service()
 
     # company_id: явный аргумент (совместимость со старыми вызовами) или
     # компания проекта — для tenant-фильтра базы знаний (8.2).
@@ -494,6 +502,12 @@ def rag_answer(
             })
 
     answer = 'Ничего не найдено'
+    # Модель для истории (RagQuery.model): LLM вызывается только при
+    # наличии источников, поэтому used_model инициализируем сразу —
+    # запрошенной моделью (UI, треб. 14). Иначе пустой результат поиска
+    # падал с UnboundLocalError на used_model[:100] при сохранении
+    # RagQuery (регрессия коммита 0951fd8, хотфикс 2026-11-10).
+    used_model = model or ''
     if sources:
         # Формируем контекст для LLM-синтеза.
         source_lines = []

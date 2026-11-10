@@ -19,7 +19,7 @@ from storage.domain.models import (
 
 
 @override_settings(
-    AI_LLM_PROVIDER='', AI_LLM_API_KEY='', AI_GIGACHAT_AUTH_KEY='',
+    AI_GIGACHAT_AUTH_KEY='',
 )
 class RagAnswerTests(TestCase):
     DIM = 1024
@@ -210,3 +210,108 @@ class RagAnswerTests(TestCase):
                 embedding_service=self.embedding,
                 vector_backend=self.backend,
             )
+
+
+@override_settings(
+    AI_GIGACHAT_AUTH_KEY='',
+)
+class RagAnswerStubLLMTests(TestCase):
+    """RAG-ответ через StubLLMProvider (без API-ключа).
+
+    Проверяет, что ответ — связный текст, а не склейка чанков.
+    Быстрые тесты: без MockVectorBackend, проверяем только StubLLMProvider.
+    """
+
+    DIM = 1024
+
+    def setUp(self):
+        self.user = User.objects.create_superuser(
+            username='rag_stub', email='stub@example.com',
+            password='TestPass123',
+        )
+        self.company = Company.objects.create(name='Компания Тест')
+        self.project = self._project(self.company, 'T-1', 'Проект Тест')
+        self.embedding = MockEmbeddingService(dim=self.DIM)
+
+        self.question = 'Какая общая нагрузка электроснабжения?'
+        self.answer_text = (
+            'Общая нагрузка электроснабжения составляет 250 кВт. '
+            'Включает: освещение 50 кВт, розетки 150 кВт, '
+            'специальное оборудование 50 кВт.'
+        )
+
+    def _project(self, company, code, name):
+        project = Project.objects.create(
+            company=company, code=code, name=name,
+            status='active', created_by=self.user,
+        )
+        section = Section.objects.create(
+            project=project, code='ЭОМ', name='Электроснабжение', order=1,
+        )
+        document = Document.objects.create(
+            project=project, section=section,
+            code=f'{code}-DOC', name=f'Источник {code}',
+            doc_type='report', status='draft', created_by=self.user,
+        )
+        return project
+
+    def _internal_doc(self, project, title, tenant_scope='company',
+                      company='auto', doc_type='internal_standard',
+                      is_active=True):
+        document = Document.objects.filter(
+            project=project, code__endswith='-DOC',
+        ).first()
+        if company == 'auto':
+            company = None if tenant_scope == 'global' else project.company
+        return InternalDocument.objects.create(
+            tenant_scope=tenant_scope,
+            company=company,
+            project=project if tenant_scope == 'project' else None,
+            source_document=document,
+            doc_type=doc_type,
+            title=title,
+            is_active=is_active,
+            created_by=self.user,
+        )
+
+    def test_stub_llm_formats_coherent_answer(self):
+        """StubLLMProvider формирует связный ответ, а не склейку чанков."""
+        from ai_checks.adapters.llm_http import StubLLMProvider
+        from ai_checks.domain.services import LLM_ERROR_SUMMARY
+
+        provider = StubLLMProvider()
+        context_text = (
+            '[1] ЭОМ-DOC (лист 5):\n'
+            'Общая нагрузка электроснабжения составляет 250 кВт. '
+            'Освещение 50 кВт, розетки 150 кВт, спец. оборудование 50 кВт.'
+        )
+        response = provider.complete([
+            {'role': 'system', 'content': 'Ты помощник ГИПа.'},
+            {'role': 'user',
+             'content': f'Вопрос: {self.question}\n\nФрагменты документов:\n{context_text}'},
+        ])
+
+        # Ответ — связный текст, не [N] title:\ntext.
+        self.assertNotIn('[1] ЭОМ-DOC', response.text[:30])
+        self.assertIn('250', response.text)
+        self.assertIn('кВт', response.text)
+
+    def test_stub_llm_includes_source_reference(self):
+        """Ответ содержит ссылку на источник (документ, лист)."""
+        from ai_checks.adapters.llm_http import StubLLMProvider
+
+        provider = StubLLMProvider()
+        context_text = '[1] Расчёт нагрузок (лист 5):\n250 кВт.'
+        response = provider.complete([
+            {'role': 'system', 'content': 'Ты помощник.'},
+            {'role': 'user',
+             'content': f'Вопрос: Нагрузка?\n\nФрагменты:\n{context_text}'},
+        ])
+
+        self.assertIn('Расчёт нагрузок', response.text)
+
+    def test_llm_error_summary_constant(self):
+        """LLM_ERROR_SUMMARY определён и содержит правильный текст."""
+        from ai_checks.domain.services import LLM_ERROR_SUMMARY
+
+        self.assertEqual(LLM_ERROR_SUMMARY, 'Резюме недоступно (ошибка LLM)')

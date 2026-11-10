@@ -77,13 +77,13 @@ class ModelSelectionServiceTests(TestCase):
             self.project, today - timedelta(days=1), today,
             self.user,
             llm_provider=spy,
-            model='z-ai/glm-5.3-flash-free',
+            model='GigaChat-2-Max',
         )
         self.assertEqual(len(spy.calls), 1)
-        self.assertEqual(spy.calls[0]['model'], 'z-ai/glm-5.3-flash-free')
+        self.assertEqual(spy.calls[0]['model'], 'GigaChat-2-Max')
         self.assertEqual(report.payload['summary'], 'Ответ выбранной модели')
         self.assertEqual(
-            report.llm_call.model, 'z-ai/glm-5.3-flash-free',
+            report.llm_call.model, 'GigaChat-2-Max',
         )
 
     def test_gip_report_default_model_is_none(self):
@@ -115,11 +115,11 @@ class ModelSelectionServiceTests(TestCase):
             embedding_service=embedding,
             vector_backend=MockVectorBackend(),
             llm_provider=spy,
-            model='deepseek/deepseek-v4.1-flash-free',
+            model='GigaChat-2-Max',
         )
         self.assertEqual(len(spy.calls), 1)
         self.assertEqual(
-            spy.calls[0]['model'], 'deepseek/deepseek-v4.1-flash-free',
+            spy.calls[0]['model'], 'GigaChat-2-Max',
         )
         self.assertEqual(result['answer'], 'Ответ выбранной модели')
         self.assertTrue(result['sources'])
@@ -157,8 +157,8 @@ class ModelSelectionViewTests(TestCase):
                 self.POST = data
 
         self.assertEqual(
-            _selected_model(Request({'model': 'z-ai/glm-5.3-flash-free'})),
-            'z-ai/glm-5.3-flash-free',
+            _selected_model(Request({'model': 'GigaChat-2-Max'})),
+            'GigaChat-2-Max',
         )
         self.assertIsNone(_selected_model(Request({'model': 'evil/model'})))
         self.assertIsNone(_selected_model(Request({})))

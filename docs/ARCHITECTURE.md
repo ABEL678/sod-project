@@ -536,7 +536,11 @@ class EmbeddingService(Protocol):
     @property
     def model_version(self) -> str: ...
 
-Реализация MVP: BgeM3OnnxEmbedding (ONNX int8, CPU, локально); внешние embedding-API не используются.
+Реализация по умолчанию (зачистка 2026-11-10): GigaChatEmbedding
+(облако Сбера, OpenAI-совместимый /v1/embeddings) — фабрика
+ai_checks.adapters.embedding_gigachat.get_embedding_service;
+офлайн-фолбэк — BgeM3OnnxEmbedding (ONNX int8, CPU, локально,
+AI_EMBEDDING_PROVIDER=onnx).
 
 ### 5.5. VectorBackend (ai_checks/ports/vector.py, Этап 19)
 class VectorBackend(Protocol):
