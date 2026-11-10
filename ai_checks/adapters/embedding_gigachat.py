@@ -157,9 +157,15 @@ class GigaChatEmbedding(EmbeddingServicePort):
                         },
                         json=payload,
                     )
-                    if response.status_code == 401:
-                        # Токен отозван/истёк раньше — сбрасываем кэш.
-                        self._token_source.invalidate_token()
+                    # 401/402/403 — без ретраев (ключ / баланс / доступ).
+                    if response.status_code in (401, 402, 403):
+                        if response.status_code == 401:
+                            # Токен отозван/истёк раньше — сбрасываем кэш.
+                            self._token_source.invalidate_token()
+                        raise RuntimeError(
+                            f'Эмбеддинги GigaChat: HTTP {response.status_code}. '
+                            'Проверьте AI_GIGACHAT_AUTH_KEY и баланс аккаунта.'
+                        )
                     response.raise_for_status()
                     data = response.json()
                 rows = sorted(

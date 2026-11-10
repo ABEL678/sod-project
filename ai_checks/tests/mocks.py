@@ -13,24 +13,21 @@ from ai_checks.ports.llm import LLMResponse
 
 
 def mock_bge_adapter(testcase, dim: int = 1024) -> None:
-    """Подменяет боевые эмбеддинги (GigaChat и ONNX) на MockEmbeddingService.
+    """Подменяет все эмбеддинги (Cloud.ru, GigaChat, ONNX) на MockEmbeddingService.
 
-    Патчим в источнике (ai_checks.adapters.embedding_gigachat) —
-    функции в services.py импортируют get_embedding_service внутри
-    тела функций, поэтому мока срабатывает при каждом вызове,
-    включая Celery-задачи (CELERY_TASK_ALWAYS_EAGER=True).
-    Одновременно мокается и BgeM3OnnxEmbedding
-    (офлайн-фолбэк) на случай AI_EMBEDDING_PROVIDER=onnx.
+    Патчим единую точку входа — фабрику get_embedding_service().
+    Это работает для всех провайдеров и для Celery-задач
+    (CELERY_TASK_ALWAYS_EAGER=True), которые вызывают index_document
+    в отдельном контексте.
     Вызывать из setUp: mock_bge_adapter(self).
     """
     service = MockEmbeddingService(dim=dim)
-    for target in (
-        'ai_checks.adapters.embedding_gigachat.get_embedding_service',
-        'ai_checks.adapters.embedding_onnx.BgeM3OnnxEmbedding',
-    ):
-        patcher = mock.patch(target, return_value=service)
-        patcher.start()
-        testcase.addCleanup(patcher.stop)
+    patcher = mock.patch(
+        'ai_checks.adapters.embedding_factory.get_embedding_service',
+        return_value=service,
+    )
+    patcher.start()
+    testcase.addCleanup(patcher.stop)
 
 
 class MockLLMProvider:

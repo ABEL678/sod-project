@@ -536,11 +536,15 @@ class EmbeddingService(Protocol):
     @property
     def model_version(self) -> str: ...
 
-Реализация по умолчанию (зачистка 2026-11-10): GigaChatEmbedding
-(облако Сбера, OpenAI-совместимый /v1/embeddings) — фабрика
-ai_checks.adapters.embedding_gigachat.get_embedding_service;
-офлайн-фолбэк — BgeM3OnnxEmbedding (ONNX int8, CPU, локально,
-AI_EMBEDDING_PROVIDER=onnx).
+Реализации (зачистка 2026-11-10): три провайдера, выбор через
+фабрику ai_checks.adapters.embedding_factory.get_embedding_service():
+
+1. **GigaChatEmbedding** (gigachat) — облако Сбера, OpenAI-совместимый
+   /v1/embeddings через OAuth-токен GigaChatProvider (api.giga.chat/v1).
+2. **CloudRuEmbedding** (cloudru) — Cloud.ru Foundation Models, BAAI/bge-m3,
+   dense 1024, L2-нормализация (foundation-models.api.cloud.ru/v1).
+3. **BgeM3OnnxEmbedding** (onnx) — локальный ONNX-инференс (CPU),
+   bge-m3 dense 1024, CLS-pooling + L2 (AI_EMBEDDING_MODEL_DIR).
 
 ### 5.5. VectorBackend (ai_checks/ports/vector.py, Этап 19)
 class VectorBackend(Protocol):

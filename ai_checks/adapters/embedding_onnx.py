@@ -35,6 +35,8 @@ import os
 from pathlib import Path
 from typing import Any
 
+import httpx
+
 from django.conf import settings
 
 from ai_checks.ports.embedding import EmbeddingService as EmbeddingServicePort
@@ -54,7 +56,7 @@ MAX_SEQ_TOKENS = 512
 CLOUD_EMBEDDING_API_KEY_ENV = 'AI_EMBEDDING_API_KEY'
 
 # OpenAI-совместимый эндпоинт и модель Cloud.ru (ТЗ патча 2026-11-10).
-DEFAULT_CLOUD_BASE_URL = 'https://foundation-models.api.cloud.ru/v1'
+DEFAULT_CLOUD_BASE_URL = 'https://foundation-models.api.cloud.ru'
 DEFAULT_CLOUD_MODEL = 'BAAI/bge-m3'
 
 # Текстов в одном запросе к API: чанки индексации ~1000 символов,
@@ -233,19 +235,12 @@ class CloudRuEmbedding(EmbeddingServicePort):
     def __init__(
         self,
         api_key: str | None = None,
-        base_url: str = DEFAULT_CLOUD_BASE_URL,
+        base_url: str | None = None,
         model: str = DEFAULT_CLOUD_MODEL,
         dim: int = 1024,
         timeout: float = 30.0,
-        client: Any | None = None,
+        verify_ssl: bool | None = None,
     ) -> None:
-        """api_key/client — точки подмены для тестов; в бою оба по умолчанию.
-
-        client — готовый OpenAI-совместимый клиент (DI вместо
-        openai.OpenAI, полезно в тестах без сети). timeout — лимит на
-        один запрос API: дефолт SDK (600 с) не годится для вьюх и
-        Celery-воркеров — зависший запрос держит Gunicorn-воркер.
-        """
         resolved_key = (
             api_key or os.environ.get(CLOUD_EMBEDDING_API_KEY_ENV, '')
         ).strip()
@@ -260,21 +255,21 @@ class CloudRuEmbedding(EmbeddingServicePort):
             )
         self._dim = dim
         self._model = model
-        if client is None:
-            try:
-                from openai import OpenAI
-            except ImportError as exc:
-                raise RuntimeError(
-                    'Облачные эмбеддинги Cloud.ru: не установлен пакет '
-                    f'openai ({exc.name}). Выполните pip install openai '
-                    '(см. requirements.txt).'
-                ) from exc
-            client = OpenAI(
-                api_key=resolved_key, base_url=base_url, timeout=timeout,
-            )
-        self._client = client
+        # Приоритет: аргумент → settings → дефолт; без /v1 — добавляется в _embed_batch.
+        self._base_url = (
+            base_url
+            or getattr(settings, 'AI_EMBEDDING_API_BASE_URL', '')
+            or DEFAULT_CLOUD_BASE_URL
+        ).rstrip('/')
+        self._api_key = resolved_key
+        self._timeout = timeout
+        self._verify_ssl = (
+            verify_ssl if verify_ssl is not None
+            else getattr(settings, 'AI_EMBEDDING_VERIFY_SSL', True)
+        )
         logger.info(
-            'CloudRuEmbedding: клиент готов (%s, модель %s)', base_url, model,
+            'CloudRuEmbedding: клиент готов (%s, модель %s, verify_ssl=%s)',
+            self._base_url, model, self._verify_ssl,
         )
 
     # --- контракт EmbeddingService -----------------------------------------
@@ -286,19 +281,7 @@ class CloudRuEmbedding(EmbeddingServicePort):
         vectors: list[list[float]] = []
         for start in range(0, len(texts), CLOUD_MAX_BATCH_TEXTS):
             batch = list(texts[start:start + CLOUD_MAX_BATCH_TEXTS])
-            response = self._client.embeddings.create(
-                model=self._model, input=batch,
-            )
-            items = sorted(response.data, key=lambda item: item.index)
-            if len(items) != len(batch):
-                raise ValueError(
-                    'Cloud.ru эмбеддинги: API вернул неверное число '
-                    f'векторов {len(items)} != {len(batch)}'
-                )
-            vectors.extend(
-                self._normalize([float(value) for value in item.embedding])
-                for item in items
-            )
+            vectors.extend(self._embed_batch(batch))
         if len(vectors) != len(texts):
             raise ValueError(
                 'Cloud.ru эмбеддинги: число векторов '
@@ -312,13 +295,62 @@ class CloudRuEmbedding(EmbeddingServicePort):
             )
         return vectors
 
+    def _embed_batch(self, batch: list[str]) -> list[list[float]]:
+        """Один запрос /embeddings: {model, input: [...]} → data[].embedding."""
+        import time
+
+        payload = {'model': self._model, 'input': list(batch)}
+        last_error: Exception | None = None
+        for attempt in range(3):
+            started = time.monotonic()
+            try:
+                with httpx.Client(
+                    timeout=self._timeout,
+                    verify=self._verify_ssl,
+                ) as client:
+                    response = client.post(
+                        f'{self._base_url}/v1/embeddings',
+                        headers={
+                            'Authorization': f'Bearer {self._api_key}',
+                            'Content-Type': 'application/json',
+                        },
+                        json=payload,
+                    )
+                    # 401/402/403 — без ретраев (ключ или баланс).
+                    if response.status_code in (401, 402, 403):
+                        raise RuntimeError(
+                            f'Cloud.ru эмбеддинги: HTTP {response.status_code}. '
+                            'Проверьте AI_EMBEDDING_API_KEY, баланс токенов и '
+                            'доступ к модели BAAI/bge-m3 в Cloud.ru Foundation Models.'
+                        )
+                    response.raise_for_status()
+                    data = response.json()
+                rows = sorted(
+                    data['data'],
+                    key=lambda item: int(item.get('index') or 0),
+                )
+                vectors = [
+                    self._normalize([float(value) for value in row['embedding']])
+                    for row in rows
+                ]
+                logger.info(
+                    'CloudRuEmbedding: батч из %d текстов, %.2f с',
+                    len(batch), (time.monotonic() - started),
+                )
+                return vectors
+            except (httpx.HTTPError, KeyError, ValueError, TypeError) as exc:
+                last_error = exc
+                if attempt < 2:
+                    time.sleep(0.5 * (attempt + 1))
+        raise RuntimeError(f'Запрос эмбеддингов Cloud.ru не удался: {last_error}')
+
     @property
     def dim(self) -> int:
         return self._dim
 
     @property
     def model_version(self) -> str:
-        return 'bge-m3-cloudru-v1'
+        return f'bge-m3-cloudru:{self._model}:v1'
 
     # --- служебное ----------------------------------------------------------
 
@@ -329,18 +361,3 @@ class CloudRuEmbedding(EmbeddingServicePort):
         if norm == 0:
             return vector
         return [round(value / norm, 6) for value in vector]
-
-
-def get_embedding_service() -> EmbeddingServicePort:
-    """Фабрика адаптера эмбеддингов по окружению.
-
-    AI_EMBEDDING_API_KEY задан → CloudRuEmbedding (облачный API,
-    режим прод-сервера без локальной модели); иначе — локальный
-    BgeM3OnnxEmbedding (dev/офлайн). Переменная читается при вызове,
-    а не при импорте модуля: python-dotenv наполняет os.environ на
-    старте Django, а тесты подменяют окружение динамически.
-    """
-    api_key = (os.environ.get(CLOUD_EMBEDDING_API_KEY_ENV) or '').strip()
-    if api_key:
-        return CloudRuEmbedding(api_key=api_key)
-    return BgeM3OnnxEmbedding()

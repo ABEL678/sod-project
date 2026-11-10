@@ -136,8 +136,7 @@ def index_document(
         raise ValueError('Не указан путь к файлу PDF')
 
     if embedding_service is None:
-        # Ленивый импорт: домен не зависит от конкретного адаптера.
-        from ai_checks.adapters.embedding_gigachat import (
+        from ai_checks.adapters.embedding_factory import (
             get_embedding_service,
         )
 
@@ -212,8 +211,7 @@ def index_project_document(
     version.save(update_fields=['indexing_status'])
     try:
         if embedding_service is None:
-            # Ленивый импорт: домен не зависит от конкретного адаптера.
-            from ai_checks.adapters.embedding_gigachat import (
+            from ai_checks.adapters.embedding_factory import (
                 get_embedding_service,
             )
 
@@ -375,8 +373,7 @@ def rag_answer(
         raise ValueError('Тип источника: project или standard')
 
     if embedding_service is None:
-        # Ленивый импорт: домен не зависит от конкретного адаптера.
-        from ai_checks.adapters.embedding_gigachat import (
+        from ai_checks.adapters.embedding_factory import (
             get_embedding_service,
         )
 

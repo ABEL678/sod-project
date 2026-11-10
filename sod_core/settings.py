@@ -146,13 +146,19 @@ AI_AVAILABLE_MODELS = [
 # ИИ-нормоконтроля (PendingCheckResult); вместе с моделью удалены задача
 # ai_checks.check_reminders и CELERY_BEAT_SCHEDULE.
 
-# Эмбеддинги: облако Сбера (AI_EMBEDDING_PROVIDER=gigachat) или
-# офлайн-фолбэк bge-m3 (onnx). Выбор модели GigaChat: Embeddings,
-# Embeddings-2, Embeddings-3B-2025-09, EmbeddingsGigaR.
+# Эмбеддинги: облако Сбера Cloud.ru (cloudru), GigaChat (gigachat)
+# или офлайн-фолбэк bge-m3 (onnx).
 # ВАЖНО: смена модели эмбеддингов = полная переиндексация документов
 # («Переиндексировать проект» + перезагрузка базы знаний).
-AI_EMBEDDING_PROVIDER = os.environ.get('AI_EMBEDDING_PROVIDER', 'gigachat')
-AI_EMBEDDING_MODEL = os.environ.get('AI_EMBEDDING_MODEL', 'Embeddings')
+AI_EMBEDDING_PROVIDER = os.environ.get('AI_EMBEDDING_PROVIDER', 'cloudru')
+# Cloud.ru Foundation Models API-ключ (для provider=cloudru).
+AI_EMBEDDING_API_KEY = os.environ.get('AI_EMBEDDING_API_KEY', '')
+# Базовый URL Cloud.ru (без /v1 — он добавляется в коде).
+AI_EMBEDDING_API_BASE_URL = os.environ.get(
+    'AI_EMBEDDING_API_BASE_URL', 'https://foundation-models.api.cloud.ru',
+)
+# Проверка SSL для Cloud.ru: True в проде, False для локальной отладки.
+AI_EMBEDDING_VERIFY_SSL = env_bool('AI_EMBEDDING_VERIFY_SSL', True)
 # Размерность вектора (колонки pgvector — 1024).
 AI_EMBEDDING_DIM = int(os.environ.get('AI_EMBEDDING_DIM', '1024'))
 AI_EMBEDDING_BATCH_SIZE = int(os.environ.get('AI_EMBEDDING_BATCH_SIZE', '8'))

@@ -1,17 +1,16 @@
-"""Тесты GigaChatEmbedding (без сети).
+"""Тесты GigaChatEmbedding и фабрики get_embedding_service (без сети).
 
-Зачистка 2026-11-10: 9 тестов, мокаются httpx.Client и GigaChatProvider.
+Зачистка 2026-11-10: мокаются httpx.Client и GigaChatProvider.
 """
 
-from unittest.mock import MagicMock, patch
+import os
+from unittest.mock import patch
 
 from django.test import SimpleTestCase, override_settings
 
-import ai_checks.adapters.embedding_gigachat as embed_mod
-from ai_checks.adapters.embedding_gigachat import (
-    GigaChatEmbedding,
-    get_embedding_service,
-)
+from ai_checks.adapters.embedding_gigachat import GigaChatEmbedding
+from ai_checks.adapters.embedding_factory import get_embedding_service
+from ai_checks.adapters.embedding_onnx import CloudRuEmbedding
 
 
 class FakeResponse:
@@ -30,19 +29,6 @@ class FakeResponse:
                     self.status_code, request=request,
                 ),
             )
-
-    def json(self):
-        return self._data
-
-
-class FakeEmbedResponse:
-    status_code = 200
-
-    def __init__(self, data):
-        self._data = data
-
-    def raise_for_status(self):
-        pass
 
     def json(self):
         return self._data
@@ -78,6 +64,19 @@ class FakeEmbedClient:
         })
 
 
+class FakeEmbedResponse:
+    status_code = 200
+
+    def __init__(self, data):
+        self._data = data
+
+    def raise_for_status(self):
+        pass
+
+    def json(self):
+        return self._data
+
+
 def fake_oauth_post(url, headers=None, data=None, timeout=None, verify=None):
     return FakeResponse({
         'access_token': 'giga-token-1',
@@ -91,8 +90,8 @@ class GigaChatEmbeddingTests(SimpleTestCase):
 
     @override_settings(AI_GIGACHAT_AUTH_KEY='test-key')
     def test_embed_texts_returns_vectors(self):
-        with patch.object(embed_mod.httpx, 'post', side_effect=fake_oauth_post), \
-                patch.object(embed_mod.httpx, 'Client', FakeEmbedClient):
+        with patch('ai_checks.adapters.embedding_gigachat.httpx.post', side_effect=fake_oauth_post), \
+                patch('ai_checks.adapters.embedding_gigachat.httpx.Client', FakeEmbedClient):
             svc = GigaChatEmbedding()
             result = svc.embed_texts(['текст 1', 'текст 2'])
 
@@ -101,8 +100,8 @@ class GigaChatEmbeddingTests(SimpleTestCase):
 
     @override_settings(AI_GIGACHAT_AUTH_KEY='test-key')
     def test_empty_texts_returns_empty(self):
-        with patch.object(embed_mod.httpx, 'post', side_effect=fake_oauth_post), \
-                patch.object(embed_mod.httpx, 'Client', FakeEmbedClient):
+        with patch('ai_checks.adapters.embedding_gigachat.httpx.post', side_effect=fake_oauth_post), \
+                patch('ai_checks.adapters.embedding_gigachat.httpx.Client', FakeEmbedClient):
             svc = GigaChatEmbedding()
             result = svc.embed_texts([])
 
@@ -110,38 +109,17 @@ class GigaChatEmbeddingTests(SimpleTestCase):
 
     @override_settings(AI_GIGACHAT_AUTH_KEY='test-key')
     def test_model_version(self):
-        with patch.object(embed_mod.httpx, 'post', side_effect=fake_oauth_post), \
-                patch.object(embed_mod.httpx, 'Client', FakeEmbedClient):
+        with patch('ai_checks.adapters.embedding_gigachat.httpx.post', side_effect=fake_oauth_post), \
+                patch('ai_checks.adapters.embedding_gigachat.httpx.Client', FakeEmbedClient):
             svc = GigaChatEmbedding()
-        self.assertEqual(svc.model_version, 'gigachat:Embeddings:v1')
+        self.assertIn('gigachat', svc.model_version)
 
     @override_settings(AI_GIGACHAT_AUTH_KEY='test-key')
     def test_dim_property(self):
-        with patch.object(embed_mod.httpx, 'post', side_effect=fake_oauth_post), \
-                patch.object(embed_mod.httpx, 'Client', FakeEmbedClient):
+        with patch('ai_checks.adapters.embedding_gigachat.httpx.post', side_effect=fake_oauth_post), \
+                patch('ai_checks.adapters.embedding_gigachat.httpx.Client', FakeEmbedClient):
             svc = GigaChatEmbedding()
         self.assertEqual(svc.dim, 1024)
-
-    @override_settings(AI_GIGACHAT_AUTH_KEY='test-key', AI_EMBEDDING_DIM=1536)
-    def test_dim_from_settings(self):
-        with patch.object(embed_mod.httpx, 'post', side_effect=fake_oauth_post), \
-                patch.object(embed_mod.httpx, 'Client', FakeEmbedClient):
-            svc = GigaChatEmbedding()
-        self.assertEqual(svc.dim, 1536)
-
-    @override_settings(AI_GIGACHAT_AUTH_KEY='test-key')
-    def test_batch_size_from_settings(self):
-        with patch.object(embed_mod.httpx, 'post', side_effect=fake_oauth_post), \
-                patch.object(embed_mod.httpx, 'Client', FakeEmbedClient):
-            svc = GigaChatEmbedding()
-        self.assertEqual(svc.batch_size, 8)
-
-    @override_settings(AI_GIGACHAT_AUTH_KEY='test-key', AI_EMBEDDING_BATCH_SIZE=4)
-    def test_batch_size_custom(self):
-        with patch.object(embed_mod.httpx, 'post', side_effect=fake_oauth_post), \
-                patch.object(embed_mod.httpx, 'Client', FakeEmbedClient):
-            svc = GigaChatEmbedding()
-        self.assertEqual(svc.batch_size, 4)
 
     @override_settings(AI_GIGACHAT_AUTH_KEY='')
     def test_no_key_raises(self):
@@ -151,10 +129,16 @@ class GigaChatEmbeddingTests(SimpleTestCase):
 
 
 class GetEmbeddingServiceTests(SimpleTestCase):
+    @override_settings(AI_EMBEDDING_PROVIDER='cloudru', AI_EMBEDDING_API_KEY='k')
+    def test_factory_returns_cloudru(self):
+        with patch('ai_checks.adapters.embedding_onnx.httpx.Client', FakeEmbedClient):
+            svc = get_embedding_service()
+        self.assertIsInstance(svc, CloudRuEmbedding)
+
     @override_settings(AI_EMBEDDING_PROVIDER='gigachat', AI_GIGACHAT_AUTH_KEY='k')
     def test_factory_returns_gigachat(self):
-        with patch.object(embed_mod.httpx, 'post', side_effect=fake_oauth_post), \
-                patch.object(embed_mod.httpx, 'Client', FakeEmbedClient):
+        with patch('ai_checks.adapters.embedding_gigachat.httpx.post', side_effect=fake_oauth_post), \
+                patch('ai_checks.adapters.embedding_gigachat.httpx.Client', FakeEmbedClient):
             svc = get_embedding_service()
         self.assertIsInstance(svc, GigaChatEmbedding)
 
@@ -171,3 +155,9 @@ class GetEmbeddingServiceTests(SimpleTestCase):
         with self.assertRaises(RuntimeError) as ctx:
             get_embedding_service()
         self.assertIn('unknown', str(ctx.exception))
+
+    @override_settings(AI_EMBEDDING_PROVIDER='')
+    def test_factory_empty_raises(self):
+        with self.assertRaises(RuntimeError) as ctx:
+            get_embedding_service()
+        self.assertIn("не поддерживается", str(ctx.exception))

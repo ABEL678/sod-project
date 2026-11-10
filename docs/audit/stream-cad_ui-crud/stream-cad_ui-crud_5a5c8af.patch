@@ -1,0 +1,1406 @@
+diff --git a/ai_checks/domain/services.py b/ai_checks/domain/services.py
+index af9c9b3..b3514ff 100644
+--- a/ai_checks/domain/services.py
++++ b/ai_checks/domain/services.py
+@@ -493,7 +493,11 @@ def rag_answer(
+                 'tenant_scope': chunk.document.tenant_scope,
+             })
+ 
+-    answer = 'Ничего не найдено'
++    answer = RAG_NO_INFO_ANSWER
++    # Регрессия 0951fd8: при пустом списке источников used_model не был
++    # определён — RagQuery.objects.create падал с NameError. Инициализируем
++    # до ветки LLM-синтеза.
++    used_model = model or ''
+     if sources:
+         # Формируем контекст для LLM-синтеза.
+         source_lines = []
+@@ -523,11 +527,24 @@ def rag_answer(
+                     'content': (
+                         'Ты — помощник ГИПа. Ответь на вопрос, используя '
+                         'ТОЛЬКО предоставленные фрагменты документов. '
+-                        'Формируй связный ответ — не просто склейку цитат. '
+-                        'Указывай, откуда взята информация '
+-                        '(документ, лист, раздел). '
++                        'Оформи ответ справкой строго в следующем формате '
++                        '(с этими заголовками, каждый с новой строки):\n'
++                        'ВОПРОС: <текст вопроса>\n'
++                        'ОТВЕТ: <связный текст с числами и ссылками на '
++                        'источники в квадратных скобках [N]>\n'
++                        'ИСТОЧНИКИ: <список: документ, лист/раздел, краткая '
++                        'цитата — одна строка на источник>\n'
++                        'ВЫВОДЫ: <что это значит для проекта>\n'
++                        'РЕКОМЕНДАЦИИ: <что делать ГИПу>\n'
++                        'Правила оформления: не используй LaTeX и '
++                        'математическую разметку (знаки доллара, \\frac, '
++                        '\\times и т.п.) — числа пиши как есть, с запятой '
++                        'в качестве десятичного разделителя (например: '
++                        '15,0 кВт; 2 350 м2 без степеней и формул). '
+                         'Не выдумывай факты и числа. '
+-                        'Если ответа нет в фрагментах — скажи об этом.'
++                        'Если ответа нет во фрагментах — в поле ОТВЕТ '
++                        'напиши ровно: «Нет информации в предоставленных '
++                        'источниках».'
+                     ),
+                 },
+                 {
+@@ -574,7 +591,7 @@ def rag_answer(
+             'Векторный поиск доступен только на PostgreSQL. '
+             'Поднимите dev-стек: docker compose -f docker-compose.dev.yml up -d.'
+         )
+-    RagQuery.objects.create(
++    query_record = RagQuery.objects.create(
+         user=user if getattr(user, 'is_authenticated', user is not None) else None,
+         project_id=project_id,
+         question=question,
+@@ -583,11 +600,72 @@ def rag_answer(
+         model=used_model[:100],
+     )
+ 
+-    return {'answer': answer, 'sources': sources}
++    return {
++        'answer': answer,
++        'sources': sources,
++        # UI-аудит (треб. 6.3): pk записи истории — для кнопки
++        # «Скачать справку (PDF)».
++        'query_id': query_record.pk,
++        # UI-аудит (треб. 6.2): ответ, разобранный на блоки справки.
++        'sections': parse_rag_sections(answer),
++    }
+ 
+ 
+ GIP_REPORT_PROMPT_VERSION = 'gip-report@2'
+-RAG_PROMPT_VERSION = 'rag-answer@1'
++RAG_PROMPT_VERSION = 'rag-answer@2'
++
++# UI-аудит (треб. 6.1): фраза при отсутствии информации в источниках.
++RAG_NO_INFO_ANSWER = 'Нет информации в предоставленных источниках'
++
++# Заголовки блоков справки ИИ-поиска (треб. 6.1/6.2) в порядке вывода.
++RAG_REPORT_SECTIONS = (
++    ('question', 'Вопрос'),
++    ('answer', 'Ответ'),
++    ('sources', 'Источники'),
++    ('conclusions', 'Выводы'),
++    ('recommendations', 'Рекомендации'),
++)
++_RAG_SECTION_HEADER_MAP = {
++    'вопрос': 'question',
++    'ответ': 'answer',
++    'источники': 'sources',
++    'выводы': 'conclusions',
++    'рекомендации': 'recommendations',
++}
++
++
++def parse_rag_sections(answer: str) -> dict:
++    """Разбор справки ИИ-поиска на блоки (треб. 6.1/6.2).
++
++    LLM возвращает текст с заголовками «ВОПРОС:/ОТВЕТ:/ИСТОЧНИКИ:/
++    ВЫВОДЫ:/РЕКОМЕНДАЦИИ:». Разбираем построчно (устойчиво к маркдауну —
++    срезаем */, # и пробелы); нераспознанный текст до первого заголовка
++    относится к блоку «Ответ». Если разбор не удался (старые записи
++    истории, сбой LLM), всё уходит в «Ответ» — шаблон покажет как есть.
++    """
++    sections = {key: '' for key, _label in RAG_REPORT_SECTIONS}
++    text = (answer or '').strip()
++    if not text:
++        return sections
++    current = None
++    for raw_line in text.splitlines():
++        line = raw_line.strip().strip('*/# ').strip()
++        header = None
++        for prefix, key in _RAG_SECTION_HEADER_MAP.items():
++            if line.lower().startswith(prefix + ':'):
++                header = key
++                line = line[len(prefix) + 1:].strip()
++                break
++        if header:
++            current = header
++            line = line.strip().strip('*/# ').strip()
++            if line:
++                sections[current] = (sections[current] + '\n' + line).strip()
++            continue
++        if current is None:
++            current = 'answer'
++        sections[current] = (sections[current] + '\n' + line).strip()
++    return sections
+ 
+ # Группировка статусов замечаний (Issue) для отчёта ГИПу.
+ ISSUE_STATUS_GROUPS = {
+@@ -1624,3 +1702,114 @@ def knowledge_documents(project):
+         .annotate(chunk_count=Count('chunks'))
+         .order_by('-created_at', '-pk')
+     )
++
++
++def rag_report_pdf(query) -> bytes:
++    """Справка ИИ-поиска в PDF (треб. 6.3) — reportlab/platypus.
++
++    Блоки справки (треб. 6.1/6.2): Вопрос, Ответ, Источники, Выводы,
++    Рекомендации. Источники берутся из снимка query.sources (JSON) на
++    момент запроса. Шрифт с кириллицей — общий реестр
++    _register_cyrillic_font (как у отчёта ГИПу).
++    """
++    import io
++
++    from reportlab.lib import colors
++    from reportlab.lib.pagesizes import A4
++    from reportlab.lib.styles import ParagraphStyle
++    from reportlab.lib.units import mm
++    from reportlab.platypus import Paragraph, SimpleDocTemplate
++
++    font, font_bold = _register_cyrillic_font()
++
++    styles = {
++        'title': ParagraphStyle(
++            'rag_title', fontName=font_bold, fontSize=14, leading=19,
++            spaceAfter=6,
++        ),
++        'meta': ParagraphStyle(
++            'rag_meta', fontName=font, fontSize=9.5, leading=13,
++            textColor=colors.HexColor('#444444'),
++        ),
++        'h2': ParagraphStyle(
++            'rag_h2', fontName=font_bold, fontSize=11.5, leading=15,
++            spaceBefore=10, spaceAfter=3,
++        ),
++        'body': ParagraphStyle(
++            'rag_body', fontName=font, fontSize=9.5, leading=13.5,
++        ),
++        'muted': ParagraphStyle(
++            'rag_muted', fontName=font, fontSize=8.5, leading=11.5,
++            textColor=colors.HexColor('#555555'),
++        ),
++    }
++
++    def _esc(text) -> str:
++        # reportlab Paragraph поддерживает мини-разметку — экранируем.
++        return (
++            str(text or '')
++            .replace('&', '&amp;')
++            .replace('<', '&lt;')
++            .replace('>', '&gt;')
++        )
++
++    sections = parse_rag_sections(query.answer)
++    author = _user_label(query.user)
++    project = query.project
++
++    buffer = io.BytesIO()
++    document = SimpleDocTemplate(
++        buffer,
++        pagesize=A4,
++        leftMargin=18 * mm,
++        rightMargin=18 * mm,
++        topMargin=16 * mm,
++        bottomMargin=16 * mm,
++        title=f'Справка ИИ-поиска #{query.pk}',
++        author=author,
++    )
++
++    story = []
++    story.append(Paragraph('Справка ИИ-поиска', styles['title']))
++    if project is not None:
++        story.append(Paragraph(
++            f'Проект: {_esc(project.name)} · шифр {_esc(project.code)}',
++            styles['meta'],
++        ))
++    model_suffix = f' · модель: {_esc(query.model)}' if query.model else ''
++    story.append(Paragraph(
++        f'Дата формирования: {timezone.localdate().strftime("%d.%m.%Y")} · '
++        f'Автор запроса: {_esc(author)}{model_suffix}',
++        styles['meta'],
++    ))
++
++    block_labels = dict(RAG_REPORT_SECTIONS)
++    for key in ('question', 'answer', 'conclusions', 'recommendations'):
++        story.append(Paragraph(_esc(block_labels[key]), styles['h2']))
++        story.append(Paragraph(
++            _esc(sections.get(key) or '—'), styles['body'],
++        ))
++
++    story.append(Paragraph(_esc(block_labels['sources']), styles['h2']))
++    sources = query.sources or []
++    if not sources:
++        story.append(Paragraph('—', styles['body']))
++    for index, source in enumerate(sources, start=1):
++        meta_parts = []
++        if source.get('section_code'):
++            meta_parts.append(f'раздел {source["section_code"]}')
++        if source.get('page'):
++            meta_parts.append(f'лист {source["page"]}')
++        meta = f' ({", ".join(meta_parts)})' if meta_parts else ''
++        story.append(Paragraph(
++            f'[{index}] {_esc(source.get("document_title", "—"))}'
++            f'{_esc(meta)}',
++            styles['body'],
++        ))
++        story.append(Paragraph(
++            f'«{_esc(str(source.get("text", ""))[:300])}»',
++            styles['muted'],
++        ))
++
++    document.build(story)
++    return buffer.getvalue()
+diff --git a/ai_checks/templates/ai_checks/_kb_edit_form.html b/ai_checks/templates/ai_checks/_kb_edit_form.html
+new file mode 100644
+index 0000000..2406f82
+--- /dev/null
++++ b/ai_checks/templates/ai_checks/_kb_edit_form.html
+@@ -0,0 +1,30 @@
++{% comment %}
++UI-аудит (треб. 9.1): HTMX-фрагмент редактирования документа базы
++знаний — название и тип. Открывается в строке таблицы _kb_table.html
++(кнопка «Редактировать»), после сохранения вьюха возвращает обновлённую
++таблицу в #kbTableWrap (как после загрузки/удаления).
++{% endcomment %}
++<form class="row g-2 align-items-end py-1"
++      hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
++      hx-post="{% url 'ai_checks:kb_document_edit' project.pk document.pk %}"
++      hx-target="#kbTableWrap" hx-swap="innerHTML">
++  <div class="col-12 col-md-5">
++    <label class="form-label small mb-0" for="kbEditTitle-{{ document.pk }}">Название</label>
++    <input type="text" class="form-control form-control-sm"
++           id="kbEditTitle-{{ document.pk }}" name="title"
++           maxlength="255" value="{{ document.title }}" required>
++  </div>
++  <div class="col-8 col-md-4">
++    <label class="form-label small mb-0" for="kbEditType-{{ document.pk }}">Тип</label>
++    <select class="form-select form-select-sm" id="kbEditType-{{ document.pk }}" name="doc_type">
++      {% for value, label in doc_types %}
++        <option value="{{ value }}"{% if document.doc_type == value %} selected{% endif %}>{{ label }}</option>
++      {% endfor %}
++    </select>
++  </div>
++  <div class="col-4 col-md-3 d-flex gap-1 justify-content-end">
++    <button type="submit" class="btn btn-sm btn-primary py-0">Сохранить</button>
++    <button type="button" class="btn btn-sm btn-outline-secondary py-0"
++            hx-on:click="document.getElementById('kb-edit-{{ document.pk }}').classList.add('d-none')">Отмена</button>
++  </div>
++</form>
+diff --git a/ai_checks/templates/ai_checks/_kb_projects.html b/ai_checks/templates/ai_checks/_kb_projects.html
+index 1e08193..02a3adb 100644
+--- a/ai_checks/templates/ai_checks/_kb_projects.html
++++ b/ai_checks/templates/ai_checks/_kb_projects.html
+@@ -23,7 +23,12 @@
+             <td class="small text-nowrap">{{ version.document.code }}</td>
+             <td class="small">{{ version.document.name }}</td>
+             <td class="small">
+-              {% if version.document.section %}{{ version.document.section.code }}{% else %}—{% endif %}
++              {# UI-аудит (треб. 5.1): технический раздел COMMON в интерфейсе не показываем #}
++              {% if version.document.section and version.document.section.code != 'COMMON' %}
++                {{ version.document.section.code }}
++              {% else %}
++                —
++              {% endif %}
+             </td>
+             <td class="small">v{{ version.version_number }}</td>
+             <td>
+diff --git a/ai_checks/templates/ai_checks/_kb_table.html b/ai_checks/templates/ai_checks/_kb_table.html
+index ee67f2e..f025563 100644
+--- a/ai_checks/templates/ai_checks/_kb_table.html
++++ b/ai_checks/templates/ai_checks/_kb_table.html
+@@ -53,6 +53,12 @@ stage2: таблица документов базы знаний (переис
+                       hx-post="{% url 'ai_checks:kb_reindex' project.pk doc.pk %}"
+                       hx-target="#kbTableWrap" hx-swap="innerHTML"
+                       title="Переиндексировать">Переиндексировать</button>
++              {# UI-аудит (треб. 9.1): редактирование названия и типа #}
++              <button type="button" class="btn btn-sm btn-outline-secondary"
++                      hx-get="{% url 'ai_checks:kb_document_edit' project.pk doc.pk %}"
++                      hx-target="#kb-edit-{{ doc.pk }} td" hx-swap="innerHTML"
++                      hx-on::after-request="document.getElementById('kb-edit-{{ doc.pk }}').classList.remove('d-none')"
++                      title="Редактировать название и тип">Редактировать</button>
+               <button type="button" class="btn btn-sm btn-outline-danger"
+                       hx-post="{% url 'ai_checks:kb_disable' project.pk doc.pk %}"
+                       hx-target="#kbTableWrap" hx-swap="innerHTML"
+@@ -60,6 +66,9 @@ stage2: таблица документов базы знаний (переис
+                       title="Удалить из базы знаний">Удалить</button>
+             </td>
+           </tr>
++          <tr id="kb-edit-{{ doc.pk }}" class="d-none">
++            <td colspan="7" class="small bg-light"></td>
++          </tr>
+           <tr id="kb-chunks-{{ doc.pk }}" class="d-none">
+             <td colspan="7" class="small bg-light"></td>
+           </tr>
+diff --git a/ai_checks/templates/ai_checks/_rag_history.html b/ai_checks/templates/ai_checks/_rag_history.html
+index 5a628fd..9c80e41 100644
+--- a/ai_checks/templates/ai_checks/_rag_history.html
++++ b/ai_checks/templates/ai_checks/_rag_history.html
+@@ -61,6 +61,7 @@
+             <th>Автор</th>
+             <th>Вопрос</th>
+             <th class="text-end">Модель</th>
++            {% if can_delete %}<th class="text-end">Действия</th>{% endif %}
+           </tr>
+         </thead>
+         <tbody>
+@@ -78,9 +79,20 @@
+                 </button>
+               </td>
+               <td class="small text-muted text-end">{{ query.model|default:'—' }}</td>
++              {% if can_delete %}
++              <td class="text-end text-nowrap">
++                {# UI-аудит (треб. 7.1): удаление запроса из истории (admin/gip) #}
++                <button type="button" class="btn btn-sm btn-outline-danger py-0"
++                        hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
++                        hx-post="{% url 'ai_checks:rag_history_delete' project.pk query.pk %}"
++                        hx-target="#aiRagHistory" hx-swap="innerHTML"
++                        hx-confirm="Удалить этот запрос из истории ИИ-поиска?"
++                        title="Удалить запрос из истории">Удалить</button>
++              </td>
++              {% endif %}
+             </tr>
+             <tr id="rag-history-detail-{{ query.pk }}" class="d-none">
+-              <td colspan="4" class="small bg-light"></td>
++              <td colspan="{% if can_delete %}5{% else %}4{% endif %}" class="small bg-light"></td>
+             </tr>
+           {% endfor %}
+         </tbody>
+diff --git a/ai_checks/templates/ai_checks/_rag_history_detail.html b/ai_checks/templates/ai_checks/_rag_history_detail.html
+index d8a5264..5629f4c 100644
+--- a/ai_checks/templates/ai_checks/_rag_history_detail.html
++++ b/ai_checks/templates/ai_checks/_rag_history_detail.html
+@@ -10,8 +10,25 @@
+   </div>
+   <div class="fw-semibold small mb-1">«{{ query.question }}»</div>
+ 
+-  {% if query.answer %}
+-    <div class="border rounded p-2 mb-2 bg-white small" style="white-space: pre-wrap;">{{ query.answer }}</div>
++  {# UI-аудит (треб. 6.2): ответ раскрывается блоками справки; для старых
++     записей без структуры весь текст попадёт в блок «Ответ» #}
++  {% if sections.answer %}
++    <div class="small mb-2">
++      <span class="text-muted">Ответ:</span>
++      <div class="border rounded p-2 bg-white" style="white-space: pre-wrap;">{{ sections.answer }}</div>
++    </div>
++  {% endif %}
++  {% if sections.conclusions %}
++    <div class="small mb-2">
++      <span class="text-muted">Выводы:</span>
++      <div class="border rounded p-2 bg-white" style="white-space: pre-wrap;">{{ sections.conclusions }}</div>
++    </div>
++  {% endif %}
++  {% if sections.recommendations %}
++    <div class="small mb-2">
++      <span class="text-muted">Рекомендации:</span>
++      <div class="border rounded p-2 bg-white" style="white-space: pre-wrap;">{{ sections.recommendations }}</div>
++    </div>
+   {% endif %}
+ 
+   {% if not groups %}
+diff --git a/ai_checks/templates/ai_checks/_rag_results.html b/ai_checks/templates/ai_checks/_rag_results.html
+index e48b7b1..6721989 100644
+--- a/ai_checks/templates/ai_checks/_rag_results.html
++++ b/ai_checks/templates/ai_checks/_rag_results.html
+@@ -1,23 +1,67 @@
+ {% comment %}
+-Треб. 8: результаты ИИ-поиска — ответ с цитатами [N] и карточки источников
+-(тип, документ, раздел, лист, цитата). Группировка: документы проекта →
+-внутренние стандарты.
++Треб. 8 + UI-аудит 6.1–6.3: результаты ИИ-поиска оформлены справкой —
++блоки Вопрос / Ответ / Источники / Выводы / Рекомендации, кнопка
++«Скачать справку (PDF)» (rag_report_pdf), карточки источников с цитатами
++[N] (тип, документ, раздел, лист, цитата). Группировка: документы
++проекта → внутренние стандарты.
+ {% endcomment %}
+ {% if error %}
+   <div class="alert alert-warning py-1 px-2 small mb-2">{{ error }}</div>
+ {% elif not sources %}
+   <div class="alert alert-light border py-2 px-3 small mb-0">
+-    Ничего не найдено
++    Нет информации в предоставленных источниках
+   </div>
+ {% else %}
+-  <div class="small text-muted mb-2">
+-    Вопрос: «{{ question }}» · источников: {{ sources|length }}
+-  </div>
++  <div class="border rounded p-2 mb-2 bg-white" id="ragReportCard">
++    <div class="d-flex justify-content-between align-items-baseline mb-1 flex-wrap gap-1">
++      <span class="fw-semibold small">
++        <i class="bi bi-file-earmark-text me-1" aria-hidden="true"></i>Справка
++      </span>
++      {% if query_id %}
++        <a class="btn btn-sm btn-outline-secondary py-0"
++           href="{% url 'ai_checks:rag_report_pdf' query_id %}"
++           title="Скачать справку в PDF (reportlab)">
++          <i class="bi bi-file-earmark-pdf me-1" aria-hidden="true"></i>Скачать справку (PDF)
++        </a>
++      {% endif %}
++    </div>
++
++    <div class="small mb-1">
++      <span class="text-muted">Вопрос:</span>
++      «{{ question }}»
++    </div>
+ 
+-  {% if answer %}
+-    <div class="border rounded p-2 mb-2 bg-white small" id="ragAnswer"
+-         style="white-space: pre-wrap;">{{ answer }}</div>
+-  {% endif %}
++    {% if sections.answer %}
++      <div class="small mb-1">
++        <span class="text-muted">Ответ:</span>
++        <div style="white-space: pre-wrap;">{{ sections.answer }}</div>
++      </div>
++    {% endif %}
++
++    <div class="small mb-1">
++      <span class="text-muted">Источники:</span>
++      {{ sources|length }} — приведены ниже, с листами и цитатами
++    </div>
++
++    {% if sections.conclusions %}
++      <div class="small mb-1">
++        <span class="text-muted">Выводы:</span>
++        <div style="white-space: pre-wrap;">{{ sections.conclusions }}</div>
++      </div>
++    {% endif %}
++
++    {% if sections.recommendations %}
++      <div class="small mb-1">
++        <span class="text-muted">Рекомендации:</span>
++        <div style="white-space: pre-wrap;">{{ sections.recommendations }}</div>
++      </div>
++    {% endif %}
++
++    {# Fallback: старые ответы без заголовков справки — показываем как есть #}
++    {% if not sections.answer and not sections.conclusions and not sections.recommendations %}
++      <div class="small" style="white-space: pre-wrap;">{{ answer }}</div>
++    {% endif %}
++  </div>
+ 
+   {% for group_code, group_label, items in groups %}
+     <div class="mb-3">
+diff --git a/ai_checks/templates/ai_checks/_report_history.html b/ai_checks/templates/ai_checks/_report_history.html
+index bab076b..4f93d58 100644
+--- a/ai_checks/templates/ai_checks/_report_history.html
++++ b/ai_checks/templates/ai_checks/_report_history.html
+@@ -33,6 +33,13 @@ _report_allowed). Включается в _report.html и обновляется
+                    title="Скачать Word">
+                   <i class="bi bi-file-earmark-word" aria-hidden="true"></i> Word
+                 </a>
++                {# UI-аудит (треб. 8.1): удаление отчёта (admin/gip) #}
++                <button type="button" class="btn btn-sm btn-outline-danger py-0"
++                        hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
++                        hx-post="{% url 'ai_checks:report_delete' report.pk %}"
++                        hx-target="#aiReportHistory" hx-swap="outerHTML"
++                        hx-confirm="Удалить отчёт за {{ report.period }}?"
++                        title="Удалить отчёт">Удалить</button>
+               </td>
+             </tr>
+           {% endfor %}
+diff --git a/ai_checks/tests/test_rag.py b/ai_checks/tests/test_rag.py
+index 3b4a8bd..008812b 100644
+--- a/ai_checks/tests/test_rag.py
++++ b/ai_checks/tests/test_rag.py
+@@ -135,7 +135,11 @@ class RagAnswerTests(TestCase):
+             embedding_service=self.embedding,
+             vector_backend=self.backend,
+         )
+-        self.assertEqual(result['answer'], 'Ничего не найдено')
++        # UI-аудит (треб. 6.1): новая формулировка при отсутствии информации.
++        self.assertEqual(
++            result['answer'],
++            'Нет информации в предоставленных источниках',
++        )
+         self.assertEqual(result['sources'], [])
+ 
+     def test_project_scope_requires_project_context(self):
+diff --git a/ai_checks/tests/test_rag_history.py b/ai_checks/tests/test_rag_history.py
+index b2b402b..3d2b9fe 100644
+--- a/ai_checks/tests/test_rag_history.py
++++ b/ai_checks/tests/test_rag_history.py
+@@ -197,7 +197,11 @@ class CrossSourceRagTests(TestCase):
+         )
+         query = RagQuery.objects.get(project=self.project)
+         self.assertEqual(query.sources, [])
+-        self.assertEqual(query.answer, 'Ничего не найдено')
++        # UI-аудит (треб. 6.1): новая формулировка при отсутствии информации.
++        self.assertEqual(
++            query.answer,
++            'Нет информации в предоставленных источниках',
++        )
+ 
+ 
+ class ProjectChunkFactory:
+diff --git a/ai_checks/urls.py b/ai_checks/urls.py
+index bc89e48..345a127 100644
+--- a/ai_checks/urls.py
++++ b/ai_checks/urls.py
+@@ -33,6 +33,14 @@ urlpatterns = [
+     ),
+     path('report/<int:pk>/pdf/', views.report_pdf, name='report_pdf'),
+     path('report/<int:pk>/docx/', views.report_docx, name='report_docx'),
++    # UI-аудит (треб. 6.3): справка ИИ-поиска в PDF.
++    path('rag/<int:pk>/pdf/', views.rag_report_pdf, name='rag_report_pdf'),
++    # UI-аудит (треб. 7.2/8.2): удаление запросов истории и отчётов.
++    path(
++        'project/<int:project_id>/rag/history/<int:pk>/delete/',
++        views.rag_history_delete, name='rag_history_delete',
++    ),
++    path('report/<int:pk>/delete/', views.report_delete, name='report_delete'),
+     # База знаний проекта (UX-аудит stage 2 + треб. 5/7).
+     path(
+         'project/<int:project_id>/kb/',
+@@ -70,4 +78,14 @@ urlpatterns = [
+         'project/<int:project_id>/kb/<int:pk>/chunks/',
+         views.kb_chunks, name='kb_chunks',
+     ),
++    # UI-аудит (треб. 9.2): редактирование названия/типа и мягкое удаление
++    # (алиас kb_document_delete → та же вьюха kb_disable, is_active=False).
++    path(
++        'project/<int:project_id>/kb/<int:pk>/edit/',
++        views.kb_document_edit, name='kb_document_edit',
++    ),
++    path(
++        'project/<int:project_id>/kb/<int:pk>/delete/',
++        views.kb_disable, name='kb_document_delete',
++    ),
+ ]
+diff --git a/ai_checks/views.py b/ai_checks/views.py
+index 1d766fb..cb3575d 100644
+--- a/ai_checks/views.py
++++ b/ai_checks/views.py
+@@ -36,7 +36,9 @@ from ai_checks.domain.services import (
+     gip_report_docx,
+     gip_report_pdf,
+     knowledge_documents,
++    parse_rag_sections,
+     rag_answer,
++    rag_report_pdf as build_rag_report_pdf,
+     reindex_document,
+     reindex_project,
+     remove_knowledge_document,
+@@ -148,6 +150,12 @@ def rag_search(request, project_id: int):
+         'project': project,
+         'question': question,
+         'answer': result['answer'],
++        # UI-аудит (треб. 6.2): блоки справки Вопрос/Ответ/Источники/
++        # Выводы/Рекомендации + pk для «Скачать справку (PDF)» (треб. 6.3).
++        'sections': result.get('sections') or parse_rag_sections(
++            result['answer'],
++        ),
++        'query_id': result.get('query_id'),
+         'sources': result['sources'],
+         'groups': _rag_groups(result['sources']),
+         'error': error,
+@@ -222,6 +230,8 @@ def _rag_history_context(project, request) -> dict:
+         'project': project,
+         'page_obj': page,
+         'members': _project_members(project),
++        # UI-аудит (треб. 7.1): кнопка «Удалить» — только admin/gip.
++        'can_delete': _report_allowed(getattr(request, 'user', None)),
+         'filters': {
+             'q': search_q,
+             'author': author_id,
+@@ -264,10 +274,95 @@ def rag_history_item(request, project_id: int, pk: int):
+     return render(request, 'ai_checks/_rag_history_detail.html', {
+         'project': project,
+         'query': query,
++        # UI-аудит (треб. 6.2): блоки справки для записи истории.
++        'sections': parse_rag_sections(query.answer),
+         'groups': _rag_groups(query.sources or []),
+     })
+ 
+ 
++# UI-аудит: CRUD истории ИИ-поиска (треб. 7), отчётов (треб. 8) и
++# справки (треб. 6.3). Права удаления/скачивания — как у отчёта ГИПу
++# (_report_allowed: admin/gip); проверка проекта — по доступным проектам.
++
++
++def _rag_query_for_manage(request, project_id: int, pk: int) -> RagQuery:
++    project = get_object_or_404(
++        get_accessible_projects(request.user), pk=project_id,
++    )
++    if not _report_allowed(request.user):
++        raise Http404('Удаление истории доступно только ГИП/администратору')
++    return get_object_or_404(
++        RagQuery.objects.filter(project=project), pk=pk,
++    )
++
++
++@login_required
++@require_POST
++def rag_history_delete(request, project_id: int, pk: int):
++    """Удаление запроса из истории ИИ-поиска (треб. 7.1, admin/gip)."""
++    _ensure_enabled()
++    project = get_object_or_404(
++        get_accessible_projects(request.user), pk=project_id,
++    )
++    query = _rag_query_for_manage(request, project_id, pk)
++    query.delete()
++    # Возвращаем обновлённый фрагмент истории (OOB — как после поиска).
++    from django.template import loader
++
++    return HttpResponse(
++        loader.render_to_string(
++            'ai_checks/_rag_history.html',
++            {**_rag_history_context(project, request), 'oob': True},
++            request=request,
++        ),
++    )
++
++
++@login_required
++@require_POST
++def report_delete(request, pk: int):
++    """Удаление отчёта ГИПу (треб. 8.1, admin/gip)."""
++    _ensure_enabled()
++    report = get_object_or_404(GeneratedReport.objects.select_related('project'), pk=pk)
++    get_object_or_404(
++        get_accessible_projects(request.user), pk=report.project_id,
++    )
++    if not _report_allowed(request.user):
++        raise Http404('Удаление отчёта доступно только ГИП/администратору')
++    report.delete()
++    # Обновлённый фрагмент истории отчётов (id корня всегда задан —
++    # меняем outerHTML по #aiReportHistory).
++    from django.template import loader
++
++    return HttpResponse(
++        loader.render_to_string(
++            'ai_checks/_report_history.html',
++            {'reports': _gip_reports(report.project)},
++        ),
++    )
++
++
++@login_required
++@require_GET
++def rag_report_pdf(request, pk: int):
++    """Скачивание справки ИИ-поиска в PDF (треб. 6.3, reportlab)."""
++    _ensure_enabled()
++    query = get_object_or_404(
++        RagQuery.objects.select_related('project', 'user'), pk=pk,
++    )
++    if query.project_id is not None:
++        get_object_or_404(
++            get_accessible_projects(request.user), pk=query.project_id,
++        )
++    response = HttpResponse(
++        build_rag_report_pdf(query), content_type='application/pdf',
++    )
++    response['Content-Disposition'] = (
++        f'attachment; filename="rag_report_{query.pk}.pdf"'
++    )
++    return response
++
++
+ def _selected_model(request) -> str | None:
+     """Модель из UI: только из разрешённого списка настроек."""
+     allowed = {
+@@ -574,6 +669,34 @@ def kb_disable(request, project_id: int, pk: int):
+     return _render_kb_table(request, project)
+ 
+ 
++@login_required
++def kb_document_edit(request, project_id: int, pk: int):
++    """Редактирование документа базы знаний: название и тип (треб. 9.1).
++
++    GET — HTMX-фрагмент с формой (встраивается в строку таблицы),
++    POST — сохранение и возврат обновлённой таблицы (как после загрузки).
++    """
++    _ensure_enabled()  # гейт флага (был пропущен — БЗ открывалась при выключенном ИИ-контуре)
++    project, document = _kb_document(request, project_id, pk)
++    if request.method == 'POST':
++        title = (request.POST.get('title') or '').strip()[:255]
++        doc_type = (request.POST.get('doc_type') or '').strip()
++        allowed_types = {
++            code for code, _label in InternalDocument.DocType.choices
++        }
++        if title:
++            document.title = title
++        if doc_type in allowed_types:
++            document.doc_type = doc_type
++        document.save(update_fields=['title', 'doc_type', 'updated_at'])
++        return _render_kb_table(request, project)
++    return render(request, 'ai_checks/_kb_edit_form.html', {
++        'project': project,
++        'document': document,
++        'doc_types': InternalDocument.DocType.choices,
++    })
++
++
+ @login_required
+ @require_GET
+ def kb_chunks(request, project_id: int, pk: int):
+diff --git a/static/js/app.js b/static/js/app.js
+index dcd441c..ffadaa5 100644
+--- a/static/js/app.js
++++ b/static/js/app.js
+@@ -431,7 +431,7 @@
+     var uploadInProgress = false;
+     var pendingUploadTarget = null;
+ 
+-    async function handleFiles(files) {
++    async function handleFiles(files, extra) {
+         if (uploadInProgress) {
+             return;
+         }
+@@ -464,8 +464,16 @@
+                 formData.append('folder_id', target.folderId);
+             }
+             formData.append('file', file);
+-            formData.append('code', file.name.replace(/\.[^.]+$/, ''));
+             formData.append('name', file.name);
++            // UI-аудит (треб. 2.1/3.1): шифр и тип отправляются только если
++            // заданы явно (модалка загрузки). Иначе сервер сам сгенерирует
++            // шифр по ГОСТ Р 21.101 и определит тип по расширению файла.
++            if (extra && extra.code) {
++                formData.append('code', extra.code);
++            }
++            if (extra && extra.doc_type) {
++                formData.append('doc_type', extra.doc_type);
++            }
+ 
+             try {
+                 var response = await fetch(uploadUrl, {
+@@ -517,6 +525,17 @@
+                 return;
+             }
+             pendingUploadTarget = null;
++            // UI-аудит (треб. 2.2/3.2): кнопка открывает модалку загрузки
++            // (data-bs-toggle="modal"); прямой выбор файла — fallback.
++            var trigger = event.target.closest('[data-role="upload-btn"]');
++            if (trigger.getAttribute('data-bs-toggle') === 'modal') {
++                var targetLabel = document.getElementById('uploadModalTarget');
++                var target = currentUploadTarget();
++                if (targetLabel && target) {
++                    targetLabel.value = target.name;
++                }
++                return;
++            }
+             var input = document.getElementById('fileInput');
+             if (input) {
+                 input.value = '';
+@@ -535,6 +554,58 @@
+             }
+         });
+ 
++        // UI-аудит (треб. 2.2/3.2): отправка формы модалки загрузки —
++        // те же ручки, что у DnD, плюс явные «Код документа» и «Тип документа».
++        var modalForm = document.getElementById('uploadModalForm');
++        if (modalForm) {
++            modalForm.addEventListener('submit', function (event) {
++                event.preventDefault();
++                if (uploadInProgress) {
++                    return;
++                }
++                var fileField = document.getElementById('uploadModalFile');
++                if (!fileField || !fileField.files || !fileField.files.length) {
++                    return;
++                }
++                var files = fileField.files;
++                var extra = {};
++                if (files.length === 1) {
++                    var codeField = document.getElementById('uploadModalCode');
++                    if (codeField && codeField.value.trim()) {
++                        extra.code = codeField.value.trim();
++                    }
++                    var typeField = document.getElementById('uploadModalDocType');
++                    if (typeField && typeField.value) {
++                        extra.doc_type = typeField.value;
++                    }
++                }
++                var modalRoot = document.getElementById('uploadModal');
++                if (modalRoot && window.bootstrap && bootstrap.Modal) {
++                    var modal = bootstrap.Modal.getInstance(modalRoot);
++                    if (modal) { modal.hide(); }
++                }
++                handleFiles(files, extra);
++                modalForm.reset();
++            });
++            var modalFileField = document.getElementById('uploadModalFile');
++            if (modalFileField) {
++                modalFileField.addEventListener('change', function () {
++                    var many = modalFileField.files.length > 1;
++                    var hint = document.getElementById('uploadModalMultiHint');
++                    var codeField = document.getElementById('uploadModalCode');
++                    var typeField = document.getElementById('uploadModalDocType');
++                    if (hint) {
++                        hint.textContent = many
++                            ? 'Выбрано несколько файлов: шифр и тип будут присвоены автоматически.'
++                            : '';
++                        hint.classList.toggle('d-none', !many);
++                    }
++                    if (codeField) { codeField.disabled = many; }
++                    if (typeField) { typeField.disabled = many; }
++                });
++            }
++        }
++
+         document.addEventListener('dragenter', function (event) {
+             if (!isFileDrag(event) || !event.target.closest('#documentsTableWrap')) {
+                 return;
+diff --git a/storage/adapters/filters.py b/storage/adapters/filters.py
+index 176dce5..639d531 100644
+--- a/storage/adapters/filters.py
++++ b/storage/adapters/filters.py
+@@ -48,7 +48,9 @@ class DocumentFilter(django_filters.FilterSet):
+     suitability_code = django_filters.ChoiceFilter(
+         field_name='suitability_code',
+         choices=Document.SUITABILITY_CHOICES,
+-        label='Статус для передачи',
++        # UI-аудит (треб. 1.4): подпись как у колонки «Статус документа»;
++        # варианты — текстовые названия из SUITABILITY_CHOICES (без кодов).
++        label='Статус документа',
+         empty_label='Все статусы',
+         widget=forms.Select(attrs={
+             'form': FILTER_FORM_ID,
+diff --git a/storage/adapters/tables.py b/storage/adapters/tables.py
+index 189f99f..c5b4f1f 100644
+--- a/storage/adapters/tables.py
++++ b/storage/adapters/tables.py
+@@ -74,8 +74,16 @@ class DocumentTable(tables.Table):
+     )
+     name = tables.Column(verbose_name='Название', attrs=_column_attrs('name'))
+     doc_type = tables.Column(verbose_name='Тип', attrs=_column_attrs('doc_type'))
++    # UI-аудит: «Состояние» — состояние жизненного цикла (зона), текстом;
++    # коды WIP/SHARED/PUBLISHED/ARCHIVE в интерфейсе не выводятся.
++    zone = tables.Column(
++        verbose_name='Состояние',
++        orderable=False,
++        empty_values=(),
++        attrs=_column_attrs('zone'),
++    )
+     suitability_code = tables.Column(
+-        verbose_name='Статус для передачи',
++        verbose_name='Статус документа',
+         attrs=_column_attrs('suitability'),
+         order_by=('suitability_code',),
+     )
+@@ -130,6 +138,7 @@ class DocumentTable(tables.Table):
+             'folder',
+             'name',
+             'doc_type',
++            'zone',
+             'suitability_code',
+             'internal_status',
+             'issues',
+@@ -224,10 +233,20 @@ class DocumentTable(tables.Table):
+             label,
+         )
+ 
++    def render_zone(self, record):
++        """Состояние документа текстом (без кодов WIP/SHARED/…)."""
++        return dict(Folder.ZONE_CHOICES).get(_effective_zone(record), '—')
++
+     def render_suitability_code(self, record):
++        # UI-аудит (треб. 1.1/1.3): текстовое название статуса документа,
++        # в тултипе — официальное пояснение (Document.SUITABILITY_DESCRIPTIONS).
++        hint = Document.SUITABILITY_DESCRIPTIONS.get(
++            record.suitability_code,
++            record.get_suitability_code_display(),
++        )
+         return format_html(
+             '<span class="doc-suitability" title="{}">{}</span>',
+-            record.get_suitability_code_display(),
++            hint,
+             record.get_suitability_code_display(),
+         )
+ 
+diff --git a/storage/adapters/templates/storage/_documents_panel.html b/storage/adapters/templates/storage/_documents_panel.html
+index f1d45b9..4013783 100644
+--- a/storage/adapters/templates/storage/_documents_panel.html
++++ b/storage/adapters/templates/storage/_documents_panel.html
+@@ -15,12 +15,12 @@
+     скрытый input zone в форму фильтров и перезагружает панель через htmx
+     (те же фильтры + зона). Счётчики — по всем доступным документам проекта.
+     {% endcomment %}
+-    <nav class="zone-segment" aria-label="Зоны ISO 19650" id="zoneSegment">
++    <nav class="zone-segment" aria-label="Состояния документов" id="zoneSegment">
+         <button type="button"
+                 class="zone-chip {% if not active_zone %}is-active{% endif %}"
+                 data-zone="" data-role="zone-chip">
+             <i class="bi bi-collection" aria-hidden="true"></i>
+-            Все зоны
++            Все состояния
+             <span class="zone-count cde-tnum" data-zone-count="">{{ zone_counts.total }}</span>
+         </button>
+         {% for zone in zone_segments %}
+@@ -82,7 +82,7 @@
+                 {{ filter.form.status }}
+             </div>
+             <div class="filter-field">
+-                <label class="filter-field__label" for="{{ filter.form.suitability_code.id_for_label }}">Пригодность</label>
++                <label class="filter-field__label" for="{{ filter.form.suitability_code.id_for_label }}">Статус документа</label>
+                 {{ filter.form.suitability_code }}
+             </div>
+             <div class="filter-field">
+@@ -158,10 +158,13 @@
+                        aria-label="Поиск по документам проекта">
+             </form>
+             {# Спринт 6: видимая главная кнопка загрузки — раньше загрузка была только через DnD и правый клик #}
++            {# UI-аудит (треб. 2.2/3.2): кнопка открывает модалку с полями «Код документа» и «Тип документа» #}
+             <button type="button"
+                     class="btn btn-primary btn-sm"
+                     id="uploadBtn"
+                     data-role="upload-btn"
++                    data-bs-toggle="modal"
++                    data-bs-target="#uploadModal"
+                     title="Загрузить документ в выбранный раздел или папку">
+                 <i class="bi bi-upload" aria-hidden="true"></i>
+                 <span class="d-none d-xl-inline">Загрузить</span>
+@@ -233,4 +236,7 @@
+             </div>
+         </div>
+     </div>
++
++    {# UI-аудит (треб. 2.2/3.2): модалка загрузки с полями «Код документа» (опционально) и «Тип документа» #}
++    {% include 'storage/_upload_modal.html' %}
+ </div>
+diff --git a/storage/adapters/templates/storage/_upload_modal.html b/storage/adapters/templates/storage/_upload_modal.html
+new file mode 100644
+index 0000000..1fdf95d
+--- /dev/null
++++ b/storage/adapters/templates/storage/_upload_modal.html
+@@ -0,0 +1,59 @@
++{% comment %}
++UI-аудит (треб. 2.2/3.2): модалка загрузки документа.
++Поля: файл, «Код документа» (опционально — пустой шифр генерируется по
++ГОСТ Р 21.101 на сервере) и «Тип документа» (пусто — определяется по
++расширению файла). Отправка через app.js (handleFiles) на
++storage:document_upload_ajax — тот же endpoint, что у DnD-загрузки.
++Для нескольких файлов поля «Код документа» и «Тип документа»
++отключаются: шифр генерируется каждому файлу, тип — по расширению.
++{% endcomment %}
++<div class="modal fade" id="uploadModal" tabindex="-1"
++     aria-labelledby="uploadModalLabel" aria-hidden="true">
++  <div class="modal-dialog">
++    <div class="modal-content">
++      <form id="uploadModalForm">
++        <div class="modal-header">
++          <h5 class="modal-title" id="uploadModalLabel">Загрузка документа</h5>
++          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрыть"></button>
++        </div>
++        <div class="modal-body">
++          <div class="mb-3">
++            <label class="form-label small" for="uploadModalTarget">Куда загружаем</label>
++            <input type="text" class="form-control form-control-sm" id="uploadModalTarget"
++                   value="{{ upload_target_name }}" readonly>
++          </div>
++          <div class="mb-3">
++            <label class="form-label small" for="uploadModalFile">Файл</label>
++            <input type="file" class="form-control form-control-sm"
++                   id="uploadModalFile" multiple required>
++            <div class="form-text d-none" id="uploadModalMultiHint"></div>
++          </div>
++          <div class="mb-3">
++            <label class="form-label small" for="uploadModalCode">Код документа (необязательно)</label>
++            <input type="text" class="form-control form-control-sm"
++                   id="uploadModalCode" name="code" maxlength="100"
++                   placeholder="Например: ИРД-ОР-01. Для одного файла">
++            <div class="form-text">Оставьте пустым — шифр будет присвоен автоматически по ГОСТ Р 21.101.</div>
++          </div>
++          <div class="mb-0">
++            <label class="form-label small" for="uploadModalDocType">Тип документа</label>
++            <select class="form-select form-select-sm" id="uploadModalDocType" name="doc_type">
++              <option value="" selected>Определить по файлу</option>
++              {% for value, label in doc_type_choices %}
++                <option value="{{ value }}">{{ label }}</option>
++              {% endfor %}
++            </select>
++            <div class="form-text">Чертёж — DWG/DXF/PDF · Отчёт — DOC/XLS · Остальное — по расширению.</div>
++          </div>
++        </div>
++        <div class="modal-footer">
++          <button type="button" class="btn btn-sm btn-outline-secondary"
++                  data-bs-dismiss="modal">Отмена</button>
++          <button type="submit" class="btn btn-sm btn-primary">
++            <i class="bi bi-upload me-1" aria-hidden="true"></i>Загрузить
++          </button>
++        </div>
++      </form>
++    </div>
++  </div>
++</div>
+diff --git a/storage/adapters/templates/storage/document_detail.html b/storage/adapters/templates/storage/document_detail.html
+index fa535b2..112872f 100644
+--- a/storage/adapters/templates/storage/document_detail.html
++++ b/storage/adapters/templates/storage/document_detail.html
+@@ -93,6 +93,65 @@
+ <div class="alert alert-info m-2 py-1 small">Публичный просмотр (только чтение)</div>
+ {% endif %}
+ 
++{# UI-аудит (треб. 1.3/2.3/3.3): панель свойств документа — шифр (редактируемый для admin/gip), статус документа с пояснением, состояние и тип. Коды S0–S4/A/B/CR и WIP/SHARED/PUBLISHED/ARCHIVE в интерфейсе не выводятся. #}
++{% if not public_view %}
++<div class="doc-info-bar d-flex flex-wrap align-items-center gap-3 px-3 py-2 border-bottom bg-light" id="docInfoBar">
++  <div class="d-flex align-items-center gap-1">
++    <span class="text-muted small">Шифр:</span>
++    <span class="fw-semibold small" id="docInfoCode">{{ document.code }}</span>
++    {% if can_edit_code %}
++      <button type="button" class="btn btn-link btn-sm p-0 ms-1" id="docCodeEditBtn"
++              title="Изменить шифр" aria-label="Изменить шифр"
++              onclick="toggleCodeEdit()"><i class="bi bi-pencil" aria-hidden="true"></i></button>
++    {% endif %}
++  </div>
++  {% if can_edit_code %}
++  <form method="post" action="{% url 'storage:document_code_update' document.pk %}"
++        id="docCodeForm" class="d-none d-flex align-items-center gap-2 mb-0">
++    {% csrf_token %}
++    <input type="text" name="code" class="form-control form-control-sm" maxlength="100"
++           value="{{ document.code }}" aria-label="Новый шифр документа" required>
++    <button type="submit" class="btn btn-sm btn-primary py-0">Сохранить</button>
++    <button type="button" class="btn btn-sm btn-outline-secondary py-0"
++            onclick="toggleCodeEdit()">Отмена</button>
++  </form>
++  {% endif %}
++  <div class="d-flex align-items-center gap-1" title="{{ suitability_hint }}">
++    <span class="text-muted small">Статус документа:</span>
++    <span class="badge text-bg-secondary">{{ document.get_suitability_code_display }}</span>
++    <span class="small text-muted d-none d-xl-inline">{{ suitability_hint }}</span>
++  </div>
++  {% if zone_label %}
++  <div class="d-flex align-items-center gap-1">
++    <span class="text-muted small">Состояние:</span>
++    <span class="badge text-bg-light border">{{ zone_label }}</span>
++  </div>
++  {% endif %}
++  <div class="d-flex align-items-center gap-1">
++    <span class="text-muted small">Тип:</span>
++    <span class="badge text-bg-light border">{{ document.get_doc_type_display }}</span>
++  </div>
++  {% if code_updated %}
++    <span class="badge text-bg-success">Шифр обновлён</span>
++  {% elif request.GET.code == 'duplicate' %}
++    <span class="text-danger small">Документ с таким шифром уже есть в этом разделе.</span>
++  {% elif request.GET.code == 'toolong' %}
++    <span class="text-danger small">Шифр не может быть длиннее 100 символов.</span>
++  {% endif %}
++</div>
++<script>
++  function toggleCodeEdit() {
++    var form = document.getElementById('docCodeForm');
++    if (!form) { return; }
++    form.classList.toggle('d-none');
++    if (!form.classList.contains('d-none')) {
++      var input = form.querySelector('input[name="code"]');
++      if (input) { input.focus(); input.select(); }
++    }
++  }
++</script>
++{% endif %}
++
+ <div class="toolbar viewer-toolbar">
+   <div class="group">
+     <button class="tbtn" onclick="prevPage()" title="Предыдущая страница (клавиша P)" aria-label="Предыдущая страница" type="button">‹</button>
+diff --git a/storage/adapters/urls.py b/storage/adapters/urls.py
+index c43bfdc..1e3393a 100644
+--- a/storage/adapters/urls.py
++++ b/storage/adapters/urls.py
+@@ -51,6 +51,7 @@ urlpatterns = [
+     path('documents/<int:document_id>/move/', views.DocumentMoveView.as_view(), name='document_move'),
+     path('documents/<int:document_id>/workflow/', views.DocumentWorkflowView.as_view(), name='document_workflow'),
+     path('documents/<int:document_id>/internal-status/', views.DocumentInternalStatusView.as_view(), name='document_internal_status_update'),
++    path('documents/<int:document_id>/code/', views.DocumentCodeUpdateView.as_view(), name='document_code_update'),
+     path('documents/<int:document_id>/copy/', views.DocumentCopyView.as_view(), name='document_copy'),
+     path('documents/<int:document_id>/delete/', views.DocumentDeleteView.as_view(), name='document_delete'),
+     path('folders/<int:folder_id>/move/', views.FolderMoveView.as_view(), name='folder_move'),
+diff --git a/storage/adapters/views.py b/storage/adapters/views.py
+index afe199b..6121241 100644
+--- a/storage/adapters/views.py
++++ b/storage/adapters/views.py
+@@ -154,7 +154,8 @@ DOCUMENT_VIEW_COLUMN_LABELS = {
+     'folder': 'Папка',
+     'name': 'Название',
+     'doc_type': 'Тип',
+-    'suitability': 'Статус для передачи',
++    'zone': 'Состояние',
++    'suitability': 'Статус документа',
+     'internal_status': 'Внутренний статус',
+     'issues': 'Замечания',
+     'version': 'Версия',
+@@ -169,6 +170,7 @@ DEFAULT_COLUMN_WIDTHS = {
+     'folder': 150,
+     'name': 315,
+     'doc_type': 100,
++    'zone': 150,
+     'suitability': 180,
+     'internal_status': 170,
+     'issues': 90,
+@@ -184,6 +186,7 @@ DOCUMENT_TABLE_COLUMN_MAP = {
+     'folder': 'folder',
+     'name': 'name',
+     'doc_type': 'doc_type',
++    'zone': 'zone',
+     'suitability_code': 'suitability',
+     'internal_status': 'internal_status',
+     'issues': 'issues',
+@@ -215,7 +218,8 @@ FILTER_CHIP_FIELDS = (
+     ('section', 'Раздел', None),
+     ('doc_type', 'Тип', Document.DOC_TYPE_CHOICES),
+     ('status', 'Статус', Document.STATUS_CHOICES),
+-    ('suitability_code', 'Пригодность', Document.SUITABILITY_CHOICES),
++    # UI-аудит (треб. 1.4): подпись чипа как у колонки «Статус документа».
++    ('suitability_code', 'Статус документа', Document.SUITABILITY_CHOICES),
+     ('internal_status', 'Внутр. статус', Document.INTERNAL_STATUS_CHOICES),
+     ('code', 'Шифр', None),
+     ('name', 'Название', None),
+@@ -719,7 +723,8 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
+         if active_zone:
+             chips.insert(0, {
+                 'param': 'zone',
+-                'label': 'Зона',
++                # UI-аудит (треб. 4.1): «Зона» → «Состояние».
++                'label': 'Состояние',
+                 'display': dict(Folder.ZONE_CHOICES).get(
+                     active_zone, active_zone,
+                 ),
+@@ -2464,9 +2469,71 @@ class DocumentDetailView(LoginRequiredMixin, DetailView):
+         context['workflow_actions'] = _workflow_actions_payload(
+             self.request.user, self.object
+         )
++        # UI-аудит (треб. 1.3/2.3): панель свойств документа — пояснение
++        # статуса, состояние текстом и право править шифр (admin/gip).
++        context['suitability_hint'] = Document.SUITABILITY_DESCRIPTIONS.get(
++            self.object.suitability_code, '',
++        )
++        context['zone_label'] = dict(Folder.ZONE_CHOICES).get(
++            _effective_zone(self.object), '',
++        )
++        context['can_edit_code'] = _document_code_edit_allowed(
++            self.request.user, self.object,
++        )
++        context['code_updated'] = self.request.GET.get('code') == 'saved'
+         return context
+ 
+ 
++def _document_code_edit_allowed(user, document: Document) -> bool:
++    """Право править шифр (треб. 2.3): только admin/gip."""
++    if not getattr(user, 'is_authenticated', False):
++        return False
++    if user.is_superuser:
++        return True
++    profile = getattr(user, 'userprofile', None)
++    if profile is not None and profile.role in ('admin', 'gip'):
++        return True
++    return document.project.gip_id == user.id
++
++
++class DocumentCodeUpdateView(LoginRequiredMixin, View):
++    """Правка шифра документа (треб. 2.3) — только admin/gip."""
++
++    def post(self, request, document_id: int):
++        document = get_object_or_404(
++            get_accessible_documents(request.user).select_related('project'),
++            pk=document_id,
++            is_deleted=False,
++        )
++        if not _document_code_edit_allowed(request.user, document):
++            return HttpResponseForbidden('Шифр могут менять только администратор или ГИП')
++
++        new_code = (request.POST.get('code') or '').strip()
++        if not new_code:
++            return redirect(
++                'storage:document_detail', document.pk,
++            )  # пустое значение — просто без изменений
++        if len(new_code) > 100:
++            return redirect(
++                f'{reverse("storage:document_detail", args=[document.pk])}?code=toolong',
++            )
++        duplicate = Document.objects.filter(
++            project=document.project,
++            section=document.section,
++            code=new_code,
++        ).exclude(pk=document.pk).exists()
++        if duplicate:
++            return redirect(
++                f'{reverse("storage:document_detail", args=[document.pk])}?code=duplicate',
++            )
++        document.code = new_code
++        # Обход FSM-охраны не нужен: поля статуса не меняются.
++        document.save(update_fields=['code', 'updated_at'])
++        return redirect(
++            f'{reverse("storage:document_detail", args=[document.pk])}?code=saved',
++        )
++
++
+ class DocumentUploadAjaxView(LoginRequiredMixin, View):
+     def handle_no_permission(self):
+         return JsonResponse({'error': 'Требуется авторизация'}, status=403)
+@@ -2513,9 +2580,12 @@ class DocumentUploadAjaxView(LoginRequiredMixin, View):
+         if folder is not None and folder.project_id != project.pk:
+             return JsonResponse({'error': 'Папка не найдена'}, status=400)
+ 
+-        code = (request.POST.get('code') or file.name).strip()
++        code = (request.POST.get('code') or '').strip()
+         name = (request.POST.get('name') or file.name).strip()
+-        doc_type = request.POST.get('doc_type') or 'other'
++        # UI-аудит (треб. 2.1/3.1): пустые code/doc_type разрешены —
++        # upload_document сгенерирует шифр по ГОСТ Р 21.101 и определит
++        # тип по расширению файла.
++        doc_type = (request.POST.get('doc_type') or '').strip()
+ 
+         try:
+             version = upload_document(
+diff --git a/storage/domain/models.py b/storage/domain/models.py
+index 44746aa..0d1527e 100644
+--- a/storage/domain/models.py
++++ b/storage/domain/models.py
+@@ -122,16 +122,30 @@ class Document(models.Model):
+         ('archived', 'Архив'),
+     ]
+     status = models.CharField(max_length=20, choices=STATUS_CHOICES, verbose_name="Статус")
++    # Требование владельца (UI-аудит): в интерфейсе коды S0–S4, A, B, CR
++    # не выводятся — только официальные русские названия ниже. Значения
++    # для БД не меняются, поэтому миграция не требуется.
+     SUITABILITY_CHOICES = [
+-        ('S0', 'В работе'),
+-        ('S1', 'Для координации'),
++        ('S0', 'Черновик'),
++        ('S1', 'Для совместной работы'),
+         ('S2', 'Для ознакомления'),
+-        ('S3', 'На согласовании'),
++        ('S3', 'На проверке'),
+         ('S4', 'На утверждении'),
+-        ('A', 'Утверждено'),
++        ('A', 'Утверждён'),
+         ('B', 'Утверждено с замечаниями'),
+-        ('CR', 'Исполнительная'),
++        ('CR', 'Утверждён'),
+     ]
++    # Пояснения к статусам документа для карточки (тултип/подпись).
++    SUITABILITY_DESCRIPTIONS = {
++        'S0': 'Документ в разработке, не передаётся другим подразделениям.',
++        'S1': 'Документ передан смежным отделам для учёта в их работе.',
++        'S2': 'Документ передан для сведения, изменения по нему не вносятся.',
++        'S3': 'Документ проверяют ГИП, проверяющий или нормоконтролёр.',
++        'S4': 'Документ передан Заказчику для утверждения.',
++        'A': 'Документ утверждён Заказчиком, допущен к использованию.',
++        'B': 'Документ утверждён Заказчиком с замечаниями.',
++        'CR': 'Исполнительная документация утверждена Заказчиком.',
++    }
+     suitability_code = models.CharField(
+         max_length=2,
+         choices=SUITABILITY_CHOICES,
+@@ -233,8 +247,10 @@ class Document(models.Model):
+ 
+ 
+ class Folder(models.Model):
++    # Состояния документов (сегмент-контрол и колонка «Состояние»).
++    # WIP переименован по требованию владельца: «В разработке».
+     ZONE_CHOICES = [
+-        ('WIP', 'В работе'),
++        ('WIP', 'В разработке'),
+         ('SHARED', 'На согласовании'),
+         ('PUBLISHED', 'Опубликовано'),
+         ('ARCHIVE', 'Архив'),
+diff --git a/storage/domain/services.py b/storage/domain/services.py
+index b440eca..83e21db 100644
+--- a/storage/domain/services.py
++++ b/storage/domain/services.py
+@@ -54,7 +54,7 @@ from storage.domain.project_templates import (
+ 
+ 
+ DOCUMENT_VIEW_COLUMNS = (
+-    'code', 'section', 'folder', 'name', 'doc_type', 'suitability',
++    'code', 'section', 'folder', 'name', 'doc_type', 'zone', 'suitability',
+     'internal_status', 'issues', 'version', 'date', 'author',
+ )
+ DOCUMENT_VIEW_FILTERS = (
+@@ -3160,14 +3160,72 @@ def get_zone_counts(user: User, project: Project) -> dict:
+     }
+ 
+ 
++# Спринт «UI-аудит»: автоопределение типа документа по расширению файла
++# (треб. 3.1): .dwg/.dxf/.pdf → чертёж; .doc/.docx/.xls/.xlsx → отчёт;
++# .jpg/.png/.tif → другое. Расширения вне словаря → «other».
++DOC_TYPE_BY_EXTENSION = {
++    'dwg': 'drawing',
++    'dxf': 'drawing',
++    'pdf': 'drawing',
++    'doc': 'report',
++    'docx': 'report',
++    'xls': 'report',
++    'xlsx': 'report',
++    'jpg': 'other',
++    'jpeg': 'other',
++    'png': 'other',
++    'tif': 'other',
++    'tiff': 'other',
++}
++
++
++def _detect_doc_type(filename: str) -> str:
++    """Тип документа по расширению файла (треб. 3.1)."""
++    extension = (
++        filename.rsplit('.', 1)[-1].lower() if '.' in filename else ''
++    )
++    return DOC_TYPE_BY_EXTENSION.get(extension, 'other')
++
++
++def _generate_document_code(
++    project: Project,
++    section: Section,
++    folder: Folder | None,
++) -> str:
++    """Шифр по ГОСТ Р 21.101 (треб. 2.1).
++
++    Формат: [base_code]-[section.code]-[folder.code]-[порядковый номер].
++    base_code берётся из проекта (при пустом — его шифр); составная часть
++    папки добавляется только если у папки заполнен код. Порядковый номер —
++    двузначный, продолжаем нумерацию внутри (проект, раздел) по префиксу,
++    коллизии разрешаем перебором (уникальность в рамках project+section).
++    """
++    base = (project.base_code or project.code or '').strip()
++    parts = [part for part in (
++        base,
++        (section.code or '').strip(),
++        ((folder.code or '').strip() if folder is not None else ''),
++    ) if part]
++    prefix = '-'.join(parts) + '-' if parts else 'DOC-'
++    existing_codes = set(
++        Document.objects
++        .filter(project=project, section=section, code__startswith=prefix)
++        .values_list('code', flat=True)
++    )
++    number = len(existing_codes) + 1
++    while f'{prefix}{number:02d}' in existing_codes:
++        number += 1
++    return f'{prefix}{number:02d}'
++
++
+ def upload_document(
+     user: User,
+     project: Project,
+     section: Section,
+-    code: str,
+-    name: str,
+-    doc_type: str,
+-    file,
++    code: str = '',
++    name: str = '',
++    doc_type: str = '',
++    file=None,
+     comment: str = "",
+     folder: Folder | None = None,
+     skip_ai_index: bool = False,
+@@ -3186,6 +3244,8 @@ def upload_document(
+       AI_CHECKS_ENABLED и файл PDF. skip_ai_index=True отключает
+       постановку задачи (документы базы знаний индексируются отдельно
+       в InternalChunk через ai_checks).
++    - UI-аудит (треб. 2.1/3.1): пустой code → генерация шифра по
++      ГОСТ Р 21.101; пустой doc_type → определение по расширению файла.
+     """
+     if not check_write_permission(user, section):
+         raise PermissionDenied("Нет прав на запись в этот раздел")
+@@ -3210,6 +3270,17 @@ def upload_document(
+     if section.project != project:
+         raise ValueError("Раздел не относится к указанному проекту")
+ 
++    # Треб. 2.1: явный шифр от пользователя имеет приоритет; пустой —
++    # генерируем по ГОСТ Р 21.101.
++    code = (code or '').strip()
++    if not code:
++        code = _generate_document_code(project, section, folder)
++
++    # Треб. 3.1: тип не указан — определяем по расширению файла.
++    doc_type = (doc_type or '').strip()
++    if not doc_type:
++        doc_type = _detect_doc_type(filename)
++
+     # Проверяем текущую зону документа (если документ уже существует и имеет папку)
+     existing_doc = Document.objects.filter(
+         project=project,
