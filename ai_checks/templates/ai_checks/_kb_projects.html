@@ -23,7 +23,12 @@
             <td class="small text-nowrap">{{ version.document.code }}</td>
             <td class="small">{{ version.document.name }}</td>
             <td class="small">
-              {% if version.document.section %}{{ version.document.section.code }}{% else %}—{% endif %}
+              {# UI-аудит (треб. 5.1): технический раздел COMMON в интерфейсе не показываем #}
+              {% if version.document.section and version.document.section.code != 'COMMON' %}
+                {{ version.document.section.code }}
+              {% else %}
+                —
+              {% endif %}
             </td>
             <td class="small">v{{ version.version_number }}</td>
             <td>

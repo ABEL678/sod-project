@@ -93,6 +93,65 @@
 <div class="alert alert-info m-2 py-1 small">Публичный просмотр (только чтение)</div>
 {% endif %}
 
+{# UI-аудит (треб. 1.3/2.3/3.3): панель свойств документа — шифр (редактируемый для admin/gip), статус документа с пояснением, состояние и тип. Коды S0–S4/A/B/CR и WIP/SHARED/PUBLISHED/ARCHIVE в интерфейсе не выводятся. #}
+{% if not public_view %}
+<div class="doc-info-bar d-flex flex-wrap align-items-center gap-3 px-3 py-2 border-bottom bg-light" id="docInfoBar">
+  <div class="d-flex align-items-center gap-1">
+    <span class="text-muted small">Шифр:</span>
+    <span class="fw-semibold small" id="docInfoCode">{{ document.code }}</span>
+    {% if can_edit_code %}
+      <button type="button" class="btn btn-link btn-sm p-0 ms-1" id="docCodeEditBtn"
+              title="Изменить шифр" aria-label="Изменить шифр"
+              onclick="toggleCodeEdit()"><i class="bi bi-pencil" aria-hidden="true"></i></button>
+    {% endif %}
+  </div>
+  {% if can_edit_code %}
+  <form method="post" action="{% url 'storage:document_code_update' document.pk %}"
+        id="docCodeForm" class="d-none d-flex align-items-center gap-2 mb-0">
+    {% csrf_token %}
+    <input type="text" name="code" class="form-control form-control-sm" maxlength="100"
+           value="{{ document.code }}" aria-label="Новый шифр документа" required>
+    <button type="submit" class="btn btn-sm btn-primary py-0">Сохранить</button>
+    <button type="button" class="btn btn-sm btn-outline-secondary py-0"
+            onclick="toggleCodeEdit()">Отмена</button>
+  </form>
+  {% endif %}
+  <div class="d-flex align-items-center gap-1" title="{{ suitability_hint }}">
+    <span class="text-muted small">Статус документа:</span>
+    <span class="badge text-bg-secondary">{{ document.get_suitability_code_display }}</span>
+    <span class="small text-muted d-none d-xl-inline">{{ suitability_hint }}</span>
+  </div>
+  {% if zone_label %}
+  <div class="d-flex align-items-center gap-1">
+    <span class="text-muted small">Состояние:</span>
+    <span class="badge text-bg-light border">{{ zone_label }}</span>
+  </div>
+  {% endif %}
+  <div class="d-flex align-items-center gap-1">
+    <span class="text-muted small">Тип:</span>
+    <span class="badge text-bg-light border">{{ document.get_doc_type_display }}</span>
+  </div>
+  {% if code_updated %}
+    <span class="badge text-bg-success">Шифр обновлён</span>
+  {% elif request.GET.code == 'duplicate' %}
+    <span class="text-danger small">Документ с таким шифром уже есть в этом разделе.</span>
+  {% elif request.GET.code == 'toolong' %}
+    <span class="text-danger small">Шифр не может быть длиннее 100 символов.</span>
+  {% endif %}
+</div>
+<script>
+  function toggleCodeEdit() {
+    var form = document.getElementById('docCodeForm');
+    if (!form) { return; }
+    form.classList.toggle('d-none');
+    if (!form.classList.contains('d-none')) {
+      var input = form.querySelector('input[name="code"]');
+      if (input) { input.focus(); input.select(); }
+    }
+  }
+</script>
+{% endif %}
+
 <div class="toolbar viewer-toolbar">
   <div class="group">
     <button class="tbtn" onclick="prevPage()" title="Предыдущая страница (клавиша P)" aria-label="Предыдущая страница" type="button">‹</button>

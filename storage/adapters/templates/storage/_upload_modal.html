@@ -1,0 +1,59 @@
+{% comment %}
+UI-аудит (треб. 2.2/3.2): модалка загрузки документа.
+Поля: файл, «Код документа» (опционально — пустой шифр генерируется по
+ГОСТ Р 21.101 на сервере) и «Тип документа» (пусто — определяется по
+расширению файла). Отправка через app.js (handleFiles) на
+storage:document_upload_ajax — тот же endpoint, что у DnD-загрузки.
+Для нескольких файлов поля «Код документа» и «Тип документа»
+отключаются: шифр генерируется каждому файлу, тип — по расширению.
+{% endcomment %}
+<div class="modal fade" id="uploadModal" tabindex="-1"
+     aria-labelledby="uploadModalLabel" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <form id="uploadModalForm">
+        <div class="modal-header">
+          <h5 class="modal-title" id="uploadModalLabel">Загрузка документа</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрыть"></button>
+        </div>
+        <div class="modal-body">
+          <div class="mb-3">
+            <label class="form-label small" for="uploadModalTarget">Куда загружаем</label>
+            <input type="text" class="form-control form-control-sm" id="uploadModalTarget"
+                   value="{{ upload_target_name }}" readonly>
+          </div>
+          <div class="mb-3">
+            <label class="form-label small" for="uploadModalFile">Файл</label>
+            <input type="file" class="form-control form-control-sm"
+                   id="uploadModalFile" multiple required>
+            <div class="form-text d-none" id="uploadModalMultiHint"></div>
+          </div>
+          <div class="mb-3">
+            <label class="form-label small" for="uploadModalCode">Код документа (необязательно)</label>
+            <input type="text" class="form-control form-control-sm"
+                   id="uploadModalCode" name="code" maxlength="100"
+                   placeholder="Например: ИРД-ОР-01. Для одного файла">
+            <div class="form-text">Оставьте пустым — шифр будет присвоен автоматически по ГОСТ Р 21.101.</div>
+          </div>
+          <div class="mb-0">
+            <label class="form-label small" for="uploadModalDocType">Тип документа</label>
+            <select class="form-select form-select-sm" id="uploadModalDocType" name="doc_type">
+              <option value="" selected>Определить по файлу</option>
+              {% for value, label in doc_type_choices %}
+                <option value="{{ value }}">{{ label }}</option>
+              {% endfor %}
+            </select>
+            <div class="form-text">Чертёж — DWG/DXF/PDF · Отчёт — DOC/XLS · Остальное — по расширению.</div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-sm btn-outline-secondary"
+                  data-bs-dismiss="modal">Отмена</button>
+          <button type="submit" class="btn btn-sm btn-primary">
+            <i class="bi bi-upload me-1" aria-hidden="true"></i>Загрузить
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>

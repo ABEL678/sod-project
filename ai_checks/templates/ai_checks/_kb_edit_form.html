@@ -1,0 +1,30 @@
+{% comment %}
+UI-аудит (треб. 9.1): HTMX-фрагмент редактирования документа базы
+знаний — название и тип. Открывается в строке таблицы _kb_table.html
+(кнопка «Редактировать»), после сохранения вьюха возвращает обновлённую
+таблицу в #kbTableWrap (как после загрузки/удаления).
+{% endcomment %}
+<form class="row g-2 align-items-end py-1"
+      hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
+      hx-post="{% url 'ai_checks:kb_document_edit' project.pk document.pk %}"
+      hx-target="#kbTableWrap" hx-swap="innerHTML">
+  <div class="col-12 col-md-5">
+    <label class="form-label small mb-0" for="kbEditTitle-{{ document.pk }}">Название</label>
+    <input type="text" class="form-control form-control-sm"
+           id="kbEditTitle-{{ document.pk }}" name="title"
+           maxlength="255" value="{{ document.title }}" required>
+  </div>
+  <div class="col-8 col-md-4">
+    <label class="form-label small mb-0" for="kbEditType-{{ document.pk }}">Тип</label>
+    <select class="form-select form-select-sm" id="kbEditType-{{ document.pk }}" name="doc_type">
+      {% for value, label in doc_types %}
+        <option value="{{ value }}"{% if document.doc_type == value %} selected{% endif %}>{{ label }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="col-4 col-md-3 d-flex gap-1 justify-content-end">
+    <button type="submit" class="btn btn-sm btn-primary py-0">Сохранить</button>
+    <button type="button" class="btn btn-sm btn-outline-secondary py-0"
+            hx-on:click="document.getElementById('kb-edit-{{ document.pk }}').classList.add('d-none')">Отмена</button>
+  </div>
+</form>

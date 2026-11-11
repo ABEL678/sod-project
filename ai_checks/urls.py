@@ -22,6 +22,11 @@ urlpatterns = [
         'project/<int:project_id>/rag/history/<int:pk>/',
         views.rag_history_item, name='rag_history_item',
     ),
+    # UI-аудит (треб. 7.1): групповое удаление из истории (admin/gip).
+    path(
+        'project/<int:project_id>/rag/history/bulk-delete/',
+        views.rag_history_bulk_delete, name='rag_history_bulk_delete',
+    ),
     # Ф4: отчёт ГИПу.
     path(
         'project/<int:project_id>/report/',
@@ -33,6 +38,14 @@ urlpatterns = [
     ),
     path('report/<int:pk>/pdf/', views.report_pdf, name='report_pdf'),
     path('report/<int:pk>/docx/', views.report_docx, name='report_docx'),
+    # UI-аудит (треб. 6.3): справка ИИ-поиска в PDF.
+    path('rag/<int:pk>/pdf/', views.rag_report_pdf, name='rag_report_pdf'),
+    # UI-аудит (треб. 7.2/8.2): удаление запросов истории и отчётов.
+    path(
+        'project/<int:project_id>/rag/history/<int:pk>/delete/',
+        views.rag_history_delete, name='rag_history_delete',
+    ),
+    path('report/<int:pk>/delete/', views.report_delete, name='report_delete'),
     # База знаний проекта (UX-аудит stage 2 + треб. 5/7).
     path(
         'project/<int:project_id>/kb/',
@@ -69,5 +82,15 @@ urlpatterns = [
     path(
         'project/<int:project_id>/kb/<int:pk>/chunks/',
         views.kb_chunks, name='kb_chunks',
+    ),
+    # UI-аудит (треб. 9.2): редактирование названия/типа и мягкое удаление
+    # (алиас kb_document_delete → та же вьюха kb_disable, is_active=False).
+    path(
+        'project/<int:project_id>/kb/<int:pk>/edit/',
+        views.kb_document_edit, name='kb_document_edit',
+    ),
+    path(
+        'project/<int:project_id>/kb/<int:pk>/delete/',
+        views.kb_disable, name='kb_document_delete',
     ),
 ]

@@ -33,6 +33,13 @@ _report_allowed). Включается в _report.html и обновляется
                    title="Скачать Word">
                   <i class="bi bi-file-earmark-word" aria-hidden="true"></i> Word
                 </a>
+                {# UI-аудит (треб. 8.1): удаление отчёта (admin/gip) #}
+                <button type="button" class="btn btn-sm btn-outline-danger py-0"
+                        hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
+                        hx-post="{% url 'ai_checks:report_delete' report.pk %}"
+                        hx-target="#aiReportHistory" hx-swap="outerHTML"
+                        hx-confirm="Удалить отчёт за {{ report.period }}?"
+                        title="Удалить отчёт">Удалить</button>
               </td>
             </tr>
           {% endfor %}

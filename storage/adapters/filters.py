@@ -48,7 +48,9 @@ class DocumentFilter(django_filters.FilterSet):
     suitability_code = django_filters.ChoiceFilter(
         field_name='suitability_code',
         choices=Document.SUITABILITY_CHOICES,
-        label='Статус для передачи',
+        # UI-аудит (треб. 1.4): подпись как у колонки «Статус документа»;
+        # варианты — текстовые названия из SUITABILITY_CHOICES (без кодов).
+        label='Статус документа',
         empty_label='Все статусы',
         widget=forms.Select(attrs={
             'form': FILTER_FORM_ID,

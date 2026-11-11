@@ -53,19 +53,50 @@
   </form>
 
   {% if page_obj.object_list %}
+    {% if can_delete %}
+    <div class="d-flex align-items-center gap-2 mb-1">
+      <button type="button" id="ragHistoryBulkDeleteBtn" class="btn btn-sm btn-outline-danger py-0" disabled
+              hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
+              hx-post="{% url 'ai_checks:rag_history_bulk_delete' project.pk %}"
+              hx-include="#ragHistoryTable input[name='rag_query_ids']"
+              hx-target="#aiRagHistory" hx-swap="innerHTML"
+              hx-confirm="Удалить выбранные запросы из истории ИИ-поиска?">
+        Удалить выбранные (<span id="ragHistoryBulkCount">0</span>)
+      </button>
+      <button type="button" class="btn btn-sm btn-outline-secondary py-0"
+              hx-get="{% url 'ai_checks:rag_history' project.pk %}"
+              hx-target="#aiRagHistory" hx-swap="innerHTML"
+              id="ragHistoryClearSelection">
+        Снять выделение
+      </button>
+    </div>
+    {% endif %}
+
     <div class="table-responsive">
       <table class="table table-sm align-middle mb-0" id="ragHistoryTable">
         <thead>
           <tr class="small text-muted">
+            {% if can_delete %}
+            <th style="width: 32px;">
+              <input type="checkbox" id="ragHistorySelectAll" class="form-check-input" title="Выбрать все">
+            </th>
+            {% endif %}
             <th style="min-width: 96px;">Дата</th>
             <th>Автор</th>
             <th>Вопрос</th>
             <th class="text-end">Модель</th>
+            {% if can_delete %}<th class="text-end">Действия</th>{% endif %}
           </tr>
         </thead>
         <tbody>
           {% for query in page_obj.object_list %}
             <tr>
+              {% if can_delete %}
+              <td>
+                <input type="checkbox" name="rag_query_ids" value="{{ query.pk }}" class="form-check-input rag-history-checkbox"
+                       onchange="_updateRagHistoryBulkCount()">
+              </td>
+              {% endif %}
               <td class="small text-muted text-nowrap">{{ query.created_at|date:"d.m.Y H:i" }}</td>
               <td class="small">{{ query.user.get_full_name|default:query.user.username|default:'—' }}</td>
               <td class="small">
@@ -78,9 +109,27 @@
                 </button>
               </td>
               <td class="small text-muted text-end">{{ query.model|default:'—' }}</td>
+              {% if can_delete %}
+              <td class="text-end text-nowrap">
+                {# UI-аудит (треб. 6.3): скачать справку PDF из истории — доступно всем #}
+                <a class="btn btn-sm btn-outline-secondary py-0"
+                   href="{% url 'ai_checks:rag_report_pdf' query.pk %}"
+                   title="Скачать справку в PDF">
+                  <i class="bi bi-file-earmark-pdf me-1" aria-hidden="true"></i>PDF
+                </a>
+                {% if can_delete %}
+                  <button type="button" class="btn btn-sm btn-outline-danger py-0"
+                          hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
+                          hx-post="{% url 'ai_checks:rag_history_delete' project.pk query.pk %}"
+                          hx-target="#aiRagHistory" hx-swap="innerHTML"
+                          hx-confirm="Удалить этот запрос из истории ИИ-поиска?"
+                          title="Удалить запрос из истории">Удалить</button>
+                {% endif %}
+              </td>
+              {% endif %}
             </tr>
             <tr id="rag-history-detail-{{ query.pk }}" class="d-none">
-              <td colspan="4" class="small bg-light"></td>
+              <td colspan="{% if can_delete %}6{% else %}4{% endif %}" class="small bg-light"></td>
             </tr>
           {% endfor %}
         </tbody>
@@ -112,3 +161,37 @@
     </div>
   {% endif %}
 </div>
+
+{% if can_delete %}
+<script>
+(function() {
+  var selectAll = document.getElementById('ragHistorySelectAll');
+  var checkboxes = document.querySelectorAll('.rag-history-checkbox');
+  var clearBtn = document.getElementById('ragHistoryClearSelection');
+
+  if (selectAll) {
+    selectAll.addEventListener('change', function() {
+      checkboxes.forEach(function(cb) { cb.checked = selectAll.checked; });
+      _updateRagHistoryBulkCount();
+    });
+  }
+
+  if (clearBtn) {
+    clearBtn.addEventListener('click', function() {
+      checkboxes.forEach(function(cb) { cb.checked = false; });
+      if (selectAll) selectAll.checked = false;
+      _updateRagHistoryBulkCount();
+    });
+  }
+
+  window._updateRagHistoryBulkCount = function() {
+    var count = document.querySelectorAll('.rag-history-checkbox:checked').length;
+    var btn = document.getElementById('ragHistoryBulkDeleteBtn');
+    var countSpan = document.getElementById('ragHistoryBulkCount');
+    if (btn) btn.disabled = count === 0;
+    if (countSpan) countSpan.textContent = count;
+    if (selectAll) selectAll.checked = count === checkboxes.length && checkboxes.length > 0;
+  };
+})();
+</script>
+{% endif %}

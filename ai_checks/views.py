@@ -36,7 +36,9 @@ from ai_checks.domain.services import (
     gip_report_docx,
     gip_report_pdf,
     knowledge_documents,
+    parse_rag_sections,
     rag_answer,
+    rag_report_pdf as build_rag_report_pdf,
     reindex_document,
     reindex_project,
     remove_knowledge_document,
@@ -148,6 +150,12 @@ def rag_search(request, project_id: int):
         'project': project,
         'question': question,
         'answer': result['answer'],
+        # UI-аудит (треб. 6.2): блоки справки Вопрос/Ответ/Источники/
+        # Выводы/Рекомендации + pk для «Скачать справку (PDF)» (треб. 6.3).
+        'sections': result.get('sections') or parse_rag_sections(
+            result['answer'],
+        ),
+        'query_id': result.get('query_id'),
         'sources': result['sources'],
         'groups': _rag_groups(result['sources']),
         'error': error,
@@ -222,6 +230,8 @@ def _rag_history_context(project, request) -> dict:
         'project': project,
         'page_obj': page,
         'members': _project_members(project),
+        # UI-аудит (треб. 7.1): кнопка «Удалить» — только admin/gip.
+        'can_delete': _report_allowed(getattr(request, 'user', None)),
         'filters': {
             'q': search_q,
             'author': author_id,
@@ -264,8 +274,120 @@ def rag_history_item(request, project_id: int, pk: int):
     return render(request, 'ai_checks/_rag_history_detail.html', {
         'project': project,
         'query': query,
+        # UI-аудит (треб. 6.2): блоки справки для записи истории.
+        'sections': parse_rag_sections(query.answer),
         'groups': _rag_groups(query.sources or []),
     })
+
+
+# UI-аудит: CRUD истории ИИ-поиска (треб. 7), отчётов (треб. 8) и
+# справки (треб. 6.3). Права удаления/скачивания — как у отчёта ГИПу
+# (_report_allowed: admin/gip); проверка проекта — по доступным проектам.
+
+
+def _rag_query_for_manage(request, project_id: int, pk: int) -> RagQuery:
+    project = get_object_or_404(
+        get_accessible_projects(request.user), pk=project_id,
+    )
+    if not _report_allowed(request.user):
+        raise Http404('Удаление истории доступно только ГИП/администратору')
+    return get_object_or_404(
+        RagQuery.objects.filter(project=project), pk=pk,
+    )
+
+
+@login_required
+@require_POST
+def rag_history_delete(request, project_id: int, pk: int):
+    """Удаление запроса из истории ИИ-поиска (треб. 7.1, admin/gip)."""
+    _ensure_enabled()
+    project = get_object_or_404(
+        get_accessible_projects(request.user), pk=project_id,
+    )
+    query = _rag_query_for_manage(request, project_id, pk)
+    query.delete()
+    # Возвращаем обновлённый фрагмент истории (OOB — как после поиска).
+    from django.template import loader
+
+    return HttpResponse(
+        loader.render_to_string(
+            'ai_checks/_rag_history.html',
+            {**_rag_history_context(project, request), 'oob': True},
+            request=request,
+        ),
+    )
+
+
+@login_required
+@require_POST
+def rag_history_bulk_delete(request, project_id: int):
+    """Групповое удаление запросов из истории ИИ-поиска (admin/gip)."""
+    from django.db import transaction
+
+    _ensure_enabled()
+    project = get_object_or_404(
+        get_accessible_projects(request.user), pk=project_id,
+    )
+    if not _report_allowed(request.user):
+        raise Http404('Удаление истории доступно только ГИП/администратору')
+    ids = request.POST.getlist('rag_query_ids')
+    with transaction.atomic():
+        RagQuery.objects.filter(project=project, pk__in=ids).delete()
+    # Возвращаем обновлённый фрагмент истории (OOB — как rag_history_delete).
+    from django.template import loader
+
+    return HttpResponse(
+        loader.render_to_string(
+            'ai_checks/_rag_history.html',
+            {**_rag_history_context(project, request), 'oob': True},
+            request=request,
+        ),
+    )
+
+
+@login_required
+@require_POST
+def report_delete(request, pk: int):
+    """Удаление отчёта ГИПу (треб. 8.1, admin/gip)."""
+    _ensure_enabled()
+    report = get_object_or_404(GeneratedReport.objects.select_related('project'), pk=pk)
+    get_object_or_404(
+        get_accessible_projects(request.user), pk=report.project_id,
+    )
+    if not _report_allowed(request.user):
+        raise Http404('Удаление отчёта доступно только ГИП/администратору')
+    report.delete()
+    # Обновлённый фрагмент истории отчётов (id корня всегда задан —
+    # меняем outerHTML по #aiReportHistory).
+    from django.template import loader
+
+    return HttpResponse(
+        loader.render_to_string(
+            'ai_checks/_report_history.html',
+            {'reports': _gip_reports(report.project)},
+        ),
+    )
+
+
+@login_required
+@require_GET
+def rag_report_pdf(request, pk: int):
+    """Скачивание справки ИИ-поиска в PDF (треб. 6.3, reportlab)."""
+    _ensure_enabled()
+    query = get_object_or_404(
+        RagQuery.objects.select_related('project', 'user'), pk=pk,
+    )
+    if query.project_id is not None:
+        get_object_or_404(
+            get_accessible_projects(request.user), pk=query.project_id,
+        )
+    response = HttpResponse(
+        build_rag_report_pdf(query), content_type='application/pdf',
+    )
+    response['Content-Disposition'] = (
+        f'attachment; filename="rag_report_{query.pk}.pdf"'
+    )
+    return response
 
 
 def _selected_model(request) -> str | None:
@@ -572,6 +694,34 @@ def kb_disable(request, project_id: int, pk: int):
     project, document = _kb_document(request, project_id, pk)
     remove_knowledge_document(document)
     return _render_kb_table(request, project)
+
+
+@login_required
+def kb_document_edit(request, project_id: int, pk: int):
+    """Редактирование документа базы знаний: название и тип (треб. 9.1).
+
+    GET — HTMX-фрагмент с формой (встраивается в строку таблицы),
+    POST — сохранение и возврат обновлённой таблицы (как после загрузки).
+    """
+    _ensure_enabled()  # гейт флага (был пропущен — БЗ открывалась при выключенном ИИ-контуре)
+    project, document = _kb_document(request, project_id, pk)
+    if request.method == 'POST':
+        title = (request.POST.get('title') or '').strip()[:255]
+        doc_type = (request.POST.get('doc_type') or '').strip()
+        allowed_types = {
+            code for code, _label in InternalDocument.DocType.choices
+        }
+        if title:
+            document.title = title
+        if doc_type in allowed_types:
+            document.doc_type = doc_type
+        document.save(update_fields=['title', 'doc_type', 'updated_at'])
+        return _render_kb_table(request, project)
+    return render(request, 'ai_checks/_kb_edit_form.html', {
+        'project': project,
+        'document': document,
+        'doc_types': InternalDocument.DocType.choices,
+    })
 
 
 @login_required

@@ -197,7 +197,11 @@ class CrossSourceRagTests(TestCase):
         )
         query = RagQuery.objects.get(project=self.project)
         self.assertEqual(query.sources, [])
-        self.assertEqual(query.answer, 'Ничего не найдено')
+        # UI-аудит (треб. 6.1): новая формулировка при отсутствии информации.
+        self.assertEqual(
+            query.answer,
+            'Нет информации в предоставленных источниках',
+        )
 
 
 class ProjectChunkFactory:

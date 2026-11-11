@@ -498,12 +498,10 @@ def rag_answer(
                 'tenant_scope': chunk.document.tenant_scope,
             })
 
-    answer = 'Ничего не найдено'
-    # Модель для истории (RagQuery.model): LLM вызывается только при
-    # наличии источников, поэтому used_model инициализируем сразу —
-    # запрошенной моделью (UI, треб. 14). Иначе пустой результат поиска
-    # падал с UnboundLocalError на used_model[:100] при сохранении
-    # RagQuery (регрессия коммита 0951fd8, хотфикс 2026-11-10).
+    # Регрессия 0951fd8: при пустом списке источников used_model не был
+    # определён — RagQuery.objects.create падал с NameError. Инициализируем
+    # до ветки LLM-синтеза.
+    answer = RAG_NO_INFO_ANSWER
     used_model = model or ''
     if sources:
         # Формируем контекст для LLM-синтеза.
@@ -534,11 +532,24 @@ def rag_answer(
                     'content': (
                         'Ты — помощник ГИПа. Ответь на вопрос, используя '
                         'ТОЛЬКО предоставленные фрагменты документов. '
-                        'Формируй связный ответ — не просто склейку цитат. '
-                        'Указывай, откуда взята информация '
-                        '(документ, лист, раздел). '
+                        'Оформи ответ справкой строго в следующем формате '
+                        '(с этими заголовками, каждый с новой строки):\n'
+                        'ВОПРОС: <текст вопроса>\n'
+                        'ОТВЕТ: <связный текст с числами и ссылками на '
+                        'источники в квадратных скобках [N]>\n'
+                        'ИСТОЧНИКИ: <список: документ, лист/раздел, краткая '
+                        'цитата — одна строка на источник>\n'
+                        'ВЫВОДЫ: <что это значит для проекта>\n'
+                        'РЕКОМЕНДАЦИИ: <что делать ГИПу>\n'
+                        'Правила оформления: не используй LaTeX и '
+                        'математическую разметку (знаки доллара, \\frac, '
+                        '\\times и т.п.) — числа пиши как есть, с запятой '
+                        'в качестве десятичного разделителя (например: '
+                        '15,0 кВт; 2 350 м2 без степеней и формул). '
                         'Не выдумывай факты и числа. '
-                        'Если ответа нет в фрагментах — скажи об этом.'
+                        'Если ответа нет во фрагментах — в поле ОТВЕТ '
+                        'напиши ровно: «Нет информации в предоставленных '
+                        'источниках».'
                     ),
                 },
                 {
@@ -585,7 +596,7 @@ def rag_answer(
             'Векторный поиск доступен только на PostgreSQL. '
             'Поднимите dev-стек: docker compose -f docker-compose.dev.yml up -d.'
         )
-    RagQuery.objects.create(
+    query_record = RagQuery.objects.create(
         user=user if getattr(user, 'is_authenticated', user is not None) else None,
         project_id=project_id,
         question=question,
@@ -594,11 +605,72 @@ def rag_answer(
         model=used_model[:100],
     )
 
-    return {'answer': answer, 'sources': sources}
+    return {
+        'answer': answer,
+        'sources': sources,
+        # UI-аудит (треб. 6.3): pk записи истории — для кнопки
+        # «Скачать справку (PDF)».
+        'query_id': query_record.pk,
+        # UI-аудит (треб. 6.2): ответ, разобранный на блоки справки.
+        'sections': parse_rag_sections(answer),
+    }
 
 
 GIP_REPORT_PROMPT_VERSION = 'gip-report@2'
-RAG_PROMPT_VERSION = 'rag-answer@1'
+RAG_PROMPT_VERSION = 'rag-answer@2'
+
+# UI-аудит (треб. 6.1): фраза при отсутствии информации в источниках.
+RAG_NO_INFO_ANSWER = 'Нет информации в предоставленных источниках'
+
+# Заголовки блоков справки ИИ-поиска (треб. 6.1/6.2) в порядке вывода.
+RAG_REPORT_SECTIONS = (
+    ('question', 'Вопрос'),
+    ('answer', 'Ответ'),
+    ('sources', 'Источники'),
+    ('conclusions', 'Выводы'),
+    ('recommendations', 'Рекомендации'),
+)
+_RAG_SECTION_HEADER_MAP = {
+    'вопрос': 'question',
+    'ответ': 'answer',
+    'источники': 'sources',
+    'выводы': 'conclusions',
+    'рекомендации': 'recommendations',
+}
+
+
+def parse_rag_sections(answer: str) -> dict:
+    """Разбор справки ИИ-поиска на блоки (треб. 6.1/6.2).
+
+    LLM возвращает текст с заголовками «ВОПРОС:/ОТВЕТ:/ИСТОЧНИКИ:/
+    ВЫВОДЫ:/РЕКОМЕНДАЦИИ:». Разбираем построчно (устойчиво к маркдауну —
+    срезаем */, # и пробелы); нераспознанный текст до первого заголовка
+    относится к блоку «Ответ». Если разбор не удался (старые записи
+    истории, сбой LLM), всё уходит в «Ответ» — шаблон покажет как есть.
+    """
+    sections = {key: '' for key, _label in RAG_REPORT_SECTIONS}
+    text = (answer or '').strip()
+    if not text:
+        return sections
+    current = None
+    for raw_line in text.splitlines():
+        line = raw_line.strip().strip('*/# ').strip()
+        header = None
+        for prefix, key in _RAG_SECTION_HEADER_MAP.items():
+            if line.lower().startswith(prefix + ':'):
+                header = key
+                line = line[len(prefix) + 1:].strip()
+                break
+        if header:
+            current = header
+            line = line.strip().strip('*/# ').strip()
+            if line:
+                sections[current] = (sections[current] + '\n' + line).strip()
+            continue
+        if current is None:
+            current = 'answer'
+        sections[current] = (sections[current] + '\n' + line).strip()
+    return sections
 
 # Группировка статусов замечаний (Issue) для отчёта ГИПу.
 ISSUE_STATUS_GROUPS = {
@@ -1635,3 +1707,253 @@ def knowledge_documents(project):
         .annotate(chunk_count=Count('chunks'))
         .order_by('-created_at', '-pk')
     )
+
+
+def rag_report_pdf(query) -> bytes:
+    """Справка ИИ-поиска в PDF (треб. 6.3) — reportlab/platypus.
+
+    Блоки справки (треб. 6.1/6.2): Вопрос, Ответ, Источники, Выводы,
+    Рекомендации. Источники берутся из снимка query.sources (JSON) на
+    момент запроса. Шрифт с кириллицей — общий реестр
+    _register_cyrillic_font (как у отчёта ГИПу).
+
+    Оформление:
+    - Шапка в виде таблицы с фоном #E8ECF1;
+    - Блок «Вопрос» — выделенный (backColor='#F5F7FA');
+    - Источники — таблицей (№ | Документ | Лист/раздел | Цитата);
+    - Рекомендации — с рамкой (BOX #3D5A98);
+    - Подвал: «Сформировано автоматически… · Стр. N из M».
+    """
+    import io
+
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import ParagraphStyle
+    from reportlab.lib.units import mm
+    from reportlab.platypus import (
+        Paragraph,
+        SimpleDocTemplate,
+        Spacer,
+        Table,
+        TableStyle,
+    )
+
+    font, font_bold = _register_cyrillic_font()
+    accent = colors.HexColor('#3D5A98')
+    header_bg = colors.HexColor('#E8ECF1')
+    question_bg = colors.HexColor('#F5F7FA')
+    recommendation_bg = colors.HexColor('#F0F4FA')
+    grid = colors.HexColor('#B9C2CC')
+
+    styles = {
+        'title': ParagraphStyle(
+            'rag_title', fontName=font_bold, fontSize=14, leading=19,
+            spaceAfter=6,
+        ),
+        'meta': ParagraphStyle(
+            'rag_meta', fontName=font, fontSize=9.5, leading=13,
+            textColor=colors.HexColor('#444444'),
+        ),
+        'h2': ParagraphStyle(
+            'rag_h2', fontName=font_bold, fontSize=11.5, leading=15,
+            spaceBefore=10, spaceAfter=3,
+        ),
+        'body': ParagraphStyle(
+            'rag_body', fontName=font, fontSize=9.5, leading=13.5,
+        ),
+        'muted': ParagraphStyle(
+            'rag_muted', fontName=font, fontSize=8.5, leading=11.5,
+            textColor=colors.HexColor('#555555'),
+        ),
+        'question': ParagraphStyle(
+            'rag_question', fontName=font, fontSize=9.5, leading=13.5,
+            backColor=question_bg, borderPadding=6, leftIndent=6,
+        ),
+        'cell': ParagraphStyle(
+            'rag_cell', fontName=font, fontSize=8, leading=10.5,
+        ),
+        'cell_head': ParagraphStyle(
+            'rag_cell_head', fontName=font_bold, fontSize=8, leading=10.5,
+            textColor=colors.white,
+        ),
+    }
+
+    def _esc(text) -> str:
+        return (
+            str(text or '')
+            .replace('&', '&amp;')
+            .replace('<', '&lt;')
+            .replace('>', '&gt;')
+        )
+
+    sections = parse_rag_sections(query.answer)
+    author = _user_label(query.user)
+    project = query.project
+    today_str = timezone.localdate().strftime('%d.%m.%Y')
+
+    buffer = io.BytesIO()
+
+    # --- Хелпер для подвала ---
+    def _footer(canvas, _doc):
+        canvas.saveState()
+        canvas.setFont(font, 7.5)
+        canvas.setFillColor(colors.HexColor('#888888'))
+        w = canvas.getWidth()
+        footer_text = (
+            f'Сформировано автоматически системой Stream-CAD (СОД) · '
+            f'{today_str} · ИИ-поиск (RAG)'
+        )
+        canvas.drawCentredString(w / 2, 8 * mm, footer_text)
+        canvas.drawRightString(w - 18 * mm, 8 * mm, f'Стр. {canvas.getPageNumber()}')
+        canvas.restoreState()
+
+    document = SimpleDocTemplate(
+        buffer,
+        pagesize=A4,
+        leftMargin=18 * mm,
+        rightMargin=18 * mm,
+        topMargin=16 * mm,
+        bottomMargin=22 * mm,
+        title=f'Справка ИИ-поиска #{query.pk}',
+        author=author,
+        onPage=_footer,
+    )
+
+    story = []
+
+    # === ШАПКА (таблица с фоном) ===
+    header_cells = [
+        [
+            Paragraph(f'Справка ИИ-поиска №{query.pk}', styles['title']),
+            Paragraph(f'Дата: {today_str}', styles['meta']),
+        ]
+    ]
+    header_table = Table(header_cells, colWidths=[A4[0] - 36 * mm, None])
+    header_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), header_bg),
+        ('FONTNAME', (0, 0), (-1, 0), font_bold),
+        ('FONTSIZE', (0, 0), (-1, 0), 14),
+        ('PADDING', (0, 0), (-1, 0), 8),
+        ('BOTTOMPADDING', (0, 0), (-1, 0), 8),
+        ('GRID', (0, 0), (-1, -1), 0.5, grid),
+    ]))
+    story.append(header_table)
+
+    # Информация о проекте/авторе
+    info_rows = []
+    if project is not None:
+        info_rows.append(f'Проект: {_esc(project.name)} ({_esc(project.code)})')
+    info_rows.append(f'Автор: {_esc(author)}')
+    if query.model:
+        info_rows.append(f'Модель: {_esc(query.model)}')
+    for line in info_rows:
+        story.append(Paragraph(line, styles['meta']))
+    story.append(Spacer(1, 8 * mm))
+
+    # === БЛОК «ВОПРОС» (выделенный) ===
+    story.append(Paragraph('Вопрос', styles['h2']))
+    question_text = sections.get('question') or '—'
+    q_table = Table(
+        [[Paragraph(_esc(question_text), styles['question'])]],
+        colWidths=A4[0] - 36 * mm,
+    )
+    q_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, -1), question_bg),
+        ('BOX', (0, 0), (-1, -1), 0.5, grid),
+        ('PADDING', (0, 0), (-1, -1), 6),
+    ]))
+    story.append(q_table)
+    story.append(Spacer(1, 8 * mm))
+
+    # === БЛОК «ОТВЕТ» ===
+    story.append(Paragraph('Ответ', styles['h2']))
+    answer_text = sections.get('answer') or '—'
+    for paragraph in answer_text.split('\n'):
+        if paragraph.strip():
+            story.append(Paragraph(_esc(paragraph.strip()), styles['body']))
+    story.append(Spacer(1, 8 * mm))
+
+    # === БЛОК «ИСТОЧНИКИ» (таблицей) ===
+    story.append(Paragraph('Источники', styles['h2']))
+    sources = query.sources or []
+    if not sources:
+        story.append(Paragraph('—', styles['body']))
+    else:
+        source_rows = [
+            [_para(f'№', 'cell_head'),
+             _para('Документ', 'cell_head'),
+             _para('Лист/раздел', 'cell_head'),
+             _para('Цитата', 'cell_head')]
+            for _para in [lambda t, s: Paragraph(t, styles[s])]
+        ]
+        # Исправляю — нужно использовать функции, а не замыкания
+        source_rows = [
+            [Paragraph('№', styles['cell_head']),
+             Paragraph('Документ', styles['cell_head']),
+             Paragraph('Лист/раздел', styles['cell_head']),
+             Paragraph('Цитата', styles['cell_head'])]
+        ]
+        for index, source in enumerate(sources, start=1):
+            meta_parts = []
+            sc = source.get('section_code')
+            if sc and sc != 'COMMON':
+                meta_parts.append(f'раздел {sc}')
+            if source.get('page'):
+                meta_parts.append(f'лист {source["page"]}')
+            meta = ', '.join(meta_parts) if meta_parts else '—'
+            source_rows.append([
+                Paragraph(str(index), styles['cell']),
+                Paragraph(_esc(source.get('document_title', '—')), styles['cell']),
+                Paragraph(_esc(meta), styles['cell']),
+                Paragraph(
+                    _esc(str(source.get('text', ''))[:200]),
+                    styles['muted'],
+                ),
+            ])
+        source_table = Table(
+            source_rows,
+            colWidths=[8 * mm, 45 * mm, 30 * mm, 100 * mm],
+            repeatRows=1,
+        )
+        source_table.setStyle(TableStyle([
+            ('FONTNAME', (0, 0), (-1, -1), font),
+            ('FONTSIZE', (0, 0), (-1, -1), 8),
+            ('GRID', (0, 0), (-1, -1), 0.4, grid),
+            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ('BACKGROUND', (0, 0), (-1, 0), accent),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1),
+             [colors.white, colors.HexColor('#F2F5F8')]),
+            ('LEFTPADDING', (0, 0), (-1, -1), 4),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 4),
+            ('TOPPADDING', (0, 0), (-1, -1), 3),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
+        ]))
+        story.append(source_table)
+    story.append(Spacer(1, 8 * mm))
+
+    # === БЛОК «ВЫВОДЫ» ===
+    story.append(Paragraph('Выводы', styles['h2']))
+    conclusions_text = sections.get('conclusions') or '—'
+    for paragraph in conclusions_text.split('\n'):
+        if paragraph.strip():
+            story.append(Paragraph(_esc(paragraph.strip()), styles['body']))
+    story.append(Spacer(1, 8 * mm))
+
+    # === БЛОК «РЕКОМЕНДАЦИИ» (с рамкой) ===
+    story.append(Paragraph('Рекомендации', styles['h2']))
+    rec_text = sections.get('recommendations') or '—'
+    rec_table = Table(
+        [[Paragraph(_esc(rec_text), styles['body'])]],
+        colWidths=A4[0] - 36 * mm,
+    )
+    rec_table.setStyle(TableStyle([
+        ('BOX', (0, 0), (-1, -1), 0.5, accent),
+        ('BACKGROUND', (0, 0), (-1, -1), recommendation_bg),
+        ('PADDING', (0, 0), (-1, -1), 8),
+        ('SPACEBEFORE', (0, 0), (-1, -1), 3),
+        ('SPACBEHIND', (0, 0), (-1, -1), 3),
+    ]))
+    story.append(rec_table)
+
+    document.build(story)
+    return buffer.getvalue()

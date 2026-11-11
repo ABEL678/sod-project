@@ -10,8 +10,25 @@
   </div>
   <div class="fw-semibold small mb-1">«{{ query.question }}»</div>
 
-  {% if query.answer %}
-    <div class="border rounded p-2 mb-2 bg-white small" style="white-space: pre-wrap;">{{ query.answer }}</div>
+  {# UI-аудит (треб. 6.2): ответ раскрывается блоками справки; для старых
+     записей без структуры весь текст попадёт в блок «Ответ» #}
+  {% if sections.answer %}
+    <div class="small mb-2">
+      <span class="text-muted">Ответ:</span>
+      <div class="border rounded p-2 bg-white" style="white-space: pre-wrap;">{{ sections.answer }}</div>
+    </div>
+  {% endif %}
+  {% if sections.conclusions %}
+    <div class="small mb-2">
+      <span class="text-muted">Выводы:</span>
+      <div class="border rounded p-2 bg-white" style="white-space: pre-wrap;">{{ sections.conclusions }}</div>
+    </div>
+  {% endif %}
+  {% if sections.recommendations %}
+    <div class="small mb-2">
+      <span class="text-muted">Рекомендации:</span>
+      <div class="border rounded p-2 bg-white" style="white-space: pre-wrap;">{{ sections.recommendations }}</div>
+    </div>
   {% endif %}
 
   {% if not groups %}

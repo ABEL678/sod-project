@@ -154,7 +154,8 @@ DOCUMENT_VIEW_COLUMN_LABELS = {
     'folder': 'Папка',
     'name': 'Название',
     'doc_type': 'Тип',
-    'suitability': 'Статус для передачи',
+    'zone': 'Состояние',
+    'suitability': 'Статус документа',
     'internal_status': 'Внутренний статус',
     'issues': 'Замечания',
     'version': 'Версия',
@@ -169,6 +170,7 @@ DEFAULT_COLUMN_WIDTHS = {
     'folder': 150,
     'name': 315,
     'doc_type': 100,
+    'zone': 150,
     'suitability': 180,
     'internal_status': 170,
     'issues': 90,
@@ -184,6 +186,7 @@ DOCUMENT_TABLE_COLUMN_MAP = {
     'folder': 'folder',
     'name': 'name',
     'doc_type': 'doc_type',
+    'zone': 'zone',
     'suitability_code': 'suitability',
     'internal_status': 'internal_status',
     'issues': 'issues',
@@ -215,7 +218,8 @@ FILTER_CHIP_FIELDS = (
     ('section', 'Раздел', None),
     ('doc_type', 'Тип', Document.DOC_TYPE_CHOICES),
     ('status', 'Статус', Document.STATUS_CHOICES),
-    ('suitability_code', 'Пригодность', Document.SUITABILITY_CHOICES),
+    # UI-аудит (треб. 1.4): подпись чипа как у колонки «Статус документа».
+    ('suitability_code', 'Статус документа', Document.SUITABILITY_CHOICES),
     ('internal_status', 'Внутр. статус', Document.INTERNAL_STATUS_CHOICES),
     ('code', 'Шифр', None),
     ('name', 'Название', None),
@@ -719,7 +723,8 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
         if active_zone:
             chips.insert(0, {
                 'param': 'zone',
-                'label': 'Зона',
+                # UI-аудит (треб. 4.1): «Зона» → «Состояние».
+                'label': 'Состояние',
                 'display': dict(Folder.ZONE_CHOICES).get(
                     active_zone, active_zone,
                 ),
@@ -2464,7 +2469,69 @@ class DocumentDetailView(LoginRequiredMixin, DetailView):
         context['workflow_actions'] = _workflow_actions_payload(
             self.request.user, self.object
         )
+        # UI-аудит (треб. 1.3/2.3): панель свойств документа — пояснение
+        # статуса, состояние текстом и право править шифр (admin/gip).
+        context['suitability_hint'] = Document.SUITABILITY_DESCRIPTIONS.get(
+            self.object.suitability_code, '',
+        )
+        context['zone_label'] = dict(Folder.ZONE_CHOICES).get(
+            _effective_zone(self.object), '',
+        )
+        context['can_edit_code'] = _document_code_edit_allowed(
+            self.request.user, self.object,
+        )
+        context['code_updated'] = self.request.GET.get('code') == 'saved'
         return context
+
+
+def _document_code_edit_allowed(user, document: Document) -> bool:
+    """Право править шифр (треб. 2.3): только admin/gip."""
+    if not getattr(user, 'is_authenticated', False):
+        return False
+    if user.is_superuser:
+        return True
+    profile = getattr(user, 'userprofile', None)
+    if profile is not None and profile.role in ('admin', 'gip'):
+        return True
+    return document.project.gip_id == user.id
+
+
+class DocumentCodeUpdateView(LoginRequiredMixin, View):
+    """Правка шифра документа (треб. 2.3) — только admin/gip."""
+
+    def post(self, request, document_id: int):
+        document = get_object_or_404(
+            get_accessible_documents(request.user).select_related('project'),
+            pk=document_id,
+            is_deleted=False,
+        )
+        if not _document_code_edit_allowed(request.user, document):
+            return HttpResponseForbidden('Шифр могут менять только администратор или ГИП')
+
+        new_code = (request.POST.get('code') or '').strip()
+        if not new_code:
+            return redirect(
+                'storage:document_detail', document.pk,
+            )  # пустое значение — просто без изменений
+        if len(new_code) > 100:
+            return redirect(
+                f'{reverse("storage:document_detail", args=[document.pk])}?code=toolong',
+            )
+        duplicate = Document.objects.filter(
+            project=document.project,
+            section=document.section,
+            code=new_code,
+        ).exclude(pk=document.pk).exists()
+        if duplicate:
+            return redirect(
+                f'{reverse("storage:document_detail", args=[document.pk])}?code=duplicate',
+            )
+        document.code = new_code
+        # Обход FSM-охраны не нужен: поля статуса не меняются.
+        document.save(update_fields=['code', 'updated_at'])
+        return redirect(
+            f'{reverse("storage:document_detail", args=[document.pk])}?code=saved',
+        )
 
 
 class DocumentUploadAjaxView(LoginRequiredMixin, View):
@@ -2513,9 +2580,12 @@ class DocumentUploadAjaxView(LoginRequiredMixin, View):
         if folder is not None and folder.project_id != project.pk:
             return JsonResponse({'error': 'Папка не найдена'}, status=400)
 
-        code = (request.POST.get('code') or file.name).strip()
+        code = (request.POST.get('code') or '').strip()
         name = (request.POST.get('name') or file.name).strip()
-        doc_type = request.POST.get('doc_type') or 'other'
+        # UI-аудит (треб. 2.1/3.1): пустые code/doc_type разрешены —
+        # upload_document сгенерирует шифр по ГОСТ Р 21.101 и определит
+        # тип по расширению файла.
+        doc_type = (request.POST.get('doc_type') or '').strip()
 
         try:
             version = upload_document(

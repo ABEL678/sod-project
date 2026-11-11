@@ -135,7 +135,11 @@ class RagAnswerTests(TestCase):
             embedding_service=self.embedding,
             vector_backend=self.backend,
         )
-        self.assertEqual(result['answer'], 'Ничего не найдено')
+        # UI-аудит (треб. 6.1): новая формулировка при отсутствии информации.
+        self.assertEqual(
+            result['answer'],
+            'Нет информации в предоставленных источниках',
+        )
         self.assertEqual(result['sources'], [])
 
     def test_project_scope_requires_project_context(self):

@@ -54,7 +54,7 @@ from storage.domain.project_templates import (
 
 
 DOCUMENT_VIEW_COLUMNS = (
-    'code', 'section', 'folder', 'name', 'doc_type', 'suitability',
+    'code', 'section', 'folder', 'name', 'doc_type', 'zone', 'suitability',
     'internal_status', 'issues', 'version', 'date', 'author',
 )
 DOCUMENT_VIEW_FILTERS = (
@@ -3160,14 +3160,72 @@ def get_zone_counts(user: User, project: Project) -> dict:
     }
 
 
+# Спринт «UI-аудит»: автоопределение типа документа по расширению файла
+# (треб. 3.1): .dwg/.dxf/.pdf → чертёж; .doc/.docx/.xls/.xlsx → отчёт;
+# .jpg/.png/.tif → другое. Расширения вне словаря → «other».
+DOC_TYPE_BY_EXTENSION = {
+    'dwg': 'drawing',
+    'dxf': 'drawing',
+    'pdf': 'drawing',
+    'doc': 'report',
+    'docx': 'report',
+    'xls': 'report',
+    'xlsx': 'report',
+    'jpg': 'other',
+    'jpeg': 'other',
+    'png': 'other',
+    'tif': 'other',
+    'tiff': 'other',
+}
+
+
+def _detect_doc_type(filename: str) -> str:
+    """Тип документа по расширению файла (треб. 3.1)."""
+    extension = (
+        filename.rsplit('.', 1)[-1].lower() if '.' in filename else ''
+    )
+    return DOC_TYPE_BY_EXTENSION.get(extension, 'other')
+
+
+def _generate_document_code(
+    project: Project,
+    section: Section,
+    folder: Folder | None,
+) -> str:
+    """Шифр по ГОСТ Р 21.101 (треб. 2.1).
+
+    Формат: [base_code]-[section.code]-[folder.code]-[порядковый номер].
+    base_code берётся из проекта (при пустом — его шифр); составная часть
+    папки добавляется только если у папки заполнен код. Порядковый номер —
+    двузначный, продолжаем нумерацию внутри (проект, раздел) по префиксу,
+    коллизии разрешаем перебором (уникальность в рамках project+section).
+    """
+    base = (project.base_code or project.code or '').strip()
+    parts = [part for part in (
+        base,
+        (section.code or '').strip(),
+        ((folder.code or '').strip() if folder is not None else ''),
+    ) if part]
+    prefix = '-'.join(parts) + '-' if parts else 'DOC-'
+    existing_codes = set(
+        Document.objects
+        .filter(project=project, section=section, code__startswith=prefix)
+        .values_list('code', flat=True)
+    )
+    number = len(existing_codes) + 1
+    while f'{prefix}{number:02d}' in existing_codes:
+        number += 1
+    return f'{prefix}{number:02d}'
+
+
 def upload_document(
     user: User,
     project: Project,
     section: Section,
-    code: str,
-    name: str,
-    doc_type: str,
-    file,
+    code: str = '',
+    name: str = '',
+    doc_type: str = '',
+    file=None,
     comment: str = "",
     folder: Folder | None = None,
     skip_ai_index: bool = False,
@@ -3186,6 +3244,8 @@ def upload_document(
       AI_CHECKS_ENABLED и файл PDF. skip_ai_index=True отключает
       постановку задачи (документы базы знаний индексируются отдельно
       в InternalChunk через ai_checks).
+    - UI-аудит (треб. 2.1/3.1): пустой code → генерация шифра по
+      ГОСТ Р 21.101; пустой doc_type → определение по расширению файла.
     """
     if not check_write_permission(user, section):
         raise PermissionDenied("Нет прав на запись в этот раздел")
@@ -3209,6 +3269,17 @@ def upload_document(
 
     if section.project != project:
         raise ValueError("Раздел не относится к указанному проекту")
+
+    # Треб. 2.1: явный шифр от пользователя имеет приоритет; пустой —
+    # генерируем по ГОСТ Р 21.101.
+    code = (code or '').strip()
+    if not code:
+        code = _generate_document_code(project, section, folder)
+
+    # Треб. 3.1: тип не указан — определяем по расширению файла.
+    doc_type = (doc_type or '').strip()
+    if not doc_type:
+        doc_type = _detect_doc_type(filename)
 
     # Проверяем текущую зону документа (если документ уже существует и имеет папку)
     existing_doc = Document.objects.filter(

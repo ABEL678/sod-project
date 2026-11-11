@@ -15,12 +15,12 @@
     скрытый input zone в форму фильтров и перезагружает панель через htmx
     (те же фильтры + зона). Счётчики — по всем доступным документам проекта.
     {% endcomment %}
-    <nav class="zone-segment" aria-label="Зоны ISO 19650" id="zoneSegment">
+    <nav class="zone-segment" aria-label="Состояния документов" id="zoneSegment">
         <button type="button"
                 class="zone-chip {% if not active_zone %}is-active{% endif %}"
                 data-zone="" data-role="zone-chip">
             <i class="bi bi-collection" aria-hidden="true"></i>
-            Все зоны
+            Все состояния
             <span class="zone-count cde-tnum" data-zone-count="">{{ zone_counts.total }}</span>
         </button>
         {% for zone in zone_segments %}
@@ -82,7 +82,7 @@
                 {{ filter.form.status }}
             </div>
             <div class="filter-field">
-                <label class="filter-field__label" for="{{ filter.form.suitability_code.id_for_label }}">Пригодность</label>
+                <label class="filter-field__label" for="{{ filter.form.suitability_code.id_for_label }}">Статус документа</label>
                 {{ filter.form.suitability_code }}
             </div>
             <div class="filter-field">
@@ -158,10 +158,13 @@
                        aria-label="Поиск по документам проекта">
             </form>
             {# Спринт 6: видимая главная кнопка загрузки — раньше загрузка была только через DnD и правый клик #}
+            {# UI-аудит (треб. 2.2/3.2): кнопка открывает модалку с полями «Код документа» и «Тип документа» #}
             <button type="button"
                     class="btn btn-primary btn-sm"
                     id="uploadBtn"
                     data-role="upload-btn"
+                    data-bs-toggle="modal"
+                    data-bs-target="#uploadModal"
                     title="Загрузить документ в выбранный раздел или папку">
                 <i class="bi bi-upload" aria-hidden="true"></i>
                 <span class="d-none d-xl-inline">Загрузить</span>
@@ -233,4 +236,7 @@
             </div>
         </div>
     </div>
+
+    {# UI-аудит (треб. 2.2/3.2): модалка загрузки с полями «Код документа» (опционально) и «Тип документа» #}
+    {% include 'storage/_upload_modal.html' %}
 </div>

@@ -53,12 +53,21 @@ stage2: таблица документов базы знаний (переис�
                       hx-post="{% url 'ai_checks:kb_reindex' project.pk doc.pk %}"
                       hx-target="#kbTableWrap" hx-swap="innerHTML"
                       title="Переиндексировать">Переиндексировать</button>
+              {# UI-аудит (треб. 9.1): редактирование названия и типа #}
+              <button type="button" class="btn btn-sm btn-outline-secondary"
+                      hx-get="{% url 'ai_checks:kb_document_edit' project.pk doc.pk %}"
+                      hx-target="#kb-edit-{{ doc.pk }} td" hx-swap="innerHTML"
+                      hx-on::after-request="document.getElementById('kb-edit-{{ doc.pk }}').classList.remove('d-none')"
+                      title="Редактировать название и тип">Редактировать</button>
               <button type="button" class="btn btn-sm btn-outline-danger"
                       hx-post="{% url 'ai_checks:kb_disable' project.pk doc.pk %}"
                       hx-target="#kbTableWrap" hx-swap="innerHTML"
                       hx-confirm="Удалить «{{ doc.title }}» из базы знаний?"
                       title="Удалить из базы знаний">Удалить</button>
             </td>
+          </tr>
+          <tr id="kb-edit-{{ doc.pk }}" class="d-none">
+            <td colspan="7" class="small bg-light"></td>
           </tr>
           <tr id="kb-chunks-{{ doc.pk }}" class="d-none">
             <td colspan="7" class="small bg-light"></td>

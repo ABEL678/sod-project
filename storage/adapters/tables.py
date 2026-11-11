@@ -74,8 +74,16 @@ class DocumentTable(tables.Table):
     )
     name = tables.Column(verbose_name='Название', attrs=_column_attrs('name'))
     doc_type = tables.Column(verbose_name='Тип', attrs=_column_attrs('doc_type'))
+    # UI-аудит: «Состояние» — состояние жизненного цикла (зона), текстом;
+    # коды WIP/SHARED/PUBLISHED/ARCHIVE в интерфейсе не выводятся.
+    zone = tables.Column(
+        verbose_name='Состояние',
+        orderable=False,
+        empty_values=(),
+        attrs=_column_attrs('zone'),
+    )
     suitability_code = tables.Column(
-        verbose_name='Статус для передачи',
+        verbose_name='Статус документа',
         attrs=_column_attrs('suitability'),
         order_by=('suitability_code',),
     )
@@ -130,6 +138,7 @@ class DocumentTable(tables.Table):
             'folder',
             'name',
             'doc_type',
+            'zone',
             'suitability_code',
             'internal_status',
             'issues',
@@ -224,10 +233,20 @@ class DocumentTable(tables.Table):
             label,
         )
 
+    def render_zone(self, record):
+        """Состояние документа текстом (без кодов WIP/SHARED/…)."""
+        return dict(Folder.ZONE_CHOICES).get(_effective_zone(record), '—')
+
     def render_suitability_code(self, record):
+        # UI-аудит (треб. 1.1/1.3): текстовое название статуса документа,
+        # в тултипе — официальное пояснение (Document.SUITABILITY_DESCRIPTIONS).
+        hint = Document.SUITABILITY_DESCRIPTIONS.get(
+            record.suitability_code,
+            record.get_suitability_code_display(),
+        )
         return format_html(
             '<span class="doc-suitability" title="{}">{}</span>',
-            record.get_suitability_code_display(),
+            hint,
             record.get_suitability_code_display(),
         )
 

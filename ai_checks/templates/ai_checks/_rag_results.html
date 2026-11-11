@@ -1,23 +1,67 @@
 {% comment %}
-Треб. 8: результаты ИИ-поиска — ответ с цитатами [N] и карточки источников
-(тип, документ, раздел, лист, цитата). Группировка: документы проекта →
-внутренние стандарты.
+Треб. 8 + UI-аудит 6.1–6.3: результаты ИИ-поиска оформлены справкой —
+блоки Вопрос / Ответ / Источники / Выводы / Рекомендации, кнопка
+«Скачать справку (PDF)» (rag_report_pdf), карточки источников с цитатами
+[N] (тип, документ, раздел, лист, цитата). Группировка: документы
+проекта → внутренние стандарты.
 {% endcomment %}
 {% if error %}
   <div class="alert alert-warning py-1 px-2 small mb-2">{{ error }}</div>
 {% elif not sources %}
   <div class="alert alert-light border py-2 px-3 small mb-0">
-    Ничего не найдено
+    Нет информации в предоставленных источниках
   </div>
 {% else %}
-  <div class="small text-muted mb-2">
-    Вопрос: «{{ question }}» · источников: {{ sources|length }}
-  </div>
+  <div class="border rounded p-2 mb-2 bg-white" id="ragReportCard">
+    <div class="d-flex justify-content-between align-items-baseline mb-1 flex-wrap gap-1">
+      <span class="fw-semibold small">
+        <i class="bi bi-file-earmark-text me-1" aria-hidden="true"></i>Справка
+      </span>
+      {% if query_id %}
+        <a class="btn btn-sm btn-outline-secondary py-0"
+           href="{% url 'ai_checks:rag_report_pdf' query_id %}"
+           title="Скачать справку в PDF (reportlab)">
+          <i class="bi bi-file-earmark-pdf me-1" aria-hidden="true"></i>Скачать справку (PDF)
+        </a>
+      {% endif %}
+    </div>
 
-  {% if answer %}
-    <div class="border rounded p-2 mb-2 bg-white small" id="ragAnswer"
-         style="white-space: pre-wrap;">{{ answer }}</div>
-  {% endif %}
+    <div class="small mb-1">
+      <span class="text-muted">Вопрос:</span>
+      «{{ question }}»
+    </div>
+
+    {% if sections.answer %}
+      <div class="small mb-1">
+        <span class="text-muted">Ответ:</span>
+        <div style="white-space: pre-wrap;">{{ sections.answer }}</div>
+      </div>
+    {% endif %}
+
+    <div class="small mb-1">
+      <span class="text-muted">Источники:</span>
+      {{ sources|length }} — приведены ниже, с листами и цитатами
+    </div>
+
+    {% if sections.conclusions %}
+      <div class="small mb-1">
+        <span class="text-muted">Выводы:</span>
+        <div style="white-space: pre-wrap;">{{ sections.conclusions }}</div>
+      </div>
+    {% endif %}
+
+    {% if sections.recommendations %}
+      <div class="small mb-1">
+        <span class="text-muted">Рекомендации:</span>
+        <div style="white-space: pre-wrap;">{{ sections.recommendations }}</div>
+      </div>
+    {% endif %}
+
+    {# Fallback: старые ответы без заголовков справки — показываем как есть #}
+    {% if not sections.answer and not sections.conclusions and not sections.recommendations %}
+      <div class="small" style="white-space: pre-wrap;">{{ answer }}</div>
+    {% endif %}
+  </div>
 
   {% for group_code, group_label, items in groups %}
     <div class="mb-3">

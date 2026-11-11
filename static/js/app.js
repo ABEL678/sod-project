@@ -431,7 +431,7 @@
     var uploadInProgress = false;
     var pendingUploadTarget = null;
 
-    async function handleFiles(files) {
+    async function handleFiles(files, extra) {
         if (uploadInProgress) {
             return;
         }
@@ -464,8 +464,16 @@
                 formData.append('folder_id', target.folderId);
             }
             formData.append('file', file);
-            formData.append('code', file.name.replace(/\.[^.]+$/, ''));
             formData.append('name', file.name);
+            // UI-аудит (треб. 2.1/3.1): шифр и тип отправляются только если
+            // заданы явно (модалка загрузки). Иначе сервер сам сгенерирует
+            // шифр по ГОСТ Р 21.101 и определит тип по расширению файла.
+            if (extra && extra.code) {
+                formData.append('code', extra.code);
+            }
+            if (extra && extra.doc_type) {
+                formData.append('doc_type', extra.doc_type);
+            }
 
             try {
                 var response = await fetch(uploadUrl, {
@@ -517,6 +525,17 @@
                 return;
             }
             pendingUploadTarget = null;
+            // UI-аудит (треб. 2.2/3.2): кнопка открывает модалку загрузки
+            // (data-bs-toggle="modal"); прямой выбор файла — fallback.
+            var trigger = event.target.closest('[data-role="upload-btn"]');
+            if (trigger.getAttribute('data-bs-toggle') === 'modal') {
+                var targetLabel = document.getElementById('uploadModalTarget');
+                var target = currentUploadTarget();
+                if (targetLabel && target) {
+                    targetLabel.value = target.name;
+                }
+                return;
+            }
             var input = document.getElementById('fileInput');
             if (input) {
                 input.value = '';
@@ -534,6 +553,58 @@
                 pendingUploadTarget = null;
             }
         });
+
+        // UI-аудит (треб. 2.2/3.2): отправка формы модалки загрузки —
+        // те же ручки, что у DnD, плюс явные «Код документа» и «Тип документа».
+        var modalForm = document.getElementById('uploadModalForm');
+        if (modalForm) {
+            modalForm.addEventListener('submit', function (event) {
+                event.preventDefault();
+                if (uploadInProgress) {
+                    return;
+                }
+                var fileField = document.getElementById('uploadModalFile');
+                if (!fileField || !fileField.files || !fileField.files.length) {
+                    return;
+                }
+                var files = fileField.files;
+                var extra = {};
+                if (files.length === 1) {
+                    var codeField = document.getElementById('uploadModalCode');
+                    if (codeField && codeField.value.trim()) {
+                        extra.code = codeField.value.trim();
+                    }
+                    var typeField = document.getElementById('uploadModalDocType');
+                    if (typeField && typeField.value) {
+                        extra.doc_type = typeField.value;
+                    }
+                }
+                var modalRoot = document.getElementById('uploadModal');
+                if (modalRoot && window.bootstrap && bootstrap.Modal) {
+                    var modal = bootstrap.Modal.getInstance(modalRoot);
+                    if (modal) { modal.hide(); }
+                }
+                handleFiles(files, extra);
+                modalForm.reset();
+            });
+            var modalFileField = document.getElementById('uploadModalFile');
+            if (modalFileField) {
+                modalFileField.addEventListener('change', function () {
+                    var many = modalFileField.files.length > 1;
+                    var hint = document.getElementById('uploadModalMultiHint');
+                    var codeField = document.getElementById('uploadModalCode');
+                    var typeField = document.getElementById('uploadModalDocType');
+                    if (hint) {
+                        hint.textContent = many
+                            ? 'Выбрано несколько файлов: шифр и тип будут присвоены автоматически.'
+                            : '';
+                        hint.classList.toggle('d-none', !many);
+                    }
+                    if (codeField) { codeField.disabled = many; }
+                    if (typeField) { typeField.disabled = many; }
+                });
+            }
+        }
 
         document.addEventListener('dragenter', function (event) {
             if (!isFileDrag(event) || !event.target.closest('#documentsTableWrap')) {
