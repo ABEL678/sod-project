@@ -135,10 +135,11 @@ AI_GIGACHAT_API_BASE_URL = os.environ.get(
 )
 
 # Модели, доступные для выбора в UI ИИ-контура.
-# Все модели уходят в GigaChatProvider.
+# Все модели уходят в GigaChatProvider (api.giga.chat/v1).
 AI_AVAILABLE_MODELS = [
-    ('GigaChat-2-Max', 'GigaChat-2-Max (Сбер)'),
-    ('GigaChat-3-Pro', 'GigaChat-3-Pro (Сбер)'),
+    ('GigaChat-2', 'GigaChat-2 (Сбер, базовая)'),
+    ('GigaChat-2-Max', 'GigaChat-2-Max (Сбер, быстрая)'),
+    ('GigaChat-3-Pro', 'GigaChat-3-Pro (Сбер, мощная)'),
 ]
 
 # Этап 19 (Ф4): ежедневные напоминания по незавершённым проверкам —
@@ -169,6 +170,13 @@ AI_EMBEDDING_TIMEOUT = int(os.environ.get('AI_EMBEDDING_TIMEOUT', '60'))
 AI_EMBEDDING_MODEL_DIR = os.environ.get(
     'AI_EMBEDDING_MODEL_DIR', str(BASE_DIR / 'ml_models' / 'bge-m3'),
 )
+
+# LLM для RAG-ответов и отчётов ГИПу (GigaChat, api.giga.chat/v1).
+# Cloud.ru Foundation Models поддерживает только эмбеддинги,
+# LLM-запросы через Cloud.ru недоступны (404).
+AI_LLM_PROVIDER = os.environ.get('AI_LLM_PROVIDER', 'gigachat')
+AI_LLM_MODEL = os.environ.get('AI_LLM_MODEL', 'GigaChat-2-Max')
+AI_LLM_TIMEOUT = int(os.environ.get('AI_LLM_TIMEOUT', '60'))
 
 
 REST_FRAMEWORK = {

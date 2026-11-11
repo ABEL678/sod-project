@@ -526,7 +526,16 @@ class LLMProvider(Protocol):
     def complete(self, messages: list[dict], *, model: str | None = None,
                  json_mode: bool = False) -> LLMResponse: ...
 
-Реализация MVP: OpenRouterHTTPProvider (httpx, без SDK; retry ×3, таймаут 60 с).
+Реализации:
+
+1. **GigaChatProvider** (gigachat) — Сбер, OAuth + OpenAI-совместимый
+   /chat/completions (api.giga.chat/v1). Основные модели:
+   GigaChat-3-Pro (мощная), GigaChat-2-Max (быстрая), GigaChat-2 (базовая).
+2. **StubLLMProvider** — заглушка без API-ключа (контур не падает,
+   ответ синтезируется из найденных фрагментов).
+
+Фабрика: ai_checks.adapters.llm_http.get_llm_provider(model).
+Приоритет: GigaChat → Stub.
 
 ### 5.4. EmbeddingService (ai_checks/ports/embedding.py, Этап 19)
 class EmbeddingService(Protocol):

@@ -1,11 +1,11 @@
 """HTTP-адаптеры LLMProvider (Этап 19, Ф4) + заглушка без API-ключа.
 
-Рабочий провайдер один (зачистка 2026-11-10, «только экосистема Сбера»):
+Рабочий провайдер:
 - GigaChat (Сбер, работа из РФ) — OAuth + OpenAI-совместимый API;
   ключ — AI_GIGACHAT_AUTH_KEY (Authorization Key, Base64).
-OrcaRouter и прочие сторонние шлюзы удалены вместе с настройками
-AI_LLM_* — любая модель из AI_AVAILABLE_MODELS уходит в GigaChatProvider.
-Эмбеддинги того же контура — ai_checks/adapters/embedding_gigachat.py.
+
+Cloud.ru Foundation Models поддерживает только эмбеддинги
+(/v1/embeddings), LLM-запросы (/chat/completions) недоступны.
 
 Тексты промптов/ответов в БД не пишутся (приватность) — только
 метаданные в LLMCallLog. Retry ×2, таймаут ≤ 12 с (ARCHITECTURE.md 5.3,
@@ -112,33 +112,33 @@ class StubLLMProvider:
 
 
 def get_llm_provider(model: str | None = None):
-    """Фабрика провайдера (зачистка 2026-11-10: только GigaChat).
+    """Фабрика провайдера (GigaChat → Stub).
 
-    Любая модель из AI_AVAILABLE_MODELS уходит в GigaChatProvider
-    (Сбер, РФ); model=None → модель из AI_GIGACHAT_MODEL.
-    Нет ключа AI_GIGACHAT_AUTH_KEY → заглушка StubLLMProvider
-    (контур не падает, ответ синтезируется из найденных фрагментов).
+    Cloud.ru Foundation Models поддерживает только эмбеддинги
+    (/v1/embeddings), LLM-запросы (/chat/completions) недоступны.
+    Основной LLM-провайдер — GigaChat (api.giga.chat/v1).
     """
+    # GigaChat (Сбер, api.giga.chat/v1) — основной LLM-провайдер.
     auth_key = (
         getattr(settings, 'AI_GIGACHAT_AUTH_KEY', '') or ''
     ).strip()
-    if not auth_key:
-        return StubLLMProvider()
-    # Бюджет синхронного LLM-вызова: 12 c x 2 попытки + паузы ~ 1.5 c
-    # = максимум ~25.5 c < 30 c (таймаут воркера gunicorn).
-    return GigaChatProvider(
-        auth_key,
-        model=model or getattr(
-            settings, 'AI_GIGACHAT_MODEL', 'GigaChat-2-Max',
-        ),
-        timeout=min(
-            float(getattr(settings, 'AI_GIGACHAT_TIMEOUT', 60)), 12.0,
-        ),
-        verify_ssl=bool(
-            getattr(settings, 'AI_GIGACHAT_VERIFY_SSL', True),
-        ),
-        retries=2,
-    )
+    if auth_key:
+        return GigaChatProvider(
+            auth_key,
+            model=model or getattr(
+                settings, 'AI_GIGACHAT_MODEL', 'GigaChat-2-Max',
+            ),
+            timeout=min(
+                float(getattr(settings, 'AI_GIGACHAT_TIMEOUT', 60)), 12.0,
+            ),
+            verify_ssl=bool(
+                getattr(settings, 'AI_GIGACHAT_VERIFY_SSL', True),
+            ),
+            retries=2,
+        )
+
+    # Fallback: StubLLMProvider — если нет ключа GigaChat.
+    return StubLLMProvider()
 
 
 class GigaChatProvider:

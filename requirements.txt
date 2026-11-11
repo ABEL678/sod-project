@@ -18,7 +18,7 @@ transformers>=4.51,<6
 # Облачные эмбеддинги Cloud.ru Foundation Models (OpenAI-совместимый
 # API, модель BAAI/bge-m3). Клиент используется только при заданном
 # AI_EMBEDDING_API_KEY; без ключа индексация идёт локальным ONNX.
-openai==3.48.0
+# LLM-вызовы (CloudRuLLMProvider) используют httpx напрямую.
 openpyxl==3.1.5
 packaging==26.3
 pillow==13.0.0
