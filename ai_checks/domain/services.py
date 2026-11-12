@@ -1790,6 +1790,10 @@ def rag_report_pdf(query) -> bytes:
             .replace('>', '&gt;')
         )
 
+    def _strip_html(text) -> str:
+        """Убирает HTML-теги из текста (источники могут содержать <table>...)."""
+        return re.sub(r'<[^>]+>', '', str(text or ''))
+
     sections = parse_rag_sections(query.answer)
     author = _user_label(query.user)
     project = query.project
@@ -1907,10 +1911,10 @@ def rag_report_pdf(query) -> bytes:
             meta = ', '.join(meta_parts) if meta_parts else '—'
             source_rows.append([
                 Paragraph(str(index), styles['cell']),
-                Paragraph(_esc(source.get('document_title', '—')), styles['cell']),
+                Paragraph(_esc(_strip_html(source.get('document_title', '—'))), styles['cell']),
                 Paragraph(_esc(meta), styles['cell']),
                 Paragraph(
-                    _esc(str(source.get('text', ''))[:200]),
+                    _esc(_strip_html(str(source.get('text', ''))[:200])),
                     styles['muted'],
                 ),
             ])
