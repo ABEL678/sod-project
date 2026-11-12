@@ -22,6 +22,7 @@ Celery — только домен и ORM.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 
 from django.core.exceptions import PermissionDenied
@@ -546,6 +547,9 @@ def rag_answer(
                         '\\times и т.п.) — числа пиши как есть, с запятой '
                         'в качестве десятичного разделителя (например: '
                         '15,0 кВт; 2 350 м2 без степеней и формул). '
+                        'Не используй HTML-теги (таблицы, <table>, <row>, '
+                        '<cell>, <br> и т.д.). Пиши обычным текстом. Для '
+                        'списков используй перенос строки и дефис. '
                         'Не выдумывай факты и числа. '
                         'Если ответа нет во фрагментах — в поле ОТВЕТ '
                         'напиши ровно: «Нет информации в предоставленных '
@@ -560,7 +564,7 @@ def rag_answer(
                     ),
                 },
             ], model=model)
-            answer = response.text
+            answer = re.sub(r'<[^>]+>', '', response.text)
             used_model = response.model or model or ''
             LLMCallLog.objects.create(
                 provider=getattr(llm_provider, 'name', 'unknown'),
