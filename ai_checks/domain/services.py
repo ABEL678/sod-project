@@ -600,12 +600,29 @@ def rag_answer(
             'Векторный поиск доступен только на PostgreSQL. '
             'Поднимите dev-стек: docker compose -f docker-compose.dev.yml up -d.'
         )
+
+    # Очистка sources от HTML перед сохранением в БД.
+    # Источники могут содержать HTML (из chunk.text), который
+    # reportlab Paragraph интерпретирует как теги — чистим на входе.
+    def _strip_html(text) -> str:
+        return re.sub(r'<[^>]+>', '', str(text or ''))
+
+    clean_sources = [
+        {
+            **s,
+            'document_title': _strip_html(s.get('document_title', '')),
+            'text': _strip_html(s.get('text', '')),
+            'section_code': _strip_html(s.get('section_code', '')),
+        }
+        for s in sources
+    ]
+
     query_record = RagQuery.objects.create(
         user=user if getattr(user, 'is_authenticated', user is not None) else None,
         project_id=project_id,
         question=question,
         answer=answer,
-        sources=sources,
+        sources=clean_sources,
         model=used_model[:100],
     )
 
