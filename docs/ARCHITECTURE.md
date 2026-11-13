@@ -460,6 +460,76 @@ sod_project/
 
 **Правило:** тексты промптов и ответов в БД не хранятся (приватность компаний) — только метаданные; детальные логи — в лог-файле приложения.
 
+#### TaskTemplate (модуль «Задания», Этап 1 — DESIGN_TASKS_SPEC.md 2.4)
+| Поле | Тип | Описание |
+|---|---|---|
+| id | PK | |
+| company | FK → Company, related_name='task_templates', CASCADE | Шаблон компании |
+| source_section | FK → Section, null=True, on_delete=SET_NULL | Типовой раздел-источник |
+| target_section | FK → Section, null=True, on_delete=SET_NULL | Типовой раздел-цель |
+| title | CharField(255) | Название шаблона |
+| description | TextField | Типовой текст задания |
+| default_duration_days | PositiveIntegerField, default=5 | Типовой срок (дней) |
+| checklist | JSONField, default=list | JSON-массив строк чек-листа |
+| is_active | BooleanField, default=True | |
+
+**Уникальность:** `(company, title)`.
+
+#### DesignTask (модуль «Задания», Этап 1 — DESIGN_TASKS_SPEC.md 2.1)
+| Поле | Тип | Описание |
+|---|---|---|
+| id | PK | |
+| project | FK → Project, related_name='design_tasks', CASCADE | Проект |
+| source_section | FK → Section, related_name='design_tasks_source', PROTECT | Раздел-источник (АР) |
+| target_section | FK → Section, related_name='design_tasks_target', PROTECT | Раздел-цель (КР) |
+| author | FK → User, related_name='issued_design_tasks', PROTECT | Инициатор из отдела-источника (не обязательно ГИП) |
+| assignee | FK → User, null=True, on_delete=SET_NULL | Исполнитель |
+| template | FK → TaskTemplate, null=True, on_delete=SET_NULL | Шаблон, по которому создано |
+| title | CharField(255) | Краткое название |
+| description | TextField | Суть задания |
+| due_date | DateField, null=True | Срок |
+| status | CharField(20), choices, default=DRAFT | DRAFT, ISSUED, IN_PROGRESS, ON_HOLD, COMPLETED, REVIEW, ACCEPTED, RETURNED, CANCELLED |
+| priority | CharField(10), choices, default=normal | low, normal, high, critical |
+| issued_at / accepted_at | DateTimeField, null=True | Когда выдано / принято |
+| closed_by | FK → User, null=True, on_delete=SET_NULL | Кто закрыл |
+| external_id | CharField(100), null=True, db_index | Синхронизация с ГИП-Ассистентом (спека 7) |
+| created_at / updated_at | DateTimeField | |
+
+**Индекс:** `(project, source_section, target_section, title, created_at)` — вкладка «Задания» проекта. Матрица переходов статусов — в сервисе `update_task_status` (Этап 2).
+
+#### DesignTaskStatusLog (модуль «Задания», Этап 1 — DESIGN_TASKS_SPEC.md 2.2)
+| Поле | Тип | Описание |
+|---|---|---|
+| id | PK | |
+| task | FK → DesignTask, related_name='status_logs', CASCADE | Задание |
+| old_status / new_status | CharField(20) | Значения DesignTask.Status |
+| changed_by | FK → User, PROTECT | Кто изменил |
+| comment | TextField, blank | Причина (при возврате/уточнении) |
+| created_at | DateTimeField, auto_now_add | |
+
+#### DesignTaskAttachment (модуль «Задания», Этап 1 — DESIGN_TASKS_SPEC.md 2.3)
+| Поле | Тип | Описание |
+|---|---|---|
+| id | PK | |
+| task | FK → DesignTask, related_name='attachments', CASCADE | Задание |
+| document | FK → Document, null=True, on_delete=SET_NULL | Привязка к документу проекта; связь теряется, вложение остаётся |
+| file | FileField, null=True, `upload_to='design_tasks/attachments/%Y/%m/'` | Свободный файл |
+| kind | CharField(20), choices | input, output, comment |
+| uploaded_by | FK → User, PROTECT | Кто загрузил |
+| created_at | DateTimeField, auto_now_add | |
+
+#### DesignTaskChecklistItem (модуль «Задания», Этап 1 — DESIGN_TASKS_SPEC.md 2.5)
+| Поле | Тип | Описание |
+|---|---|---|
+| id | PK | |
+| task | FK → DesignTask, related_name='checklist_items', CASCADE | Задание |
+| text | CharField(500) | Пункт |
+| is_done | BooleanField, default=False | |
+| done_by | FK → User, null=True, on_delete=SET_NULL | Кто выполнил |
+| done_at | DateTimeField, null=True | Когда выполнил |
+
+**Без уникальности:** одно задание может содержать несколько одинаковых пунктов.
+
 ### 3.3. Связи
 
 User 1─1 UserProfile
@@ -470,6 +540,10 @@ Section 1─N Folder
 Folder 1─N Folder (parent)
 Folder 1─N Document
 Document 1─N DocumentVersion
+Document 1─N DesignTaskAttachment (design_task_attachments, «Задания»)
+Company 1─N TaskTemplate (task_templates, «Задания»)
+Project 1─N DesignTask (design_tasks, «Задания»)
+DesignTask 1─N DesignTaskStatusLog / DesignTaskAttachment / DesignTaskChecklistItem
 Document 1─N InternalDocument (source_document, ИИ-контур)
 InternalDocument 1─N InternalChunk
 DocumentVersion 1─N CheckRun

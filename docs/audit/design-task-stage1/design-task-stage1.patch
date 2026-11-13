@@ -1,0 +1,771 @@
+diff --git a/docs/ARCHITECTURE.md b/docs/ARCHITECTURE.md
+index df5c6a2..0cfa47a 100644
+--- a/docs/ARCHITECTURE.md
++++ b/docs/ARCHITECTURE.md
+@@ -460,6 +460,76 @@ sod_project/
+ 
+ **Правило:** тексты промптов и ответов в БД не хранятся (приватность компаний) — только метаданные; детальные логи — в лог-файле приложения.
+ 
++#### TaskTemplate (модуль «Задания», Этап 1 — DESIGN_TASKS_SPEC.md 2.4)
++| Поле | Тип | Описание |
++|---|---|---|
++| id | PK | |
++| company | FK → Company, related_name='task_templates', CASCADE | Шаблон компании |
++| source_section | FK → Section, null=True, on_delete=SET_NULL | Типовой раздел-источник |
++| target_section | FK → Section, null=True, on_delete=SET_NULL | Типовой раздел-цель |
++| title | CharField(255) | Название шаблона |
++| description | TextField | Типовой текст задания |
++| default_duration_days | PositiveIntegerField, default=5 | Типовой срок (дней) |
++| checklist | JSONField, default=list | JSON-массив строк чек-листа |
++| is_active | BooleanField, default=True | |
++
++**Уникальность:** `(company, title)`.
++
++#### DesignTask (модуль «Задания», Этап 1 — DESIGN_TASKS_SPEC.md 2.1)
++| Поле | Тип | Описание |
++|---|---|---|
++| id | PK | |
++| project | FK → Project, related_name='design_tasks', CASCADE | Проект |
++| source_section | FK → Section, related_name='design_tasks_source', PROTECT | Раздел-источник (АР) |
++| target_section | FK → Section, related_name='design_tasks_target', PROTECT | Раздел-цель (КР) |
++| author | FK → User, related_name='issued_design_tasks', PROTECT | Инициатор из отдела-источника (не обязательно ГИП) |
++| assignee | FK → User, null=True, on_delete=SET_NULL | Исполнитель |
++| template | FK → TaskTemplate, null=True, on_delete=SET_NULL | Шаблон, по которому создано |
++| title | CharField(255) | Краткое название |
++| description | TextField | Суть задания |
++| due_date | DateField, null=True | Срок |
++| status | CharField(20), choices, default=DRAFT | DRAFT, ISSUED, IN_PROGRESS, ON_HOLD, COMPLETED, REVIEW, ACCEPTED, RETURNED, CANCELLED |
++| priority | CharField(10), choices, default=normal | low, normal, high, critical |
++| issued_at / accepted_at | DateTimeField, null=True | Когда выдано / принято |
++| closed_by | FK → User, null=True, on_delete=SET_NULL | Кто закрыл |
++| external_id | CharField(100), null=True, db_index | Синхронизация с ГИП-Ассистентом (спека 7) |
++| created_at / updated_at | DateTimeField | |
++
++**Индекс:** `(project, source_section, target_section, title, created_at)` — вкладка «Задания» проекта. Матрица переходов статусов — в сервисе `update_task_status` (Этап 2).
++
++#### DesignTaskStatusLog (модуль «Задания», Этап 1 — DESIGN_TASKS_SPEC.md 2.2)
++| Поле | Тип | Описание |
++|---|---|---|
++| id | PK | |
++| task | FK → DesignTask, related_name='status_logs', CASCADE | Задание |
++| old_status / new_status | CharField(20) | Значения DesignTask.Status |
++| changed_by | FK → User, PROTECT | Кто изменил |
++| comment | TextField, blank | Причина (при возврате/уточнении) |
++| created_at | DateTimeField, auto_now_add | |
++
++#### DesignTaskAttachment (модуль «Задания», Этап 1 — DESIGN_TASKS_SPEC.md 2.3)
++| Поле | Тип | Описание |
++|---|---|---|
++| id | PK | |
++| task | FK → DesignTask, related_name='attachments', CASCADE | Задание |
++| document | FK → Document, null=True, on_delete=SET_NULL | Привязка к документу проекта; связь теряется, вложение остаётся |
++| file | FileField, null=True, `upload_to='design_tasks/attachments/%Y/%m/'` | Свободный файл |
++| kind | CharField(20), choices | input, output, comment |
++| uploaded_by | FK → User, PROTECT | Кто загрузил |
++| created_at | DateTimeField, auto_now_add | |
++
++#### DesignTaskChecklistItem (модуль «Задания», Этап 1 — DESIGN_TASKS_SPEC.md 2.5)
++| Поле | Тип | Описание |
++|---|---|---|
++| id | PK | |
++| task | FK → DesignTask, related_name='checklist_items', CASCADE | Задание |
++| text | CharField(500) | Пункт |
++| is_done | BooleanField, default=False | |
++| done_by | FK → User, null=True, on_delete=SET_NULL | Кто выполнил |
++| done_at | DateTimeField, null=True | Когда выполнил |
++
++**Без уникальности:** одно задание может содержать несколько одинаковых пунктов.
++
+ ### 3.3. Связи
+ 
+ User 1─1 UserProfile
+@@ -470,6 +540,10 @@ Section 1─N Folder
+ Folder 1─N Folder (parent)
+ Folder 1─N Document
+ Document 1─N DocumentVersion
++Document 1─N DesignTaskAttachment (design_task_attachments, «Задания»)
++Company 1─N TaskTemplate (task_templates, «Задания»)
++Project 1─N DesignTask (design_tasks, «Задания»)
++DesignTask 1─N DesignTaskStatusLog / DesignTaskAttachment / DesignTaskChecklistItem
+ Document 1─N InternalDocument (source_document, ИИ-контур)
+ InternalDocument 1─N InternalChunk
+ DocumentVersion 1─N CheckRun
+diff --git a/docs/audit/design-task-stage1/REPORT.md b/docs/audit/design-task-stage1/REPORT.md
+new file mode 100644
+index 0000000..643f98f
+--- /dev/null
++++ b/docs/audit/design-task-stage1/REPORT.md
+@@ -0,0 +1,130 @@
++# Отчёт аудита: Этап 1 — Модели и миграции модуля «Задания» (DesignTask)
++
++**Дата:** 2026-11-13
++**База патча:** `main`, HEAD `c717b97c3dcc7624d176b0f87352b6f7e0e1bcc9`
++**Спецификация:** `docs/DESIGN_TASKS_SPEC.md` v1.0 (прочитана до начала работ)
++**Патч:** `design-task-stage1.patch` (применяется `git apply` на чистый `c717b97`)
++
++## 1. Что сделано
++
++Созданы 5 моделей модуля «Задания» (спека 2.1–2.5) в `storage/domain/models.py`
++(рядом с `Document`), одна новая миграция, обновлён `ARCHITECTURE.md`
++(правило владельца №4: «Модели менять только с обновлением ARCHITECTURE.md»).
++Новых файлов моделей не создавалось, существующие модели (`Document`, `Issue`,
++`Project`, `Section`, `Company` и др.) не менялись.
++
++| Модель | Таблица | Ключевые требования спеки |
++|---|---|---|
++| `DesignTask` | `storage_designtask` | status 9 значений (DRAFT…CANCELLED), priority low/normal/high/critical, `external_id` CharField(100) null+db_index (ГИП-Ассистент, спека 7), индекс `(project, source_section, target_section, title, created_at)` |
++| `DesignTaskStatusLog` | `storage_designtaskstatuslog` | `task.status_logs`, old/new_status, changed_by PROTECT, comment blank |
++| `DesignTaskAttachment` | `storage_designtaskattachment` | kind input/output/comment, `document.design_task_attachments` (спека 7) |
++| `TaskTemplate` | `storage_tasktemplate` | `checklist` JSONField default=list, уникальность `(company, title)` |
++| `DesignTaskChecklistItem` | `storage_designtaskchecklistitem` | БЕЗ уникальности — дубликаты пунктов разрешены |
++
++## 2. Изменённые файлы
++
++| Файл | Тип | Что изменено |
++|---|---|---|
++| `storage/domain/models.py` | изменён | +5 моделей (~325 строк, блок «Модуль „Задания“») |
++| `storage/migrations/0031_design_task_stage1.py` | новый | 5×CreateModel + AddField(template) + AddConstraint + AddIndex |
++| `storage/admin.py` | изменён | импорт + 5 админ-классов (list_display, list_filter, search_fields) |
++| `docs/ARCHITECTURE.md` | изменён | раздел 3.2: 5 блоков моделей; раздел 3.3: связи |
++
++## 3. Проверки
++
++### 3.1. `manage.py check`
++
++```
++System check identified no issues (0 silenced).
++```
++
++### 3.2. `manage.py makemigrations storage --check --dry-run`
++
++По моделям Этапа 1 — «No changes detected» (миграция 0031 покрывает все 5
++моделей полностью). Команда остаётся с двумя операциями, которые существуют
++на чистом `c717b97` ДО этого патча (см. п. 5.1):
++
++```
++storage/migrations/0032_alter_document_suitability_code_alter_folder_zone.py
++    ~ Alter field suitability_code on document
++    ~ Alter field zone on folder
++```
++
++**Проверено на чистом c717b97 (без патча):** те же две операции —
++предсуществующий дрейф, не привнесённый Этапом 1.
++
++### 3.3. Миграция применена
++
++`manage.py migrate` (sqlite) — все приложения, включая
++`0031_design_task_stage1... OK`. `sqlmigrate storage 0031` содержит только
++`CREATE TABLE` (5 новых таблиц) и `CREATE INDEX` (FK-индексы, FK-констрейнты,
++`design_task_proj_src_tgt_idx`, уникальность шаблона). ALTER существующих
++таблиц отсутствует.
++
++### 3.4. Смоук-тест поведения моделей (22/22 PASS)
++
++Дубликат `(company, title)` шаблона → IntegrityError; два одинаковых пункта
++чек-листа → разрешены; `author` — обычный пользователь (не ГИП) → OK;
++`external_id` сохраняется; PROTECT на оба раздела (ProtectedError при удалении
++Section с заданиями); `status_logs`/`attachments`/`checklist_items` работают;
++все 5 моделей зарегистрированы в админке; choices в точности по спеке.
++
++## 4. Проверка «по смыслу» (для Координатора)
++
++1. **Существующие связи не сломаны.** Миграция содержит только CreateModel по
++   5 новым таблицам (FK на существующие `Project`/`Section`/`User`/`Document`/
++   `Company`); sqlmigrate подтверждает отсутствие ALTER. `Document`, `Issue`,
++   `Project`, `Section`, `Company` в models.py и в прошлых миграциях не тронуты.
++2. **`external_id` есть.** `CharField(100), null=True, db_index=True` (+blank=True
++   для форм — см. п. 5.3) — готов к синхронизации с ГИП-Ассистентом (спека 7).
++3. **`author` не обязательно ГИП.** `FK → User, PROTECT`, без ограничения по
++   роли; write-доступ к `source_section` проверяется сервисом `create_task`
++   (Этап 2) через существующий `check_write_permission` — на уровне модели
++   ограничений нет, что и требуется.
++4. **Миграции — только новые таблицы.** Да (см. п. 3.3); зависимости —
++   `('storage', '0030_documentversion_indexing_status')` + AUTH_USER_MODEL.
++
++## 5. Расхождения со спекой и замечания аудита
++
++### 5.1. Предсуществующий дрейф миграций на c717b97 (не входит в патч)
++
++`makemigrations --check --dry-run` на чистом `c717b97` НЕ даёт «No changes
++detected»: требует `AlterField` для `Document.suitability_code` (миграция 0018
++хранит лейблы «S0 — Исходный (WIP)», модель — «Черновик») и `Folder.zone`
++(0010 — «В работе», модель — «В разработке»). Комментарий в models.py ошибочно
++считает, что «миграция не требуется» — лейблы choices являются частью
++состояния миграций. Обе операции меняют только лейблы (значения БД те же) и
++SQL не порождают. В патч Этапа 1 их включать нельзя (спека 8: «существующие
++не трогаются»). **Рекомендация:** отдельным патчем добавить label-only
++миграцию `0032` (2×AlterField, без SQL), после чего `makemigrations --check`
++станет чистым; либо зафиксировать исключение в HANDOFF.md.
++
++### 5.2. on_delete, не заданные в таблицах спеки (интерпретация)
++
++Спека задаёт PROTECT только для `source_section`/`target_section`/`author`/
++`uploaded_by`/`changed_by`. Для nullable-FK выбран `SET_NULL` (единственно
++возможный при null=True): `assignee`, `closed_by`, `template`, `done_by`,
++`attachment.document`, `template.source_section/target_section`.
++`attachment.document → SET_NULL` — осознанно: жёсткое удаление документа
++(вместе с проектом) не должно стирать вложение и файл — теряется только связь.
++
++### 5.3. Мелкие дополнения сверх таблиц спеки (не конфликтуют)
++
++- `external_id`: добавлен `blank=True` (для админки/форм; как у
++  `Issue.external_id`).
++- Добавлены значения по умолчанию: `status=DRAFT`, `priority=normal`
++  (соответствуют сигнатуре `create_task` и потоку спеки 3).
++- `TaskTemplate.source/target_section` получили `blank=True` (подсказки,
++  не обязательные поля).
++
++## 6. Применение
++
++```bash
++git checkout main && git pull            # ожидается HEAD c717b97 (или позже)
++git apply --check design-task-stage1.patch
++git apply design-task-stage1.patch
++python manage.py check
++python manage.py migrate storage
++python manage.py makemigrations storage --check --dry-run
++# см. п. 3.2: останутся 2 label-only AlterField — предсуществующий дрейф (п. 5.1)
++```
+diff --git a/storage/admin.py b/storage/admin.py
+index 144fdc6..62a19cb 100644
+--- a/storage/admin.py
++++ b/storage/admin.py
+@@ -2,6 +2,8 @@ from django.contrib import admin
+ from .domain.models import (
+     Company, Project, Section, Document, DocumentVersion, UserProfile, ProjectMembership,
+     DocumentView, Specification, VorItem,
++    DesignTask, DesignTaskStatusLog, DesignTaskAttachment, TaskTemplate,
++    DesignTaskChecklistItem,
+ )
+ 
+ 
+@@ -76,3 +78,54 @@ class VorItemAdmin(admin.ModelAdmin):
+     )
+     list_filter = ('project', 'section_code')
+     search_fields = ('code', 'name')
++
++
++# === Модуль «Задания» (DesignTask), Этап 1 — базовая регистрация ===
++
++
++@admin.register(DesignTask)
++class DesignTaskAdmin(admin.ModelAdmin):
++    list_display = (
++        'id', 'title', 'project', 'source_section', 'target_section',
++        'author', 'assignee', 'status', 'priority', 'due_date', 'created_at',
++    )
++    list_filter = ('project', 'status', 'priority')
++    search_fields = ('title', 'description', 'external_id')
++    list_select_related = (
++        'project', 'source_section', 'target_section', 'author',
++        'assignee', 'template',
++    )
++
++
++@admin.register(DesignTaskStatusLog)
++class DesignTaskStatusLogAdmin(admin.ModelAdmin):
++    list_display = ('task', 'old_status', 'new_status', 'changed_by', 'created_at')
++    list_filter = ('new_status',)
++    search_fields = ('task__title', 'comment')
++    list_select_related = ('task', 'changed_by')
++
++
++@admin.register(DesignTaskAttachment)
++class DesignTaskAttachmentAdmin(admin.ModelAdmin):
++    list_display = ('task', 'kind', 'document', 'file', 'uploaded_by', 'created_at')
++    list_filter = ('kind',)
++    search_fields = ('task__title',)
++    list_select_related = ('task', 'document', 'uploaded_by')
++
++
++@admin.register(TaskTemplate)
++class TaskTemplateAdmin(admin.ModelAdmin):
++    list_display = (
++        'title', 'company', 'source_section', 'target_section',
++        'default_duration_days', 'is_active',
++    )
++    list_filter = ('company', 'is_active')
++    search_fields = ('title', 'description')
++
++
++@admin.register(DesignTaskChecklistItem)
++class DesignTaskChecklistItemAdmin(admin.ModelAdmin):
++    list_display = ('task', 'text', 'is_done', 'done_by', 'done_at')
++    list_filter = ('is_done',)
++    search_fields = ('text', 'task__title')
++    list_select_related = ('task', 'done_by')
+diff --git a/storage/domain/models.py b/storage/domain/models.py
+index 0d1527e..42f1197 100644
+--- a/storage/domain/models.py
++++ b/storage/domain/models.py
+@@ -618,3 +618,330 @@ class VorItem(models.Model):
+ 
+     def __str__(self):
+         return f"{self.code} — {self.name}"
++
++
++# =====================================================================
++# Модуль «Задания» (DesignTask) — docs/DESIGN_TASKS_SPEC.md v1.0, Этап 1.
++#
++# Задания между смежными разделами (АР → КР, ОВ → ЭОМ и т.д.). Отличие
++# от Issue: Issue — «исправь ошибку» (замечание к документу), DesignTask —
++# «сделай работу» (задание от отдела-источника отделу-цели).
++#
++# Роль ГИПа (спека 1): ГИП не выдаёт задания вручную — он настраивает
++# шаблоны, контролирует сроки и вмешивается при конфликтах. Задания
++# создаются представителями профильных отделов.
++#
++# Бизнес-логика (матрица переходов, права, уведомления) — Этап 2,
++# storage/domain/services.py. Здесь только структура данных.
++# =====================================================================
++
++
++class TaskTemplate(models.Model):
++    """Шаблон типового задания между смежными разделами (спека 2.4).
++
++    Настраивается ГИПом/админом на уровне компании. При создании задания
++    по шаблону его checklist (JSON-массив строк) копируется в
++    DesignTaskChecklistItem (Этап 2, create_task).
++    """
++
++    company = models.ForeignKey(
++        Company,
++        on_delete=models.CASCADE,
++        related_name='task_templates',
++        verbose_name="Компания",
++    )
++    # Типовые источник/цель — подсказка при создании задания, поэтому
++    # необязательны (null=True) и не мешают удалению раздела (SET_NULL).
++    source_section = models.ForeignKey(
++        Section,
++        on_delete=models.SET_NULL,
++        null=True,
++        blank=True,
++        related_name='task_templates_source',
++        verbose_name="Типовой раздел-источник",
++    )
++    target_section = models.ForeignKey(
++        Section,
++        on_delete=models.SET_NULL,
++        null=True,
++        blank=True,
++        related_name='task_templates_target',
++        verbose_name="Типовой раздел-цель",
++    )
++    title = models.CharField(max_length=255, verbose_name="Название шаблона")
++    description = models.TextField(verbose_name="Типовой текст задания")
++    default_duration_days = models.PositiveIntegerField(
++        default=5,
++        verbose_name="Типовой срок (дней)",
++    )
++    # JSON-массив строк: ["Проверить нагрузки", "Сделать расчёт", ...]
++    # (спека 6). default=list — у каждого шаблона свой список пунктов.
++    checklist = models.JSONField(default=list, verbose_name="Чек-лист")
++    is_active = models.BooleanField(default=True, verbose_name="Активен")
++
++    class Meta:
++        ordering = ['company', 'title']
++        verbose_name = "Шаблон задания"
++        verbose_name_plural = "Шаблоны заданий"
++        constraints = [
++            models.UniqueConstraint(
++                fields=['company', 'title'],
++                name='uniq_tasktemplate_company_title',
++            ),
++        ]
++
++    def __str__(self):
++        return f'{self.title} ({self.company.name})'
++
++
++class DesignTask(models.Model):
++    """Задание между смежными разделами (спека 2.1).
++
++    Автор — инициатор из отдела-источника: любой пользователь с
++    write-доступом к source_section (проверка прав — Этап 2, сервис
++    create_task через существующий check_write_permission), НЕ
++    обязательно ГИП. ГИП/админ может только выдавать/принимать/отменять
++    вместе с автором (матрица переходов, спека 3).
++    """
++
++    class Status(models.TextChoices):
++        DRAFT = 'DRAFT', 'Черновик'
++        ISSUED = 'ISSUED', 'Выдано'
++        IN_PROGRESS = 'IN_PROGRESS', 'В работе'
++        ON_HOLD = 'ON_HOLD', 'Приостановлено'
++        COMPLETED = 'COMPLETED', 'Выполнено'
++        REVIEW = 'REVIEW', 'На проверке'
++        ACCEPTED = 'ACCEPTED', 'Принято'
++        RETURNED = 'RETURNED', 'Возвращено на доработку'
++        CANCELLED = 'CANCELLED', 'Отменено'
++
++    class Priority(models.TextChoices):
++        LOW = 'low', 'Низкий'
++        NORMAL = 'normal', 'Обычный'
++        HIGH = 'high', 'Высокий'
++        CRITICAL = 'critical', 'Критический'
++
++    project = models.ForeignKey(
++        Project,
++        on_delete=models.CASCADE,
++        related_name='design_tasks',
++        verbose_name="Проект",
++    )
++    # PROTECT по спеке 2.1: раздел с историей заданий нельзя молча удалить;
++    # раздел удаляется только после снятия зависимостей.
++    source_section = models.ForeignKey(
++        Section,
++        on_delete=models.PROTECT,
++        related_name='design_tasks_source',
++        verbose_name="Раздел-источник",
++    )
++    target_section = models.ForeignKey(
++        Section,
++        on_delete=models.PROTECT,
++        related_name='design_tasks_target',
++        verbose_name="Раздел-цель",
++    )
++    author = models.ForeignKey(
++        User,
++        on_delete=models.PROTECT,
++        related_name='issued_design_tasks',
++        verbose_name="Инициатор (отдел-источник)",
++    )
++    assignee = models.ForeignKey(
++        User,
++        on_delete=models.SET_NULL,
++        null=True,
++        blank=True,
++        related_name='assigned_design_tasks',
++        verbose_name="Исполнитель",
++    )
++    template = models.ForeignKey(
++        TaskTemplate,
++        on_delete=models.SET_NULL,
++        null=True,
++        blank=True,
++        related_name='tasks',
++        verbose_name="Шаблон",
++    )
++    title = models.CharField(max_length=255, verbose_name="Краткое название")
++    description = models.TextField(verbose_name="Суть задания")
++    due_date = models.DateField(null=True, blank=True, verbose_name="Срок")
++    status = models.CharField(
++        max_length=20,
++        choices=Status.choices,
++        default=Status.DRAFT,
++        verbose_name="Статус",
++    )
++    priority = models.CharField(
++        max_length=10,
++        choices=Priority.choices,
++        default=Priority.NORMAL,
++        verbose_name="Приоритет",
++    )
++    issued_at = models.DateTimeField(null=True, blank=True, verbose_name="Когда выдано")
++    accepted_at = models.DateTimeField(null=True, blank=True, verbose_name="Когда принято")
++    closed_by = models.ForeignKey(
++        User,
++        on_delete=models.SET_NULL,
++        null=True,
++        blank=True,
++        related_name='closed_design_tasks',
++        verbose_name="Кто закрыл",
++    )
++    # Синхронизация с ГИП-Ассистентом (спека 7): Task/Decision из внешней
++    # среды. Аналог Issue.external_id — nullable + db_index для поиска.
++    external_id = models.CharField(
++        max_length=100,
++        null=True,
++        blank=True,
++        db_index=True,
++        verbose_name="Внешний ID (ГИП-Ассистент)",
++    )
++    created_at = models.DateTimeField(auto_now_add=True, verbose_name="Дата создания")
++    updated_at = models.DateTimeField(auto_now=True, verbose_name="Дата обновления")
++
++    class Meta:
++        ordering = ['-created_at']
++        verbose_name = "Задание между разделами"
++        verbose_name_plural = "Задания между разделами"
++        indexes = [
++            # Спека 2.1: составной индекс под вкладку «Задания» проекта
++            # (фильтр по проекту + связка источник→цель + сортировка).
++            models.Index(
++                fields=['project', 'source_section', 'target_section', 'title', 'created_at'],
++                name='design_task_proj_src_tgt_idx',
++            ),
++        ]
++
++    def __str__(self):
++        return f'{self.source_section.code} → {self.target_section.code}: {self.title}'
++
++
++class DesignTaskStatusLog(models.Model):
++    """История смены статусов задания (спека 2.2).
++
++    Пишется сервисом update_task_status (Этап 2) при каждом переходе
++    по матрице. old_status/new_status — значения DesignTask.Status.
++    """
++
++    task = models.ForeignKey(
++        DesignTask,
++        on_delete=models.CASCADE,
++        related_name='status_logs',
++        verbose_name="Задание",
++    )
++    old_status = models.CharField(max_length=20, verbose_name="Прежний статус")
++    new_status = models.CharField(max_length=20, verbose_name="Новый статус")
++    changed_by = models.ForeignKey(
++        User,
++        on_delete=models.PROTECT,
++        related_name='design_task_status_logs',
++        verbose_name="Кто изменил",
++    )
++    comment = models.TextField(
++        blank=True,
++        default='',
++        verbose_name="Причина (при возврате/уточнении)",
++    )
++    created_at = models.DateTimeField(auto_now_add=True, verbose_name="Дата создания")
++
++    class Meta:
++        ordering = ['created_at']
++        verbose_name = "Запись истории статусов"
++        verbose_name_plural = "Истории статусов заданий"
++
++    def __str__(self):
++        return f'{self.old_status} → {self.new_status} ({self.task_id})'
++
++
++class DesignTaskAttachment(models.Model):
++    """Вложение задания: входные данные, результат или комментарий (спека 2.3).
++
++    Входные данные — конкретные документы (листы) проекта, результат —
++    файлы исполнителя (спека 1). Заполняется через add_task_attachment
++    (Этап 2): kind=input добавляет автор, kind=output — исполнитель.
++    """
++
++    class Kind(models.TextChoices):
++        INPUT = 'input', 'Входные данные'
++        OUTPUT = 'output', 'Результат'
++        COMMENT = 'comment', 'Комментарий'
++
++    task = models.ForeignKey(
++        DesignTask,
++        on_delete=models.CASCADE,
++        related_name='attachments',
++        verbose_name="Задание",
++    )
++    # Привязка к документу проекта. SET_NULL: документ использует
++    # мягкое удаление, а жёсткое удаление (вместе с проектом) не должно
++    # стирать историю задания — связь теряется, вложение и файл остаются.
++    document = models.ForeignKey(
++        Document,
++        on_delete=models.SET_NULL,
++        null=True,
++        blank=True,
++        related_name='design_task_attachments',
++        verbose_name="Документ проекта",
++    )
++    file = models.FileField(
++        upload_to='design_tasks/attachments/%Y/%m/',
++        null=True,
++        blank=True,
++        verbose_name="Свободный файл",
++    )
++    kind = models.CharField(
++        max_length=20,
++        choices=Kind.choices,
++        verbose_name="Тип вложения",
++    )
++    uploaded_by = models.ForeignKey(
++        User,
++        on_delete=models.PROTECT,
++        related_name='design_task_attachments',
++        verbose_name="Кто загрузил",
++    )
++    created_at = models.DateTimeField(auto_now_add=True, verbose_name="Дата загрузки")
++
++    class Meta:
++        ordering = ['created_at']
++        verbose_name = "Вложение задания"
++        verbose_name_plural = "Вложения заданий"
++
++    def __str__(self):
++        return f'{self.get_kind_display()} — {self.task_id}'
++
++
++class DesignTaskChecklistItem(models.Model):
++    """Пункт чек-листа задания (спека 2.5).
++
++    Создаётся при выпуске задания по шаблону (копия TaskTemplate.checklist).
++    БЕЗ уникальности по (task, text): одно задание может содержать
++    несколько одинаковых пунктов (спека, Этап 1).
++    """
++
++    task = models.ForeignKey(
++        DesignTask,
++        on_delete=models.CASCADE,
++        related_name='checklist_items',
++        verbose_name="Задание",
++    )
++    text = models.CharField(max_length=500, verbose_name="Пункт")
++    is_done = models.BooleanField(default=False, verbose_name="Выполнено")
++    done_by = models.ForeignKey(
++        User,
++        on_delete=models.SET_NULL,
++        null=True,
++        blank=True,
++        related_name='design_task_checklist_items',
++        verbose_name="Кто выполнил",
++    )
++    done_at = models.DateTimeField(null=True, blank=True, verbose_name="Когда выполнил")
++
++    class Meta:
++        ordering = ['id']
++        verbose_name = "Пункт чек-листа задания"
++        verbose_name_plural = "Пункты чек-листа заданий"
++
++    def __str__(self):
++        return f'{self.text[:50]} ({self.task_id})'
+diff --git a/storage/migrations/0031_design_task_stage1.py b/storage/migrations/0031_design_task_stage1.py
+new file mode 100644
+index 0000000..a7afc28
+--- /dev/null
++++ b/storage/migrations/0031_design_task_stage1.py
+@@ -0,0 +1,134 @@
++# Generated by Django 6.1.2 on 2026-11-13 20:31
++#
++# Этап 1 модуля «Задания» (docs/DESIGN_TASKS_SPEC.md v1.0): только новые
++# таблицы DesignTask-модуля. Существующие таблицы не изменяются (спека 8).
++#
++# ВАЖНО: чистый autodetector на c717b97 дополнительно требует два
++# label-only AlterField (document.suitability_code, folder.zone) —
++# предсуществующий дрейф models.py/миграций, к Этапу 1 отношения не
++# имеет и сюда намеренно НЕ включён (см. отчёт аудита). Изменение лейблов
++# choices не порождает SQL и не затрагивает схему.
++
++import django.db.models.deletion
++from django.conf import settings
++from django.db import migrations, models
++
++
++class Migration(migrations.Migration):
++
++    dependencies = [
++        ('storage', '0030_documentversion_indexing_status'),
++        migrations.swappable_dependency(settings.AUTH_USER_MODEL),
++    ]
++
++    operations = [
++        migrations.CreateModel(
++            name='DesignTask',
++            fields=[
++                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
++                ('title', models.CharField(max_length=255, verbose_name='Краткое название')),
++                ('description', models.TextField(verbose_name='Суть задания')),
++                ('due_date', models.DateField(blank=True, null=True, verbose_name='Срок')),
++                ('status', models.CharField(choices=[('DRAFT', 'Черновик'), ('ISSUED', 'Выдано'), ('IN_PROGRESS', 'В работе'), ('ON_HOLD', 'Приостановлено'), ('COMPLETED', 'Выполнено'), ('REVIEW', 'На проверке'), ('ACCEPTED', 'Принято'), ('RETURNED', 'Возвращено на доработку'), ('CANCELLED', 'Отменено')], default='DRAFT', max_length=20, verbose_name='Статус')),
++                ('priority', models.CharField(choices=[('low', 'Низкий'), ('normal', 'Обычный'), ('high', 'Высокий'), ('critical', 'Критический')], default='normal', max_length=10, verbose_name='Приоритет')),
++                ('issued_at', models.DateTimeField(blank=True, null=True, verbose_name='Когда выдано')),
++                ('accepted_at', models.DateTimeField(blank=True, null=True, verbose_name='Когда принято')),
++                ('external_id', models.CharField(blank=True, db_index=True, max_length=100, null=True, verbose_name='Внешний ID (ГИП-Ассистент)')),
++                ('created_at', models.DateTimeField(auto_now_add=True, verbose_name='Дата создания')),
++                ('updated_at', models.DateTimeField(auto_now=True, verbose_name='Дата обновления')),
++                ('assignee', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='assigned_design_tasks', to=settings.AUTH_USER_MODEL, verbose_name='Исполнитель')),
++                ('author', models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, related_name='issued_design_tasks', to=settings.AUTH_USER_MODEL, verbose_name='Инициатор (отдел-источник)')),
++                ('closed_by', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='closed_design_tasks', to=settings.AUTH_USER_MODEL, verbose_name='Кто закрыл')),
++                ('project', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='design_tasks', to='storage.project', verbose_name='Проект')),
++                ('source_section', models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, related_name='design_tasks_source', to='storage.section', verbose_name='Раздел-источник')),
++                ('target_section', models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, related_name='design_tasks_target', to='storage.section', verbose_name='Раздел-цель')),
++            ],
++            options={
++                'verbose_name': 'Задание между разделами',
++                'verbose_name_plural': 'Задания между разделами',
++                'ordering': ['-created_at'],
++            },
++        ),
++        migrations.CreateModel(
++            name='DesignTaskAttachment',
++            fields=[
++                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
++                ('file', models.FileField(blank=True, null=True, upload_to='design_tasks/attachments/%Y/%m/', verbose_name='Свободный файл')),
++                ('kind', models.CharField(choices=[('input', 'Входные данные'), ('output', 'Результат'), ('comment', 'Комментарий')], max_length=20, verbose_name='Тип вложения')),
++                ('created_at', models.DateTimeField(auto_now_add=True, verbose_name='Дата загрузки')),
++                ('document', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='design_task_attachments', to='storage.document', verbose_name='Документ проекта')),
++                ('task', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='attachments', to='storage.designtask', verbose_name='Задание')),
++                ('uploaded_by', models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, related_name='design_task_attachments', to=settings.AUTH_USER_MODEL, verbose_name='Кто загрузил')),
++            ],
++            options={
++                'verbose_name': 'Вложение задания',
++                'verbose_name_plural': 'Вложения заданий',
++                'ordering': ['created_at'],
++            },
++        ),
++        migrations.CreateModel(
++            name='DesignTaskChecklistItem',
++            fields=[
++                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
++                ('text', models.CharField(max_length=500, verbose_name='Пункт')),
++                ('is_done', models.BooleanField(default=False, verbose_name='Выполнено')),
++                ('done_at', models.DateTimeField(blank=True, null=True, verbose_name='Когда выполнил')),
++                ('done_by', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='design_task_checklist_items', to=settings.AUTH_USER_MODEL, verbose_name='Кто выполнил')),
++                ('task', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='checklist_items', to='storage.designtask', verbose_name='Задание')),
++            ],
++            options={
++                'verbose_name': 'Пункт чек-листа задания',
++                'verbose_name_plural': 'Пункты чек-листа заданий',
++                'ordering': ['id'],
++            },
++        ),
++        migrations.CreateModel(
++            name='DesignTaskStatusLog',
++            fields=[
++                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
++                ('old_status', models.CharField(max_length=20, verbose_name='Прежний статус')),
++                ('new_status', models.CharField(max_length=20, verbose_name='Новый статус')),
++                ('comment', models.TextField(blank=True, default='', verbose_name='Причина (при возврате/уточнении)')),
++                ('created_at', models.DateTimeField(auto_now_add=True, verbose_name='Дата создания')),
++                ('changed_by', models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, related_name='design_task_status_logs', to=settings.AUTH_USER_MODEL, verbose_name='Кто изменил')),
++                ('task', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='status_logs', to='storage.designtask', verbose_name='Задание')),
++            ],
++            options={
++                'verbose_name': 'Запись истории статусов',
++                'verbose_name_plural': 'Истории статусов заданий',
++                'ordering': ['created_at'],
++            },
++        ),
++        migrations.CreateModel(
++            name='TaskTemplate',
++            fields=[
++                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
++                ('title', models.CharField(max_length=255, verbose_name='Название шаблона')),
++                ('description', models.TextField(verbose_name='Типовой текст задания')),
++                ('default_duration_days', models.PositiveIntegerField(default=5, verbose_name='Типовой срок (дней)')),
++                ('checklist', models.JSONField(default=list, verbose_name='Чек-лист')),
++                ('is_active', models.BooleanField(default=True, verbose_name='Активен')),
++                ('company', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='task_templates', to='storage.company', verbose_name='Компания')),
++                ('source_section', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='task_templates_source', to='storage.section', verbose_name='Типовой раздел-источник')),
++                ('target_section', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='task_templates_target', to='storage.section', verbose_name='Типовой раздел-цель')),
++            ],
++            options={
++                'verbose_name': 'Шаблон задания',
++                'verbose_name_plural': 'Шаблоны заданий',
++                'ordering': ['company', 'title'],
++            },
++        ),
++        migrations.AddField(
++            model_name='designtask',
++            name='template',
++            field=models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='tasks', to='storage.tasktemplate', verbose_name='Шаблон'),
++        ),
++        migrations.AddConstraint(
++            model_name='tasktemplate',
++            constraint=models.UniqueConstraint(fields=('company', 'title'), name='uniq_tasktemplate_company_title'),
++        ),
++        migrations.AddIndex(
++            model_name='designtask',
++            index=models.Index(fields=['project', 'source_section', 'target_section', 'title', 'created_at'], name='design_task_proj_src_tgt_idx'),
++        ),
++    ]

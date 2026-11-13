@@ -618,3 +618,330 @@ class VorItem(models.Model):
 
     def __str__(self):
         return f"{self.code} — {self.name}"
+
+
+# =====================================================================
+# Модуль «Задания» (DesignTask) — docs/DESIGN_TASKS_SPEC.md v1.0, Этап 1.
+#
+# Задания между смежными разделами (АР → КР, ОВ → ЭОМ и т.д.). Отличие
+# от Issue: Issue — «исправь ошибку» (замечание к документу), DesignTask —
+# «сделай работу» (задание от отдела-источника отделу-цели).
+#
+# Роль ГИПа (спека 1): ГИП не выдаёт задания вручную — он настраивает
+# шаблоны, контролирует сроки и вмешивается при конфликтах. Задания
+# создаются представителями профильных отделов.
+#
+# Бизнес-логика (матрица переходов, права, уведомления) — Этап 2,
+# storage/domain/services.py. Здесь только структура данных.
+# =====================================================================
+
+
+class TaskTemplate(models.Model):
+    """Шаблон типового задания между смежными разделами (спека 2.4).
+
+    Настраивается ГИПом/админом на уровне компании. При создании задания
+    по шаблону его checklist (JSON-массив строк) копируется в
+    DesignTaskChecklistItem (Этап 2, create_task).
+    """
+
+    company = models.ForeignKey(
+        Company,
+        on_delete=models.CASCADE,
+        related_name='task_templates',
+        verbose_name="Компания",
+    )
+    # Типовые источник/цель — подсказка при создании задания, поэтому
+    # необязательны (null=True) и не мешают удалению раздела (SET_NULL).
+    source_section = models.ForeignKey(
+        Section,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='task_templates_source',
+        verbose_name="Типовой раздел-источник",
+    )
+    target_section = models.ForeignKey(
+        Section,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='task_templates_target',
+        verbose_name="Типовой раздел-цель",
+    )
+    title = models.CharField(max_length=255, verbose_name="Название шаблона")
+    description = models.TextField(verbose_name="Типовой текст задания")
+    default_duration_days = models.PositiveIntegerField(
+        default=5,
+        verbose_name="Типовой срок (дней)",
+    )
+    # JSON-массив строк: ["Проверить нагрузки", "Сделать расчёт", ...]
+    # (спека 6). default=list — у каждого шаблона свой список пунктов.
+    checklist = models.JSONField(default=list, verbose_name="Чек-лист")
+    is_active = models.BooleanField(default=True, verbose_name="Активен")
+
+    class Meta:
+        ordering = ['company', 'title']
+        verbose_name = "Шаблон задания"
+        verbose_name_plural = "Шаблоны заданий"
+        constraints = [
+            models.UniqueConstraint(
+                fields=['company', 'title'],
+                name='uniq_tasktemplate_company_title',
+            ),
+        ]
+
+    def __str__(self):
+        return f'{self.title} ({self.company.name})'
+
+
+class DesignTask(models.Model):
+    """Задание между смежными разделами (спека 2.1).
+
+    Автор — инициатор из отдела-источника: любой пользователь с
+    write-доступом к source_section (проверка прав — Этап 2, сервис
+    create_task через существующий check_write_permission), НЕ
+    обязательно ГИП. ГИП/админ может только выдавать/принимать/отменять
+    вместе с автором (матрица переходов, спека 3).
+    """
+
+    class Status(models.TextChoices):
+        DRAFT = 'DRAFT', 'Черновик'
+        ISSUED = 'ISSUED', 'Выдано'
+        IN_PROGRESS = 'IN_PROGRESS', 'В работе'
+        ON_HOLD = 'ON_HOLD', 'Приостановлено'
+        COMPLETED = 'COMPLETED', 'Выполнено'
+        REVIEW = 'REVIEW', 'На проверке'
+        ACCEPTED = 'ACCEPTED', 'Принято'
+        RETURNED = 'RETURNED', 'Возвращено на доработку'
+        CANCELLED = 'CANCELLED', 'Отменено'
+
+    class Priority(models.TextChoices):
+        LOW = 'low', 'Низкий'
+        NORMAL = 'normal', 'Обычный'
+        HIGH = 'high', 'Высокий'
+        CRITICAL = 'critical', 'Критический'
+
+    project = models.ForeignKey(
+        Project,
+        on_delete=models.CASCADE,
+        related_name='design_tasks',
+        verbose_name="Проект",
+    )
+    # PROTECT по спеке 2.1: раздел с историей заданий нельзя молча удалить;
+    # раздел удаляется только после снятия зависимостей.
+    source_section = models.ForeignKey(
+        Section,
+        on_delete=models.PROTECT,
+        related_name='design_tasks_source',
+        verbose_name="Раздел-источник",
+    )
+    target_section = models.ForeignKey(
+        Section,
+        on_delete=models.PROTECT,
+        related_name='design_tasks_target',
+        verbose_name="Раздел-цель",
+    )
+    author = models.ForeignKey(
+        User,
+        on_delete=models.PROTECT,
+        related_name='issued_design_tasks',
+        verbose_name="Инициатор (отдел-источник)",
+    )
+    assignee = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='assigned_design_tasks',
+        verbose_name="Исполнитель",
+    )
+    template = models.ForeignKey(
+        TaskTemplate,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='tasks',
+        verbose_name="Шаблон",
+    )
+    title = models.CharField(max_length=255, verbose_name="Краткое название")
+    description = models.TextField(verbose_name="Суть задания")
+    due_date = models.DateField(null=True, blank=True, verbose_name="Срок")
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.DRAFT,
+        verbose_name="Статус",
+    )
+    priority = models.CharField(
+        max_length=10,
+        choices=Priority.choices,
+        default=Priority.NORMAL,
+        verbose_name="Приоритет",
+    )
+    issued_at = models.DateTimeField(null=True, blank=True, verbose_name="Когда выдано")
+    accepted_at = models.DateTimeField(null=True, blank=True, verbose_name="Когда принято")
+    closed_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='closed_design_tasks',
+        verbose_name="Кто закрыл",
+    )
+    # Синхронизация с ГИП-Ассистентом (спека 7): Task/Decision из внешней
+    # среды. Аналог Issue.external_id — nullable + db_index для поиска.
+    external_id = models.CharField(
+        max_length=100,
+        null=True,
+        blank=True,
+        db_index=True,
+        verbose_name="Внешний ID (ГИП-Ассистент)",
+    )
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name="Дата создания")
+    updated_at = models.DateTimeField(auto_now=True, verbose_name="Дата обновления")
+
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name = "Задание между разделами"
+        verbose_name_plural = "Задания между разделами"
+        indexes = [
+            # Спека 2.1: составной индекс под вкладку «Задания» проекта
+            # (фильтр по проекту + связка источник→цель + сортировка).
+            models.Index(
+                fields=['project', 'source_section', 'target_section', 'title', 'created_at'],
+                name='design_task_proj_src_tgt_idx',
+            ),
+        ]
+
+    def __str__(self):
+        return f'{self.source_section.code} → {self.target_section.code}: {self.title}'
+
+
+class DesignTaskStatusLog(models.Model):
+    """История смены статусов задания (спека 2.2).
+
+    Пишется сервисом update_task_status (Этап 2) при каждом переходе
+    по матрице. old_status/new_status — значения DesignTask.Status.
+    """
+
+    task = models.ForeignKey(
+        DesignTask,
+        on_delete=models.CASCADE,
+        related_name='status_logs',
+        verbose_name="Задание",
+    )
+    old_status = models.CharField(max_length=20, verbose_name="Прежний статус")
+    new_status = models.CharField(max_length=20, verbose_name="Новый статус")
+    changed_by = models.ForeignKey(
+        User,
+        on_delete=models.PROTECT,
+        related_name='design_task_status_logs',
+        verbose_name="Кто изменил",
+    )
+    comment = models.TextField(
+        blank=True,
+        default='',
+        verbose_name="Причина (при возврате/уточнении)",
+    )
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name="Дата создания")
+
+    class Meta:
+        ordering = ['created_at']
+        verbose_name = "Запись истории статусов"
+        verbose_name_plural = "Истории статусов заданий"
+
+    def __str__(self):
+        return f'{self.old_status} → {self.new_status} ({self.task_id})'
+
+
+class DesignTaskAttachment(models.Model):
+    """Вложение задания: входные данные, результат или комментарий (спека 2.3).
+
+    Входные данные — конкретные документы (листы) проекта, результат —
+    файлы исполнителя (спека 1). Заполняется через add_task_attachment
+    (Этап 2): kind=input добавляет автор, kind=output — исполнитель.
+    """
+
+    class Kind(models.TextChoices):
+        INPUT = 'input', 'Входные данные'
+        OUTPUT = 'output', 'Результат'
+        COMMENT = 'comment', 'Комментарий'
+
+    task = models.ForeignKey(
+        DesignTask,
+        on_delete=models.CASCADE,
+        related_name='attachments',
+        verbose_name="Задание",
+    )
+    # Привязка к документу проекта. SET_NULL: документ использует
+    # мягкое удаление, а жёсткое удаление (вместе с проектом) не должно
+    # стирать историю задания — связь теряется, вложение и файл остаются.
+    document = models.ForeignKey(
+        Document,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='design_task_attachments',
+        verbose_name="Документ проекта",
+    )
+    file = models.FileField(
+        upload_to='design_tasks/attachments/%Y/%m/',
+        null=True,
+        blank=True,
+        verbose_name="Свободный файл",
+    )
+    kind = models.CharField(
+        max_length=20,
+        choices=Kind.choices,
+        verbose_name="Тип вложения",
+    )
+    uploaded_by = models.ForeignKey(
+        User,
+        on_delete=models.PROTECT,
+        related_name='design_task_attachments',
+        verbose_name="Кто загрузил",
+    )
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name="Дата загрузки")
+
+    class Meta:
+        ordering = ['created_at']
+        verbose_name = "Вложение задания"
+        verbose_name_plural = "Вложения заданий"
+
+    def __str__(self):
+        return f'{self.get_kind_display()} — {self.task_id}'
+
+
+class DesignTaskChecklistItem(models.Model):
+    """Пункт чек-листа задания (спека 2.5).
+
+    Создаётся при выпуске задания по шаблону (копия TaskTemplate.checklist).
+    БЕЗ уникальности по (task, text): одно задание может содержать
+    несколько одинаковых пунктов (спека, Этап 1).
+    """
+
+    task = models.ForeignKey(
+        DesignTask,
+        on_delete=models.CASCADE,
+        related_name='checklist_items',
+        verbose_name="Задание",
+    )
+    text = models.CharField(max_length=500, verbose_name="Пункт")
+    is_done = models.BooleanField(default=False, verbose_name="Выполнено")
+    done_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='design_task_checklist_items',
+        verbose_name="Кто выполнил",
+    )
+    done_at = models.DateTimeField(null=True, blank=True, verbose_name="Когда выполнил")
+
+    class Meta:
+        ordering = ['id']
+        verbose_name = "Пункт чек-листа задания"
+        verbose_name_plural = "Пункты чек-листа заданий"
+
+    def __str__(self):
+        return f'{self.text[:50]} ({self.task_id})'

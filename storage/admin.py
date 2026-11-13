@@ -2,6 +2,8 @@ from django.contrib import admin
 from .domain.models import (
     Company, Project, Section, Document, DocumentVersion, UserProfile, ProjectMembership,
     DocumentView, Specification, VorItem,
+    DesignTask, DesignTaskStatusLog, DesignTaskAttachment, TaskTemplate,
+    DesignTaskChecklistItem,
 )
 
 
@@ -76,3 +78,54 @@ class VorItemAdmin(admin.ModelAdmin):
     )
     list_filter = ('project', 'section_code')
     search_fields = ('code', 'name')
+
+
+# === Модуль «Задания» (DesignTask), Этап 1 — базовая регистрация ===
+
+
+@admin.register(DesignTask)
+class DesignTaskAdmin(admin.ModelAdmin):
+    list_display = (
+        'id', 'title', 'project', 'source_section', 'target_section',
+        'author', 'assignee', 'status', 'priority', 'due_date', 'created_at',
+    )
+    list_filter = ('project', 'status', 'priority')
+    search_fields = ('title', 'description', 'external_id')
+    list_select_related = (
+        'project', 'source_section', 'target_section', 'author',
+        'assignee', 'template',
+    )
+
+
+@admin.register(DesignTaskStatusLog)
+class DesignTaskStatusLogAdmin(admin.ModelAdmin):
+    list_display = ('task', 'old_status', 'new_status', 'changed_by', 'created_at')
+    list_filter = ('new_status',)
+    search_fields = ('task__title', 'comment')
+    list_select_related = ('task', 'changed_by')
+
+
+@admin.register(DesignTaskAttachment)
+class DesignTaskAttachmentAdmin(admin.ModelAdmin):
+    list_display = ('task', 'kind', 'document', 'file', 'uploaded_by', 'created_at')
+    list_filter = ('kind',)
+    search_fields = ('task__title',)
+    list_select_related = ('task', 'document', 'uploaded_by')
+
+
+@admin.register(TaskTemplate)
+class TaskTemplateAdmin(admin.ModelAdmin):
+    list_display = (
+        'title', 'company', 'source_section', 'target_section',
+        'default_duration_days', 'is_active',
+    )
+    list_filter = ('company', 'is_active')
+    search_fields = ('title', 'description')
+
+
+@admin.register(DesignTaskChecklistItem)
+class DesignTaskChecklistItemAdmin(admin.ModelAdmin):
+    list_display = ('task', 'text', 'is_done', 'done_by', 'done_at')
+    list_filter = ('is_done',)
+    search_fields = ('text', 'task__title')
+    list_select_related = ('task', 'done_by')
