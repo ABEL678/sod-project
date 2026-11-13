@@ -13,6 +13,8 @@
 - **Issue** — «исправь ошибку» (NEW → IN_PROGRESS → DONE → CLOSED).
 - **DesignTask** — «сделай работу» (DRAFT → ISSUED → IN_PROGRESS → ON_HOLD → COMPLETED → REVIEW → ACCEPTED / RETURNED).
 
+**Роль ГИПа:** ГИП не выдаёт задания вручную. Он организует процесс: настраивает шаблоны типовых взаимодействий, контролирует сроки, видит все задания между отделами и вмешивается при конфликтах. Задания создаются между профильными отделами (АР → КР, ОВ → ЭОМ и т.д.) их представителями.
+
 **Бизнес-правило:** задание всегда привязано к разделу-источнику (кто выдал) и разделу-цели (кому выдано). Входные данные — конкретные документы (листы) проекта. Выходные — файлы результата.
 
 ## 2. Модели данных (storage/domain/models.py)
@@ -25,7 +27,7 @@
 | project | FK → Project, CASCADE | Проект |
 | source_section | FK → Section, PROTECT | Раздел-источник (АР) |
 | target_section | FK → Section, PROTECT | Раздел-цель (КР) |
-| author | FK → User, PROTECT | Кто выдал |
+| author | FK → User, PROTECT | Инициатор из отдела-источника (не обязательно ГИП) |
 | assignee | FK → User, null=True | Исполнитель |
 | template | FK → TaskTemplate, null=True | Шаблон |
 | title | CharField(255) | Краткое название |
@@ -224,6 +226,7 @@ def list_tasks(project, user, role_filter='all') -> QuerySet:
 
 - **Документы:** в карточке документа (`document_detail.html`) — блок «Связанные задания» (по `DesignTaskAttachment.document`).
 - **RAG:** в `rag_answer` учитывать задания (если вопрос про задания — искать в `DesignTask.description/title`). Опционально: отдельный источник в RAG.
+- **ГИП-Ассистент:** модуль DesignTask может синхронизироваться с Task/Decision из ГИП-Ассистента через `external_id` (поле в модели). API-контракт: POST/GET `/api/v1/projects/{code}/tasks/`. Это позволит ГИПу выдавать задания из своей среды, а проектировщикам — выполнять их в Stream-CAD.
 - **API Gateway:** эндпоинт `GET /api/v1/projects/{code}/tasks/` (опционально, позже).
 
 ## 8. Правила и ограничения
