@@ -14,6 +14,7 @@ POST через сервис create_task, кнопки «Сохранить че
 from datetime import timedelta
 
 from django.contrib.auth import get_user_model
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
@@ -22,15 +23,17 @@ from issues.models import Notification
 from storage.domain.models import (
     Company,
     DesignTask,
+    DesignTaskAttachment,
     DesignTaskChecklistItem,
     DesignTaskStatusLog,
+    Document,
     Project,
     ProjectMembership,
     Section,
     TaskTemplate,
     UserProfile,
 )
-from storage.domain.services import create_task
+from storage.domain.services import add_task_attachment, create_task, issue_task, update_task_status
 
 User = get_user_model()
 
@@ -524,3 +527,736 @@ class TaskIssueActionViewTests(DesignTaskViewsTestBase):
         self.assertEqual(response.status_code, 405)
         self.task.refresh_from_db()
         self.assertEqual(self.task.status, DesignTask.Status.DRAFT)
+
+
+# ============================================================================
+# Этап 4 (спека 4.3): карточка задания
+# ============================================================================
+
+
+class TaskCardTestBase(DesignTaskViewsTestBase):
+    """Общие хелперы карточки: URL и доведение задания до статуса."""
+
+    def _card_url(self, task=None):
+        task = task or getattr(self, 'task', None)
+        return reverse('storage:task_detail', args=[self.project.pk, task.pk])
+
+    def _status_url(self, task=None):
+        task = task or getattr(self, 'task', None)
+        return reverse('storage:task_status', args=[self.project.pk, task.pk])
+
+    def _attachments_url(self, task=None):
+        task = task or getattr(self, 'task', None)
+        return reverse(
+            'storage:task_attachment', args=[self.project.pk, task.pk],
+        )
+
+    def _checklist_url(self, task=None):
+        task = task or getattr(self, 'task', None)
+        return reverse(
+            'storage:task_checklist', args=[self.project.pk, task.pk],
+        )
+
+    def _task_issued(self, **kwargs):
+        params = dict(assignee=self.assignee)
+        params.update(kwargs)
+        task = self._make_task(**params)
+        issue_task(self.author, task)
+        return task
+
+    def _task_in_progress(self, **kwargs):
+        task = self._task_issued(**kwargs)
+        update_task_status(self.assignee, task, DesignTask.Status.IN_PROGRESS)
+        return task
+
+    def _task_with_checklist(self):
+        # TaskTemplate уникален по (company, title) — берём готовый,
+        # чтобы несколько заданий могли ссылаться на один шаблон.
+        template, _ = TaskTemplate.objects.get_or_create(
+            company=self.company,
+            title='Шаблон карточки',
+            defaults={
+                'description': 'Описание',
+                'default_duration_days': 5,
+                'checklist': ['Проверить нагрузки', 'Сделать расчёт'],
+            },
+        )
+        return self._task_in_progress(template=template)
+
+
+class TaskDetailViewTests(TaskCardTestBase):
+    """GET карточки: доступ, блоки, история, дедлайн, кнопки по правам."""
+
+    def test_card_requires_login(self):
+        task = self._task_issued()
+        response = self.client.get(self._card_url(task))
+        self.assertEqual(response.status_code, 302)
+        self.assertIn('/login/', response['Location'])
+
+    def test_card_no_project_access(self):
+        task = self._task_issued()
+        self.client.force_login(self.outsider)
+        response = self.client.get(self._card_url(task))
+        self.assertEqual(response.status_code, 404)
+
+    def test_task_of_other_project_404(self):
+        """Задание другого проекта не открывается через URL этого проекта."""
+        other_project = Project.objects.create(
+            company=self.company,
+            code='UI-3',
+            name='Другой проект карточек',
+            status='active',
+            created_by=self.gip,
+            gip=self.gip,
+        )
+        other_section = Section.objects.create(
+            project=other_project, code='OV', name='ОВ', order=1,
+        )
+        self.author.userprofile.allowed_sections.add(other_section)
+        other_task = create_task(
+            self.author, other_project, other_section, other_section,
+            title='Чужое задание', description='Не открывается отсюда',
+        )
+        self.client.force_login(self.gip)
+        response = self.client.get(
+            reverse(
+                'storage:task_detail',
+                args=[self.project.pk, other_task.pk],
+            ),
+        )
+        self.assertEqual(response.status_code, 404)
+
+    def test_card_shows_all_blocks(self):
+        """Шапка, «Суть», разделы, «История», «Реквизиты» — у ГИПа."""
+        task = self._task_in_progress()
+        self.client.force_login(self.gip)
+        response = self.client.get(self._card_url(task))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Передать нагрузки')
+        self.assertContains(response, 'Учесть нагрузки от АР в расчёте КР')
+        for block in ('Суть', 'Входные данные', 'Результат', 'История',
+                      'Действия', 'Реквизиты'):
+            self.assertContains(response, block)
+        self.assertContains(response, self.section_ar.code)
+        self.assertContains(response, self.section_kr.code)
+        # Статус-бейдж — тот же класс TASK_STATUS_BADGES, что в списке.
+        self.assertContains(response, 'text-bg-info')
+        self.assertContains(response, 'В работе')
+
+    def test_card_history_displayed(self):
+        """Таймлайн: переходы, автор изменения, комментарий."""
+        task = self._task_issued()
+        update_task_status(self.assignee, task, DesignTask.Status.IN_PROGRESS)
+        update_task_status(
+            self.assignee, task, DesignTask.Status.ON_HOLD,
+            comment='Жду исходные данные по нагрузкам',
+        )
+        self.client.force_login(self.author)
+        response = self.client.get(self._card_url(task))
+        self.assertContains(response, 'Выдано')
+        self.assertContains(response, 'Приостановлено')
+        self.assertContains(response, 'Жду исходные данные по нагрузкам')
+        logs = response.context['status_logs']
+        self.assertEqual(len(logs), 3)
+        self.assertEqual(logs[0].old_status, 'DRAFT')
+        self.assertEqual(logs[0].new_status, 'ISSUED')
+        self.assertEqual(logs[1].new_status, 'IN_PROGRESS')
+        self.assertEqual(logs[2].new_status, 'ON_HOLD')
+
+    def test_card_history_empty_for_draft(self):
+        task = self._make_task()
+        self.client.force_login(self.author)
+        response = self.client.get(self._card_url(task))
+        self.assertContains(response, 'История пуста')
+
+    def test_card_deadline_labels(self):
+        """Живой дедлайн: просрочка, «осталось», терминальный статус."""
+        today = timezone.localdate()
+        overdue = self._task_in_progress(
+            title='Просроченное', due_date=today - timedelta(days=2),
+        )
+        ahead = self._task_issued(
+            title='Со сроком', due_date=today + timedelta(days=10),
+        )
+        today_task = self._task_issued(
+            title='Срок сегодня', due_date=today,
+        )
+
+        self.client.force_login(self.gip)
+
+        response = self.client.get(self._card_url(overdue))
+        deadline = response.context['deadline']
+        self.assertTrue(deadline['label'].startswith('просрочено на 2'))
+        self.assertEqual(deadline['badge'], 'text-bg-danger')
+        self.assertContains(response, 'просрочено на 2')
+
+        response = self.client.get(self._card_url(ahead))
+        deadline = response.context['deadline']
+        self.assertEqual(deadline['label'], 'осталось 10 дней')
+        self.assertEqual(deadline['badge'], 'text-bg-secondary')
+
+        response = self.client.get(self._card_url(today_task))
+        self.assertEqual(response.context['deadline']['label'], 'срок сегодня')
+
+    def test_card_deadline_hidden_for_accepted(self):
+        today = timezone.localdate()
+        task = self._task_issued(due_date=today + timedelta(days=3))
+        update_task_status(self.assignee, task, DesignTask.Status.IN_PROGRESS)
+        add_task_attachment(
+            self.assignee, task, 'output',
+            file=SimpleUploadedFile('result.pdf', b'result'),
+        )
+        update_task_status(self.assignee, task, DesignTask.Status.COMPLETED)
+        update_task_status(self.gip, task, DesignTask.Status.REVIEW)
+        update_task_status(self.gip, task, DesignTask.Status.ACCEPTED)
+
+        self.client.force_login(self.gip)
+        response = self.client.get(self._card_url(task))
+        self.assertIsNone(response.context['deadline'])
+
+    def test_card_links_from_tasks_tab(self):
+        """Заголовок строки во вкладке — ссылка на карточку (спека 4.3)."""
+        task = self._task_issued()
+        self.client.force_login(self.gip)
+        response = self.client.get(
+            self.project_detail_url, {'tab': 'tasks'},
+        )
+        self.assertContains(
+            response,
+            reverse('storage:task_detail', args=[self.project.pk, task.pk]),
+        )
+
+    def test_card_action_buttons_by_role(self):
+        """Кнопки панели: assignee видит «Принять в работу», автор — отмену."""
+        task = self._task_issued()
+        self.client.force_login(self.assignee)
+        response = self.client.get(self._card_url(task))
+        self.assertContains(response, 'Принять в работу')
+        self.assertFalse(response.context['can_cancel'])
+
+        self.client.force_login(self.author)
+        response = self.client.get(self._card_url(task))
+        self.assertNotContains(response, 'Принять в работу')
+        self.assertTrue(response.context['can_cancel'])
+        self.assertContains(response, 'Отменить')
+
+    def test_card_review_buttons_for_author_and_gip(self):
+        task = self._task_in_progress()
+        add_task_attachment(
+            self.assignee, task, 'output',
+            file=SimpleUploadedFile('result.pdf', b'result'),
+        )
+        update_task_status(self.assignee, task, DesignTask.Status.COMPLETED)
+        update_task_status(self.author, task, DesignTask.Status.REVIEW)
+
+        for user in (self.author, self.gip):
+            self.client.force_login(user)
+            response = self.client.get(self._card_url(task))
+            self.assertTrue(response.context['can_review'])
+            self.assertContains(response, 'Принять')
+            self.assertContains(response, 'Вернуть на доработку')
+
+        self.client.force_login(self.assignee)
+        response = self.client.get(self._card_url(task))
+        self.assertFalse(response.context['can_review'])
+        self.assertNotContains(response, 'Вернуть на доработку')
+
+    def test_card_complete_hint_without_output(self):
+        """Исполнитель видит подсказку о необходимости output-вложения."""
+        task = self._task_in_progress()
+        self.client.force_login(self.assignee)
+        response = self.client.get(self._card_url(task))
+        self.assertTrue(response.context['can_complete'])
+        self.assertContains(response, 'приложите результат')
+
+    def test_card_attachment_forms_by_role(self):
+        """input-форма — автору, output-форма — исполнителю в работе."""
+        task = self._task_in_progress()
+
+        self.client.force_login(self.author)
+        response = self.client.get(self._card_url(task))
+        self.assertTrue(response.context['can_add_input'])
+        self.assertFalse(response.context['can_add_output'])
+        self.assertContains(response, 'Добавить входные данные')
+        self.assertNotContains(response, 'Добавить результат')
+
+        self.client.force_login(self.assignee)
+        response = self.client.get(self._card_url(task))
+        self.assertFalse(response.context['can_add_input'])
+        self.assertTrue(response.context['can_add_output'])
+        self.assertContains(response, 'Добавить результат')
+        self.assertNotContains(response, 'Добавить входные данные')
+
+    def test_card_attachment_document_link(self):
+        """Входные данные с привязкой к документу проекта — ссылкой."""
+        task = self._task_in_progress()
+        document = Document.objects.create(
+            project=self.project,
+            section=self.section_ar,
+            code='AR-01',
+            name='Задание на проектирование',
+            doc_type='source_data',
+            status='active',
+            created_by=self.author,
+        )
+        add_task_attachment(
+            self.author, task, 'input', document=document,
+        )
+        self.client.force_login(self.gip)
+        response = self.client.get(self._card_url(task))
+        self.assertEqual(response.context['input_attachments'][0].document, document)
+        self.assertContains(
+            response,
+            reverse(
+                'storage:document_detail', args=[document.pk],
+            ),
+        )
+        self.assertContains(response, 'AR-01')
+
+    def test_card_checklist_shown_not_toggleable_for_viewer(self):
+        """Наблюдатель видит пункты, но toggle-форм у него нет."""
+        task = self._task_with_checklist()
+        self.client.force_login(self.viewer)
+        response = self.client.get(self._card_url(task))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context['checklist_total'], 2)
+        self.assertEqual(response.context['checklist_done'], 0)
+        self.assertFalse(response.context['can_toggle_checklist'])
+        self.assertNotContains(response, self._checklist_url(task))
+        self.assertContains(response, 'Проверить нагрузки')
+
+    def test_card_contractor_sees_card(self):
+        """Подрядчик-исполнитель работает с карточкой (регресс 3c95380)."""
+        task = self._task_issued(assignee=self.contractor)
+        self.client.force_login(self.contractor)
+        response = self.client.get(self._card_url(task))
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.context['can_start_work'])
+
+
+class TaskStatusActionViewTests(TaskCardTestBase):
+    """POST-смена статуса: матрица остаётся в update_task_status."""
+
+    def test_start_work_by_assignee(self):
+        task = self._task_issued()
+        self.client.force_login(self.assignee)
+        response = self.client.post(
+            self._status_url(task), {'new_status': 'IN_PROGRESS'},
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertIn(self._card_url(task), response['Location'])
+        task.refresh_from_db()
+        self.assertEqual(task.status, DesignTask.Status.IN_PROGRESS)
+
+    def test_start_work_denied_for_author(self):
+        """ISSUED → IN_PROGRESS разрешён только assignee (матрица)."""
+        task = self._task_issued()
+        self.client.force_login(self.author)
+        response = self.client.post(
+            self._status_url(task), {'new_status': 'IN_PROGRESS'},
+        )
+        self.assertEqual(response.status_code, 302)
+        task.refresh_from_db()
+        self.assertEqual(task.status, DesignTask.Status.ISSUED)
+        followed = self.client.get(response['Location'])
+        self.assertContains(followed, 'недоступен вашей роли')
+
+    def test_hold_requires_comment(self):
+        """IN_PROGRESS → ON_HOLD без комментария отклоняет сервис."""
+        task = self._task_in_progress()
+        self.client.force_login(self.assignee)
+        response = self.client.post(
+            self._status_url(task),
+            {'new_status': 'ON_HOLD', 'comment': ''},
+        )
+        self.assertEqual(response.status_code, 302)
+        task.refresh_from_db()
+        self.assertEqual(task.status, DesignTask.Status.IN_PROGRESS)
+        followed = self.client.get(response['Location'])
+        self.assertContains(followed, 'требует комментария')
+
+    def test_hold_with_comment_ok(self):
+        task = self._task_in_progress()
+        self.client.force_login(self.assignee)
+        response = self.client.post(
+            self._status_url(task),
+            {'new_status': 'ON_HOLD', 'comment': 'Жду нагрузки'},
+        )
+        task.refresh_from_db()
+        self.assertEqual(task.status, DesignTask.Status.ON_HOLD)
+        followed = self.client.get(response['Location'])
+        self.assertContains(followed, 'Приостановлено')
+
+    def test_resume_from_hold(self):
+        task = self._task_in_progress()
+        update_task_status(
+            self.assignee, task, DesignTask.Status.ON_HOLD, comment='Пауза',
+        )
+        self.client.force_login(self.assignee)
+        response = self.client.post(
+            self._status_url(task), {'new_status': 'IN_PROGRESS'},
+        )
+        task.refresh_from_db()
+        self.assertEqual(task.status, DesignTask.Status.IN_PROGRESS)
+
+    def test_complete_without_output_rejected(self):
+        """COMPLETED без output-вложения — ошибка сервиса, статус прежний."""
+        task = self._task_in_progress()
+        self.client.force_login(self.assignee)
+        response = self.client.post(
+            self._status_url(task), {'new_status': 'COMPLETED'},
+        )
+        self.assertEqual(response.status_code, 302)
+        task.refresh_from_db()
+        self.assertEqual(task.status, DesignTask.Status.IN_PROGRESS)
+        followed = self.client.get(response['Location'])
+        self.assertContains(followed, 'приложите результат')
+
+    def test_complete_with_output_ok(self):
+        task = self._task_in_progress()
+        add_task_attachment(
+            self.assignee, task, 'output',
+            file=SimpleUploadedFile('result.pdf', b'result'),
+        )
+        self.client.force_login(self.assignee)
+        response = self.client.post(
+            self._status_url(task), {'new_status': 'COMPLETED'},
+        )
+        task.refresh_from_db()
+        self.assertEqual(task.status, DesignTask.Status.COMPLETED)
+        followed = self.client.get(response['Location'])
+        self.assertContains(followed, 'Выполнено')
+
+    def test_accept_by_gip(self):
+        task = self._task_in_progress()
+        add_task_attachment(
+            self.assignee, task, 'output',
+            file=SimpleUploadedFile('result.pdf', b'result'),
+        )
+        update_task_status(self.assignee, task, DesignTask.Status.COMPLETED)
+        update_task_status(self.gip, task, DesignTask.Status.REVIEW)
+
+        self.client.force_login(self.gip)
+        response = self.client.post(
+            self._status_url(task), {'new_status': 'ACCEPTED'},
+        )
+        task.refresh_from_db()
+        self.assertEqual(task.status, DesignTask.Status.ACCEPTED)
+        self.assertIsNotNone(task.accepted_at)
+
+    def test_return_requires_comment(self):
+        task = self._task_in_progress()
+        add_task_attachment(
+            self.assignee, task, 'output',
+            file=SimpleUploadedFile('result.pdf', b'result'),
+        )
+        update_task_status(self.assignee, task, DesignTask.Status.COMPLETED)
+        update_task_status(self.gip, task, DesignTask.Status.REVIEW)
+
+        self.client.force_login(self.gip)
+        response = self.client.post(
+            self._status_url(task),
+            {'new_status': 'RETURNED', 'comment': ''},
+        )
+        task.refresh_from_db()
+        self.assertEqual(task.status, DesignTask.Status.REVIEW)
+        followed = self.client.get(response['Location'])
+        self.assertContains(followed, 'требует комментария')
+
+    def test_return_with_comment_notifies_assignee(self):
+        task = self._task_in_progress()
+        add_task_attachment(
+            self.assignee, task, 'output',
+            file=SimpleUploadedFile('result.pdf', b'result'),
+        )
+        update_task_status(self.assignee, task, DesignTask.Status.COMPLETED)
+        update_task_status(self.gip, task, DesignTask.Status.REVIEW)
+
+        self.client.force_login(self.gip)
+        response = self.client.post(
+            self._status_url(task),
+            {'new_status': 'RETURNED', 'comment': 'Исправить схему'},
+        )
+        task.refresh_from_db()
+        self.assertEqual(task.status, DesignTask.Status.RETURNED)
+        followed = self.client.get(response['Location'])
+        self.assertContains(followed, 'Исправить схему')
+        self.assertTrue(
+            Notification.objects.filter(recipient=self.assignee).exists(),
+        )
+
+    def test_cancel_by_author_with_comment(self):
+        task = self._task_issued()
+        self.client.force_login(self.author)
+        response = self.client.post(
+            self._status_url(task),
+            {'new_status': 'CANCELLED', 'comment': 'Раздел упразднён'},
+        )
+        task.refresh_from_db()
+        self.assertEqual(task.status, DesignTask.Status.CANCELLED)
+
+    def test_cancel_accepted_rejected(self):
+        """Терминальные статусы (ACCEPTED) отменить нельзя."""
+        task = self._task_in_progress()
+        add_task_attachment(
+            self.assignee, task, 'output',
+            file=SimpleUploadedFile('result.pdf', b'result'),
+        )
+        update_task_status(self.assignee, task, DesignTask.Status.COMPLETED)
+        update_task_status(self.gip, task, DesignTask.Status.REVIEW)
+        update_task_status(self.gip, task, DesignTask.Status.ACCEPTED)
+
+        self.client.force_login(self.gip)
+        response = self.client.post(
+            self._status_url(task),
+            {'new_status': 'CANCELLED', 'comment': 'Поздно'},
+        )
+        task.refresh_from_db()
+        self.assertEqual(task.status, DesignTask.Status.ACCEPTED)
+        followed = self.client.get(response['Location'])
+        self.assertContains(followed, 'Нельзя отменить')
+
+    def test_unknown_status_rejected(self):
+        task = self._task_issued()
+        self.client.force_login(self.assignee)
+        response = self.client.post(
+            self._status_url(task), {'new_status': 'FOO'},
+        )
+        task.refresh_from_db()
+        self.assertEqual(task.status, DesignTask.Status.ISSUED)
+        followed = self.client.get(response['Location'])
+        self.assertContains(followed, 'Неизвестный статус')
+
+    def test_status_action_no_project_access(self):
+        task = self._task_issued()
+        self.client.force_login(self.outsider)
+        response = self.client.post(
+            self._status_url(task), {'new_status': 'IN_PROGRESS'},
+        )
+        self.assertEqual(response.status_code, 404)
+
+    def test_status_action_requires_post(self):
+        task = self._task_issued()
+        self.client.force_login(self.gip)
+        response = self.client.get(self._status_url(task))
+        self.assertEqual(response.status_code, 405)
+        task.refresh_from_db()
+        self.assertEqual(task.status, DesignTask.Status.ISSUED)
+
+
+class TaskAttachmentActionViewTests(TaskCardTestBase):
+    """POST-загрузка вложений input/output (add_task_attachment)."""
+
+    def test_output_upload_by_assignee(self):
+        task = self._task_in_progress()
+        self.client.force_login(self.assignee)
+        response = self.client.post(
+            self._attachments_url(task),
+            {
+                'kind': 'output',
+                'document': '',
+                'file': SimpleUploadedFile('result.pdf', b'result'),
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        attachment = DesignTaskAttachment.objects.get()
+        self.assertEqual(attachment.task, task)
+        self.assertEqual(attachment.kind, 'output')
+        self.assertEqual(attachment.uploaded_by, self.assignee)
+        self.assertTrue(attachment.file.name)
+        self.assertIsNone(attachment.document)
+
+    def test_output_upload_denied_for_author(self):
+        """output добавляет только исполнитель (сервис)."""
+        task = self._task_in_progress()
+        self.client.force_login(self.author)
+        response = self.client.post(
+            self._attachments_url(task),
+            {
+                'kind': 'output',
+                'document': '',
+                'file': SimpleUploadedFile('bad.pdf', b'bad'),
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(DesignTaskAttachment.objects.count(), 0)
+        followed = self.client.get(response['Location'])
+        self.assertContains(followed, 'только исполнитель')
+
+    def test_output_upload_wrong_status(self):
+        """output только в статусе IN_PROGRESS (сервис)."""
+        task = self._task_issued()
+        self.client.force_login(self.assignee)
+        response = self.client.post(
+            self._attachments_url(task),
+            {
+                'kind': 'output',
+                'document': '',
+                'file': SimpleUploadedFile('result.pdf', b'result'),
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(DesignTaskAttachment.objects.count(), 0)
+        followed = self.client.get(response['Location'])
+        self.assertContains(followed, 'только в статусе')
+
+    def test_input_upload_with_document(self):
+        """input от автора с привязкой к документу проекта."""
+        task = self._task_in_progress()
+        document = Document.objects.create(
+            project=self.project,
+            section=self.section_ar,
+            code='AR-02',
+            name='Техническое задание',
+            doc_type='source_data',
+            status='active',
+            created_by=self.author,
+        )
+        self.client.force_login(self.author)
+        response = self.client.post(
+            self._attachments_url(task),
+            {'kind': 'input', 'document': str(document.pk)},
+        )
+        self.assertEqual(response.status_code, 302)
+        attachment = DesignTaskAttachment.objects.get()
+        self.assertEqual(attachment.kind, 'input')
+        self.assertEqual(attachment.document, document)
+        self.assertFalse(attachment.file)
+
+    def test_input_upload_foreign_document_rejected(self):
+        """Документ другого проекта в select не проходит (вьюха)."""
+        other_project = Project.objects.create(
+            company=self.company,
+            code='UI-9',
+            name='Другой проект для документов',
+            status='active',
+            created_by=self.gip,
+            gip=self.gip,
+        )
+        foreign_document = Document.objects.create(
+            project=other_project,
+            section=Section.objects.create(
+                project=other_project, code='XX', name='Чужой', order=1,
+            ),
+            code='XX-01',
+            name='Чужой документ',
+            doc_type='other',
+            status='active',
+            created_by=self.gip,
+        )
+        task = self._task_in_progress()
+        self.client.force_login(self.author)
+        response = self.client.post(
+            self._attachments_url(task),
+            {'kind': 'input', 'document': str(foreign_document.pk)},
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(DesignTaskAttachment.objects.count(), 0)
+        followed = self.client.get(response['Location'])
+        self.assertContains(followed, 'не найден в этом проекте')
+
+    def test_attachment_requires_file_or_document(self):
+        """Ни файла, ни документа — сервис требует одно из двух."""
+        task = self._task_in_progress()
+        self.client.force_login(self.author)
+        response = self.client.post(
+            self._attachments_url(task), {'kind': 'input', 'document': ''},
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(DesignTaskAttachment.objects.count(), 0)
+        followed = self.client.get(response['Location'])
+        self.assertContains(followed, 'требует документ или файл')
+
+    def test_attachment_no_project_access(self):
+        task = self._task_in_progress()
+        self.client.force_login(self.outsider)
+        response = self.client.post(
+            self._attachments_url(task),
+            {
+                'kind': 'output',
+                'file': SimpleUploadedFile('x.pdf', b'x'),
+            },
+        )
+        self.assertEqual(response.status_code, 404)
+
+    def test_attachment_requires_post(self):
+        task = self._task_in_progress()
+        self.client.force_login(self.author)
+        response = self.client.get(self._attachments_url(task))
+        self.assertEqual(response.status_code, 405)
+
+
+class TaskChecklistActionViewTests(TaskCardTestBase):
+    """POST-переключение чек-листа (toggle_checklist_item)."""
+
+    def setUp(self):
+        super().setUp()
+        self.task = self._task_with_checklist()
+        self.items = list(self.task.checklist_items.order_by('id'))
+
+    def test_toggle_by_assignee(self):
+        self.client.force_login(self.assignee)
+        response = self.client.post(
+            self._checklist_url(), {'item_id': str(self.items[0].pk)},
+        )
+        self.assertEqual(response.status_code, 302)
+        self.items[0].refresh_from_db()
+        self.assertTrue(self.items[0].is_done)
+        self.assertEqual(self.items[0].done_by, self.assignee)
+        self.assertIsNotNone(self.items[0].done_at)
+        # Повторное переключение снимает отметку.
+        self.client.post(self._checklist_url(), {'item_id': str(self.items[0].pk)})
+        self.items[0].refresh_from_db()
+        self.assertFalse(self.items[0].is_done)
+        self.assertIsNone(self.items[0].done_by)
+
+    def test_toggle_by_gip_ok(self):
+        self.client.force_login(self.gip)
+        response = self.client.post(
+            self._checklist_url(), {'item_id': str(self.items[0].pk)},
+        )
+        self.items[0].refresh_from_db()
+        self.assertTrue(self.items[0].is_done)
+        self.assertEqual(self.items[0].done_by, self.gip)
+
+    def test_toggle_denied_for_viewer(self):
+        """Наблюдатель не переключает чек-лист (сервис)."""
+        self.client.force_login(self.viewer)
+        response = self.client.post(
+            self._checklist_url(), {'item_id': str(self.items[0].pk)},
+        )
+        self.assertEqual(response.status_code, 302)
+        self.items[0].refresh_from_db()
+        self.assertFalse(self.items[0].is_done)
+        followed = self.client.get(response['Location'])
+        self.assertContains(followed, 'Чек-лист отмечает исполнитель')
+
+    def test_unknown_item_rejected(self):
+        self.client.force_login(self.assignee)
+        response = self.client.post(
+            self._checklist_url(), {'item_id': '999999'},
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(
+            DesignTaskChecklistItem.objects.filter(is_done=True).count(), 0,
+        )
+        followed = self.client.get(response['Location'])
+        self.assertContains(followed, 'не найден')
+
+    def test_item_of_other_task_rejected(self):
+        other_task = self._task_with_checklist()
+        other_item = other_task.checklist_items.order_by('id').first()
+        self.client.force_login(self.assignee)
+        response = self.client.post(
+            self._checklist_url(), {'item_id': str(other_item.pk)},
+        )
+        self.assertEqual(response.status_code, 302)
+        other_item.refresh_from_db()
+        self.assertFalse(other_item.is_done)
+        followed = self.client.get(response['Location'])
+        self.assertContains(followed, 'не найден')
+
+    def test_checklist_action_requires_post(self):
+        self.client.force_login(self.assignee)
+        response = self.client.get(self._checklist_url())
+        self.assertEqual(response.status_code, 405)

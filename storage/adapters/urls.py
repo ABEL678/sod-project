@@ -56,6 +56,30 @@ urlpatterns = [
         views.TaskIssueActionView.as_view(),
         name='task_issue',
     ),
+    # Этап 4 (спека 4.3): карточка задания и POST-действия (статус,
+    # вложения, чек-лист). Вьюхи тонкие — матрица переходов и права
+    # в сервисах update_task_status / add_task_attachment /
+    # toggle_checklist_item.
+    path(
+        'projects/<int:project_id>/tasks/<int:task_id>/',
+        views.TaskDetailView.as_view(),
+        name='task_detail',
+    ),
+    path(
+        'projects/<int:project_id>/tasks/<int:task_id>/status/',
+        views.TaskStatusActionView.as_view(),
+        name='task_status',
+    ),
+    path(
+        'projects/<int:project_id>/tasks/<int:task_id>/attachments/',
+        views.TaskAttachmentActionView.as_view(),
+        name='task_attachment',
+    ),
+    path(
+        'projects/<int:project_id>/tasks/<int:task_id>/checklist/',
+        views.TaskChecklistActionView.as_view(),
+        name='task_checklist',
+    ),
     path('projects/<int:project_id>/sections/create/', views.SectionCreateView.as_view(), name='section_create'),
     path('sections/<int:section_id>/rename/', views.SectionRenameView.as_view(), name='section_rename'),
     path('projects/<int:project_id>/folders/create/', views.FolderCreateView.as_view(), name='folder_create'),

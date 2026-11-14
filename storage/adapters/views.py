@@ -46,6 +46,9 @@ from storage.adapters.tables import DocumentTable
 from storage.domain.models import (
     Company,
     DesignTask,
+    DesignTaskAttachment,
+    DesignTaskChecklistItem,
+    DesignTaskStatusLog,
     Document,
     DocumentVersion,
     Feedback,
@@ -60,6 +63,7 @@ from storage.domain.models import (
 from storage.domain.services import (
     DOCUMENT_VIEW_COLUMNS,
     add_company_member,
+    add_task_attachment,
     allowed_issue_statuses,
     archive_project,
     attach_user_to_company,
@@ -144,6 +148,8 @@ from storage.domain.services import (
     update_feedback_status,
     update_project,
     update_project_member_role,
+    update_task_status,
+    toggle_checklist_item,
     upload_document,
 )
 
@@ -1415,6 +1421,292 @@ class TaskIssueActionView(LoginRequiredMixin, View):
         return redirect(
             reverse('storage:project_detail', args=[project.pk]) + '?tab=tasks'
         )
+
+
+# ============================================================================
+# Этап 4 (спека 4.3): карточка задания
+# ============================================================================
+
+# Статусы, в которых живой дедлайн ещё «давит». Терминальные (ACCEPTED,
+# CANCELLED) исключаются — тот же принцип, что у issue_extras для
+# замечаний. Сам фильтр deadline_label переиспользовать нельзя: там
+# ACTIVE_STATUSES — статусы Issue (NEW/IN_PROGRESS/DISCUSSION/REJECTED),
+# с DesignTask совпадает только «IN_PROGRESS», поэтому бейдж показывался
+# бы исключительно в работе. Аналог ниже — с Bootstrap-классами
+# (новый CSS по условию Этапа 4 не добавляется).
+TASK_DEADLINE_ACTIVE_STATUSES = frozenset({
+    DesignTask.Status.DRAFT,
+    DesignTask.Status.ISSUED,
+    DesignTask.Status.IN_PROGRESS,
+    DesignTask.Status.ON_HOLD,
+    DesignTask.Status.COMPLETED,
+    DesignTask.Status.REVIEW,
+    DesignTask.Status.RETURNED,
+})
+
+
+def _design_task_deadline(task):
+    """Живой дедлайн задания (спека 4.3): {'label', 'badge'} или None.
+
+    «осталось N дней» / «срок сегодня» / «просрочено на N дней».
+    Классы — только Bootstrap: просрочка красным, ≤3 дней жёлтым,
+    остальное нейтральным. Плюрализация — сервис ru_plural (как в
+    issue_extras, но для DesignTask).
+    """
+    due = task.due_date
+    if due is None or task.status not in TASK_DEADLINE_ACTIVE_STATUSES:
+        return None
+    days = (due - timezone.localdate()).days
+    if days > 0:
+        label = f'осталось {days} {ru_plural(days, "день", "дня", "дней")}'
+        badge = 'text-bg-warning' if days <= 3 else 'text-bg-secondary'
+    elif days == 0:
+        label, badge = 'срок сегодня', 'text-bg-warning'
+    else:
+        overdue_days = abs(days)
+        label = (
+            f'просрочено на {overdue_days} '
+            f'{ru_plural(overdue_days, "день", "дня", "дней")}'
+        )
+        badge = 'text-bg-danger'
+    return {'label': label, 'badge': badge}
+
+
+class _DesignTaskCardMixin:
+    """Общий доступ к заданию проекта для вьюх карточки (спека 4.3).
+
+    Проект — только из get_accessible_projects (чужой проект → 404),
+    задание — только из этого проекта (чужое задание → 404). Права на
+    конкретные действия проверяют сервисы; здесь только поиск объектов.
+    """
+
+    def _get_task(self):
+        if not hasattr(self, '_task_cache'):
+            project = get_object_or_404(
+                get_accessible_projects(self.request.user),
+                pk=self.kwargs['project_id'],
+            )
+            self._task_cache = get_object_or_404(
+                DesignTask.objects.select_related(
+                    'project', 'source_section', 'target_section',
+                    'author', 'assignee', 'template', 'closed_by',
+                ),
+                pk=self.kwargs['task_id'],
+                project=project,
+            )
+        return self._task_cache
+
+    def _redirect_to_task(self, task):
+        """После POST — назад на карточку (спека 4.3)."""
+        return redirect('storage:task_detail', task.project_id, task.pk)
+
+
+class TaskDetailView(LoginRequiredMixin, _DesignTaskCardMixin, View):
+    """Карточка задания /projects/<id>/tasks/<task_id>/ (спека 4.3, Этап 4).
+
+    GET — только чтение: шапка (заголовок, статус-бейдж, приоритет,
+    живой дедлайн), блоки «Суть», «Входные данные», «Результат»,
+    «Чек-лист», «История» и панель действий. Видимость кнопок —
+    UI-подсказка по роли и текущему статусу: сама матрица переходов,
+    права и условия (обязательный комментарий, output-вложение)
+    проверяются сервисами update_task_status / add_task_attachment /
+    toggle_checklist_item, дублировать матрицу во вьюхе запрещено.
+    POST-действия — в TaskStatusActionView / TaskAttachmentActionView /
+    TaskChecklistActionView.
+    """
+
+    template_name = 'storage/task_detail.html'
+
+    def get(self, request, *args, **kwargs):
+        task = self._get_task()
+        user = request.user
+
+        is_author = task.author_id == user.pk
+        is_assignee = task.assignee_id == user.pk
+        # Тот же предикат, что PermissionDenied-гейт сервисов: автор или
+        # ГИП/админ управляют заданием, исполнитель выполняет.
+        can_manage = can_view_all_tasks(user, task.project)
+        status = task.status
+        is_final = status in (
+            DesignTask.Status.ACCEPTED, DesignTask.Status.CANCELLED,
+        )
+
+        input_attachments = list(
+            task.attachments.filter(kind=DesignTaskAttachment.Kind.INPUT)
+            .select_related('document', 'uploaded_by')
+        )
+        output_attachments = list(
+            task.attachments.filter(kind=DesignTaskAttachment.Kind.OUTPUT)
+            .select_related('document', 'uploaded_by')
+        )
+        # Для свободных файлов показываем только имя файла, а не путь
+        # хранения (design_tasks/attachments/2026/11/…).
+        for attachment in (*input_attachments, *output_attachments):
+            if attachment.file:
+                attachment.file_name = attachment.file.name.rsplit(
+                    '/', 1,
+                )[-1]
+
+        # История: статусы в логе — CharField без choices (спека 2.2),
+        # подписи и бейджи подставляем здесь, чтобы шаблон не собирал
+        # их сам (тот же TASK_STATUS_BADGES, что в шапке и списке).
+        status_labels = dict(DesignTask.Status.choices)
+        status_logs = list(task.status_logs.select_related('changed_by'))
+        for log in status_logs:
+            log.old_label = status_labels.get(log.old_status, log.old_status)
+            log.new_label = status_labels.get(log.new_status, log.new_status)
+            log.old_badge = TASK_STATUS_BADGES.get(
+                log.old_status, 'text-bg-secondary',
+            )
+            log.new_badge = TASK_STATUS_BADGES.get(
+                log.new_status, 'text-bg-secondary',
+            )
+
+        checklist_items = list(task.checklist_items.order_by('id'))
+
+        context = {
+            'task': task,
+            'project': task.project,
+            'status_badge': TASK_STATUS_BADGES.get(
+                status, 'text-bg-secondary',
+            ),
+            'deadline': _design_task_deadline(task),
+            'input_attachments': input_attachments,
+            'output_attachments': output_attachments,
+            'checklist_items': checklist_items,
+            'checklist_total': len(checklist_items),
+            'checklist_done': sum(
+                1 for item in checklist_items if item.is_done
+            ),
+            'status_logs': status_logs,
+            # Документы проекта для привязки вложений (select «без
+            # привязки» разрешён — вложение может быть свободным файлом).
+            'document_choices': get_readable_documents(
+                user, task.project,
+            ).order_by('code'),
+            'is_author': is_author,
+            'is_assignee': is_assignee,
+            'can_manage': can_manage,
+            # Панель действий — по ролям и текущему статусу (матрица
+            # п. 3 спеки); валидность перехода гарантирует сервис.
+            'can_start_work': is_assignee and status in (
+                DesignTask.Status.ISSUED, DesignTask.Status.RETURNED,
+            ),
+            'can_hold': is_assignee and status == DesignTask.Status.IN_PROGRESS,
+            'can_resume': is_assignee and status == DesignTask.Status.ON_HOLD,
+            'can_complete': is_assignee
+            and status == DesignTask.Status.IN_PROGRESS,
+            'can_send_review': (is_author or can_manage)
+            and status == DesignTask.Status.COMPLETED,
+            'can_review': (is_author or can_manage)
+            and status == DesignTask.Status.REVIEW,
+            'can_cancel': (is_author or can_manage) and not is_final,
+            # Вложение input — автор/ГИП/админ (правило сервиса),
+            # output — только исполнитель в статусе «В работе».
+            'can_add_input': is_author or can_manage,
+            'can_add_output': is_assignee
+            and status == DesignTask.Status.IN_PROGRESS,
+            'can_toggle_checklist': is_assignee or can_manage,
+        }
+        return render(request, self.template_name, context)
+
+
+class TaskStatusActionView(LoginRequiredMixin, _DesignTaskCardMixin, View):
+    """POST-смена статуса с карточки (спека 4.3, Этап 4).
+
+    Тонкая вьюха над update_task_status: матрица переходов, права,
+    обязательный комментарий и требование output-вложения остаются в
+    сервисе. Ошибки сервиса показываются пользователю через messages;
+    при ошибке статус не меняется. После успеха — redirect на карточку.
+    """
+
+    def post(self, request, *args, **kwargs):
+        task = self._get_task()
+        new_status = (request.POST.get('new_status') or '').strip()
+        comment = request.POST.get('comment') or ''
+        try:
+            update_task_status(request.user, task, new_status, comment)
+        except (PermissionDenied, ValueError, ValidationError) as exc:
+            messages.error(request, str(exc))
+        else:
+            messages.success(
+                request,
+                f'Статус задания #{task.pk}: {task.get_status_display()}.',
+            )
+        return self._redirect_to_task(task)
+
+
+class TaskAttachmentActionView(LoginRequiredMixin, _DesignTaskCardMixin, View):
+    """POST-загрузка вложения input/output с карточки (спека 4.3, Этап 4).
+
+    Тонкая вьюха над add_task_attachment: права по kind и статус для
+    output проверяет сервис. Поле document — опциональный select из
+    документов проекта (вьюха проверяет принадлежность документу
+    проекта; свободный файл — без привязки).
+    """
+
+    def post(self, request, *args, **kwargs):
+        task = self._get_task()
+        kind = (request.POST.get('kind') or '').strip()
+
+        document = None
+        raw_document = (request.POST.get('document') or '').strip()
+        if raw_document:
+            document = Document.objects.filter(
+                project_id=task.project_id,
+                pk=raw_document,
+                is_deleted=False,
+            ).first() if raw_document.isdigit() else None
+            if document is None:
+                messages.error(
+                    request, 'Документ не найден в этом проекте.',
+                )
+                return self._redirect_to_task(task)
+
+        try:
+            attachment = add_task_attachment(
+                request.user,
+                task,
+                kind,
+                document=document,
+                file=request.FILES.get('file'),
+            )
+        except (PermissionDenied, ValueError, ValidationError) as exc:
+            messages.error(request, str(exc))
+        else:
+            kind_label = attachment.get_kind_display()
+            messages.success(request, f'{kind_label}: вложение добавлено.')
+        return self._redirect_to_task(task)
+
+
+class TaskChecklistActionView(LoginRequiredMixin, _DesignTaskCardMixin, View):
+    """POST-переключение пункта чек-листа с карточки (спека 4.3, Этап 4).
+
+    Тонкая вьюха над toggle_checklist_item: отмечать может только
+    исполнитель (или ГИП/админ) — проверяет сервис. Обычная POST-форма
+    без JS: чекбокс — submit-кнопка с иконкой.
+    """
+
+    def post(self, request, *args, **kwargs):
+        task = self._get_task()
+        raw_item = (request.POST.get('item_id') or '').strip()
+        item = None
+        if raw_item.isdigit():
+            item = DesignTaskChecklistItem.objects.filter(
+                task=task, pk=raw_item,
+            ).first()
+        if item is None:
+            messages.error(request, 'Пункт чек-листа не найден.')
+            return self._redirect_to_task(task)
+
+        try:
+            toggle_checklist_item(request.user, item)
+        except (PermissionDenied, ValueError, ValidationError) as exc:
+            messages.error(request, str(exc))
+        else:
+            state = 'отмечен' if item.is_done else 'снят'
+            messages.success(request, f'Пункт «{item.text}» {state}.')
+        return self._redirect_to_task(task)
 
 
 def _folder_archive_segments(folder, base_folder=None):

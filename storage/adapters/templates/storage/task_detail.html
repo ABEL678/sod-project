@@ -1,0 +1,417 @@
+{% extends 'storage/base.html' %}
+{% load static %}
+
+{# Этап 4 (спека 4.3): карточка задания между разделами. #}
+{# Только чтение + POST-формы к тонким вьюхам (task_status / task_attachment / #}
+{# task_checklist). Матрица переходов и права — в сервисах Этапа 2 #}
+{# (update_task_status, add_task_attachment, toggle_checklist_item); видимость #}
+{# кнопок здесь — лишь UI-подсказка по роли и текущему статусу. Только #}
+{# Bootstrap-классы и bi-* иконки, без нового CSS/JS. #}
+
+{% block title %}Задание #{{ task.pk }} — {{ project.name }} — Stream-CAD{% endblock %}
+
+{% block topbar %}
+    {% include 'storage/_topbar.html' with topbar_project=project topbar_title="Задание" %}
+{% endblock %}
+
+{% block content %}
+<main class="container py-3 pb-5">
+    {# Сообщения django.contrib.messages: ошибки сервисов (права, матрица #}
+    {# переходов, «COMPLETED требует output») показываются пользователю. #}
+    {% if messages %}
+        <div class="flash-stack mb-3" data-role="task-messages">
+            {% for message in messages %}
+                <div class="alert {% if message.tags == 'error' %}alert-danger{% else %}alert-{{ message.tags }}{% endif %} mb-0">{{ message }}</div>
+            {% endfor %}
+        </div>
+    {% endif %}
+
+    <div class="d-flex justify-content-between align-items-start mb-3 flex-wrap gap-2">
+        <div>
+            <a href="{% url 'storage:project_detail' project.pk %}?tab=tasks" class="small text-decoration-none">← К заданиям проекта</a>
+            <h1 class="h4 mb-1" data-role="task-title">{{ task.title }}</h1>
+            <div class="d-flex flex-wrap align-items-center gap-2 mb-1">
+                {# Статус-бейдж — те же классы TASK_STATUS_BADGES, что во вкладке. #}
+                <span class="badge {{ status_badge }}" data-role="task-status-badge">{{ task.get_status_display }}</span>
+                {% if task.priority == 'critical' %}
+                    <span class="badge text-bg-danger">{{ task.get_priority_display }}</span>
+                {% elif task.priority == 'high' %}
+                    <span class="badge text-bg-warning">{{ task.get_priority_display }}</span>
+                {% endif %}
+                {% if deadline %}
+                    {# Живой дедлайн (спека 4.3): «осталось N дней» / «срок сегодня» / «просрочено на N дней». #}
+                    <span class="badge {{ deadline.badge }}" data-role="task-deadline" title="Срок: {{ task.due_date|date:'d.m.Y' }}">
+                        <i class="bi bi-calendar-event me-1" aria-hidden="true"></i>{{ deadline.label }}
+                    </span>
+                {% endif %}
+            </div>
+            <div class="small text-muted">
+                Задание #{{ task.pk }} ·
+                <span class="badge text-bg-light border">{{ task.source_section.code }}</span>
+                <i class="bi bi-arrow-right" aria-hidden="true"></i>
+                <span class="badge text-bg-light border">{{ task.target_section.code }}</span>
+                · создано {{ task.created_at|date:"d.m.Y H:i" }}
+            </div>
+        </div>
+        <a href="{% url 'storage:project_detail' project.pk %}?tab=tasks" class="btn btn-sm btn-outline-secondary">← К заданиям</a>
+    </div>
+
+    <div class="row g-3">
+        <div class="col-lg-8">
+            {# Блок «Суть» (спека 4.3) #}
+            <div class="card shadow-sm mb-3">
+                <div class="card-header fw-semibold"><i class="bi bi-text-paragraph me-2" aria-hidden="true"></i>Суть</div>
+                <div class="card-body" data-role="task-description" style="white-space: pre-line;">{{ task.description }}</div>
+            </div>
+
+            {# Блок «Входные данные» (спека 4.3): вложения kind=input + привязка к документам. #}
+            <div class="card shadow-sm mb-3">
+                <div class="card-header fw-semibold d-flex align-items-center">
+                    <i class="bi bi-box-arrow-in-down me-2" aria-hidden="true"></i>Входные данные
+                    <span class="badge text-bg-light border ms-2">{{ input_attachments|length }}</span>
+                </div>
+                <div class="card-body">
+                    {% if input_attachments %}
+                        <ul class="list-group list-group-flush mb-3" data-role="task-input-attachments">
+                            {% for attachment in input_attachments %}
+                                <li class="list-group-item px-0 d-flex align-items-start gap-2">
+                                    <i class="bi {% if attachment.document %}bi-file-earmark-text{% else %}bi-paperclip{% endif %} mt-1" aria-hidden="true"></i>
+                                    <div>
+                                        {% if attachment.document %}
+                                            <a href="{% url 'storage:document_detail' attachment.document.pk %}">
+                                                {{ attachment.document.code }} — {{ attachment.document.name }}
+                                            </a>
+                                        {% else %}
+                                            <a href="{{ attachment.file.url }}">{{ attachment.file_name|default:attachment.file.name }}</a>
+                                        {% endif %}
+                                        <div class="small text-muted">
+                                            загрузил {{ attachment.uploaded_by.get_full_name|default:attachment.uploaded_by.username }}
+                                            · {{ attachment.created_at|date:"d.m.Y H:i" }}
+                                        </div>
+                                    </div>
+                                </li>
+                            {% endfor %}
+                        </ul>
+                    {% else %}
+                        <p class="text-muted mb-3" data-role="task-input-empty">Входные данные не приложены.</p>
+                    {% endif %}
+
+                    {% if can_add_input %}
+                        {# add_task_attachment: input добавляет автор (или ГИП/админ) — правило в сервисе. #}
+                        <form method="post" action="{% url 'storage:task_attachment' project.pk task.pk %}" enctype="multipart/form-data" class="border rounded p-2 bg-light" data-role="task-input-form">
+                            {% csrf_token %}
+                            <input type="hidden" name="kind" value="input">
+                            <label class="form-label small mb-1" for="inputDocumentSelect">Документ проекта (опционально)</label>
+                            <select class="form-select form-select-sm mb-2" id="inputDocumentSelect" name="document">
+                                <option value="">— без привязки —</option>
+                                {% for document in document_choices %}
+                                    <option value="{{ document.pk }}">{{ document.code }} — {{ document.name }}</option>
+                                {% endfor %}
+                            </select>
+                            <label class="form-label small mb-1" for="inputFileField">Или свободный файл</label>
+                            <input type="file" class="form-control form-control-sm mb-2" id="inputFileField" name="file">
+                            <button type="submit" class="btn btn-sm btn-outline-primary">
+                                <i class="bi bi-plus-lg me-1" aria-hidden="true"></i>Добавить входные данные
+                            </button>
+                        </form>
+                    {% endif %}
+                </div>
+            </div>
+
+            {# Блок «Результат» (спека 4.3): вложения kind=output. #}
+            <div class="card shadow-sm mb-3">
+                <div class="card-header fw-semibold d-flex align-items-center">
+                    <i class="bi bi-box-arrow-up me-2" aria-hidden="true"></i>Результат
+                    <span class="badge text-bg-light border ms-2">{{ output_attachments|length }}</span>
+                </div>
+                <div class="card-body">
+                    {% if output_attachments %}
+                        <ul class="list-group list-group-flush mb-3" data-role="task-output-attachments">
+                            {% for attachment in output_attachments %}
+                                <li class="list-group-item px-0 d-flex align-items-start gap-2">
+                                    <i class="bi {% if attachment.document %}bi-file-earmark-text{% else %}bi-paperclip{% endif %} mt-1" aria-hidden="true"></i>
+                                    <div>
+                                        {% if attachment.document %}
+                                            <a href="{% url 'storage:document_detail' attachment.document.pk %}">
+                                                {{ attachment.document.code }} — {{ attachment.document.name }}
+                                            </a>
+                                        {% else %}
+                                            <a href="{{ attachment.file.url }}">{{ attachment.file_name|default:attachment.file.name }}</a>
+                                        {% endif %}
+                                        <div class="small text-muted">
+                                            загрузил {{ attachment.uploaded_by.get_full_name|default:attachment.uploaded_by.username }}
+                                            · {{ attachment.created_at|date:"d.m.Y H:i" }}
+                                        </div>
+                                    </div>
+                                </li>
+                            {% endfor %}
+                        </ul>
+                    {% else %}
+                        <p class="text-muted mb-3" data-role="task-output-empty">
+                            Результат не приложен{% if can_complete %}. Перед отметкой «Выполнено» приложите хотя бы один результат.{% endif %}
+                        </p>
+                    {% endif %}
+
+                    {% if can_add_output %}
+                        {# add_task_attachment: output — только исполнитель и только в статусе IN_PROGRESS (сервис). #}
+                        <form method="post" action="{% url 'storage:task_attachment' project.pk task.pk %}" enctype="multipart/form-data" class="border rounded p-2 bg-light" data-role="task-output-form">
+                            {% csrf_token %}
+                            <input type="hidden" name="kind" value="output">
+                            <label class="form-label small mb-1" for="outputDocumentSelect">Документ проекта (опционально)</label>
+                            <select class="form-select form-select-sm mb-2" id="outputDocumentSelect" name="document">
+                                <option value="">— без привязки —</option>
+                                {% for document in document_choices %}
+                                    <option value="{{ document.pk }}">{{ document.code }} — {{ document.name }}</option>
+                                {% endfor %}
+                            </select>
+                            <label class="form-label small mb-1" for="outputFileField">Или свободный файл</label>
+                            <input type="file" class="form-control form-control-sm mb-2" id="outputFileField" name="file">
+                            <button type="submit" class="btn btn-sm btn-outline-primary">
+                                <i class="bi bi-plus-lg me-1" aria-hidden="true"></i>Добавить результат
+                            </button>
+                        </form>
+                    {% endif %}
+                </div>
+            </div>
+
+            {# Блок «Чек-лист» (спека 4.3): переключение — POST toggle_checklist_item, права в сервисе. #}
+            {% if checklist_total %}
+                <div class="card shadow-sm mb-3">
+                    <div class="card-header fw-semibold d-flex align-items-center">
+                        <i class="bi bi-check2-square me-2" aria-hidden="true"></i>Чек-лист
+                        <span class="badge text-bg-light border ms-2" data-role="task-checklist-progress">{{ checklist_done }} / {{ checklist_total }}</span>
+                    </div>
+                    <div class="card-body py-0">
+                        <ul class="list-group list-group-flush" data-role="task-checklist">
+                            {% for item in checklist_items %}
+                                <li class="list-group-item px-0 d-flex align-items-start gap-2">
+                                    {% if can_toggle_checklist %}
+                                        <form method="post" action="{% url 'storage:task_checklist' project.pk task.pk %}" class="mt-1">
+                                            {% csrf_token %}
+                                            <input type="hidden" name="item_id" value="{{ item.pk }}">
+                                            <button type="submit" class="btn btn-link p-0" style="line-height: 1;"
+                                                    title="{% if item.is_done %}Снять отметку{% else %}Отметить выполненным{% endif %}"
+                                                    aria-label="{% if item.is_done %}Снять отметку{% else %}Отметить выполненным{% endif %}: {{ item.text }}">
+                                                <i class="bi {% if item.is_done %}bi-check2-square text-success{% else %}bi-square{% endif %}" aria-hidden="true"></i>
+                                            </button>
+                                        </form>
+                                    {% else %}
+                                        <i class="bi {% if item.is_done %}bi-check2-square text-success{% else %}bi-square{% endif %} mt-1" aria-hidden="true"></i>
+                                    {% endif %}
+                                    <span class="{% if item.is_done %}text-decoration-line-through text-muted{% endif %}">{{ item.text }}</span>
+                                    {% if item.is_done and item.done_by %}
+                                        <small class="text-muted ms-auto text-nowrap">
+                                            {{ item.done_by.get_full_name|default:item.done_by.username }} · {{ item.done_at|date:"d.m.Y H:i" }}
+                                        </small>
+                                    {% endif %}
+                                </li>
+                            {% endfor %}
+                        </ul>
+                    </div>
+                    <div class="card-body py-2 small text-muted">
+                        Чек-лист отмечает исполнитель{% if can_manage %} (или ГИП){% endif %}.
+                    </div>
+                </div>
+            {% endif %}
+
+            {# Блок «История» (спека 4.3): таймлайн status_logs. #}
+            <div class="card shadow-sm mb-3">
+                <div class="card-header fw-semibold"><i class="bi bi-clock-history me-2" aria-hidden="true"></i>История</div>
+                <div class="card-body">
+                    {% if status_logs %}
+                        <ul class="list-group list-group-flush" data-role="task-history">
+                            {% for log in status_logs %}
+                                <li class="list-group-item px-0">
+                                    <div class="d-flex justify-content-between align-items-center flex-wrap gap-1">
+                                        <span>
+                                            <span class="badge {{ log.old_badge }}">{{ log.old_label }}</span>
+                                            <i class="bi bi-arrow-right mx-1" aria-hidden="true"></i>
+                                            <span class="badge {{ log.new_badge }}">{{ log.new_label }}</span>
+                                        </span>
+                                        <small class="text-muted">{{ log.created_at|date:"d.m.Y H:i" }}</small>
+                                    </div>
+                                    <div class="small text-muted mt-1">
+                                        {{ log.changed_by.get_full_name|default:log.changed_by.username }}
+                                    </div>
+                                    {% if log.comment %}
+                                        <div class="small mt-1 border-start ps-2">{{ log.comment }}</div>
+                                    {% endif %}
+                                </li>
+                            {% endfor %}
+                        </ul>
+                    {% else %}
+                        <p class="text-muted mb-0" data-role="task-history-empty">
+                            История пуста — задание ещё не выдавалось (черновик).
+                        </p>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+
+        <div class="col-lg-4">
+            {# Панель действий (спека 4.3): видимость — по роли и статусу, #}
+            {# матрица переходов и условия проверяет update_task_status. #}
+            {% if can_start_work or can_hold or can_resume or can_complete or can_send_review or can_review or can_cancel %}
+                <div class="card shadow-sm mb-3">
+                    <div class="card-header fw-semibold"><i class="bi bi-lightning-charge me-2" aria-hidden="true"></i>Действия</div>
+                    <div class="card-body d-grid gap-2" data-role="task-actions">
+
+                        {% if can_start_work %}
+                            {# ISSUED/RETURNED → IN_PROGRESS (assignee) #}
+                            <form method="post" action="{% url 'storage:task_status' project.pk task.pk %}" data-role="task-action-start">
+                                {% csrf_token %}
+                                <input type="hidden" name="new_status" value="IN_PROGRESS">
+                                <button type="submit" class="btn btn-sm btn-primary w-100">
+                                    <i class="bi bi-play-fill me-1" aria-hidden="true"></i>Принять в работу
+                                </button>
+                            </form>
+                        {% endif %}
+
+                        {% if can_hold %}
+                            {# IN_PROGRESS → ON_HOLD (assignee, с комментарием) #}
+                            <form method="post" action="{% url 'storage:task_status' project.pk task.pk %}" class="border rounded p-2 bg-light" data-role="task-action-hold">
+                                {% csrf_token %}
+                                <input type="hidden" name="new_status" value="ON_HOLD">
+                                <label class="form-label small mb-1" for="holdComment">Приостановить — причина</label>
+                                <textarea class="form-control form-control-sm mb-2" id="holdComment" name="comment" rows="2" required placeholder="Например: жду исходные данные"></textarea>
+                                <button type="submit" class="btn btn-sm btn-outline-warning">
+                                    <i class="bi bi-pause-fill me-1" aria-hidden="true"></i>Приостановить
+                                </button>
+                            </form>
+                        {% endif %}
+
+                        {% if can_resume %}
+                            {# ON_HOLD → IN_PROGRESS (assignee) #}
+                            <form method="post" action="{% url 'storage:task_status' project.pk task.pk %}" data-role="task-action-resume">
+                                {% csrf_token %}
+                                <input type="hidden" name="new_status" value="IN_PROGRESS">
+                                <button type="submit" class="btn btn-sm btn-primary w-100">
+                                    <i class="bi bi-play-fill me-1" aria-hidden="true"></i>Возобновить работу
+                                </button>
+                            </form>
+                        {% endif %}
+
+                        {% if can_complete %}
+                            {# IN_PROGRESS → COMPLETED (assignee); требование output проверяет сервис. #}
+                            {% if not output_attachments %}
+                                <div class="alert alert-warning mb-0 py-1 px-2 small">
+                                    <i class="bi bi-exclamation-triangle me-1" aria-hidden="true"></i>
+                                    Перед отметкой «Выполнено» приложите результат (output).
+                                </div>
+                            {% endif %}
+                            <form method="post" action="{% url 'storage:task_status' project.pk task.pk %}" data-role="task-action-complete">
+                                {% csrf_token %}
+                                <input type="hidden" name="new_status" value="COMPLETED">
+                                <button type="submit" class="btn btn-sm btn-success w-100">
+                                    <i class="bi bi-check2-circle me-1" aria-hidden="true"></i>Выполнено
+                                </button>
+                            </form>
+                        {% endif %}
+
+                        {% if can_send_review %}
+                            {# COMPLETED → REVIEW (author/gip) #}
+                            <form method="post" action="{% url 'storage:task_status' project.pk task.pk %}" data-role="task-action-review">
+                                {% csrf_token %}
+                                <input type="hidden" name="new_status" value="REVIEW">
+                                <button type="submit" class="btn btn-sm btn-primary w-100">
+                                    <i class="bi bi-search me-1" aria-hidden="true"></i>Отправить на проверку
+                                </button>
+                            </form>
+                        {% endif %}
+
+                        {% if can_review %}
+                            {# REVIEW → ACCEPTED / RETURNED (author/gip) #}
+                            <form method="post" action="{% url 'storage:task_status' project.pk task.pk %}" data-role="task-action-accept">
+                                {% csrf_token %}
+                                <input type="hidden" name="new_status" value="ACCEPTED">
+                                <button type="submit" class="btn btn-sm btn-success w-100">
+                                    <i class="bi bi-check2-all me-1" aria-hidden="true"></i>Принять
+                                </button>
+                            </form>
+                            <form method="post" action="{% url 'storage:task_status' project.pk task.pk %}" class="border rounded p-2 bg-light" data-role="task-action-return">
+                                {% csrf_token %}
+                                <input type="hidden" name="new_status" value="RETURNED">
+                                <label class="form-label small mb-1" for="returnComment">Вернуть на доработку — причина</label>
+                                <textarea class="form-control form-control-sm mb-2" id="returnComment" name="comment" rows="2" required placeholder="Что именно доработать"></textarea>
+                                <button type="submit" class="btn btn-sm btn-outline-danger">
+                                    <i class="bi bi-arrow-counterclockwise me-1" aria-hidden="true"></i>Вернуть на доработку
+                                </button>
+                            </form>
+                        {% endif %}
+
+                        {% if can_cancel %}
+                            {# Любой (не терминальный) → CANCELLED (author/gip/admin, с комментарием) #}
+                            <form method="post" action="{% url 'storage:task_status' project.pk task.pk %}" class="border rounded p-2 bg-light" data-role="task-action-cancel">
+                                {% csrf_token %}
+                                <input type="hidden" name="new_status" value="CANCELLED">
+                                <label class="form-label small mb-1" for="cancelComment">Отменить задание — причина</label>
+                                <textarea class="form-control form-control-sm mb-2" id="cancelComment" name="comment" rows="2" required placeholder="Почему задание отменяется"></textarea>
+                                <button type="submit" class="btn btn-sm btn-outline-danger">
+                                    <i class="bi bi-x-circle me-1" aria-hidden="true"></i>Отменить
+                                </button>
+                            </form>
+                        {% endif %}
+                    </div>
+                </div>
+            {% endif %}
+
+            {# Сводка реквизитов задания #}
+            <div class="card shadow-sm mb-3">
+                <div class="card-header fw-semibold"><i class="bi bi-info-circle me-2" aria-hidden="true"></i>Реквизиты</div>
+                <ul class="list-group list-group-flush small">
+                    <li class="list-group-item d-flex justify-content-between">
+                        <span class="text-muted">Источник → Цель</span>
+                        <span>
+                            <span class="badge text-bg-light border">{{ task.source_section.code }}</span>
+                            <i class="bi bi-arrow-right" aria-hidden="true"></i>
+                            <span class="badge text-bg-light border">{{ task.target_section.code }}</span>
+                        </span>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between">
+                        <span class="text-muted">Автор</span>
+                        <span>{{ task.author.get_full_name|default:task.author.username }}</span>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between">
+                        <span class="text-muted">Исполнитель</span>
+                        <span>{% if task.assignee %}{{ task.assignee.get_full_name|default:task.assignee.username }}{% else %}—{% endif %}</span>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between">
+                        <span class="text-muted">Срок</span>
+                        <span class="cde-tnum">{% if task.due_date %}{{ task.due_date|date:"d.m.Y" }}{% else %}—{% endif %}</span>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between">
+                        <span class="text-muted">Приоритет</span>
+                        <span>{{ task.get_priority_display }}</span>
+                    </li>
+                    {% if task.template %}
+                        <li class="list-group-item d-flex justify-content-between">
+                            <span class="text-muted">Шаблон</span>
+                            <span>{{ task.template.title }}</span>
+                        </li>
+                    {% endif %}
+                    <li class="list-group-item d-flex justify-content-between">
+                        <span class="text-muted">Выдано</span>
+                        <span>{% if task.issued_at %}{{ task.issued_at|date:"d.m.Y H:i" }}{% else %}—{% endif %}</span>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between">
+                        <span class="text-muted">Принято</span>
+                        <span>{% if task.accepted_at %}{{ task.accepted_at|date:"d.m.Y H:i" }}{% else %}—{% endif %}</span>
+                    </li>
+                    {% if task.closed_by %}
+                        <li class="list-group-item d-flex justify-content-between">
+                            <span class="text-muted">Закрыл</span>
+                            <span>{{ task.closed_by.get_full_name|default:task.closed_by.username }}</span>
+                        </li>
+                    {% endif %}
+                </ul>
+            </div>
+
+            <p class="small text-muted">
+                <i class="bi bi-shield-check me-1" aria-hidden="true"></i>
+                Права и допустимость переходов проверяются на сервере — кнопки
+                видны только для действий, доступных вашей роли в текущем статусе.
+            </p>
+        </div>
+    </div>
+</main>
+{% endblock %}

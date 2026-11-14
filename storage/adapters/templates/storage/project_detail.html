@@ -555,7 +555,8 @@
                                     {% for task in tasks %}
                                         <tr>
                                             <td>
-                                                <span class="fw-semibold">{{ task.title }}</span>
+                                                {# Этап 4 (спека 4.3): заголовок — ссылка на карточку задания. #}
+                                                <a class="fw-semibold" href="{% url 'storage:task_detail' project.pk task.pk %}">{{ task.title }}</a>
                                                 {% if task.priority == 'critical' %}
                                                     <span class="badge text-bg-danger">{{ task.get_priority_display }}</span>
                                                 {% elif task.priority == 'high' %}
