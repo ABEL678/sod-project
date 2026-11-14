@@ -580,6 +580,8 @@ def revoke_api_token(user, token) -> None: ... (admin компании токе�
 def list_api_tokens(user, company) -> QuerySet[ApiToken]: ... (admin компании / superuser; только токены своей компании)
 def _clear_profile_cache(user) -> None: ... (внутренний хелпер: сбрасывает кэш обратной связи user.userprofile после смены роли/компании, чтобы проверки прав не «залипали»)
 
+def can_view_all_tasks(user: User, project: Project) -> bool: ... — предикат «видит все задания проекта» (только ГИП/админ); тонкая обёртка над `_is_gip_or_admin`, используется сегмент-контролом вкладки «Задания» (Этап 3), чтобы UI и права не расходились.
+
 **Management-команда:** `python manage.py backfill_profiles [--company ID] [--dry-run]` — создаёт `UserProfile` существующим пользователям без профиля (сигнал `create_user_profile` покрывает только новых), опционально привязывает к компании; роли не перезаписывает, идемпотентна.
 
 **Правило:** upload_document() — единственная точка создания версий.
