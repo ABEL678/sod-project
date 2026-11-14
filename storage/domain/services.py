@@ -5230,6 +5230,19 @@ def task_summary_for_gip(project: Project) -> dict:
     }
 
 
+def can_view_all_tasks(user: User, project: Project) -> bool:
+    """Видит ли пользователь все задания проекта (спека 3, list_tasks 'all').
+
+    Тонкая обёртка над _is_gip_or_admin — тот же предикат, что и
+    PermissionDenied-гейт внутри list_tasks('all'). Нужна вкладке
+    «Задания» (спека 4.1, Этап 3): сегмент-контрол «Все / Входящие /
+    Исходящие» показывает сегмент «Все» только тем, кого сервис не
+    отклонит, — UI и права не расходятся. Новая функция, существующие
+    сервисы Этапа 2 не изменены.
+    """
+    return _is_gip_or_admin(user, project)
+
+
 def list_tasks(
     project: Project,
     user: User,

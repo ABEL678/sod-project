@@ -44,6 +44,18 @@ urlpatterns = [
         name='project_reset_structure',
     ),
     path('projects/<int:pk>/', views.ProjectDetailView.as_view(), name='project_detail'),
+    # Этап 3 (спека 4.1–4.2): задания между разделами. Список — вкладка
+    # ?tab=tasks в ProjectDetailView; форма — отдельная страница.
+    path(
+        'projects/<int:project_id>/tasks/new/',
+        views.TaskCreateView.as_view(),
+        name='task_create',
+    ),
+    path(
+        'projects/<int:project_id>/tasks/<int:task_id>/issue/',
+        views.TaskIssueActionView.as_view(),
+        name='task_issue',
+    ),
     path('projects/<int:project_id>/sections/create/', views.SectionCreateView.as_view(), name='section_create'),
     path('sections/<int:section_id>/rename/', views.SectionRenameView.as_view(), name='section_rename'),
     path('projects/<int:project_id>/folders/create/', views.FolderCreateView.as_view(), name='folder_create'),

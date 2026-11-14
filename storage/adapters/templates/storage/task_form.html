@@ -1,0 +1,188 @@
+{% extends 'storage/base.html' %}
+{% load static %}
+
+{# Этап 3 (спека 4.2): форма создания задания между разделами. #}
+{# Обычная HTML-форма (HTMX — по решению Этапа 3 не используется); #}
+{# автозаполнение по шаблону — ванильный JS ниже. Права и валидацию #}
+{# разделов выполняет сервис create_task (storage/domain/services.py). #}
+
+{% block title %}Выдать задание — {{ project.name }} — Stream-CAD{% endblock %}
+
+{% block topbar %}
+    {% include 'storage/_topbar.html' with topbar_project=project topbar_title="Выдать задание" %}
+{% endblock %}
+
+{% block content %}
+<main class="container py-3 pb-5">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <div>
+            <h1 class="h4 mb-0">Выдать задание</h1>
+            <div class="small text-muted">{{ project.code }} — {{ project.name }}</div>
+        </div>
+        <a href="{% url 'storage:project_detail' project.pk %}?tab=tasks"
+           class="btn btn-sm btn-outline-secondary">← К заданиям</a>
+    </div>
+
+    {% if errors %}
+        <div class="alert alert-danger" data-role="task-form-errors">
+            <ul class="mb-0">
+                {% for error in errors %}
+                    <li>{{ error }}</li>
+                {% endfor %}
+            </ul>
+        </div>
+    {% endif %}
+
+    <div class="card shadow-sm" style="max-width: 720px;">
+        <div class="card-body">
+            <form method="post" action="{% url 'storage:task_create' project.pk %}">
+                {% csrf_token %}
+
+                <div class="row">
+                    <div class="col-md-6 mb-3">
+                        <label class="form-label small" for="taskSourceSection">Раздел-источник <span class="text-danger">*</span></label>
+                        <select class="form-select form-select-sm" id="taskSourceSection" name="source_section" required>
+                            <option value="">— выберите —</option>
+                            {% for section in writable_sections %}
+                                <option value="{{ section.pk }}"
+                                        {% if form_data.source_section == section.pk|stringformat:"s" %}selected{% endif %}>
+                                    {{ section.code }} — {{ section.name }}
+                                </option>
+                            {% endfor %}
+                        </select>
+                        <div class="form-text">Только разделы, куда у вас есть право записи.</div>
+                    </div>
+                    <div class="col-md-6 mb-3">
+                        <label class="form-label small" for="taskTargetSection">Раздел-цель <span class="text-danger">*</span></label>
+                        <select class="form-select form-select-sm" id="taskTargetSection" name="target_section" required>
+                            <option value="">— выберите —</option>
+                            {% for section in all_sections %}
+                                <option value="{{ section.pk }}"
+                                        {% if form_data.target_section == section.pk|stringformat:"s" %}selected{% endif %}>
+                                    {{ section.code }} — {{ section.name }}
+                                </option>
+                            {% endfor %}
+                        </select>
+                        <div class="form-text">Кому передаётся задание (раздел проекта).</div>
+                    </div>
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label small" for="taskTitle">Краткое название <span class="text-danger">*</span></label>
+                    <input class="form-control form-control-sm" id="taskTitle" name="title" type="text"
+                           maxlength="255" required
+                           value="{{ form_data.title }}">
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label small" for="taskDescription">Суть задания <span class="text-danger">*</span></label>
+                    <textarea class="form-control form-control-sm" id="taskDescription" name="description"
+                              rows="5" required>{{ form_data.description }}</textarea>
+                </div>
+
+                <div class="row">
+                    <div class="col-md-4 mb-3">
+                        <label class="form-label small" for="taskDueDate">Срок</label>
+                        <input class="form-control form-control-sm" id="taskDueDate" name="due_date" type="date"
+                               value="{{ form_data.due_date }}">
+                        <div class="form-text">Не указан — подставится из шаблона (или не ограничен).</div>
+                    </div>
+                    <div class="col-md-4 mb-3">
+                        <label class="form-label small" for="taskPriority">Приоритет</label>
+                        <select class="form-select form-select-sm" id="taskPriority" name="priority">
+                            {% for value, label in priority_choices %}
+                                <option value="{{ value }}"
+                                        {% if form_data.priority == value or not form_data.priority and value == 'normal' %}selected{% endif %}>
+                                    {{ label }}
+                                </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-md-4 mb-3">
+                        <label class="form-label small" for="taskAssignee">Исполнитель</label>
+                        <select class="form-select form-select-sm" id="taskAssignee" name="assignee">
+                            <option value="">— не назначен —</option>
+                            {% for member in assignee_choices %}
+                                <option value="{{ member.pk }}"
+                                        {% if form_data.assignee == member.pk|stringformat:"s" %}selected{% endif %}>
+                                    {{ member.get_full_name|default:member.username }} (@{{ member.username }})
+                                </option>
+                            {% endfor %}
+                        </select>
+                        <div class="form-text">Участники проекта (и ГИП).</div>
+                    </div>
+                </div>
+
+                {% if task_templates %}
+                    <div class="mb-3">
+                        <label class="form-label small" for="taskTemplate">Шаблон задания</label>
+                        <select class="form-select form-select-sm" id="taskTemplate" name="template">
+                            <option value="">— без шаблона —</option>
+                            {% for template in task_templates %}
+                                <option value="{{ template.pk }}"
+                                        data-title="{{ template.title }}"
+                                        data-description="{{ template.description }}"
+                                        data-duration="{{ template.default_duration_days }}"
+                                        {% if form_data.template == template.pk|stringformat:"s" %}selected{% endif %}>
+                                    {{ template.title }}
+                                </option>
+                            {% endfor %}
+                        </select>
+                        <div class="form-text">Подставит название, текст и срок; чек-лист скопируется в задание.</div>
+                    </div>
+                {% endif %}
+
+                <div class="d-flex gap-2 mt-4">
+                    <button type="submit" name="action" value="draft" class="btn btn-outline-primary btn-sm">
+                        <i class="bi bi-save me-1" aria-hidden="true"></i>Сохранить черновик
+                    </button>
+                    <button type="submit" name="action" value="issue" class="btn btn-primary btn-sm">
+                        <i class="bi bi-send me-1" aria-hidden="true"></i>Выдать
+                    </button>
+                    <a href="{% url 'storage:project_detail' project.pk %}?tab=tasks"
+                       class="btn btn-outline-secondary btn-sm ms-auto">Отмена</a>
+                </div>
+            </form>
+        </div>
+    </div>
+</main>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+/* Этап 3 (спека 4.2): автозаполнение формы при выборе шаблона задания.
+   Ванильный JS (без HTMX по условию Этапа 3). Название и текст шаблон
+   подставляет сразу, срок — только если поле ещё пустое: явный выбор
+   даты пользователем приоритетнее дефолта шаблона. Если сервер не
+   получил дату (JS выключен), create_task сам подставит срок из
+   template.default_duration_days — см. сервис Этапа 2. */
+(function () {
+    'use strict';
+    var select = document.getElementById('taskTemplate');
+    if (!select) return;
+    var title = document.getElementById('taskTitle');
+    var description = document.getElementById('taskDescription');
+    var dueDate = document.getElementById('taskDueDate');
+
+    select.addEventListener('change', function () {
+        var option = select.selectedOptions[0];
+        /* «— без шаблона —» ничего не подставляет. */
+        if (!option || !option.value) return;
+
+        if (option.dataset.title && title) {
+            title.value = option.dataset.title;
+        }
+        if (option.dataset.description && description) {
+            description.value = option.dataset.description;
+        }
+        var days = parseInt(option.dataset.duration, 10);
+        if (days > 0 && dueDate && !dueDate.value) {
+            var d = new Date();
+            d.setDate(d.getDate() + days);
+            var pad = function (n) { return String(n).padStart(2, '0'); };
+            dueDate.value = d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+        }
+    });
+})();
+</script>
+{% endblock %}

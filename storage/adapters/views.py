@@ -3,6 +3,7 @@ import json
 import re
 import uuid
 import zipfile
+from datetime import date, timedelta
 from io import BytesIO
 from urllib.parse import urlencode
 
@@ -44,6 +45,7 @@ from storage.adapters.local_storage import LocalFileStorage
 from storage.adapters.tables import DocumentTable
 from storage.domain.models import (
     Company,
+    DesignTask,
     Document,
     DocumentVersion,
     Feedback,
@@ -52,6 +54,7 @@ from storage.domain.models import (
     Project,
     ProjectMembership,
     Section,
+    TaskTemplate,
     UserProfile,
 )
 from storage.domain.services import (
@@ -66,6 +69,7 @@ from storage.domain.services import (
     can_edit_project,
     can_manage_project_participants,
     can_restore_project,
+    can_view_all_tasks,
     check_issue_permission,
     can_purge_trash,
     check_read_permission,
@@ -76,6 +80,7 @@ from storage.domain.services import (
     create_project,
     create_project_from_template,
     create_section,
+    create_task,
     delete_document,
     delete_documents,
     delete_folder,
@@ -107,6 +112,8 @@ from storage.domain.services import (
     get_company_members,
     get_user_company,
     get_zone_counts,
+    list_tasks,
+    issue_task,
     revoke_share_link,
     document_actions,
     document_workflow_actions,
@@ -230,6 +237,20 @@ DOCUMENT_SORT_COLUMN_MAP = {
     'name': 'name',
     'date': 'updated_at',
     'version': 'current_version',
+}
+
+# Этап 3 (спека 4.1): Bootstrap-бейджи статусов задания во вкладке
+# «Задания». Существующие классы bootstrap.min.css, без нового CSS.
+TASK_STATUS_BADGES = {
+    DesignTask.Status.DRAFT: 'text-bg-secondary',
+    DesignTask.Status.ISSUED: 'text-bg-primary',
+    DesignTask.Status.IN_PROGRESS: 'text-bg-info',
+    DesignTask.Status.ON_HOLD: 'text-bg-warning',
+    DesignTask.Status.COMPLETED: 'text-bg-success',
+    DesignTask.Status.REVIEW: 'text-bg-light border',
+    DesignTask.Status.ACCEPTED: 'text-bg-success',
+    DesignTask.Status.RETURNED: 'text-bg-danger',
+    DesignTask.Status.CANCELLED: 'text-bg-dark',
 }
 
 HIGHLIGHT_ROW_SECONDS = 5
@@ -748,7 +769,11 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
             # «Отчёт ГИПу») возвращает полную страницу — htmx вырезает
             # из неё #mainTabs (hx-select). Остальные htmx-запросы
             # (фильтры/сортировка/зоны) получают только панель документов.
-            if self.request.GET.get('tab') in ('ai-search', 'ai-report', 'ai-kb'):
+            # Этап 3: вкладка «Задания» тоже полная страница — вкладка
+            # рендерится без htmx (обычные ссылки, как «Участники»).
+            if self.request.GET.get('tab') in (
+                    'ai-search', 'ai-report', 'ai-kb', 'tasks',
+            ):
                 return [self.template_name]
             return ['storage/_documents_panel.html']
         return [self.template_name]
@@ -785,9 +810,15 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
         # (видимость самих вкладок по-прежнему регулируют ai_checks_enabled /
         # ai_report_allowed в шаблоне; при выключенном контуре вкладка
         # мягко откатывается на «Документы»).
-        if can_manage_participants and requested_tab in (
+        # Этап 3 (спека 4.1): вкладка «Задания» доступна всем участникам
+        # проекта — исполнитель видит входящие задания без права
+        # управления участниками; остальные вкладки — как прежде.
+        allowed_tabs = ('tasks',)
+        if can_manage_participants:
+            allowed_tabs += (
                 'participants', 'trash', 'ai-search', 'ai-report', 'ai-kb',
-        ):
+            )
+        if requested_tab in allowed_tabs:
             active_tab = requested_tab
 
         # UX-аудит P0 (интеграция): панели ИИ-вкладок рендерятся серверно,
@@ -1001,6 +1032,9 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
             'active_tab': active_tab,
             'can_manage_participants': can_manage_participants,
             'can_manage_structure': can_manage_participants,
+            # Этап 3 (спека 4.1): вкладка «Задания» доступна всем, у кого
+            # есть доступ к проекту (list_tasks проверяет его в сервисе).
+            'can_view_tasks': True,
             'can_purge_trash': can_purge_trash(user, project),
             'doc_type_choices': Document.DOC_TYPE_CHOICES,
             'status_choices': Document.STATUS_CHOICES,
@@ -1041,7 +1075,346 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
         if active_tab == 'trash':
             context['trash'] = get_trash(user, project)
 
+        # Этап 3 (спека 4.1): контекст вкладки «Задания». Вьюха тонкая:
+        # выборка и права — в list_tasks, здесь только GET-фильтры
+        # отображения (статус/приоритет/срок) и декор строк для бейджей.
+        if active_tab == 'tasks':
+            context.update(self._get_tasks_context(user, project, sections))
+
         return context
+
+    def _get_tasks_context(self, user, project, sections):
+        """Данные вкладки «Задания»: role_filter, фильтры, декор строк."""
+        can_view_all = can_view_all_tasks(user, project)
+
+        # Сегмент-контрол (спека 4.1): ГИП/админ — «Все», остальные
+        # переключаются только между «Входящие»/«Исходящие».
+        segments = [
+            {'value': 'incoming', 'label': 'Входящие'},
+            {'value': 'outgoing', 'label': 'Исходящие'},
+        ]
+        if can_view_all:
+            segments.insert(0, {'value': 'all', 'label': 'Все'})
+
+        # role_filter из GET (спека 4.1): по умолчанию «all» для ГИПа
+        # и «incoming» для остальных; подделанный ?role_filter=all
+        # не-ГИПом мягко откатывается к «incoming» — то же правило,
+        # что внутри list_tasks, без ошибки на странице.
+        role_filter = self.request.GET.get('role_filter') or ''
+        if role_filter not in ('incoming', 'outgoing', 'all'):
+            role_filter = 'all' if can_view_all else 'incoming'
+        elif role_filter == 'all' and not can_view_all:
+            role_filter = 'incoming'
+
+        tasks = list(list_tasks(project, user, role_filter))
+
+        # Фильтры отображения (статус / приоритет / срок). Правила
+        # просрочки — как в task_summary_for_gip: терминальные статусы
+        # (ACCEPTED, CANCELLED) просроченными не считаются.
+        today = timezone.localdate()
+        final_statuses = (
+            DesignTask.Status.ACCEPTED,
+            DesignTask.Status.CANCELLED,
+        )
+        status_filter = self.request.GET.get('status') or ''
+        if status_filter in DesignTask.Status.values:
+            tasks = [t for t in tasks if t.status == status_filter]
+        priority_filter = self.request.GET.get('priority') or ''
+        if priority_filter in DesignTask.Priority.values:
+            tasks = [t for t in tasks if t.priority == priority_filter]
+        due_filter = self.request.GET.get('due') or ''
+        if due_filter == 'overdue':
+            tasks = [
+                t for t in tasks
+                if t.due_date and t.due_date < today
+                and t.status not in final_statuses
+            ]
+        elif due_filter == 'week':
+            week_end = today + timedelta(days=7)
+            tasks = [
+                t for t in tasks
+                if t.due_date and today <= t.due_date <= week_end
+                and t.status not in final_statuses
+            ]
+
+        # Декор строк для шаблона: бейдж статуса, просрочка, доступность
+        # кнопки «Выдать» (черновик + автор/ГИП/админ; сама проверка прав
+        # выполняется в issue_task — здесь только подсказка UI).
+        can_manage = can_manage_project_participants(user, project)
+        for task in tasks:
+            task.status_badge = TASK_STATUS_BADGES.get(task.status, 'text-bg-secondary')
+            task.is_overdue = bool(
+                task.due_date
+                and task.due_date < today
+                and task.status not in final_statuses
+            )
+            task.can_issue = (
+                task.status == DesignTask.Status.DRAFT
+                and (task.author_id == user.pk or can_manage)
+            )
+
+        return {
+            'tasks': tasks,
+            'task_segments': segments,
+            'active_role_filter': role_filter,
+            'task_status_filter': status_filter,
+            'task_priority_filter': priority_filter,
+            'task_due_filter': due_filter,
+            'task_status_choices': DesignTask.Status.choices,
+            'task_priority_choices': DesignTask.Priority.choices,
+            'can_issue_task': any(
+                check_write_permission(user, section) for section in sections
+            ),
+        }
+
+
+class TaskCreateView(LoginRequiredMixin, View):
+    """Форма создания задания (спека 4.2, Этап 3).
+
+    GET — обычная HTML-форма (без HTMX по условию Этапа 3). POST —
+    create_task: права и проверки разделов остаются в сервисе, вьюха
+    только разбирает ввод и показывает ошибки. Кнопка «Выдать» создаёт
+    задание и сразу переводит его в ISSUED через issue_task.
+    """
+
+    template_name = 'storage/task_form.html'
+
+    def _get_project(self, request, project_id):
+        return get_object_or_404(
+            get_accessible_projects(request.user),
+            pk=project_id,
+        )
+
+    def _project_sections(self, request, project):
+        """Разделы проекта для формы — как во вкладке «Задания».
+
+        get_sections_with_counts исключает сервисный COMMON: задания
+        выдаются между смежными проектными разделами (спека 2.1).
+        """
+        return list(get_sections_with_counts(request.user, project))
+
+    def _form_context(self, request, project, form_data=None, errors=None):
+        """Разделы, участники, шаблоны + сохранённый ввод при ошибках."""
+        sections = self._project_sections(request, project)
+        writable_sections = [
+            section for section in sections
+            if check_write_permission(request.user, section)
+        ]
+        # Исполнители — участники проекта (спека 4.2) плюс ГИП проекта,
+        # даже если он не заведён в участники. Прямое чтение memberships:
+        # список нужен любому автору с write-доступом к своему разделу,
+        # а list_project_participants разрешён только ГИПу/админу.
+        # Права на само создание всё равно проверяет create_task.
+        members = (
+            project.memberships.select_related('user')
+            .order_by('user__last_name', 'user__first_name', 'user__username')
+        )
+        assignee_choices = []
+        seen_ids = set()
+        for membership in members:
+            if membership.user_id in seen_ids:
+                continue
+            seen_ids.add(membership.user_id)
+            assignee_choices.append(membership.user)
+        if project.gip is not None and project.gip_id not in seen_ids:
+            assignee_choices.append(project.gip)
+
+        return {
+            'project': project,
+            'writable_sections': writable_sections,
+            'all_sections': sections,
+            'assignee_choices': assignee_choices,
+            'task_templates': TaskTemplate.objects.filter(
+                company=project.company, is_active=True,
+            ).order_by('title'),
+            'priority_choices': DesignTask.Priority.choices,
+            'form_data': form_data or {},
+            'errors': errors or [],
+        }
+
+    def get(self, request, project_id):
+        project = self._get_project(request, project_id)
+        if not any(
+            check_write_permission(request.user, section)
+            for section in self._project_sections(request, project)
+        ):
+            messages.error(
+                request,
+                'Выдавать задания может только пользователь с правом '
+                'записи хотя бы в один раздел проекта.',
+            )
+            return redirect(
+                reverse('storage:project_detail', args=[project.pk])
+                + '?tab=tasks'
+            )
+        return render(
+            request, self.template_name, self._form_context(request, project),
+        )
+
+    def _section_or_none(self, project, raw_id):
+        """Раздел проекта по id из формы; чужой/битый id → None."""
+        if raw_id and str(raw_id).isdigit():
+            return Section.objects.filter(project=project, pk=raw_id).first()
+        return None
+
+    def _resolve_input(self, project, form_data):
+        """Разбор ввода формы. Возвращает (cleaned, errors)."""
+        errors = []
+        cleaned = {}
+
+        source = self._section_or_none(project, form_data['source_section'])
+        if source is None:
+            errors.append(
+                'Выберите раздел-источник (доступен только раздел '
+                'с правом записи).'
+            )
+        target = self._section_or_none(project, form_data['target_section'])
+        if target is None:
+            errors.append('Выберите раздел-цель проекта.')
+        cleaned['source_section'] = source
+        cleaned['target_section'] = target
+
+        title = (form_data['title'] or '').strip()
+        if not title:
+            errors.append('Укажите краткое название задания.')
+        elif len(title) > 255:
+            errors.append('Название не должно превышать 255 символов.')
+        cleaned['title'] = title
+
+        description = (form_data['description'] or '').strip()
+        if not description:
+            errors.append('Опишите суть задания.')
+        cleaned['description'] = description
+
+        due_date = None
+        raw_due = (form_data['due_date'] or '').strip()
+        if raw_due:
+            try:
+                due_date = date.fromisoformat(raw_due)
+            except ValueError:
+                errors.append('Некорректный формат срока.')
+        cleaned['due_date'] = due_date
+
+        assignee = None
+        raw_assignee = (form_data['assignee'] or '').strip()
+        if raw_assignee:
+            candidate = None
+            if str(raw_assignee).isdigit():
+                candidate = get_user_model().objects.filter(pk=raw_assignee).first()
+            if candidate is None or not (
+                project.memberships.filter(user=candidate).exists()
+                or project.gip_id == candidate.pk
+            ):
+                errors.append('Исполнитель должен быть участником проекта.')
+            else:
+                assignee = candidate
+        cleaned['assignee'] = assignee
+
+        template = None
+        raw_template = (form_data['template'] or '').strip()
+        if raw_template:
+            if str(raw_template).isdigit():
+                template = TaskTemplate.objects.filter(
+                    company=project.company, pk=raw_template, is_active=True,
+                ).first()
+            if template is None:
+                errors.append('Шаблон не найден.')
+        cleaned['template'] = template
+
+        priority = form_data['priority'] or 'normal'
+        if priority not in DesignTask.Priority.values:
+            errors.append(f'Неизвестный приоритет: {priority}')
+        cleaned['priority'] = priority
+
+        return cleaned, errors
+
+    def post(self, request, project_id):
+        project = self._get_project(request, project_id)
+        form_data = {
+            'source_section': request.POST.get('source_section', ''),
+            'target_section': request.POST.get('target_section', ''),
+            'title': request.POST.get('title', ''),
+            'description': request.POST.get('description', ''),
+            'due_date': request.POST.get('due_date', ''),
+            'assignee': request.POST.get('assignee', ''),
+            'template': request.POST.get('template', ''),
+            'priority': request.POST.get('priority', 'normal'),
+            'action': request.POST.get('action', 'draft'),
+        }
+
+        cleaned, errors = self._resolve_input(project, form_data)
+        task = None
+        if not errors:
+            try:
+                task = create_task(
+                    request.user,
+                    project,
+                    cleaned['source_section'],
+                    cleaned['target_section'],
+                    title=cleaned['title'],
+                    description=cleaned['description'],
+                    due_date=cleaned['due_date'],
+                    assignee=cleaned['assignee'],
+                    template=cleaned['template'],
+                    priority=cleaned['priority'],
+                )
+            except (PermissionDenied, ValueError, ValidationError) as exc:
+                errors.append(str(exc))
+
+        if errors:
+            context = self._form_context(
+                request, project, form_data=form_data, errors=errors,
+            )
+            return render(request, self.template_name, context, status=400)
+
+        issue_failed = None
+        if form_data['action'] == 'issue':
+            try:
+                issue_task(request.user, task)
+            except (PermissionDenied, ValueError, ValidationError) as exc:
+                # Черновик уже создан — сообщаем и оставляем его в списке.
+                issue_failed = str(exc)
+
+        if issue_failed is not None:
+            messages.warning(
+                request,
+                f'Задание #{task.pk} сохранено как черновик, но выдать '
+                f'не удалось: {issue_failed}',
+            )
+        elif form_data['action'] == 'issue':
+            messages.success(request, f'Задание #{task.pk} выдано.')
+        else:
+            messages.success(
+                request, f'Задание #{task.pk} сохранено как черновик.',
+            )
+        return redirect(
+            reverse('storage:project_detail', args=[project.pk]) + '?tab=tasks'
+        )
+
+
+class TaskIssueActionView(LoginRequiredMixin, View):
+    """Выдача черновика из списка заданий (колонка «Действия», Этап 3).
+
+    Тонкая POST-вьюха над issue_task: права и статус проверяет сервис.
+    Карточка задания с полным набором действий — Этап 4.3 (спека 4.3).
+    """
+
+    def post(self, request, project_id, task_id):
+        project = get_object_or_404(
+            get_accessible_projects(request.user), pk=project_id,
+        )
+        task = get_object_or_404(
+            DesignTask.objects.filter(project=project), pk=task_id,
+        )
+        try:
+            issue_task(request.user, task)
+        except (PermissionDenied, ValueError, ValidationError) as exc:
+            messages.error(request, str(exc))
+        else:
+            messages.success(request, f'Задание #{task.pk} выдано.')
+        return redirect(
+            reverse('storage:project_detail', args=[project.pk]) + '?tab=tasks'
+        )
 
 
 def _folder_archive_segments(folder, base_folder=None):

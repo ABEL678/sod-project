@@ -213,10 +213,14 @@
                 </div>
             {% endif %}
 
-            {% if can_manage_participants %}
+            {% if can_manage_participants or can_view_tasks %}
                 {# UX-аудит P0-1/P0-2: вкладки — обычная навигация с состоянием #}
                 {# в URL (?tab=…), панели взаимоисключающие. #mainTabs — цель #}
                 {# htmx-переключения: из ответа вырезается и подставляется целиком. #}
+                {# Этап 3 (спека 4.1): навигация открыта всем участникам проекта, #}
+                {# вкладка «Задания» нужна исполнителям без права управления #}
+                {# участниками; «Участники»/«Корзина»/ИИ-вкладки — как прежде, #}
+                {# только для управляющих. #}
                 <div id="mainTabs" class="app-tabs-wrap">
                     <nav class="app-tabs" role="tablist" aria-label="Разделы проекта">
                         <a class="app-tab {% if active_tab == 'documents' %}active{% endif %}"
@@ -227,6 +231,15 @@
                             Документы
                             <span class="badge text-bg-light border">{{ documents|length }}</span>
                         </a>
+                        <a class="app-tab {% if active_tab == 'tasks' %}active{% endif %}"
+                           href="{% url 'storage:project_detail' project.pk %}?tab=tasks"
+                           role="tab"
+                           aria-selected="{% if active_tab == 'tasks' %}true{% else %}false{% endif %}">
+                            <i class="bi bi-list-task" aria-hidden="true"></i>
+                            Задания
+                            {% if tasks %}<span class="badge text-bg-light border">{{ tasks|length }}</span>{% endif %}
+                        </a>
+                        {% if can_manage_participants %}
                         <a class="app-tab {% if active_tab == 'participants' %}active{% endif %}"
                            href="{% url 'storage:project_detail' project.pk %}?tab=participants"
                            role="tab"
@@ -241,6 +254,8 @@
                             <i class="bi bi-trash3" aria-hidden="true"></i>
                             Корзина
                         </a>
+                        {% endif %}
+                        {% if can_manage_participants %}{# ИИ-вкладки — только для управляющих (спека 4.1) #}
                         {% if ai_checks_enabled %}
                             {# Этап 19 (Ф2): вкладка ИИ-поиска (состояние в URL) #}
                             <a class="app-tab {% if active_tab == 'ai-search' %}active{% endif %}"
@@ -286,6 +301,7 @@
                                 База знаний
                             </a>
                         {% endif %}
+                        {% endif %}{# /can_manage_participants для ИИ-вкладок #}
                     </nav>
 
                     {# P0-1: единственная панель вкладки — колонка с собственной #}
@@ -457,13 +473,160 @@
                     <div class="ai-tabpane__scroll">
                         {% include 'ai_checks/_kb.html' %}
                     </div>
+                {% elif active_tab == 'tasks' %}
+                    {# Этап 3 (спека 4.1): список заданий между смежными разделами. #}
+                    <div class="toolbar" data-role="tasks-toolbar">
+                        <span class="fw-semibold">
+                            <i class="bi bi-list-task me-2" aria-hidden="true"></i>Задания проекта
+                        </span>
+                        <span class="badge text-bg-light border">{{ tasks|length }}</span>
+                        <span class="toolbar-spacer"></span>
+                        {% if can_issue_task %}
+                            <a class="btn btn-sm btn-primary" href="{% url 'storage:task_create' project.pk %}">
+                                <i class="bi bi-plus-lg me-1" aria-hidden="true"></i>Выдать задание
+                            </a>
+                        {% endif %}
+                    </div>
+                    <div class="ai-tabpane__scroll">
+                        {# Сегмент-контрол направления (спека 4.1): ГИП/админ — «Все», #}
+                        {# остальные переключаются между «Входящие»/«Исходящие». #}
+                        <nav class="zone-segment" aria-label="Направление заданий" data-role="task-segments">
+                            {% for segment in task_segments %}
+                                <a class="zone-chip {% if segment.value == active_role_filter %}is-active{% endif %}"
+                                   href="?tab=tasks&amp;role_filter={{ segment.value }}">
+                                    <i class="bi {% if segment.value == 'all' %}bi-collection{% elif segment.value == 'incoming' %}bi-arrow-down-right{% else %}bi-arrow-up-right{% endif %}" aria-hidden="true"></i>
+                                    {{ segment.label }}
+                                </a>
+                            {% endfor %}
+                        </nav>
+
+                        {# Фильтры (спека 4.1): статус, срок, приоритет — обычная GET-форма. #}
+                        <form method="get" action="{% url 'storage:project_detail' project.pk %}"
+                              class="d-flex flex-wrap gap-2 align-items-end mb-3"
+                              aria-label="Фильтры заданий" data-role="tasks-filters">
+                            <input type="hidden" name="tab" value="tasks">
+                            <input type="hidden" name="role_filter" value="{{ active_role_filter }}">
+                            <div>
+                                <label class="form-label small text-muted mb-1" for="taskStatusFilter">Статус</label>
+                                <select name="status" id="taskStatusFilter" class="form-select form-select-sm">
+                                    <option value="">Все статусы</option>
+                                    {% for value, label in task_status_choices %}
+                                        <option value="{{ value }}" {% if task_status_filter == value %}selected{% endif %}>{{ label }}</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                            <div>
+                                <label class="form-label small text-muted mb-1" for="taskDueFilter">Срок</label>
+                                <select name="due" id="taskDueFilter" class="form-select form-select-sm">
+                                    <option value="">Все сроки</option>
+                                    <option value="overdue" {% if task_due_filter == 'overdue' %}selected{% endif %}>Просроченные</option>
+                                    <option value="week" {% if task_due_filter == 'week' %}selected{% endif %}>На этой неделе</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="form-label small text-muted mb-1" for="taskPriorityFilter">Приоритет</label>
+                                <select name="priority" id="taskPriorityFilter" class="form-select form-select-sm">
+                                    <option value="">Любой</option>
+                                    {% for value, label in task_priority_choices %}
+                                        <option value="{{ value }}" {% if task_priority_filter == value %}selected{% endif %}>{{ label }}</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                            <button type="submit" class="btn btn-sm btn-outline-secondary">Применить</button>
+                            <a class="btn btn-sm btn-outline-secondary"
+                               href="?tab=tasks&amp;role_filter={{ active_role_filter }}">Сбросить</a>
+                        </form>
+
+                        {% if tasks %}
+                            <div class="table-responsive">
+                                <table class="table table-hover align-middle" data-role="tasks-table">
+                                    <thead class="table-light">
+                                        <tr>
+                                            <th>Заголовок</th>
+                                            <th>Источник → Цель</th>
+                                            <th>Автор</th>
+                                            <th>Исполнитель</th>
+                                            <th>Срок</th>
+                                            <th>Статус</th>
+                                            <th class="text-end">Действия</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                    {% for task in tasks %}
+                                        <tr>
+                                            <td>
+                                                <span class="fw-semibold">{{ task.title }}</span>
+                                                {% if task.priority == 'critical' %}
+                                                    <span class="badge text-bg-danger">{{ task.get_priority_display }}</span>
+                                                {% elif task.priority == 'high' %}
+                                                    <span class="badge text-bg-warning">{{ task.get_priority_display }}</span>
+                                                {% endif %}
+                                                <div class="small text-muted">#{{ task.pk }} · {{ task.created_at|date:"d.m.Y" }}</div>
+                                            </td>
+                                            <td class="text-nowrap">
+                                                <span class="badge text-bg-light border">{{ task.source_section.code }}</span>
+                                                <i class="bi bi-arrow-right" aria-hidden="true"></i>
+                                                <span class="badge text-bg-light border">{{ task.target_section.code }}</span>
+                                            </td>
+                                            <td>{{ task.author.get_full_name|default:task.author.username }}</td>
+                                            <td>
+                                                {% if task.assignee %}
+                                                    {{ task.assignee.get_full_name|default:task.assignee.username }}
+                                                {% else %}
+                                                    <span class="text-muted">—</span>
+                                                {% endif %}
+                                            </td>
+                                            <td class="cde-tnum {% if task.is_overdue %}text-danger fw-semibold{% endif %}">
+                                                {% if task.due_date %}{{ task.due_date|date:"d.m.Y" }}{% else %}<span class="text-muted">—</span>{% endif %}
+                                                {% if task.is_overdue %}
+                                                    <i class="bi bi-exclamation-triangle ms-1" title="Просрочено" aria-hidden="true"></i>
+                                                {% endif %}
+                                            </td>
+                                            <td><span class="badge {{ task.status_badge }}">{{ task.get_status_display }}</span></td>
+                                            <td class="text-end">
+                                                {% if task.can_issue %}
+                                                    <form method="post" action="{% url 'storage:task_issue' project.pk task.pk %}" class="d-inline">
+                                                        {% csrf_token %}
+                                                        <button type="submit" class="btn btn-sm btn-outline-primary"
+                                                                title="Выдать задание исполнителю">Выдать</button>
+                                                    </form>
+                                                {% else %}
+                                                    <span class="text-muted">—</span>
+                                                {% endif %}
+                                            </td>
+                                        </tr>
+                                    {% endfor %}
+                                    </tbody>
+                                </table>
+                            </div>
+                        {% else %}
+                            {# Пустое состояние (спека 4.1) #}
+                            <div class="text-center text-muted py-5" data-role="tasks-empty">
+                                <i class="bi bi-inbox d-block mb-2" style="font-size: 2rem;" aria-hidden="true"></i>
+                                {% if task_status_filter or task_priority_filter or task_due_filter %}
+                                    <p class="mb-3">По выбранным фильтрам заданий нет</p>
+                                    <a class="btn btn-sm btn-outline-secondary"
+                                       href="?tab=tasks&amp;role_filter={{ active_role_filter }}">Сбросить фильтры</a>
+                                {% else %}
+                                    <p class="mb-3">Заданий нет{% if can_issue_task %}. Выдайте первое задание{% endif %}</p>
+                                    {% if can_issue_task %}
+                                        <a class="btn btn-primary" href="{% url 'storage:task_create' project.pk %}">
+                                            <i class="bi bi-plus-lg me-1" aria-hidden="true"></i>Выдать задание
+                                        </a>
+                                    {% endif %}
+                                {% endif %}
+                            </div>
+                        {% endif %}
+                    </div>
                     {% endif %}
                     </div>{# /#mainTabContent #}
                 </div>{# /#mainTabs #}
             {% endif %}
 
-            {# Панель документов — всегда видна (для управляющих внутри вкладки «Документы»,
-               для остальных — единственный контент). #}
+            {# Панель документов — всегда видна (для управляющих внутри вкладки #}
+            {# «Документы», для остальных — единственный контент). Многострочные #}
+            {# шаблонные комментарии Django не поддерживает — они рендерятся #}
+            {# на странице как текст, поэтому комментарий разбит на строки. #}
             {% if active_tab == 'documents' %}
                 {% include 'storage/_documents_panel.html' %}
             {% endif %}
