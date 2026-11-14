@@ -22,6 +22,10 @@ logger = logging.getLogger(__name__)
 
 from storage.domain.models import (
     Company,
+    DesignTask,
+    DesignTaskAttachment,
+    DesignTaskChecklistItem,
+    DesignTaskStatusLog,
     Document,
     DocumentVersion,
     DocumentView,
@@ -32,12 +36,14 @@ from storage.domain.models import (
     ProjectMembership,
     Section,
     Specification,
+    TaskTemplate,
     User,
     UserProfile,
     VorItem,
 )
 from issues.models import Issue, IssueComment
 from issues.notify import (
+    create_notification,
     notify_issue_assigned,
     notify_issue_commented,
     notify_issue_status_changed,
@@ -4804,3 +4810,453 @@ def get_pending_issues(project: Project):
         .select_related("document", "assignee")
         .order_by("-created_at")
     )
+
+
+# =====================================================================
+# Модуль «Задания» (DesignTask) — Этап 2, спека
+# docs/DESIGN_TASKS_SPEC.md v1.0, раздел 3. Модели — Этап 1 (models.py),
+# UI — Этапы 3–4. Бизнес-логика заданий живёт ТОЛЬКО здесь.
+# =====================================================================
+
+# URL карточки задания. Роут появится на Этапе 3 (спека 4.3:
+# /projects/<id>/tasks/<task_id>/); до тех пор ссылка в уведомлениях
+# ведёт на этот канонический адрес.
+def _design_task_url(task: DesignTask) -> str:
+    return f'/projects/{task.project_id}/tasks/{task.pk}/'
+
+
+def _is_project_gip(user: User, project: Project) -> bool:
+    """ГИП именно этого проекта: Project.gip или ProjectMembership(role=gip).
+
+    UserProfile.role == 'gip' сам по себе права на чужой проект не даёт —
+    в отличие от роли 'admin', которая глобальна.
+    """
+    if user.is_superuser:
+        return True
+    if project.gip_id == user.pk:
+        return True
+    return project.memberships.filter(user=user, role_in_project='gip').exists()
+
+
+def _is_project_admin(user: User, project: Project) -> bool:
+    """Админ: superuser или глобальная роль admin в UserProfile."""
+    if user.is_superuser:
+        return True
+    profile = getattr(user, 'userprofile', None)
+    return profile is not None and profile.role == 'admin'
+
+
+def _is_gip_or_admin(user: User, project: Project) -> bool:
+    return _is_project_gip(user, project) or _is_project_admin(user, project)
+
+
+def _is_task_participant(user: User, task: DesignTask) -> bool:
+    """Участник задания: автор, исполнитель, ГИП проекта или админ."""
+    if task.author_id == user.pk or task.assignee_id == user.pk:
+        return True
+    return _is_gip_or_admin(user, task.project)
+
+
+def _notify_task(
+    task: DesignTask,
+    recipient: User | None,
+    actor: User,
+    message: str,
+    verb: str = 'status_changed',
+) -> None:
+    """Уведомление по заданию через существующий Notification.
+
+    Verb'ы DesignTask в Notification.VERB_CHOICES отсутствуют (модель
+    issues не расширялась — Этап 2 не трогает существующие модели),
+    поэтому используются ближайшие по смыслу: 'assigned' при выдаче,
+    'status_changed' при переходах. create_notification сам не шлёт
+    уведомление актору и молча переживает ошибки.
+    """
+    create_notification(
+        recipient=recipient,
+        actor=actor,
+        verb=verb,
+        project=task.project,
+        message=message,
+        url=_design_task_url(task),
+    )
+
+
+def _log_status_change(
+    task: DesignTask,
+    old_status: str,
+    new_status: str,
+    user: User,
+    comment: str = '',
+) -> None:
+    DesignTaskStatusLog.objects.create(
+        task=task,
+        old_status=old_status,
+        new_status=new_status,
+        changed_by=user,
+        comment=comment or '',
+    )
+
+
+def create_task(
+    user: User,
+    project: Project,
+    source_section: Section,
+    target_section: Section,
+    title: str,
+    description: str,
+    due_date=None,
+    assignee: User | None = None,
+    template: TaskTemplate | None = None,
+    priority: str = 'normal',
+) -> DesignTask:
+    """Создание задания со статусом DRAFT (спека 3, create_task).
+
+    Права: user должен иметь write-доступ к source_section
+    (check_write_permission) — инициатором может быть любой представитель
+    отдела-источника, не обязательно ГИП. При template копируется
+    чек-лист; если срок не задан — берётся template.default_duration_days.
+    """
+    if source_section.project_id != project.pk or target_section.project_id != project.pk:
+        raise ValueError("Разделы должны принадлежать проекту задания")
+    if not check_write_permission(user, source_section):
+        raise PermissionDenied("Нет прав на выдачу задания от этого раздела")
+    if priority not in DesignTask.Priority.values:
+        raise ValueError(f"Неизвестный приоритет: {priority}")
+    if assignee is not None and assignee.pk == user.pk:
+        # Себе задание «через себя» — допустимо? Спека не запрещает;
+        # автор одновременно исполнитель — не блокируем.
+        pass
+
+    with transaction.atomic():
+        if due_date is None and template is not None:
+            due_date = timezone.localdate() + timedelta(
+                days=template.default_duration_days
+            )
+        task = DesignTask.objects.create(
+            project=project,
+            source_section=source_section,
+            target_section=target_section,
+            author=user,
+            assignee=assignee,
+            template=template,
+            title=title,
+            description=description,
+            due_date=due_date,
+            status=DesignTask.Status.DRAFT,
+            priority=priority,
+        )
+        if template is not None and template.checklist:
+            DesignTaskChecklistItem.objects.bulk_create(
+                DesignTaskChecklistItem(task=task, text=str(item))
+                for item in template.checklist
+            )
+    logger.info(
+        "create_task: user=%s task=%s project=%s %s→%s template=%s",
+        user.pk, task.pk, project.code,
+        source_section.code, target_section.code,
+        template.pk if template else None,
+    )
+    return task
+
+
+def issue_task(user: User, task: DesignTask) -> DesignTask:
+    """Выдача задания: DRAFT → ISSUED (спека 3, issue_task).
+
+    Права: только author или gip/admin. Заполняет issued_at, пишет лог и
+    уведомляет исполнителя.
+    """
+    if task.status != DesignTask.Status.DRAFT:
+        raise ValueError("Выдать можно только задание в статусе DRAFT")
+    if task.author_id != user.pk and not _is_gip_or_admin(user, task.project):
+        raise PermissionDenied("Выдать задание может автор, ГИП или админ")
+
+    old_status = task.status
+    with transaction.atomic():
+        task.status = DesignTask.Status.ISSUED
+        task.issued_at = timezone.now()
+        task.save(update_fields=['status', 'issued_at', 'updated_at'])
+        _log_status_change(task, old_status, DesignTask.Status.ISSUED, user)
+        if task.assignee is not None:
+            _notify_task(
+                task,
+                task.assignee,
+                user,
+                f'Вам выдано задание #{task.pk}: {task.title}',
+                verb='assigned',
+            )
+    logger.info(
+        "issue_task: user=%s task=%s assignee=%s",
+        user.pk, task.pk, task.assignee_id,
+    )
+    return task
+
+
+# Матрица переходов (спека 3): (old_status, new_status) → кто разрешён.
+# Роли: A=assignee, AU=author, G=gip/admin. Условия (обязательный
+# комментарий, output-attachment) проверяются отдельно.
+_DESIGN_TASK_TRANSITIONS = {
+    (DesignTask.Status.ISSUED, DesignTask.Status.IN_PROGRESS): {'A'},
+    (DesignTask.Status.IN_PROGRESS, DesignTask.Status.ON_HOLD): {'A'},
+    (DesignTask.Status.ON_HOLD, DesignTask.Status.IN_PROGRESS): {'A'},
+    (DesignTask.Status.IN_PROGRESS, DesignTask.Status.COMPLETED): {'A'},
+    (DesignTask.Status.COMPLETED, DesignTask.Status.REVIEW): {'AU', 'G'},
+    (DesignTask.Status.REVIEW, DesignTask.Status.ACCEPTED): {'AU', 'G'},
+    (DesignTask.Status.REVIEW, DesignTask.Status.RETURNED): {'AU', 'G'},
+    (DesignTask.Status.RETURNED, DesignTask.Status.IN_PROGRESS): {'A'},
+}
+
+# Переходы «Любой → CANCELLED»: author/gip/admin, с комментарием.
+# Терминальные статусы отменять нельзя: ACCEPTED уже закрыт заданием,
+# CANCELLED — повторная отмена бессмысленна (интерпретация «Любой»,
+# см. отчёт аудита).
+_DESIGN_TASK_FINAL_STATUSES = {
+    DesignTask.Status.ACCEPTED,
+    DesignTask.Status.CANCELLED,
+}
+
+# Переходы, требующие непустого комментария (колонка «Условие» матрицы).
+_COMMENT_REQUIRED = {
+    DesignTask.Status.ON_HOLD,
+    DesignTask.Status.RETURNED,
+    DesignTask.Status.CANCELLED,
+}
+
+
+def update_task_status(
+    user: User,
+    task: DesignTask,
+    new_status: str,
+    comment: str = '',
+) -> DesignTask:
+    """Смена статуса по матрице переходов (спека 3, update_task_status).
+
+    Права — по матрице (assignee / author / gip / admin). Недопустимый
+    переход или нарушенное условие → ValidationError; отсутствие прав →
+    PermissionDenied. Каждый переход пишется в DesignTaskStatusLog;
+    ключевые переходы уведомляют участников (COMPLETED → author/gip,
+    RETURNED → assignee, ACCEPTED → assignee).
+    """
+    if new_status not in DesignTask.Status.values:
+        raise ValueError(f"Неизвестный статус: {new_status}")
+    if new_status == task.status:
+        raise ValueError("Новый статус совпадает с текущим")
+
+    old_status = task.status
+
+    if new_status == DesignTask.Status.CANCELLED:
+        if old_status in _DESIGN_TASK_FINAL_STATUSES:
+            raise ValidationError(
+                f"Нельзя отменить задание в статусе {old_status}"
+            )
+        if task.author_id != user.pk and not _is_gip_or_admin(user, task.project):
+            raise PermissionDenied("Отменить задание может автор, ГИП или админ")
+    else:
+        allowed = _DESIGN_TASK_TRANSITIONS.get((old_status, new_status))
+        if allowed is None:
+            raise ValidationError(
+                f"Переход {old_status} → {new_status} запрещён матрицей"
+            )
+        if not (
+            ('A' in allowed and task.assignee_id == user.pk)
+            or ('AU' in allowed and task.author_id == user.pk)
+            or ('G' in allowed and _is_gip_or_admin(user, task.project))
+        ):
+            raise PermissionDenied(
+                f"Переход {old_status} → {new_status} недоступен вашей роли"
+            )
+
+    comment = (comment or '').strip()
+    if new_status in _COMMENT_REQUIRED and not comment:
+        raise ValidationError(
+            f"Переход в статус {new_status} требует комментария"
+        )
+
+    if (
+        new_status == DesignTask.Status.COMPLETED
+        and not task.attachments.filter(kind=DesignTaskAttachment.Kind.OUTPUT).exists()
+    ):
+        raise ValidationError(
+            "Перед отметкой выполнения приложите результат (output)"
+        )
+
+    with transaction.atomic():
+        task.status = new_status
+        update_fields = ['status', 'updated_at']
+        if new_status == DesignTask.Status.ACCEPTED:
+            task.accepted_at = timezone.now()
+            task.closed_by = user
+            update_fields += ['accepted_at', 'closed_by']
+        task.save(update_fields=update_fields)
+        _log_status_change(task, old_status, new_status, user, comment)
+
+        if new_status == DesignTask.Status.COMPLETED:
+            for recipient in {task.author, task.project.gip} - {None, user}:
+                _notify_task(
+                    task,
+                    recipient,
+                    user,
+                    f'Задание #{task.pk} выполнено и ждёт проверки: {task.title}',
+                )
+        elif new_status == DesignTask.Status.RETURNED:
+            _notify_task(
+                task,
+                task.assignee,
+                user,
+                f'Задание #{task.pk} возвращено на доработку: {comment[:200]}',
+            )
+        elif new_status == DesignTask.Status.ACCEPTED:
+            _notify_task(
+                task,
+                task.assignee,
+                user,
+                f'Задание #{task.pk} принято: {task.title}',
+            )
+
+    logger.info(
+        "update_task_status: user=%s task=%s %s→%s",
+        user.pk, task.pk, old_status, new_status,
+    )
+    return task
+
+
+def add_task_attachment(
+    user: User,
+    task: DesignTask,
+    kind: str,
+    document: Document | None = None,
+    file=None,
+) -> DesignTaskAttachment:
+    """Вложение к заданию (спека 3, add_task_attachment).
+
+    Права по kind: input — author или gip/admin (передача исходных
+    данных), output — только assignee (результат, только в статусе
+    IN_PROGRESS), comment — любые участники. Требуется хотя бы одно из
+    document/file.
+    """
+    if kind not in DesignTaskAttachment.Kind.values:
+        raise ValueError(f"Неизвестный тип вложения: {kind}")
+    if document is None and file is None:
+        raise ValidationError("Вложение требует документ или файл")
+
+    is_gip_or_admin = _is_gip_or_admin(user, task.project)
+    if kind == DesignTaskAttachment.Kind.INPUT:
+        if task.author_id != user.pk and not is_gip_or_admin:
+            raise PermissionDenied(
+                "Входные данные добавляет автор задания, ГИП или админ"
+            )
+    elif kind == DesignTaskAttachment.Kind.OUTPUT:
+        if task.assignee_id != user.pk:
+            raise PermissionDenied("Результат добавляет только исполнитель")
+        if task.status != DesignTask.Status.IN_PROGRESS:
+            raise ValidationError(
+                "Результат можно прикладывать только в статусе В работе"
+            )
+    else:  # comment
+        if not _is_task_participant(user, task):
+            raise PermissionDenied(
+                "Комментарии оставляют только участники задания"
+            )
+
+    attachment = DesignTaskAttachment.objects.create(
+        task=task,
+        document=document,
+        file=file,
+        kind=kind,
+        uploaded_by=user,
+    )
+    logger.info(
+        "add_task_attachment: user=%s task=%s kind=%s attachment=%s",
+        user.pk, task.pk, kind, attachment.pk,
+    )
+    return attachment
+
+
+def toggle_checklist_item(
+    user: User,
+    item: DesignTaskChecklistItem,
+) -> DesignTaskChecklistItem:
+    """Отметка/снятие пункта чек-листа (спека 3, toggle_checklist_item).
+
+    Права: только assignee или gip/admin. При выполнении фиксируются
+    done_by/done_at; при снятии — сбрасываются.
+    """
+    task = item.task
+    if task.assignee_id != user.pk and not _is_gip_or_admin(user, task.project):
+        raise PermissionDenied("Чек-лист отмечает исполнитель, ГИП или админ")
+
+    item.is_done = not item.is_done
+    if item.is_done:
+        item.done_by = user
+        item.done_at = timezone.now()
+    else:
+        item.done_by = None
+        item.done_at = None
+    item.save(update_fields=['is_done', 'done_by', 'done_at'])
+    logger.info(
+        "toggle_checklist_item: user=%s item=%s is_done=%s",
+        user.pk, item.pk, item.is_done,
+    )
+    return item
+
+
+def task_summary_for_gip(project: Project) -> dict:
+    """Сводка по заданиям проекта для дашборда ГИПа (спека 3, 4.4).
+
+    overdue: due_date < сегодня и статус не в терминальных
+    (ACCEPTED, CANCELLED). awaiting_review: статус REVIEW.
+    """
+    today = timezone.localdate()
+    queryset = DesignTask.objects.filter(project=project)
+    by_status_counts = queryset.values('status').annotate(total=Count('id'))
+    by_status = {row['status']: row['total'] for row in by_status_counts}
+    return {
+        'total': queryset.count(),
+        'by_status': by_status,
+        'overdue': queryset.filter(
+            due_date__lt=today,
+            status__in=[
+                DesignTask.Status.DRAFT,
+                DesignTask.Status.ISSUED,
+                DesignTask.Status.IN_PROGRESS,
+                DesignTask.Status.ON_HOLD,
+                DesignTask.Status.COMPLETED,
+                DesignTask.Status.REVIEW,
+                DesignTask.Status.RETURNED,
+            ],
+        ).count(),
+        'on_hold': by_status.get(DesignTask.Status.ON_HOLD, 0),
+        'awaiting_review': by_status.get(DesignTask.Status.REVIEW, 0),
+    }
+
+
+def list_tasks(
+    project: Project,
+    user: User,
+    role_filter: str = 'all',
+) -> QuerySet:
+    """Список заданий проекта (спека 3, list_tasks).
+
+    role_filter: 'incoming' — назначенные мне; 'outgoing' — созданные
+    мной; 'all' — все задания (только gip/admin проекта, иначе
+    PermissionDenied). Доступ к проекту обязателен для всех вариантов.
+    """
+    _ensure_project_access(user, project)
+    if role_filter not in ('incoming', 'outgoing', 'all'):
+        raise ValueError(f"Неизвестный role_filter: {role_filter}")
+    if role_filter == 'all' and not _is_gip_or_admin(user, project):
+        raise PermissionDenied(
+            "Все задания проекта видит только ГИП или админ"
+        )
+    queryset = (
+        DesignTask.objects.filter(project=project)
+        .select_related(
+            'project', 'source_section', 'target_section',
+            'author', 'assignee', 'template',
+        )
+    )
+    if role_filter == 'incoming':
+        queryset = queryset.filter(assignee=user)
+    elif role_filter == 'outgoing':
+        queryset = queryset.filter(author=user)
+    return queryset.order_by('-created_at')
