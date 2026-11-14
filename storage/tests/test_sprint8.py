@@ -38,7 +38,7 @@ class FilterBarTests(Sprint5TestBase):
 
     def test_zone_chip_displayed(self):
         response = self._page('tab=documents&zone=PUBLISHED')
-        self.assertContains(response, 'Зона:')
+        self.assertContains(response, 'Состояние:')
         self.assertContains(response, 'Опубликовано')
         self.assertContains(response, 'data-filter-chip-clear="zone"')
 

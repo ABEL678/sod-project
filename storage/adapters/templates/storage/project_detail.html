@@ -457,11 +457,15 @@
                     <div class="ai-tabpane__scroll">
                         {% include 'ai_checks/_kb.html' %}
                     </div>
-            {% else %}
-                {% include 'storage/_documents_panel.html' %}
-            {% endif %}
+                    {% endif %}
                     </div>{# /#mainTabContent #}
                 </div>{# /#mainTabs #}
+            {% endif %}
+
+            {# Панель документов — всегда видна (для управляющих внутри вкладки «Документы»,
+               для остальных — единственный контент). #}
+            {% if active_tab == 'documents' %}
+                {% include 'storage/_documents_panel.html' %}
             {% endif %}
         </main>
     </div>
