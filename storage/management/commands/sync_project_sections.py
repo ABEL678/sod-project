@@ -138,7 +138,7 @@ class Command(BaseCommand):
             )
             for code, sd in sections.items():
                 self.stdout.write(
-                    f'    + {code}: {sd["name"]}'
+                    f'    + {code}: {sd.name}'
                 )
 
             # 2. Перепривязка папок
