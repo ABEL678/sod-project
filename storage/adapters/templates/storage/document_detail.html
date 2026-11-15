@@ -447,6 +447,34 @@
       {% endfor %}
     </div>
 
+    {% if related_tasks %}
+      {# Этап 4 (спека 7): блок «Связанные задания» — задания, в которых #}
+      {# этот документ приложен как input/output-вложение. Только #}
+      {# существующие классы панели и Bootstrap; анониму (share-ссылка) #}
+      {# блок не отдаётся — related_tasks пуст у public_view. #}
+      <div class="border-top flex-shrink-0" id="relatedTasks" style="max-height: 34%; overflow-y: auto;">
+        <div class="panel-head">
+          <h2>Связанные задания</h2><span class="count num">{{ related_tasks|length }}</span>
+        </div>
+        <div class="list flex-grow-0" style="max-height: none; overflow: visible;" data-role="related-tasks">
+          {% for related in related_tasks %}
+            <div class="card">
+              <div class="card-body" style="cursor: default;">
+                <div class="card-title">
+                  <a href="{% url 'storage:task_detail' related.project_id related.pk %}">#{{ related.pk }} {{ related.title|truncatechars:48 }}</a>
+                </div>
+                <div class="card-meta">
+                  <span class="badge {{ related.status_badge }}">{{ related.get_status_display }}</span>
+                  {% if related.assignee %}<span>{{ related.assignee.get_full_name|default:related.assignee.username }}</span>{% endif %}
+                  {% if related.due_date %}<span>· до {{ related.due_date|date:"d.m.Y" }}</span>{% endif %}
+                </div>
+              </div>
+            </div>
+          {% endfor %}
+        </div>
+      </div>
+    {% endif %}
+
     <div class="detail" id="detail">
       <div class="detail-head">
         <button class="back" onclick="closeIssueCard()" type="button">←</button>

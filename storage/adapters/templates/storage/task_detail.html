@@ -39,10 +39,8 @@
                     <span class="badge text-bg-warning">{{ task.get_priority_display }}</span>
                 {% endif %}
                 {% if deadline %}
-                    {# Живой дедлайн (спека 4.3): «осталось N дней» / «срок сегодня» / «просрочено на N дней». #}
-                    <span class="badge {{ deadline.badge }}" data-role="task-deadline" title="Срок: {{ task.due_date|date:'d.m.Y' }}">
-                        <i class="bi bi-calendar-event me-1" aria-hidden="true"></i>{{ deadline.label }}
-                    </span>
+                    {# Живой дедлайн (спека 4.3): HTMX-поллинг раз в 60 секунд — фрагмент _task_deadline.html. #}
+                    {% include 'storage/_task_deadline.html' %}
                 {% endif %}
             </div>
             <div class="small text-muted">
@@ -64,154 +62,15 @@
                 <div class="card-body" data-role="task-description" style="white-space: pre-line;">{{ task.description }}</div>
             </div>
 
-            {# Блок «Входные данные» (спека 4.3): вложения kind=input + привязка к документам. #}
-            <div class="card shadow-sm mb-3">
-                <div class="card-header fw-semibold d-flex align-items-center">
-                    <i class="bi bi-box-arrow-in-down me-2" aria-hidden="true"></i>Входные данные
-                    <span class="badge text-bg-light border ms-2">{{ input_attachments|length }}</span>
-                </div>
-                <div class="card-body">
-                    {% if input_attachments %}
-                        <ul class="list-group list-group-flush mb-3" data-role="task-input-attachments">
-                            {% for attachment in input_attachments %}
-                                <li class="list-group-item px-0 d-flex align-items-start gap-2">
-                                    <i class="bi {% if attachment.document %}bi-file-earmark-text{% else %}bi-paperclip{% endif %} mt-1" aria-hidden="true"></i>
-                                    <div>
-                                        {% if attachment.document %}
-                                            <a href="{% url 'storage:document_detail' attachment.document.pk %}">
-                                                {{ attachment.document.code }} — {{ attachment.document.name }}
-                                            </a>
-                                        {% else %}
-                                            <a href="{{ attachment.file.url }}">{{ attachment.file_name|default:attachment.file.name }}</a>
-                                        {% endif %}
-                                        <div class="small text-muted">
-                                            загрузил {{ attachment.uploaded_by.get_full_name|default:attachment.uploaded_by.username }}
-                                            · {{ attachment.created_at|date:"d.m.Y H:i" }}
-                                        </div>
-                                    </div>
-                                </li>
-                            {% endfor %}
-                        </ul>
-                    {% else %}
-                        <p class="text-muted mb-3" data-role="task-input-empty">Входные данные не приложены.</p>
-                    {% endif %}
+            {# Блоки «Входные данные» и «Результат» — фрагменты _task_input_card.html / _task_output_card.html: #}
+            {# те же карточки используются как HTMX-ответ TaskAttachmentActionView (обновление без перезагрузки). #}
+            {% include 'storage/_task_input_card.html' %}
 
-                    {% if can_add_input %}
-                        {# add_task_attachment: input добавляет автор (или ГИП/админ) — правило в сервисе. #}
-                        <form method="post" action="{% url 'storage:task_attachment' project.pk task.pk %}" enctype="multipart/form-data" class="border rounded p-2 bg-light" data-role="task-input-form">
-                            {% csrf_token %}
-                            <input type="hidden" name="kind" value="input">
-                            <label class="form-label small mb-1" for="inputDocumentSelect">Документ проекта (опционально)</label>
-                            <select class="form-select form-select-sm mb-2" id="inputDocumentSelect" name="document">
-                                <option value="">— без привязки —</option>
-                                {% for document in document_choices %}
-                                    <option value="{{ document.pk }}">{{ document.code }} — {{ document.name }}</option>
-                                {% endfor %}
-                            </select>
-                            <label class="form-label small mb-1" for="inputFileField">Или свободный файл</label>
-                            <input type="file" class="form-control form-control-sm mb-2" id="inputFileField" name="file">
-                            <button type="submit" class="btn btn-sm btn-outline-primary">
-                                <i class="bi bi-plus-lg me-1" aria-hidden="true"></i>Добавить входные данные
-                            </button>
-                        </form>
-                    {% endif %}
-                </div>
-            </div>
+            {% include 'storage/_task_output_card.html' %}
 
-            {# Блок «Результат» (спека 4.3): вложения kind=output. #}
-            <div class="card shadow-sm mb-3">
-                <div class="card-header fw-semibold d-flex align-items-center">
-                    <i class="bi bi-box-arrow-up me-2" aria-hidden="true"></i>Результат
-                    <span class="badge text-bg-light border ms-2">{{ output_attachments|length }}</span>
-                </div>
-                <div class="card-body">
-                    {% if output_attachments %}
-                        <ul class="list-group list-group-flush mb-3" data-role="task-output-attachments">
-                            {% for attachment in output_attachments %}
-                                <li class="list-group-item px-0 d-flex align-items-start gap-2">
-                                    <i class="bi {% if attachment.document %}bi-file-earmark-text{% else %}bi-paperclip{% endif %} mt-1" aria-hidden="true"></i>
-                                    <div>
-                                        {% if attachment.document %}
-                                            <a href="{% url 'storage:document_detail' attachment.document.pk %}">
-                                                {{ attachment.document.code }} — {{ attachment.document.name }}
-                                            </a>
-                                        {% else %}
-                                            <a href="{{ attachment.file.url }}">{{ attachment.file_name|default:attachment.file.name }}</a>
-                                        {% endif %}
-                                        <div class="small text-muted">
-                                            загрузил {{ attachment.uploaded_by.get_full_name|default:attachment.uploaded_by.username }}
-                                            · {{ attachment.created_at|date:"d.m.Y H:i" }}
-                                        </div>
-                                    </div>
-                                </li>
-                            {% endfor %}
-                        </ul>
-                    {% else %}
-                        <p class="text-muted mb-3" data-role="task-output-empty">
-                            Результат не приложен{% if can_complete %}. Перед отметкой «Выполнено» приложите хотя бы один результат.{% endif %}
-                        </p>
-                    {% endif %}
-
-                    {% if can_add_output %}
-                        {# add_task_attachment: output — только исполнитель и только в статусе IN_PROGRESS (сервис). #}
-                        <form method="post" action="{% url 'storage:task_attachment' project.pk task.pk %}" enctype="multipart/form-data" class="border rounded p-2 bg-light" data-role="task-output-form">
-                            {% csrf_token %}
-                            <input type="hidden" name="kind" value="output">
-                            <label class="form-label small mb-1" for="outputDocumentSelect">Документ проекта (опционально)</label>
-                            <select class="form-select form-select-sm mb-2" id="outputDocumentSelect" name="document">
-                                <option value="">— без привязки —</option>
-                                {% for document in document_choices %}
-                                    <option value="{{ document.pk }}">{{ document.code }} — {{ document.name }}</option>
-                                {% endfor %}
-                            </select>
-                            <label class="form-label small mb-1" for="outputFileField">Или свободный файл</label>
-                            <input type="file" class="form-control form-control-sm mb-2" id="outputFileField" name="file">
-                            <button type="submit" class="btn btn-sm btn-outline-primary">
-                                <i class="bi bi-plus-lg me-1" aria-hidden="true"></i>Добавить результат
-                            </button>
-                        </form>
-                    {% endif %}
-                </div>
-            </div>
-
-            {# Блок «Чек-лист» (спека 4.3): переключение — POST toggle_checklist_item, права в сервисе. #}
+            {# Блок «Чек-лист» (спека 4.3) — фрагмент _task_checklist.html: HTMX toggle без перезагрузки. #}
             {% if checklist_total %}
-                <div class="card shadow-sm mb-3">
-                    <div class="card-header fw-semibold d-flex align-items-center">
-                        <i class="bi bi-check2-square me-2" aria-hidden="true"></i>Чек-лист
-                        <span class="badge text-bg-light border ms-2" data-role="task-checklist-progress">{{ checklist_done }} / {{ checklist_total }}</span>
-                    </div>
-                    <div class="card-body py-0">
-                        <ul class="list-group list-group-flush" data-role="task-checklist">
-                            {% for item in checklist_items %}
-                                <li class="list-group-item px-0 d-flex align-items-start gap-2">
-                                    {% if can_toggle_checklist %}
-                                        <form method="post" action="{% url 'storage:task_checklist' project.pk task.pk %}" class="mt-1">
-                                            {% csrf_token %}
-                                            <input type="hidden" name="item_id" value="{{ item.pk }}">
-                                            <button type="submit" class="btn btn-link p-0" style="line-height: 1;"
-                                                    title="{% if item.is_done %}Снять отметку{% else %}Отметить выполненным{% endif %}"
-                                                    aria-label="{% if item.is_done %}Снять отметку{% else %}Отметить выполненным{% endif %}: {{ item.text }}">
-                                                <i class="bi {% if item.is_done %}bi-check2-square text-success{% else %}bi-square{% endif %}" aria-hidden="true"></i>
-                                            </button>
-                                        </form>
-                                    {% else %}
-                                        <i class="bi {% if item.is_done %}bi-check2-square text-success{% else %}bi-square{% endif %} mt-1" aria-hidden="true"></i>
-                                    {% endif %}
-                                    <span class="{% if item.is_done %}text-decoration-line-through text-muted{% endif %}">{{ item.text }}</span>
-                                    {% if item.is_done and item.done_by %}
-                                        <small class="text-muted ms-auto text-nowrap">
-                                            {{ item.done_by.get_full_name|default:item.done_by.username }} · {{ item.done_at|date:"d.m.Y H:i" }}
-                                        </small>
-                                    {% endif %}
-                                </li>
-                            {% endfor %}
-                        </ul>
-                    </div>
-                    <div class="card-body py-2 small text-muted">
-                        Чек-лист отмечает исполнитель{% if can_manage %} (или ГИП){% endif %}.
-                    </div>
-                </div>
+                {% include 'storage/_task_checklist.html' %}
             {% endif %}
 
             {# Блок «История» (спека 4.3): таймлайн status_logs. #}

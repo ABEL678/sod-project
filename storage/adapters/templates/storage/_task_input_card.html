@@ -1,0 +1,70 @@
+{# Этап 4 (спека 4.3): блок «Входные данные» — фрагмент карточки задания. #}
+{# Используется в task_detail.html и как HTMX-ответ TaskAttachmentActionView #}
+{# (hx-post → outerHTML этой карточки): список обновляется без перезагрузки #}
+{# страницы, на время запроса показывается Bootstrap-спиннер (hx-indicator). #}
+{# Загрузка — через сервис add_task_attachment (правила в сервисе); во вьюхе #}
+{# ограничение типов файлов и kind. Без нового CSS — только Bootstrap и bi-*. #}
+<div class="card shadow-sm mb-3" id="taskInputCard">
+    <div class="card-header fw-semibold d-flex align-items-center">
+        <i class="bi bi-box-arrow-in-down me-2" aria-hidden="true"></i>Входные данные
+        <span class="badge text-bg-light border ms-2">{{ input_attachments|length }}</span>
+    </div>
+    <div class="card-body">
+        {% if fragment_message %}
+            {# Сообщение HTMX-ответа (ошибка сервиса/валидации или успех). #}
+            <div class="alert {% if fragment_message_tags == 'error' %}alert-danger{% else %}alert-{{ fragment_message_tags|default:'info' }}{% endif %} alert-dismissible py-2 px-3 small mb-2" data-role="task-input-fragment-message">
+                {{ fragment_message }}
+                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Закрыть"></button>
+            </div>
+        {% endif %}
+        {% if input_attachments %}
+            <ul class="list-group list-group-flush mb-3" data-role="task-input-attachments">
+                {% for attachment in input_attachments %}
+                    <li class="list-group-item px-0 d-flex align-items-start gap-2">
+                        <i class="bi {% if attachment.document %}bi-file-earmark-text{% else %}bi-paperclip{% endif %} mt-1" aria-hidden="true"></i>
+                        <div>
+                            {% if attachment.document %}
+                                <a href="{% url 'storage:document_detail' attachment.document.pk %}">
+                                    {{ attachment.document.code }} — {{ attachment.document.name }}
+                                </a>
+                            {% else %}
+                                <a href="{{ attachment.file.url }}">{{ attachment.file_name|default:attachment.file.name }}</a>
+                            {% endif %}
+                            <div class="small text-muted">
+                                загрузил {{ attachment.uploaded_by.get_full_name|default:attachment.uploaded_by.username }}
+                                · {{ attachment.created_at|date:"d.m.Y H:i" }}
+                            </div>
+                        </div>
+                    </li>
+                {% endfor %}
+            </ul>
+        {% else %}
+            <p class="text-muted mb-3" data-role="task-input-empty">Входные данные не приложены.</p>
+        {% endif %}
+
+        {% if can_add_input %}
+            {# add_task_attachment: input добавляет автор (или ГИП/админ) — правило в сервисе. #}
+            <form method="post" action="{% url 'storage:task_attachment' project.pk task.pk %}"
+                  enctype="multipart/form-data" class="border rounded p-2 bg-light" data-role="task-input-form"
+                  hx-post="{% url 'storage:task_attachment' project.pk task.pk %}"
+                  hx-target="#taskInputCard" hx-swap="outerHTML"
+                  hx-indicator="#inputUploadSpinner">
+                {% csrf_token %}
+                <input type="hidden" name="kind" value="input">
+                <label class="form-label small mb-1" for="inputDocumentSelect">Документ проекта (опционально)</label>
+                <select class="form-select form-select-sm mb-2" id="inputDocumentSelect" name="document">
+                    <option value="">— без привязки —</option>
+                    {% for document in document_choices %}
+                        <option value="{{ document.pk }}">{{ document.code }} — {{ document.name }}</option>
+                    {% endfor %}
+                </select>
+                <label class="form-label small mb-1" for="inputFileField">Или свободный файл</label>
+                <input type="file" class="form-control form-control-sm mb-2" id="inputFileField" name="file">
+                <button type="submit" class="btn btn-sm btn-outline-primary">
+                    <span class="spinner-border spinner-border-sm htmx-indicator me-1" id="inputUploadSpinner" aria-hidden="true"></span>
+                    <i class="bi bi-plus-lg me-1" aria-hidden="true"></i>Добавить входные данные
+                </button>
+            </form>
+        {% endif %}
+    </div>
+</div>

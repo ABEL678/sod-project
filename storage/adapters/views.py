@@ -61,7 +61,9 @@ from storage.domain.models import (
     UserProfile,
 )
 from storage.domain.services import (
+    ALLOWED_UPLOAD_EXTENSIONS,
     DOCUMENT_VIEW_COLUMNS,
+    MAX_UPLOAD_SIZE,
     add_company_member,
     add_task_attachment,
     allowed_issue_statuses,
@@ -1451,7 +1453,8 @@ def _design_task_deadline(task):
     «осталось N дней» / «срок сегодня» / «просрочено на N дней».
     Классы — только Bootstrap: просрочка красным, ≤3 дней жёлтым,
     остальное нейтральным. Плюрализация — сервис ru_plural (как в
-    issue_extras, но для DesignTask).
+    issue_extras, но для DesignTask). Флаг overdue — для иконки
+    (bi-alarm-fill у просрочки) без изменения цвета в шаблоне.
     """
     due = task.due_date
     if due is None or task.status not in TASK_DEADLINE_ACTIVE_STATUSES:
@@ -1469,7 +1472,7 @@ def _design_task_deadline(task):
             f'{ru_plural(overdue_days, "день", "дня", "дней")}'
         )
         badge = 'text-bg-danger'
-    return {'label': label, 'badge': badge}
+    return {'label': label, 'badge': badge, 'overdue': days < 0}
 
 
 class _DesignTaskCardMixin:
@@ -1501,6 +1504,83 @@ class _DesignTaskCardMixin:
         return redirect('storage:task_detail', task.project_id, task.pk)
 
 
+def _task_card_flags(user, task):
+    """UI-флаги видимости кнопок и форм карточки (спека 4.3, Этап 4).
+
+    Общий источник для TaskDetailView и HTMX-фрагментов действий:
+    сами матрица переходов, права и условия (обязательный комментарий,
+    output-вложение) проверяются сервисами update_task_status /
+    add_task_attachment / toggle_checklist_item — здесь только
+    подсказка «какие кнопки имеет смысл показать» для текущей роли
+    и статуса. Значения согласованы с интерпретацией матрицы п. 3
+    в сервисе: CANCELLED недоступен из финальных (ACCEPTED/CANCELLED),
+    output — только в IN_PROGRESS.
+    """
+    is_author = task.author_id == user.pk
+    is_assignee = task.assignee_id == user.pk
+    can_manage = can_view_all_tasks(user, task.project)
+    status = task.status
+    is_final = status in (
+        DesignTask.Status.ACCEPTED, DesignTask.Status.CANCELLED,
+    )
+    return {
+        'is_author': is_author,
+        'is_assignee': is_assignee,
+        'can_manage': can_manage,
+        'can_start_work': is_assignee and status in (
+            DesignTask.Status.ISSUED, DesignTask.Status.RETURNED,
+        ),
+        'can_hold': is_assignee and status == DesignTask.Status.IN_PROGRESS,
+        'can_resume': is_assignee and status == DesignTask.Status.ON_HOLD,
+        'can_complete': is_assignee
+        and status == DesignTask.Status.IN_PROGRESS,
+        'can_send_review': (is_author or can_manage)
+        and status == DesignTask.Status.COMPLETED,
+        'can_review': (is_author or can_manage)
+        and status == DesignTask.Status.REVIEW,
+        'can_cancel': (is_author or can_manage) and not is_final,
+        # Вложение input — автор/ГИП/админ (правило сервиса),
+        # output — только исполнитель в статусе «В работе».
+        'can_add_input': is_author or can_manage,
+        'can_add_output': is_assignee
+        and status == DesignTask.Status.IN_PROGRESS,
+        'can_toggle_checklist': is_assignee or can_manage,
+    }
+
+
+def _task_attachments_context(user, task):
+    """Списки вложений и справочник документов для фрагментов карточки.
+
+    select_related убирает N+1 по document/uploaded_by; для свободных
+    файлов показывается только имя файла, а не путь хранения.
+    """
+    attachments_by_kind = {}
+    for kind in (DesignTaskAttachment.Kind.INPUT, DesignTaskAttachment.Kind.OUTPUT):
+        kind_attachments = list(
+            task.attachments.filter(kind=kind)
+            .select_related('document', 'uploaded_by')
+        )
+        for attachment in kind_attachments:
+            if attachment.file:
+                attachment.file_name = attachment.file.name.rsplit(
+                    '/', 1,
+                )[-1]
+        attachments_by_kind[kind] = kind_attachments
+    return {
+        'task': task,
+        'project': task.project,
+        'input_attachments': attachments_by_kind[
+            DesignTaskAttachment.Kind.INPUT
+        ],
+        'output_attachments': attachments_by_kind[
+            DesignTaskAttachment.Kind.OUTPUT
+        ],
+        'document_choices': get_readable_documents(
+            user, task.project,
+        ).order_by('code'),
+    }
+
+
 class TaskDetailView(LoginRequiredMixin, _DesignTaskCardMixin, View):
     """Карточка задания /projects/<id>/tasks/<task_id>/ (спека 4.3, Этап 4).
 
@@ -1516,36 +1596,24 @@ class TaskDetailView(LoginRequiredMixin, _DesignTaskCardMixin, View):
     """
 
     template_name = 'storage/task_detail.html'
+    deadline_partial = 'storage/_task_deadline.html'
 
     def get(self, request, *args, **kwargs):
         task = self._get_task()
         user = request.user
 
-        is_author = task.author_id == user.pk
-        is_assignee = task.assignee_id == user.pk
-        # Тот же предикат, что PermissionDenied-гейт сервисов: автор или
-        # ГИП/админ управляют заданием, исполнитель выполняет.
-        can_manage = can_view_all_tasks(user, task.project)
-        status = task.status
-        is_final = status in (
-            DesignTask.Status.ACCEPTED, DesignTask.Status.CANCELLED,
-        )
+        # HTMX-поллинг живого дедлайна (аудит Этапа 4): шапка опрашивает
+        # этот же URL с ?partial=deadline раз в 60 секунд и заменяет
+        # только слот бейджа. Эндпоинт защищён тем же LoginRequiredMixin
+        # и проверкой доступа к проекту в _get_task (чужой проект → 404).
+        if request.GET.get('partial') == 'deadline':
+            return render(request, self.deadline_partial, {
+                'task': task,
+                'deadline': _design_task_deadline(task),
+            })
 
-        input_attachments = list(
-            task.attachments.filter(kind=DesignTaskAttachment.Kind.INPUT)
-            .select_related('document', 'uploaded_by')
-        )
-        output_attachments = list(
-            task.attachments.filter(kind=DesignTaskAttachment.Kind.OUTPUT)
-            .select_related('document', 'uploaded_by')
-        )
-        # Для свободных файлов показываем только имя файла, а не путь
-        # хранения (design_tasks/attachments/2026/11/…).
-        for attachment in (*input_attachments, *output_attachments):
-            if attachment.file:
-                attachment.file_name = attachment.file.name.rsplit(
-                    '/', 1,
-                )[-1]
+        flags = _task_card_flags(user, task)
+        attachments_context = _task_attachments_context(user, task)
 
         # История: статусы в логе — CharField без choices (спека 2.2),
         # подписи и бейджи подставляем здесь, чтобы шаблон не собирал
@@ -1568,46 +1636,20 @@ class TaskDetailView(LoginRequiredMixin, _DesignTaskCardMixin, View):
             'task': task,
             'project': task.project,
             'status_badge': TASK_STATUS_BADGES.get(
-                status, 'text-bg-secondary',
+                task.status, 'text-bg-secondary',
             ),
             'deadline': _design_task_deadline(task),
-            'input_attachments': input_attachments,
-            'output_attachments': output_attachments,
+            'input_attachments': attachments_context['input_attachments'],
+            'output_attachments': attachments_context['output_attachments'],
+            'document_choices': attachments_context['document_choices'],
             'checklist_items': checklist_items,
             'checklist_total': len(checklist_items),
             'checklist_done': sum(
                 1 for item in checklist_items if item.is_done
             ),
             'status_logs': status_logs,
-            # Документы проекта для привязки вложений (select «без
-            # привязки» разрешён — вложение может быть свободным файлом).
-            'document_choices': get_readable_documents(
-                user, task.project,
-            ).order_by('code'),
-            'is_author': is_author,
-            'is_assignee': is_assignee,
-            'can_manage': can_manage,
-            # Панель действий — по ролям и текущему статусу (матрица
-            # п. 3 спеки); валидность перехода гарантирует сервис.
-            'can_start_work': is_assignee and status in (
-                DesignTask.Status.ISSUED, DesignTask.Status.RETURNED,
-            ),
-            'can_hold': is_assignee and status == DesignTask.Status.IN_PROGRESS,
-            'can_resume': is_assignee and status == DesignTask.Status.ON_HOLD,
-            'can_complete': is_assignee
-            and status == DesignTask.Status.IN_PROGRESS,
-            'can_send_review': (is_author or can_manage)
-            and status == DesignTask.Status.COMPLETED,
-            'can_review': (is_author or can_manage)
-            and status == DesignTask.Status.REVIEW,
-            'can_cancel': (is_author or can_manage) and not is_final,
-            # Вложение input — автор/ГИП/админ (правило сервиса),
-            # output — только исполнитель в статусе «В работе».
-            'can_add_input': is_author or can_manage,
-            'can_add_output': is_assignee
-            and status == DesignTask.Status.IN_PROGRESS,
-            'can_toggle_checklist': is_assignee or can_manage,
         }
+        context.update(flags)
         return render(request, self.template_name, context)
 
 
@@ -1640,14 +1682,80 @@ class TaskAttachmentActionView(LoginRequiredMixin, _DesignTaskCardMixin, View):
     """POST-загрузка вложения input/output с карточки (спека 4.3, Этап 4).
 
     Тонкая вьюха над add_task_attachment: права по kind и статус для
-    output проверяет сервис. Поле document — опциональный select из
+    output проверяет сервис. Вьюха отвечает только за форму запроса:
+    с карточки разрешены kind input/output (comment — не форма
+    карточки), белый список расширений и лимит размера — те же
+    константы, что у версий документов (ALLOWED_UPLOAD_EXTENSIONS /
+    MAX_UPLOAD_SIZE). Поле document — опциональный select из
     документов проекта (вьюха проверяет принадлежность документу
     проекта; свободный файл — без привязки).
+
+    HTMX: формы загрузки уходят hx-post'ом — в ответ отдаётся
+    обновлённый фрагмент карточки вложений (_task_input_card.html /
+    _task_output_card.html) с сообщением результата. Без HTMX —
+    классический redirect с messages (прогрессивное улучшение).
     """
+
+    input_fragment = 'storage/_task_input_card.html'
+    output_fragment = 'storage/_task_output_card.html'
+
+    def _fragment_response(self, request, task, kind, message, tags):
+        """Фрагмент карточки вложений для HTMX-ответа."""
+        context = _task_attachments_context(request.user, task)
+        context.update(_task_card_flags(request.user, task))
+        context['fragment_message'] = message
+        context['fragment_message_tags'] = tags
+        template = (
+            self.input_fragment
+            if kind == DesignTaskAttachment.Kind.INPUT
+            else self.output_fragment
+        )
+        return render(request, template, context)
+
+    def _validate_upload_file(self, file):
+        """Расширение и размер — та же политика, что у версий документов."""
+        filename = getattr(file, 'name', '') or ''
+        extension = (
+            filename.rsplit('.', 1)[-1].lower() if '.' in filename else ''
+        )
+        if extension not in ALLOWED_UPLOAD_EXTENSIONS:
+            raise ValueError(
+                f"Формат «{extension or 'без расширения'}» не поддерживается. "
+                "Разрешены: " + ', '.join(sorted(ALLOWED_UPLOAD_EXTENSIONS))
+            )
+        file_size = getattr(file, 'size', 0) or 0
+        if file_size <= 0:
+            raise ValueError("Файл пустой")
+        if file_size > MAX_UPLOAD_SIZE:
+            raise ValueError(
+                f"Файл больше {MAX_UPLOAD_SIZE // (1024 * 1024)} МБ — "
+                "разбейте его или загрузите через обмен файлами"
+            )
 
     def post(self, request, *args, **kwargs):
         task = self._get_task()
         kind = (request.POST.get('kind') or '').strip()
+        is_htmx = bool(request.htmx)
+
+        if kind not in (
+            DesignTaskAttachment.Kind.INPUT,
+            DesignTaskAttachment.Kind.OUTPUT,
+        ):
+            error = 'Недопустимый тип вложения для карточки задания.'
+            if is_htmx:
+                return self._fragment_response(request, task, kind, error, 'error')
+            messages.error(request, error)
+            return self._redirect_to_task(task)
+
+        file = request.FILES.get('file')
+        if file is not None:
+            try:
+                self._validate_upload_file(file)
+            except ValueError as exc:
+                if is_htmx:
+                    return self._fragment_response(request, task, kind, str(exc), 'error')
+                messages.error(request, str(exc))
+                return self._redirect_to_task(task)
 
         document = None
         raw_document = (request.POST.get('document') or '').strip()
@@ -1658,8 +1766,11 @@ class TaskAttachmentActionView(LoginRequiredMixin, _DesignTaskCardMixin, View):
                 is_deleted=False,
             ).first() if raw_document.isdigit() else None
             if document is None:
+                error = 'Документ не найден в этом проекте.'
+                if is_htmx:
+                    return self._fragment_response(request, task, kind, error, 'error')
                 messages.error(
-                    request, 'Документ не найден в этом проекте.',
+                    request, error,
                 )
                 return self._redirect_to_task(task)
 
@@ -1669,13 +1780,18 @@ class TaskAttachmentActionView(LoginRequiredMixin, _DesignTaskCardMixin, View):
                 task,
                 kind,
                 document=document,
-                file=request.FILES.get('file'),
+                file=file,
             )
         except (PermissionDenied, ValueError, ValidationError) as exc:
+            if is_htmx:
+                return self._fragment_response(request, task, kind, str(exc), 'error')
             messages.error(request, str(exc))
         else:
             kind_label = attachment.get_kind_display()
-            messages.success(request, f'{kind_label}: вложение добавлено.')
+            message = f'{kind_label}: вложение добавлено.'
+            if is_htmx:
+                return self._fragment_response(request, task, kind, message, 'success')
+            messages.success(request, message)
         return self._redirect_to_task(task)
 
 
@@ -1683,12 +1799,33 @@ class TaskChecklistActionView(LoginRequiredMixin, _DesignTaskCardMixin, View):
     """POST-переключение пункта чек-листа с карточки (спека 4.3, Этап 4).
 
     Тонкая вьюха над toggle_checklist_item: отмечать может только
-    исполнитель (или ГИП/админ) — проверяет сервис. Обычная POST-форма
-    без JS: чекбокс — submit-кнопка с иконкой.
+    исполнитель (или ГИП/админ) — проверяет сервис.
+
+    HTMX: чекбокс — hx-post форма, в ответ отдаётся обновлённый
+    фрагмент чек-листа (_task_checklist.html) — мгновенное сохранение
+    без перезагрузки страницы. Без HTMX — классический redirect с
+    messages (прогрессивное улучшение).
     """
+
+    fragment = 'storage/_task_checklist.html'
+
+    def _fragment_response(self, request, task, message, tags):
+        items = list(task.checklist_items.order_by('id'))
+        context = {
+            'task': task,
+            'project': task.project,
+            'checklist_items': items,
+            'checklist_total': len(items),
+            'checklist_done': sum(1 for item in items if item.is_done),
+            'fragment_message': message,
+            'fragment_message_tags': tags,
+        }
+        context.update(_task_card_flags(request.user, task))
+        return render(request, self.fragment, context)
 
     def post(self, request, *args, **kwargs):
         task = self._get_task()
+        is_htmx = bool(request.htmx)
         raw_item = (request.POST.get('item_id') or '').strip()
         item = None
         if raw_item.isdigit():
@@ -1696,16 +1833,24 @@ class TaskChecklistActionView(LoginRequiredMixin, _DesignTaskCardMixin, View):
                 task=task, pk=raw_item,
             ).first()
         if item is None:
-            messages.error(request, 'Пункт чек-листа не найден.')
+            error = 'Пункт чек-листа не найден.'
+            if is_htmx:
+                return self._fragment_response(request, task, error, 'error')
+            messages.error(request, error)
             return self._redirect_to_task(task)
 
         try:
             toggle_checklist_item(request.user, item)
         except (PermissionDenied, ValueError, ValidationError) as exc:
+            if is_htmx:
+                return self._fragment_response(request, task, str(exc), 'error')
             messages.error(request, str(exc))
         else:
             state = 'отмечен' if item.is_done else 'снят'
-            messages.success(request, f'Пункт «{item.text}» {state}.')
+            message = f'Пункт «{item.text}» {state}.'
+            if is_htmx:
+                return self._fragment_response(request, task, message, 'success')
+            messages.success(request, message)
         return self._redirect_to_task(task)
 
 
@@ -3083,7 +3228,26 @@ class DocumentDetailView(LoginRequiredMixin, DetailView):
             context['issues'] = []
             context['issues_json'] = []
             context['issue_assignees'] = []
+            # Этап 4 (спека 7): задания по документу анониму не отдаём.
+            context['related_tasks'] = []
         else:
+            # Этап 4 (спека 7): блок «Связанные задания» в карточке
+            # документа — задания, у которых input/output-вложение
+            # ссылается на этот документ. Один запрос с select_related
+            # (без N+1); бейдж статуса — тот же TASK_STATUS_BADGES.
+            related_tasks = list(
+                DesignTask.objects.filter(
+                    attachments__document=self.object,
+                )
+                .distinct()
+                .select_related('project', 'assignee')
+                .order_by('-updated_at')
+            )
+            for related in related_tasks:
+                related.status_badge = TASK_STATUS_BADGES.get(
+                    related.status, 'text-bg-secondary',
+                )
+            context['related_tasks'] = related_tasks
             status_labels = dict(Issue.STATUS_CHOICES)
             for issue in issues:
                 issue.allowed_status_options = [

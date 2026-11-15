@@ -1,0 +1,21 @@
+{# Этап 4 (спека 4.3): живой дедлайн с HTMX-поллингом (аудит Этапа 4). #}
+{# Слот опрашивает task_detail?partial=deadline раз в 60 секунд (TTL #}
+{# поллинга) и заменяет сам себя (outerHTML); бейдж «просрочено» — #}
+{# красный text-bg-danger с иконкой bi-alarm-fill. Без HTMX слот просто #}
+{# статичен — данные считаются на сервере при полной отдаче страницы. #}
+{# Эндпоинт закрыт LoginRequiredMixin + проверкой доступа к проекту. #}
+<span id="taskDeadlineSlot"
+      hx-get="{% url 'storage:task_detail' task.project_id task.pk %}?partial=deadline"
+      hx-trigger="every 60s"
+      hx-swap="outerHTML">
+    {% if deadline %}
+        <span class="badge {{ deadline.badge }}" data-role="task-deadline" title="Срок: {{ task.due_date|date:'d.m.Y' }}">
+            {% if deadline.overdue %}
+                <i class="bi bi-alarm-fill me-1" aria-hidden="true"></i>
+            {% else %}
+                <i class="bi bi-calendar-event me-1" aria-hidden="true"></i>
+            {% endif %}
+            {{ deadline.label }}
+        </span>
+    {% endif %}
+</span>

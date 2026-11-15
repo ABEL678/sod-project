@@ -1,0 +1,51 @@
+{# Этап 4 (спека 4.3): блок «Чек-лист» — фрагмент карточки задания. #}
+{# Используется в task_detail.html и как HTMX-ответ TaskChecklistActionView: #}
+{# каждый пункт — hx-post форма, в ответ отдаётся этот же фрагмент #}
+{# (outerHTML #taskChecklistCard) — мгновенное сохранение без перезагрузки. #}
+{# Права toggle — в сервисе toggle_checklist_item (assignee или ГИП/админ); #}
+{# без HTMX форма срабатывает обычным POST (прогрессивное улучшение). #}
+<div class="card shadow-sm mb-3" id="taskChecklistCard">
+    <div class="card-header fw-semibold d-flex align-items-center">
+        <i class="bi bi-check2-square me-2" aria-hidden="true"></i>Чек-лист
+        <span class="badge text-bg-light border ms-2" data-role="task-checklist-progress">{{ checklist_done }} / {{ checklist_total }}</span>
+    </div>
+    <div class="card-body py-0">
+        {% if fragment_message %}
+            {# Сообщение HTMX-ответа (ошибка прав/сервиса или успех). #}
+            <div class="alert {% if fragment_message_tags == 'error' %}alert-danger{% else %}alert-{{ fragment_message_tags|default:'info' }}{% endif %} alert-dismissible py-2 px-3 small mt-2 mb-0" data-role="task-checklist-fragment-message">
+                {{ fragment_message }}
+                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Закрыть"></button>
+            </div>
+        {% endif %}
+        <ul class="list-group list-group-flush" data-role="task-checklist">
+            {% for item in checklist_items %}
+                <li class="list-group-item px-0 d-flex align-items-start gap-2">
+                    {% if can_toggle_checklist %}
+                        <form method="post" action="{% url 'storage:task_checklist' project.pk task.pk %}" class="mt-1"
+                              hx-post="{% url 'storage:task_checklist' project.pk task.pk %}"
+                              hx-target="#taskChecklistCard" hx-swap="outerHTML">
+                            {% csrf_token %}
+                            <input type="hidden" name="item_id" value="{{ item.pk }}">
+                            <button type="submit" class="btn btn-link p-0" style="line-height: 1;"
+                                    title="{% if item.is_done %}Снять отметку{% else %}Отметить выполненным{% endif %}"
+                                    aria-label="{% if item.is_done %}Снять отметку{% else %}Отметить выполненным{% endif %}: {{ item.text }}">
+                                <i class="bi {% if item.is_done %}bi-check2-square text-success{% else %}bi-square{% endif %}" aria-hidden="true"></i>
+                            </button>
+                        </form>
+                    {% else %}
+                        <i class="bi {% if item.is_done %}bi-check2-square text-success{% else %}bi-square{% endif %} mt-1" aria-hidden="true"></i>
+                    {% endif %}
+                    <span class="{% if item.is_done %}text-decoration-line-through text-muted{% endif %}">{{ item.text }}</span>
+                    {% if item.is_done and item.done_by %}
+                        <small class="text-muted ms-auto text-nowrap">
+                            {{ item.done_by.get_full_name|default:item.done_by.username }} · {{ item.done_at|date:"d.m.Y H:i" }}
+                        </small>
+                    {% endif %}
+                </li>
+            {% endfor %}
+        </ul>
+    </div>
+    <div class="card-body py-2 small text-muted">
+        Чек-лист отмечает исполнитель{% if can_manage %} (или ГИП){% endif %}.
+    </div>
+</div>

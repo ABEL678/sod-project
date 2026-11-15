@@ -12,6 +12,7 @@ POST через сервис create_task, кнопки «Сохранить че
 Этап 1 — модели (см. storage/domain/models.py).
 """
 from datetime import timedelta
+from unittest import mock
 
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -833,6 +834,89 @@ class TaskDetailViewTests(TaskCardTestBase):
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.context['can_start_work'])
 
+    def test_card_deadline_polling_partial(self):
+        """HTMX-поллинг дедлайна: ?partial=deadline отдаёт слот бейджа."""
+        task = self._task_issued(
+            due_date=timezone.localdate() - timedelta(days=2),
+        )
+        self.client.force_login(self.gip)
+        response = self.client.get(
+            self._card_url(task), {'partial': 'deadline'},
+        )
+        self.assertEqual(response.status_code, 200)
+        # Слот поллинга: атрибуты HTMX с разумным TTL (60 секунд).
+        self.assertContains(response, 'id="taskDeadlineSlot"')
+        self.assertContains(response, 'hx-trigger="every 60s"')
+        self.assertContains(response, 'hx-swap="outerHTML"')
+        # Просрочка — красный бейдж с иконкой (критерий UI/UX Этапа 4).
+        self.assertContains(response, 'text-bg-danger')
+        self.assertContains(response, 'bi-alarm-fill')
+        self.assertContains(response, 'просрочено на 2 дня')
+
+    def test_card_deadline_polling_partial_requires_project_access(self):
+        """Поллинг-фрагмент защищён так же, как карточка (чужой → 404)."""
+        task = self._task_issued()
+        self.client.force_login(self.outsider)
+        response = self.client.get(
+            self._card_url(task), {'partial': 'deadline'},
+        )
+        self.assertEqual(response.status_code, 404)
+
+    def test_card_deadline_polling_partial_without_deadline(self):
+        """Без срока — слот пуст, но поллинг сохраняется."""
+        task = self._task_issued()
+        self.client.force_login(self.gip)
+        response = self.client.get(
+            self._card_url(task), {'partial': 'deadline'},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'id="taskDeadlineSlot"')
+        self.assertNotContains(response, 'task-deadline')
+
+    def test_document_detail_related_tasks(self):
+        """Спека 7: карточка документа показывает «Связанные задания»."""
+        task = self._task_in_progress()
+        document = Document.objects.create(
+            project=self.project,
+            section=self.section_ar,
+            code='AR-03',
+            name='Пояснительная записка',
+            doc_type='source_data',
+            status='active',
+            created_by=self.author,
+        )
+        add_task_attachment(
+            self.author, task, DesignTaskAttachment.Kind.INPUT,
+            document=document,
+        )
+        self.client.force_login(self.gip)
+        response = self.client.get(
+            reverse('storage:document_detail', args=[document.pk]),
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Связанные задания')
+        self.assertContains(response, 'Передать нагрузки')
+        # Ссылка ведёт на карточку задания.
+        self.assertContains(response, self._card_url(task))
+
+    def test_document_detail_without_related_tasks(self):
+        """У документа без привязанных заданий блока нет."""
+        document = Document.objects.create(
+            project=self.project,
+            section=self.section_ar,
+            code='AR-04',
+            name='Документ без заданий',
+            doc_type='other',
+            status='active',
+            created_by=self.author,
+        )
+        self.client.force_login(self.gip)
+        response = self.client.get(
+            reverse('storage:document_detail', args=[document.pk]),
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, 'Связанные задания')
+
 
 class TaskStatusActionViewTests(TaskCardTestBase):
     """POST-смена статуса: матрица остаётся в update_task_status."""
@@ -1185,6 +1269,101 @@ class TaskAttachmentActionViewTests(TaskCardTestBase):
         response = self.client.get(self._attachments_url(task))
         self.assertEqual(response.status_code, 405)
 
+    def test_output_upload_htmx_fragment(self):
+        """HTMX-загрузка: фрагмент карточки вместо redirect (мгновенный UI)."""
+        task = self._task_in_progress()
+        self.client.force_login(self.assignee)
+        response = self.client.post(
+            self._attachments_url(task),
+            {
+                'kind': 'output',
+                'document': '',
+                'file': SimpleUploadedFile('result.pdf', b'result'),
+            },
+            HTTP_HX_REQUEST='true',
+        )
+        self.assertEqual(response.status_code, 200)
+        # Фрагмент — карточка «Результат» с приложением внутри.
+        self.assertContains(response, 'id="taskOutputCard"')
+        # Имя файла сохраняется (с суффиксом коллизии хранилища).
+        self.assertContains(response, 'result_')
+        self.assertContains(response, '.pdf')
+        self.assertContains(response, '/media/design_tasks/attachments/')
+        self.assertContains(response, 'Результат: вложение добавлено.')
+        self.assertEqual(DesignTaskAttachment.objects.count(), 1)
+
+    def test_attachment_file_type_restricted(self):
+        """Белый список расширений — та же политика, что у документов."""
+        task = self._task_in_progress()
+        self.client.force_login(self.assignee)
+        response = self.client.post(
+            self._attachments_url(task),
+            {
+                'kind': 'output',
+                'document': '',
+                'file': SimpleUploadedFile('virus.exe', b'evil'),
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(DesignTaskAttachment.objects.count(), 0)
+        followed = self.client.get(response['Location'])
+        self.assertContains(followed, 'не поддерживается')
+
+    def test_attachment_file_type_restricted_htmx(self):
+        """Отказ по расширению в HTMX-режиме — фрагмент с ошибкой."""
+        task = self._task_in_progress()
+        self.client.force_login(self.assignee)
+        response = self.client.post(
+            self._attachments_url(task),
+            {
+                'kind': 'output',
+                'document': '',
+                'file': SimpleUploadedFile('virus.exe', b'evil'),
+            },
+            HTTP_HX_REQUEST='true',
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(DesignTaskAttachment.objects.count(), 0)
+        self.assertContains(response, 'id="taskOutputCard"')
+        self.assertContains(response, 'не поддерживается')
+
+    def test_attachment_file_size_restricted(self):
+        """Файл больше лимита отклоняется (та же константа MAX_UPLOAD_SIZE)."""
+        task = self._task_in_progress()
+        self.client.force_login(self.assignee)
+        with mock.patch(
+            'storage.adapters.views.MAX_UPLOAD_SIZE', 10,
+        ):
+            response = self.client.post(
+                self._attachments_url(task),
+                {
+                    'kind': 'output',
+                    'document': '',
+                    'file': SimpleUploadedFile('big.pdf', b'x' * 11),
+                },
+            )
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(DesignTaskAttachment.objects.count(), 0)
+        followed = self.client.get(response['Location'])
+        self.assertContains(followed, 'Файл больше')
+
+    def test_attachment_kind_comment_rejected_from_card(self):
+        """kind=comment — не форма карточки: вьюха допускает input/output."""
+        task = self._task_in_progress()
+        self.client.force_login(self.author)
+        response = self.client.post(
+            self._attachments_url(task),
+            {
+                'kind': 'comment',
+                'document': '',
+                'file': SimpleUploadedFile('note.pdf', b'note'),
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(DesignTaskAttachment.objects.count(), 0)
+        followed = self.client.get(response['Location'])
+        self.assertContains(followed, 'Недопустимый тип вложения')
+
 
 class TaskChecklistActionViewTests(TaskCardTestBase):
     """POST-переключение чек-листа (toggle_checklist_item)."""
@@ -1260,3 +1439,35 @@ class TaskChecklistActionViewTests(TaskCardTestBase):
         self.client.force_login(self.assignee)
         response = self.client.get(self._checklist_url())
         self.assertEqual(response.status_code, 405)
+
+    def test_toggle_htmx_fragment_by_assignee(self):
+        """HTMX toggle: фрагмент чек-листа вместо redirect (мгновенно)."""
+        self.client.force_login(self.assignee)
+        response = self.client.post(
+            self._checklist_url(),
+            {'item_id': str(self.items[0].pk)},
+            HTTP_HX_REQUEST='true',
+        )
+        self.assertEqual(response.status_code, 200)
+        self.items[0].refresh_from_db()
+        self.assertTrue(self.items[0].is_done)
+        # Фрагмент — карточка чек-листа с обновлённым счётчиком.
+        self.assertContains(response, 'id="taskChecklistCard"')
+        self.assertContains(response, '1 / 2')
+        self.assertContains(response, 'Пункт «Проверить нагрузки» отмечен.')
+
+    def test_toggle_htmx_denied_for_viewer(self):
+        """HTMX-отказ: фрагмент с ошибкой прав, состояние не меняется."""
+        self.client.force_login(self.viewer)
+        response = self.client.post(
+            self._checklist_url(),
+            {'item_id': str(self.items[0].pk)},
+            HTTP_HX_REQUEST='true',
+        )
+        self.assertEqual(response.status_code, 200)
+        self.items[0].refresh_from_db()
+        self.assertFalse(self.items[0].is_done)
+        self.assertContains(response, 'id="taskChecklistCard"')
+        self.assertContains(response, 'Чек-лист отмечает исполнитель')
+        # Счётчик не изменился.
+        self.assertContains(response, '0 / 2')
