@@ -1170,10 +1170,26 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
             'task_due_filter': due_filter,
             'task_status_choices': DesignTask.Status.choices,
             'task_priority_choices': DesignTask.Priority.choices,
-            'can_issue_task': any(
-                check_write_permission(user, section) for section in sections
-            ),
+            'can_issue_task': _can_issue_task(user, project),
         }
+
+
+def _can_issue_task(user, project):
+    """Может ли пользователь выдавать задания в проекте (спека 4.1–4.2).
+
+    Не зависит от наличия разделов — проверяет только роль пользователя
+    и его связь с проектом.
+    """
+    if user.is_superuser:
+        return True
+    profile = getattr(user, 'userprofile', None)
+    if profile is not None and profile.role == 'admin':
+        return True
+    if project.gip_id == user.id:
+        return True
+    if project.memberships.filter(user=user, role_in_project='gip').exists():
+        return True
+    return False
 
 
 class TaskCreateView(LoginRequiredMixin, View):
@@ -1203,11 +1219,18 @@ class TaskCreateView(LoginRequiredMixin, View):
 
     def _form_context(self, request, project, form_data=None, errors=None):
         """Разделы, участники, шаблоны + сохранённый ввод при ошибках."""
-        sections = self._project_sections(request, project)
-        writable_sections = [
-            section for section in sections
-            if check_write_permission(request.user, section)
-        ]
+        # Для тех, у кого есть право на выдачу — показываем все разделы
+        # проекта (без COMMON). get_sections_with_counts может вернуть
+        # пусто из-за get_accessible_sections, поэтому берём напрямую.
+        if _can_issue_task(request.user, project):
+            sections = list(
+                Section.objects.filter(project=project).exclude(
+                    code='COMMON'
+                ).order_by('code', 'name')
+            )
+        else:
+            sections = self._project_sections(request, project)
+        writable_sections = sections
         # Исполнители — участники проекта (спека 4.2) плюс ГИП проекта,
         # даже если он не заведён в участники. Прямое чтение memberships:
         # список нужен любому автору с write-доступом к своему разделу,
@@ -1242,14 +1265,10 @@ class TaskCreateView(LoginRequiredMixin, View):
 
     def get(self, request, project_id):
         project = self._get_project(request, project_id)
-        if not any(
-            check_write_permission(request.user, section)
-            for section in self._project_sections(request, project)
-        ):
+        if not _can_issue_task(request.user, project):
             messages.error(
                 request,
-                'Выдавать задания может только пользователь с правом '
-                'записи хотя бы в один раздел проекта.',
+                'У вас нет прав на выдачу заданий в этом проекте.',
             )
             return redirect(
                 reverse('storage:project_detail', args=[project.pk])
