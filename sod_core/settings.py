@@ -16,6 +16,8 @@ from dotenv import load_dotenv
 load_dotenv()
 from pathlib import Path
 
+from celery.schedules import crontab
+
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -119,6 +121,10 @@ CELERY_BROKER_URL = os.environ.get(
 CELERY_TASK_ALWAYS_EAGER = env_bool('CELERY_TASK_ALWAYS_EAGER', True)
 CELERY_TASK_EAGER_PROPAGATES = True
 CELERY_TASK_IGNORE_RESULT = True
+
+# Расписание напоминаний (CELERY_BEAT_SCHEDULE) — ниже, после TIME_ZONE:
+# crontab-часы должны считаться в часовом поясе проекта, поэтому блок
+# размещён после определения TIME_ZONE (Этап 5, модуль «Задания»).
 
 # Этап 19 (Ф4): LLM для отчётов ГИПа и RAG-синтеза.
 # Только GigaChat (Сбер, работа из РФ). Без ключа — заглушка
@@ -290,6 +296,27 @@ AUTH_PASSWORD_VALIDATORS = [
 LANGUAGE_CODE = 'ru-ru'
 
 TIME_ZONE = 'Europe/Moscow'
+
+# Этап 5 (модуль «Задания»): расписание напоминаний о сроках заданий.
+# Часовой пояс Celery = TIME_ZONE проекта, иначе crontab-часы считаются
+# в UTC. due_* — раз в сутки (утро по Москве), overdue — раз в час;
+# повторные запуски в течение суток безопасны — дубликаты отсекает
+# идемпотентность сервисов notify_tasks_* (storage/domain/services.py).
+CELERY_TIMEZONE = TIME_ZONE
+CELERY_BEAT_SCHEDULE = {
+    'notify-task-due-soon': {
+        'task': 'storage.tasks.notify_task_due_soon',
+        'schedule': crontab(hour=8, minute=0),
+    },
+    'notify-task-due-today': {
+        'task': 'storage.tasks.notify_task_due_today',
+        'schedule': crontab(hour=8, minute=15),
+    },
+    'notify-task-overdue': {
+        'task': 'storage.tasks.notify_task_overdue',
+        'schedule': crontab(minute=0),
+    },
+}
 
 USE_I18N = True
 

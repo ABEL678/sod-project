@@ -3704,7 +3704,9 @@ class EditMemberForm(forms.ModelForm):
             ).order_by('code')
             self.fields['allowed_sections'].queryset = Section.objects.filter(
                 project__company=company
-            ).select_related('project').order_by('project__code', 'order')
+            ).exclude(code='COMMON').select_related(
+                'project'
+            ).order_by('project__code', 'order')
             if self.instance.user_id:
                 self.fields['projects'].initial = list(
                     ProjectMembership.objects.filter(

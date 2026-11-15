@@ -1,6 +1,6 @@
 import base64
 from collections import defaultdict
-from datetime import timedelta
+from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
 import io
 import logging
@@ -41,7 +41,7 @@ from storage.domain.models import (
     UserProfile,
     VorItem,
 )
-from issues.models import Issue, IssueComment
+from issues.models import Issue, IssueComment, Notification
 from issues.notify import (
     create_notification,
     notify_issue_assigned,
@@ -724,6 +724,61 @@ def _code_prefix(project: Project) -> str:
     return f'{base_code}-' if base_code else ''
 
 
+def _ensure_project_sections(
+    project: Project, actor: User, template: dict,
+) -> dict[str, Section]:
+    """Создаёт разделы-марки для проекта по шаблону (идемпотентно).
+
+    Возвращает словарь {mark_code: Section}. COMMON не создаётся.
+    Повторный вызов — no-op (разделы уже существуют).
+    """
+    result: dict[str, Section] = {}
+    seen_codes: set[str] = set()
+
+    # Собираем марки из ПД (по номерам ПП №87)
+    if template.get('pd'):
+        for section_data in PD_SECTIONS:
+            mark = section_data['mark']
+            if mark in seen_codes:
+                continue
+            seen_codes.add(mark)
+            section_obj, created = Section.objects.get_or_create(
+                project=project,
+                code=mark,
+                defaults={
+                    'name': section_data['name'].replace('Раздел ', ''),
+                    'order': len(result) + 1,
+                },
+            )
+            if created:
+                result[mark] = section_obj
+
+    # Собираем марки из РД (по ГОСТ Р 21.101-2020)
+    if template.get('rd'):
+        for section_data in RD_SECTIONS:
+            mark = section_data['mark']
+            if mark in seen_codes:
+                continue
+            seen_codes.add(mark)
+            section_obj, created = Section.objects.get_or_create(
+                project=project,
+                code=mark,
+                defaults={
+                    'name': section_data['name'],
+                    'order': len(result) + 1,
+                },
+            )
+            if created:
+                result[mark] = section_obj
+
+    # Обновляем full_code для всех разделов проекта
+    for section in project.sections.all():
+        section.full_code = generate_gost_code(project.base_code, section.code)
+        section.save(update_fields=['full_code'])
+
+    return result
+
+
 def _get_or_create_common_section(project: Project) -> Section:
     """Единый скрытый раздел для документов ПД/РД/ИРД."""
     section, _ = Section.objects.get_or_create(
@@ -772,18 +827,22 @@ def _create_pd_structure(
     project: Project,
     actor: User,
     superfolders: dict[str, Folder],
+    sections: dict[str, Section] | None = None,
 ) -> None:
     """Создаёт разделы ПД и папки «Часть 1» по ПП №87."""
     root = superfolders['PD']
     prefix = _code_prefix(project)
     common = _get_or_create_common_section(project)
+    sections = sections or {}
 
     for section_data in PD_SECTIONS:
+        mark = section_data['mark']
+        section_obj = sections.get(mark, common)
         section_folder = create_folder(
             actor,
             project,
             name=section_data['name'],
-            section=common,
+            section=section_obj,
             parent=root,
             code='',
             force=True,
@@ -796,7 +855,7 @@ def _create_pd_structure(
                     actor,
                     project,
                     name=subsection['name'],
-                    section=common,
+                    section=section_obj,
                     parent=section_folder,
                     code='',
                     force=True,
@@ -809,18 +868,18 @@ def _create_pd_structure(
                     actor,
                     project,
                     name=subsection['part'],
-                    section=common,
+                    section=section_obj,
                     parent=sub_folder,
                     code=part_code,
                     force=True,
                 )
         else:
-            part_code = f"{prefix}{section_data['mark']}1"
+            part_code = f"{prefix}{mark}1"
             create_folder(
                 actor,
                 project,
                 name=section_data['part'],
-                section=common,
+                section=section_obj,
                 parent=section_folder,
                 code=part_code,
                 force=True,
@@ -831,19 +890,22 @@ def _create_rd_structure(
     project: Project,
     actor: User,
     superfolders: dict[str, Folder],
+    sections: dict[str, Section] | None = None,
 ) -> None:
     """Создаёт марки РД и папки «Комплект 1» по ГОСТ Р 21.101-2020."""
     root = superfolders['RD']
     prefix = _code_prefix(project)
     common = _get_or_create_common_section(project)
+    sections = sections or {}
 
     for section_data in RD_SECTIONS:
         mark = section_data['mark']
+        section_obj = sections.get(mark, common)
         mark_folder = create_folder(
             actor,
             project,
             name=section_data['name'],
-            section=common,
+            section=section_obj,
             parent=root,
             code='',
             force=True,
@@ -852,7 +914,7 @@ def _create_rd_structure(
             actor,
             project,
             name=section_data['name'],
-            section=common,
+            section=section_obj,
             parent=mark_folder,
             code=f'{prefix}{mark}1',
             force=True,
@@ -867,10 +929,11 @@ def _populate_project_template(
     """Создаёт только базовый верхний каркас выбранного шаблона."""
     superfolders = _ensure_root_superfolders(project, actor)
     _create_ird_structure(project, actor, superfolders)
+    sections = _ensure_project_sections(project, actor, template)
     if template.get('pd'):
-        _create_pd_structure(project, actor, superfolders)
+        _create_pd_structure(project, actor, superfolders, sections)
     if template.get('rd'):
-        _create_rd_structure(project, actor, superfolders)
+        _create_rd_structure(project, actor, superfolders, sections)
 
 
 @transaction.atomic
@@ -4857,6 +4920,23 @@ def _is_task_participant(user: User, task: DesignTask) -> bool:
     return _is_gip_or_admin(user, task.project)
 
 
+def _is_project_participant(user: User | None, project: Project) -> bool:
+    """Может ли пользователь получить уведомление по проекту (Этап 5).
+
+    Граница доступа в СОД — компания (см. get_accessible_projects):
+    участником проекта для уведомлений считается пользователь компании
+    проекта, ГИП проекта или superuser. Пользователь другой компании или
+    без профиля уведомлений не получает — уведомления не утекают за
+    пределы проекта.
+    """
+    if user is None:
+        return False
+    if user.is_superuser or project.gip_id == user.pk:
+        return True
+    profile = getattr(user, 'userprofile', None)
+    return profile is not None and profile.company_id == project.company_id
+
+
 def _notify_task(
     task: DesignTask,
     recipient: User | None,
@@ -4869,9 +4949,13 @@ def _notify_task(
     Verb'ы DesignTask в Notification.VERB_CHOICES отсутствуют (модель
     issues не расширялась — Этап 2 не трогает существующие модели),
     поэтому используются ближайшие по смыслу: 'assigned' при выдаче,
-    'status_changed' при переходах. create_notification сам не шлёт
-    уведомление актору и молча переживает ошибки.
+    'status_changed' при переходах и напоминаниях. create_notification
+    сам не шлёт уведомление актору и молча переживает ошибки; перед
+    созданием проверяется принадлежность получателя проекту
+    (_is_project_participant, Этап 5, безопасность).
     """
+    if not _is_project_participant(recipient, task.project):
+        return
     create_notification(
         recipient=recipient,
         actor=actor,
@@ -5034,8 +5118,10 @@ def update_task_status(
     Права — по матрице (assignee / author / gip / admin). Недопустимый
     переход или нарушенное условие → ValidationError; отсутствие прав →
     PermissionDenied. Каждый переход пишется в DesignTaskStatusLog;
-    ключевые переходы уведомляют участников (COMPLETED → author/gip,
-    RETURNED → assignee, ACCEPTED → assignee).
+    переходы уведомляют противоположную сторону (Этап 5): действия
+    исполнителя (принято в работу, приостановлено, возобновлено,
+    выполнено) видят автор/ГИП, действия автора/ГИПа (на проверку,
+    доработка, принято, отмена) видит исполнитель (+ автор при отмене).
     """
     if new_status not in DesignTask.Status.values:
         raise ValueError(f"Неизвестный статус: {new_status}")
@@ -5090,20 +5176,53 @@ def update_task_status(
         task.save(update_fields=update_fields)
         _log_status_change(task, old_status, new_status, user, comment)
 
+        # Уведомления (Этап 5): ключевые переходы сообщают заинтересованной
+        # стороне. Получатель — противоположная по роли сторона: действия
+        # исполнителя видят автор/ГИП (create_notification не уведомляет
+        # актора), действия автора/ГИПа видит исполнитель. Длинная причина
+        # обрезается до 200 знаков (полный текст — в DesignTaskStatusLog).
         if new_status == DesignTask.Status.COMPLETED:
             for recipient in {task.author, task.project.gip} - {None, user}:
                 _notify_task(
                     task,
                     recipient,
                     user,
-                    f'Задание #{task.pk} выполнено и ждёт проверки: {task.title}',
+                    f'Задание #{task.pk} ожидает проверки',
+                )
+        elif new_status == DesignTask.Status.IN_PROGRESS:
+            # ISSUED → IN_PROGRESS («принято в работу») и
+            # ON_HOLD → IN_PROGRESS («возобновлено») — оба делает
+            # исполнитель, уведомляем автора и ГИПа.
+            message = (
+                f'Задание #{task.pk} принято в работу'
+                if old_status == DesignTask.Status.ISSUED
+                else f'Задание #{task.pk} возобновлено'
+            )
+            for recipient in {task.author, task.project.gip} - {None, user}:
+                _notify_task(task, recipient, user, message)
+        elif new_status == DesignTask.Status.ON_HOLD:
+            for recipient in {task.author, task.project.gip} - {None, user}:
+                _notify_task(
+                    task,
+                    recipient,
+                    user,
+                    f'Задание #{task.pk} приостановлено. '
+                    f'Причина: {comment[:200]}',
                 )
         elif new_status == DesignTask.Status.RETURNED:
             _notify_task(
                 task,
                 task.assignee,
                 user,
-                f'Задание #{task.pk} возвращено на доработку: {comment[:200]}',
+                f'Задание #{task.pk} возвращено на доработку. '
+                f'Причина: {comment[:200]}',
+            )
+        elif new_status == DesignTask.Status.REVIEW:
+            _notify_task(
+                task,
+                task.assignee,
+                user,
+                f'Задание #{task.pk} отправлено на проверку',
             )
         elif new_status == DesignTask.Status.ACCEPTED:
             _notify_task(
@@ -5112,6 +5231,14 @@ def update_task_status(
                 user,
                 f'Задание #{task.pk} принято: {task.title}',
             )
+        elif new_status == DesignTask.Status.CANCELLED:
+            for recipient in {task.assignee, task.author} - {None, user}:
+                _notify_task(
+                    task,
+                    recipient,
+                    user,
+                    f'Задание #{task.pk} отменено. Причина: {comment[:200]}',
+                )
 
     logger.info(
         "update_task_status: user=%s task=%s %s→%s",
@@ -5273,3 +5400,178 @@ def list_tasks(
     elif role_filter == 'outgoing':
         queryset = queryset.filter(author=user)
     return queryset.order_by('-created_at')
+
+
+# --- Этап 5: напоминания о сроках (Celery-задачи storage/tasks.py) ------
+
+# Открытые статусы для напоминаний «срок скоро/сегодня» (спека Этап 5):
+# ISSUED, IN_PROGRESS, ON_HOLD, REVIEW.
+_OPEN_TASK_STATUSES = [
+    DesignTask.Status.ISSUED,
+    DesignTask.Status.IN_PROGRESS,
+    DesignTask.Status.ON_HOLD,
+    DesignTask.Status.REVIEW,
+]
+
+# Не-терминальные статусы для напоминания о просрочке: всё, кроме
+# COMPLETED / ACCEPTED / CANCELLED (черновик и «возвращено» тоже
+# считаются незакрытыми — просрочка не исчезает от смены статуса).
+_NOT_CLOSED_TASK_STATUSES = [
+    DesignTask.Status.DRAFT,
+    DesignTask.Status.ISSUED,
+    DesignTask.Status.IN_PROGRESS,
+    DesignTask.Status.ON_HOLD,
+    DesignTask.Status.REVIEW,
+    DesignTask.Status.RETURNED,
+]
+
+
+def _deadline_tasks(target_date, statuses, overdue: bool = False) -> QuerySet:
+    """Выборка заданий для напоминаний — ОДИН запрос (производительность).
+
+    select_related тянет проект (компания, ГИП), исполнителя и автора
+    вместе с их профилями (компания нужна проверке участника), .only()
+    ограничивает столбцы полями, которые реально читает рассылка.
+    """
+    queryset = DesignTask.objects.filter(status__in=statuses)
+    queryset = (
+        queryset.filter(due_date__lt=target_date)
+        if overdue
+        else queryset.filter(due_date=target_date)
+    )
+    return queryset.select_related(
+        'project', 'project__gip', 'project__gip__userprofile',
+        'assignee', 'assignee__userprofile',
+        'author', 'author__userprofile',
+    ).only(
+        'id', 'title', 'due_date',
+        'project_id', 'project__id', 'project__company_id', 'project__gip_id',
+        'project__gip__id', 'project__gip__is_superuser',
+        'project__gip__userprofile__id',
+        'project__gip__userprofile__company_id',
+        'assignee_id', 'assignee__id', 'assignee__is_superuser',
+        'assignee__userprofile__id', 'assignee__userprofile__company_id',
+        'author_id', 'author__id', 'author__is_superuser',
+        'author__userprofile__id', 'author__userprofile__company_id',
+    )
+
+
+def _reminder_recipients(task: DesignTask, include_author: bool) -> set:
+    """Получатели напоминания: исполнитель (просрочка — ещё автор и ГИП).
+
+    Каждый кандидат проверяется через _is_project_participant —
+    уведомления не уходят за пределы проекта (спека Этап 5).
+    """
+    candidates = {task.assignee_id: task.assignee}
+    if include_author:
+        candidates[task.author_id] = task.author
+        candidates[task.project.gip_id] = task.project.gip
+    return {
+        user
+        for user_id, user in candidates.items()
+        if user_id is not None and _is_project_participant(user, task.project)
+    }
+
+
+def _send_task_deadline_notifications(tasks, today, recipients_of, message_of) -> int:
+    """Массовая рассылка напоминаний с идемпотентностью и bulk_create.
+
+    Идемпотентность (спека Этап 5): пара (recipient, url, message)
+    уже встречалась СЕГОДНЯ → уведомление не дублируется. Ретрай
+    Celery или повторный запуск beat в течение суток безопасны.
+    Возвращает число созданных уведомлений.
+    """
+    tasks = list(tasks)
+    if not tasks:
+        return 0
+
+    day_start = timezone.make_aware(datetime.combine(today, datetime.min.time()))
+    url_set = {_design_task_url(task) for task in tasks}
+    existing = set(
+        Notification.objects.filter(
+            url__in=url_set,
+            created_at__gte=day_start,
+        ).values_list('recipient_id', 'url', 'message')
+    )
+
+    rows = []
+    for task in tasks:
+        url = _design_task_url(task)
+        message = message_of(task)[:300]
+        for recipient in recipients_of(task):
+            if (recipient.pk, url, message) in existing:
+                continue
+            rows.append(Notification(
+                recipient_id=recipient.pk,
+                actor=None,
+                project_id=task.project_id,
+                verb='status_changed',
+                message=message,
+                url=url,
+            ))
+    if rows:
+        Notification.objects.bulk_create(rows)
+    logger.info(
+        "notify deadline batch: tasks=%s created=%s",
+        len(tasks), len(rows),
+    )
+    return len(rows)
+
+
+def notify_tasks_due_soon() -> int:
+    """Напоминание за 2 дня до срока (спека Этап 5, notify_task_due_soon).
+
+    Статусы ISSUED/IN_PROGRESS/ON_HOLD/REVIEW, срок == сегодня+2.
+    Получатель — исполнитель. Возвращает число созданных уведомлений.
+    """
+    today = timezone.localdate()
+    tasks = _deadline_tasks(today + timedelta(days=2), _OPEN_TASK_STATUSES)
+    return _send_task_deadline_notifications(
+        tasks,
+        today,
+        recipients_of=lambda task: _reminder_recipients(task, include_author=False),
+        message_of=lambda task: (
+            f'Задание #{task.pk} «{task.title}»: срок через 2 дня '
+            f'({task.due_date:%d.%m.%Y})'
+        ),
+    )
+
+
+def notify_tasks_due_today() -> int:
+    """Напоминание в день срока (спека Этап 5, notify_task_due_today).
+
+    Те же открытые статусы, срок == сегодня. Получатель — исполнитель.
+    """
+    today = timezone.localdate()
+    tasks = _deadline_tasks(today, _OPEN_TASK_STATUSES)
+    return _send_task_deadline_notifications(
+        tasks,
+        today,
+        recipients_of=lambda task: _reminder_recipients(task, include_author=False),
+        message_of=lambda task: (
+            f'Задание #{task.pk} «{task.title}»: срок истекает сегодня '
+            f'({task.due_date:%d.%m.%Y})'
+        ),
+    )
+
+
+def notify_tasks_overdue() -> int:
+    """Напоминание о просрочке (спека Этап 5, notify_task_overdue).
+
+    Срок < сегодня и статус ещё не COMPLETED/ACCEPTED/CANCELLED.
+    Получатели — исполнитель, автор и ГИП (просрочка важна всем
+    сторонам; автор и ГИП = source задания). Идемпотентность за сутки:
+    beat запускает задачу раз в час, дубликаты в пределах дня не
+    создаются.
+    """
+    today = timezone.localdate()
+    tasks = _deadline_tasks(today, _NOT_CLOSED_TASK_STATUSES, overdue=True)
+    return _send_task_deadline_notifications(
+        tasks,
+        today,
+        recipients_of=lambda task: _reminder_recipients(task, include_author=True),
+        message_of=lambda task: (
+            f'Задание #{task.pk} «{task.title}»: просрочено, '
+            f'срок был {task.due_date:%d.%m.%Y}'
+        ),
+    )
