@@ -70,6 +70,11 @@ urlpatterns = [
         views.TaskDashboardExportView.as_view(),
         name='task_dashboard_export',
     ),
+    path(
+        'projects/<int:project_id>/tasks/dashboard/api/',
+        views.TaskDashboardApiView.as_view(),
+        name='task_dashboard_api',
+    ),
     # Этап 4 (спека 4.3): карточка задания и POST-действия (статус,
     # вложения, чек-лист). Вьюхи тонкие — матрица переходов и права
     # в сервисах update_task_status / add_task_attachment /

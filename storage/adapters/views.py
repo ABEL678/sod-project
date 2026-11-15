@@ -38,7 +38,7 @@ from django.views import View
 from django.views.generic import DetailView, ListView, TemplateView, UpdateView
 from django_scotty.views import CottonTableView
 from openpyxl import Workbook
-from openpyxl.styles import Alignment, Font
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
 from storage.adapters.filters import DocumentFilter
 from storage.adapters.local_storage import LocalFileStorage
@@ -1835,13 +1835,39 @@ class TaskDashboardExportView(LoginRequiredMixin, View):
         sheet = workbook.active
         sheet.title = 'Открытые задания'
 
-        sheet.append([
+        headers = [
             '№', 'Задание', 'Источник', 'Цель', 'Автор', 'Исполнитель',
             'Приоритет', 'Статус', 'Срок', 'Просрочено', 'Создано',
             'Суть (кратко)',
-        ])
-        for cell in sheet[1]:
-            cell.font = Font(bold=True)
+        ]
+        sheet.append(headers)
+
+        header_fill = PatternFill(start_color='0056B3', end_color='0056B3', fill_type='solid')
+        header_font = Font(bold=True, color='FFFFFF')
+        thin_border = Border(
+            left=Side(style='thin'),
+            right=Side(style='thin'),
+            top=Side(style='thin'),
+            bottom=Side(style='thin'),
+        )
+        alt_fill = PatternFill(start_color='F2F2F2', end_color='F2F2F2', fill_type='solid')
+
+        HEADER_COLS = 12
+        for col_idx in range(1, HEADER_COLS + 1):
+            cell = sheet.cell(row=1, column=col_idx)
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.border = thin_border
+
+        sheet.auto_filter.ref = f'A1:L{max(1, len(tasks))}'
+
+        for row, task in enumerate(tasks, start=2):
+            for col_idx in range(1, HEADER_COLS + 1):
+                sheet.cell(row=row, column=col_idx).border = thin_border
+
+            if row % 2 == 0:
+                for col_idx in range(1, HEADER_COLS + 1):
+                    sheet.cell(row=row, column=col_idx).fill = alt_fill
 
         for row, task in enumerate(tasks, start=2):
             sheet.cell(row=row, column=1, value=row - 1)
@@ -1901,8 +1927,8 @@ class TaskDashboardExportView(LoginRequiredMixin, View):
             essence_cell.alignment = Alignment(wrap_text=True, vertical='top')
 
         for column, width in {
-            'A': 5, 'B': 40, 'C': 20, 'D': 20, 'E': 24, 'F': 24,
-            'G': 12, 'H': 16, 'I': 12, 'J': 12, 'K': 12, 'L': 46,
+            'A': 5, 'B': 40, 'C': 24, 'D': 24, 'E': 24, 'F': 24,
+            'G': 14, 'H': 18, 'I': 14, 'J': 14, 'K': 14, 'L': 50,
         }.items():
             sheet.column_dimensions[column].width = width
 
@@ -1922,6 +1948,71 @@ class TaskDashboardExportView(LoginRequiredMixin, View):
                 '.spreadsheetml.sheet'
             ),
         )
+
+
+class TaskDashboardApiView(LoginRequiredMixin, View):
+    """JSON API сводки по заданиям для ГИП-Ассистента (спека 4.4, Этап 6).
+
+    GET /projects/<id>/tasks/dashboard/api/ → {
+        "summary": { "total": N, "overdue": N, "on_hold": N, "awaiting_review": N },
+        "tasks_requiring_attention": [ { "id", "title", "reason", ... } ]
+    }
+    Доступ — только ГИП/админ проекта.
+    """
+
+    def get(self, request, project_id):
+        project = get_object_or_404(
+            get_accessible_projects(request.user),
+            pk=project_id,
+        )
+        if not can_view_all_tasks(request.user, project):
+            return JsonResponse({'error': 'Forbidden'}, status=403)
+
+        summary = task_summary_for_gip(project)
+        attention = tasks_requiring_attention(project)
+        today = timezone.localdate()
+
+        return JsonResponse({
+            'summary': {
+                'total': summary['total'],
+                'overdue': summary['overdue'],
+                'on_hold': summary['on_hold'],
+                'awaiting_review': summary['awaiting_review'],
+            },
+            'tasks_requiring_attention': [
+                {
+                    'id': t.pk,
+                    'title': t.title,
+                    'reason': t.attention_reason,
+                    'reason_label': TASK_ATTENTION_LABELS.get(
+                        t.attention_reason, t.attention_reason,
+                    ),
+                    'status': t.status,
+                    'status_label': t.get_status_display(),
+                    'assignee': (
+                        t.assignee.get_full_name() or t.assignee.username
+                    ) if t.assignee else None,
+                    'due_date': (
+                        t.due_date.isoformat() if t.due_date else None
+                    ),
+                    'is_overdue': bool(
+                        t.due_date and t.due_date < today
+                    ),
+                    'overdue_days': (
+                        (today - t.due_date).days
+                        if t.due_date and t.due_date < today
+                        else 0
+                    ),
+                    'url': request.build_absolute_uri(
+                        reverse(
+                            'storage:task_detail',
+                            args=[project.pk, t.pk],
+                        )
+                    ),
+                }
+                for t in attention
+            ],
+        })
 
 
 class TaskStatusActionView(LoginRequiredMixin, _DesignTaskCardMixin, View):

@@ -7,17 +7,17 @@
 {# доступ закрыт во вьюхе (can_view_all_tasks — ГИП/админ проекта). #}
 {# Статичный Bootstrap + существующие классы redesign.css, без JS. #}
 
-{% block title %}Дашборд ГИПа — {{ project.name }} — Stream-CAD{% endblock %}
+{% block title %}Сводка по заданиям смежников — {{ project.name }} — Stream-CAD{% endblock %}
 
 {% block topbar %}
-    {% include 'storage/_topbar.html' with topbar_project=project topbar_title="Дашборд ГИПа" %}
+    {% include 'storage/_topbar.html' with topbar_project=project topbar_title="Сводка по заданиям смежников" %}
 {% endblock %}
 
 {% block content %}
 <main class="container py-3 pb-5">
     <div class="d-flex justify-content-between align-items-center mb-3">
         <div>
-            <h1 class="h4 mb-0">Дашборд ГИПа</h1>
+            <h1 class="h4 mb-0">Сводка по заданиям смежников</h1>
             <div class="small text-muted">
                 {{ project.code }} — {{ project.name }} · на сегодня: {{ today|date:"d.m.Y" }}
             </div>
