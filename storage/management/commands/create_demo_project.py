@@ -163,13 +163,12 @@ class Command(BaseCommand):
 
         sections = {}
         for index, (code, name, _folder_name) in enumerate(SECTION_SPECS, start=1):
-            sections[code] = create_section(
-                project,
-                code,
-                name,
-                index,
-                user=actor,
-            )
+            try:
+                sections[code] = create_section(
+                    project, code, name, index, user=actor,
+                )
+            except ValueError:
+                sections[code] = Section.objects.get(project=project, code=code)
 
         folders = {}
         for code, _name, folder_name in SECTION_SPECS:

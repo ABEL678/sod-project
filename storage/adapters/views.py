@@ -38,7 +38,7 @@ from django.views import View
 from django.views.generic import DetailView, ListView, TemplateView, UpdateView
 from django_scotty.views import CottonTableView
 from openpyxl import Workbook
-from openpyxl.styles import Font
+from openpyxl.styles import Alignment, Font
 
 from storage.adapters.filters import DocumentFilter
 from storage.adapters.local_storage import LocalFileStorage
@@ -60,7 +60,9 @@ from storage.domain.models import (
     TaskTemplate,
     UserProfile,
 )
+from storage.domain.design_colors import EXCEL_LINK, EXCEL_OVERDUE_TEXT
 from storage.domain.services import (
+    _NOT_TERMINAL_TASK_STATUSES,
     ALLOWED_UPLOAD_EXTENSIONS,
     DOCUMENT_VIEW_COLUMNS,
     MAX_UPLOAD_SIZE,
@@ -121,6 +123,8 @@ from storage.domain.services import (
     list_tasks,
     issue_task,
     revoke_share_link,
+    task_summary_for_gip,
+    tasks_requiring_attention,
     document_actions,
     document_workflow_actions,
     _effective_zone,
@@ -1171,6 +1175,8 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
             'task_status_choices': DesignTask.Status.choices,
             'task_priority_choices': DesignTask.Priority.choices,
             'can_issue_task': _can_issue_task(user, project),
+            # Этап 6 (спека 4.4): вход на дашборд ГИПа из тулбара вкладки.
+            'can_view_all_tasks': can_view_all,
         }
 
 
@@ -1670,6 +1676,252 @@ class TaskDetailView(LoginRequiredMixin, _DesignTaskCardMixin, View):
         }
         context.update(flags)
         return render(request, self.template_name, context)
+
+
+# --- Этап 6 (спека 4.4): дашборд ГИПа -------------------------------------
+
+# Причины попадания в таблицу «Требуют внимания» → бейдж и подпись.
+# Классы — те же Bootstrap-бейджи, что и TASK_STATUS_BADGES (без нового CSS).
+TASK_ATTENTION_BADGES = {
+    'overdue': 'text-bg-danger',
+    'review': 'text-bg-warning',
+    'on_hold': 'text-bg-info',
+}
+TASK_ATTENTION_LABELS = {
+    'overdue': 'Просрочено',
+    'review': 'Ожидает проверки',
+    'on_hold': 'На уточнении',
+}
+
+
+def _safe_excel_value(value):
+    """Защита от Formula Injection (как в реестре замечаний): строка,
+    начинающаяся с =, +, - или @, экранируется апострофом."""
+    if value is None:
+        return ''
+    if not isinstance(value, str):
+        return value
+    if value[:1] in ('=', '+', '-', '@'):
+        return "'" + value
+    return value
+
+
+class TaskDashboardView(LoginRequiredMixin, View):
+    """Дашборд ГИПа /projects/<id>/tasks/dashboard/ (спека 4.4, Этап 6).
+
+    Сводка — task_summary_for_gip (5 карточек), таблица «Требуют
+    внимания» — tasks_requiring_attention. Доступ: только ГИП проекта
+    или админ (can_view_all_tasks) — прочие участники получают 403,
+    пользователи вне компании проекта — 404 (проект не виден через
+    get_accessible_projects, как и на остальных задачных вьюхах).
+    Метрики определяются сервисами; вьюха только готовит подписи,
+    бейджи и переходы на вкладку «Задания».
+    """
+
+    template_name = 'storage/task_dashboard.html'
+
+    def get(self, request, project_id):
+        project = get_object_or_404(
+            get_accessible_projects(request.user),
+            pk=project_id,
+        )
+        if not can_view_all_tasks(request.user, project):
+            raise PermissionDenied(
+                "Дашборд ГИПа доступен только ГИПу или админу проекта"
+            )
+        summary = task_summary_for_gip(project)
+        attention = tasks_requiring_attention(project)
+        for task in attention:
+            task.status_badge = TASK_STATUS_BADGES.get(
+                task.status, 'text-bg-secondary',
+            )
+            task.reason_badge = TASK_ATTENTION_BADGES[task.attention_reason]
+            task.reason_label = TASK_ATTENTION_LABELS[task.attention_reason]
+        context = {
+            'project': project,
+            'summary': summary,
+            'summary_cards': self._summary_cards(summary),
+            'status_chips': self._status_chips(summary),
+            'attention': attention,
+            'today': timezone.localdate(),
+        }
+        return render(request, self.template_name, context)
+
+    @staticmethod
+    def _summary_cards(summary):
+        """Пять карточек сводки (спека 4.4): Всего / В работе /
+        На проверке / Просрочено / На уточнении."""
+        by_status = summary['by_status']
+        return [
+            {
+                'key': 'total',
+                'label': 'Всего',
+                'value': summary['total'],
+                'icon': 'bi-list-task',
+            },
+            {
+                'key': 'in_progress',
+                'label': 'В работе',
+                'value': by_status.get(DesignTask.Status.IN_PROGRESS, 0),
+                'icon': 'bi-play',
+            },
+            {
+                'key': 'awaiting_review',
+                'label': 'На проверке',
+                'value': summary['awaiting_review'],
+                'icon': 'bi-eye',
+            },
+            {
+                'key': 'overdue',
+                'label': 'Просрочено',
+                'value': summary['overdue'],
+                'icon': 'bi-exclamation-triangle',
+            },
+            {
+                'key': 'on_hold',
+                'label': 'На уточнении',
+                'value': summary['on_hold'],
+                'icon': 'bi-pause',
+            },
+        ]
+
+    @staticmethod
+    def _status_chips(summary):
+        """Чипы по всем 9 статусам (решение D3 плана Этапа 6): клик
+        ведёт на вкладку «Задания» с фильтром ?tab=tasks&status=X."""
+        by_status = summary['by_status']
+        return [
+            {
+                'value': value,
+                'label': label,
+                'count': by_status.get(value, 0),
+            }
+            for value, label in DesignTask.Status.choices
+        ]
+
+
+class TaskDashboardExportView(LoginRequiredMixin, View):
+    """Экспорт открытых заданий в Excel (спека 4.4, Этап 6).
+
+    Данные — list_tasks('all') (сервис сам проверяет права ГИП/админ
+    и тянет select_related), фильтр не-терминальных статусов
+    (_NOT_TERMINAL_TASK_STATUSES, решение D4: DRAFT…RETURNED, включая
+    COMPLETED — ожидает проверки). Книга — по образцу реестра
+    замечаний: жирная шапка, hyperlink на карточку задания, красный
+    шрифт у просрочки, ширины колонок, BytesIO → FileResponse.
+    """
+
+    def get(self, request, project_id):
+        project = get_object_or_404(
+            get_accessible_projects(request.user),
+            pk=project_id,
+        )
+        if not can_view_all_tasks(request.user, project):
+            raise PermissionDenied(
+                "Дашборд ГИПа доступен только ГИПу или админу проекта"
+            )
+        today = timezone.localdate()
+        tasks = [
+            task for task in list_tasks(project, request.user, 'all')
+            if task.status in _NOT_TERMINAL_TASK_STATUSES
+        ]
+        # Срок по возрастанию (без срока — в конец), затем новые раньше.
+        tasks.sort(key=lambda t: (
+            t.due_date is None, t.due_date or today,
+            -t.created_at.timestamp(),
+        ))
+
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.title = 'Открытые задания'
+
+        sheet.append([
+            '№', 'Задание', 'Источник', 'Цель', 'Автор', 'Исполнитель',
+            'Приоритет', 'Статус', 'Срок', 'Просрочено', 'Создано',
+            'Суть (кратко)',
+        ])
+        for cell in sheet[1]:
+            cell.font = Font(bold=True)
+
+        for row, task in enumerate(tasks, start=2):
+            sheet.cell(row=row, column=1, value=row - 1)
+
+            title_cell = sheet.cell(
+                row=row, column=2,
+                value=_safe_excel_value(f'{task.title}\n#{task.pk}'),
+            )
+            title_cell.hyperlink = request.build_absolute_uri(
+                reverse('storage:task_detail', args=[project.pk, task.pk])
+            )
+            title_cell.font = Font(color=EXCEL_LINK, underline='single')
+            title_cell.alignment = Alignment(wrap_text=True, vertical='top')
+
+            sheet.cell(
+                row=row, column=3,
+                value=f'{task.source_section.code} — '
+                      f'{task.source_section.name}',
+            )
+            sheet.cell(
+                row=row, column=4,
+                value=f'{task.target_section.code} — '
+                      f'{task.target_section.name}',
+            )
+            sheet.cell(
+                row=row, column=5,
+                value=task.author.get_full_name() or task.author.username,
+            )
+            sheet.cell(
+                row=row, column=6,
+                value=(
+                    task.assignee.get_full_name()
+                    or task.assignee.username
+                ) if task.assignee else '',
+            )
+            sheet.cell(row=row, column=7, value=task.get_priority_display())
+            sheet.cell(row=row, column=8, value=task.get_status_display())
+            sheet.cell(
+                row=row, column=9,
+                value=task.due_date.strftime('%d.%m.%Y')
+                if task.due_date else '',
+            )
+            overdue = bool(task.due_date and task.due_date < today)
+            overdue_cell = sheet.cell(
+                row=row, column=10, value='да' if overdue else '',
+            )
+            if overdue:
+                overdue_cell.font = Font(color=EXCEL_OVERDUE_TEXT, bold=True)
+            sheet.cell(
+                row=row, column=11,
+                value=timezone.localtime(task.created_at).strftime('%d.%m.%Y'),
+            )
+            essence_cell = sheet.cell(
+                row=row, column=12,
+                value=_safe_excel_value(task.description[:200]),
+            )
+            essence_cell.alignment = Alignment(wrap_text=True, vertical='top')
+
+        for column, width in {
+            'A': 5, 'B': 40, 'C': 20, 'D': 20, 'E': 24, 'F': 24,
+            'G': 12, 'H': 16, 'I': 12, 'J': 12, 'K': 12, 'L': 46,
+        }.items():
+            sheet.column_dimensions[column].width = width
+
+        buffer = BytesIO()
+        workbook.save(buffer)
+        buffer.seek(0)
+
+        filename = 'reestr_zadanij_{code}.xlsx'.format(
+            code=get_valid_filename(project.code or project.pk),
+        )
+        return FileResponse(
+            buffer,
+            as_attachment=True,
+            filename=filename,
+            content_type=(
+                'application/vnd.openxmlformats-officedocument'
+                '.spreadsheetml.sheet'
+            ),
+        )
 
 
 class TaskStatusActionView(LoginRequiredMixin, _DesignTaskCardMixin, View):

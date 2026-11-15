@@ -56,6 +56,20 @@ urlpatterns = [
         views.TaskIssueActionView.as_view(),
         name='task_issue',
     ),
+    # Этап 6 (спека 4.4): дашборд ГИПа — сводка, «Требуют внимания» и
+    # экспорт открытых заданий в Excel. Доступ — только ГИП/админ
+    # (can_view_all_tasks). Объявлены до tasks/<int:task_id>/ для
+    # читаемости; int-конвертер литерал 'dashboard' не съедает.
+    path(
+        'projects/<int:project_id>/tasks/dashboard/',
+        views.TaskDashboardView.as_view(),
+        name='task_dashboard',
+    ),
+    path(
+        'projects/<int:project_id>/tasks/dashboard/export/',
+        views.TaskDashboardExportView.as_view(),
+        name='task_dashboard_export',
+    ),
     # Этап 4 (спека 4.3): карточка задания и POST-действия (статус,
     # вложения, чек-лист). Вьюхи тонкие — матрица переходов и права
     # в сервисах update_task_status / add_task_attachment /

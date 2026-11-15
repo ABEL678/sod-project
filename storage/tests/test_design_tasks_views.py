@@ -244,13 +244,13 @@ class TaskListViewTests(DesignTaskViewsTestBase):
         self.assertContains(response, 'text-danger')
 
     def test_tasks_tab_issue_button_rights(self):
-        # Автор (developer с write в АР) видит кнопку «Выдать задание».
-        response = self._get_tasks_tab(self.author)
+        # ГИП видит кнопку «Выдать задание».
+        response = self._get_tasks_tab(self.gip)
         self.assertTrue(response.context['can_issue_task'])
         self.assertContains(response, 'Выдать задание')
 
-        # Наблюдатель без write-доступа — не видит.
-        response = self._get_tasks_tab(self.viewer)
+        # Developer без роли ГИП/админ — не видит (ролевой гейт).
+        response = self._get_tasks_tab(self.author)
         self.assertFalse(response.context['can_issue_task'])
         self.assertNotContains(response, 'Выдать задание')
 
@@ -294,7 +294,7 @@ class TaskCreateViewTests(DesignTaskViewsTestBase):
         return data
 
     def test_create_form_get_ok(self):
-        self.client.force_login(self.author)
+        self.client.force_login(self.gip)
         response = self.client.get(self.create_url)
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, 'Раздел-источник')
@@ -303,22 +303,22 @@ class TaskCreateViewTests(DesignTaskViewsTestBase):
         self.assertContains(response, 'Выдать')
         writable = list(response.context['writable_sections'])
         all_sections = list(response.context['all_sections'])
-        # source — только разделы с write-доступом (у автора — АР).
+        # ГИП видит все разделы проекта.
         self.assertIn(self.section_ar, writable)
-        self.assertNotIn(self.section_kr, writable)
+        self.assertIn(self.section_kr, writable)
         # target — все разделы проекта.
         self.assertIn(self.section_ar, all_sections)
         self.assertIn(self.section_kr, all_sections)
         # Исполнители — участники проекта.
         self.assertIn(self.assignee, response.context['assignee_choices'])
 
-    def test_create_form_get_without_write_access(self):
+    def test_create_form_get_without_issue_rights(self):
         self.client.force_login(self.no_write_dev)
         response = self.client.get(self.create_url)
         self.assertEqual(response.status_code, 302)
         self.assertIn('tab=tasks', response['Location'])
         followed = self.client.get(response['Location'])
-        self.assertContains(followed, 'правом записи')
+        self.assertContains(followed, 'нет прав на выдачу заданий')
 
     def test_create_form_get_no_project_access(self):
         self.client.force_login(self.outsider)

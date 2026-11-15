@@ -5327,11 +5327,29 @@ def toggle_checklist_item(
     return item
 
 
+# Не-терминальные статусы заданий (спека 4.4, Этап 6): всё, кроме
+# ACCEPTED / CANCELLED. Определяют «просрочено» в сводке ГИПа и состав
+# открытых заданий в экспорте дашборда: «выполнено» (COMPLETED) и
+# «возвращено» (RETURNED) тоже считаются незакрытыми — просрочка не
+# исчезает от смены статуса (семантика сводки Этапа 2 сохранена;
+# _NOT_CLOSED_TASK_STATUSES Этапа 5 не трогается — другой состав).
+_NOT_TERMINAL_TASK_STATUSES = [
+    DesignTask.Status.DRAFT,
+    DesignTask.Status.ISSUED,
+    DesignTask.Status.IN_PROGRESS,
+    DesignTask.Status.ON_HOLD,
+    DesignTask.Status.COMPLETED,
+    DesignTask.Status.REVIEW,
+    DesignTask.Status.RETURNED,
+]
+
+
 def task_summary_for_gip(project: Project) -> dict:
     """Сводка по заданиям проекта для дашборда ГИПа (спека 3, 4.4).
 
     overdue: due_date < сегодня и статус не в терминальных
-    (ACCEPTED, CANCELLED). awaiting_review: статус REVIEW.
+    (ACCEPTED, CANCELLED) — см. _NOT_TERMINAL_TASK_STATUSES.
+    awaiting_review: статус REVIEW.
     """
     today = timezone.localdate()
     queryset = DesignTask.objects.filter(project=project)
@@ -5342,19 +5360,64 @@ def task_summary_for_gip(project: Project) -> dict:
         'by_status': by_status,
         'overdue': queryset.filter(
             due_date__lt=today,
-            status__in=[
-                DesignTask.Status.DRAFT,
-                DesignTask.Status.ISSUED,
-                DesignTask.Status.IN_PROGRESS,
-                DesignTask.Status.ON_HOLD,
-                DesignTask.Status.COMPLETED,
-                DesignTask.Status.REVIEW,
-                DesignTask.Status.RETURNED,
-            ],
+            status__in=_NOT_TERMINAL_TASK_STATUSES,
         ).count(),
         'on_hold': by_status.get(DesignTask.Status.ON_HOLD, 0),
         'awaiting_review': by_status.get(DesignTask.Status.REVIEW, 0),
     }
+
+
+def tasks_requiring_attention(project: Project) -> list[DesignTask]:
+    """Задания «Требуют внимания» для дашборда ГИПа (спека 4.4, Этап 6).
+
+    Просроченные (due_date < сегодня, статус не-терминальный),
+    ожидающие проверки (REVIEW) и на уточнении (ON_HOLD). Один запрос
+    с select_related, как в list_tasks (производительность); задание
+    попадает в результат один раз — причина выбирается по приоритету
+    overdue → review → on_hold (пересечения карточки сводки считают
+    независимо, как в task_summary_for_gip). Сортировка: группа
+    overdue → review → on_hold, внутри группы due_date по возрастанию
+    (без срока — в конец), затем pk.
+    """
+    today = timezone.localdate()
+    rows = (
+        DesignTask.objects.filter(project=project)
+        .filter(
+            Q(status__in=(
+                DesignTask.Status.REVIEW,
+                DesignTask.Status.ON_HOLD,
+            ))
+            | Q(due_date__lt=today,
+                status__in=_NOT_TERMINAL_TASK_STATUSES)
+        )
+        .select_related(
+            'project', 'source_section', 'target_section',
+            'author', 'assignee', 'template',
+        )
+    )
+    reason_rank = {'overdue': 0, 'review': 1, 'on_hold': 2}
+    decorated = []
+    for task in rows:
+        is_overdue = bool(
+            task.due_date
+            and task.due_date < today
+            and task.status in _NOT_TERMINAL_TASK_STATUSES
+        )
+        if is_overdue:
+            reason = 'overdue'
+        elif task.status == DesignTask.Status.REVIEW:
+            reason = 'review'
+        else:
+            reason = 'on_hold'
+        task.is_overdue = is_overdue
+        task.attention_reason = reason
+        task.overdue_days = (today - task.due_date).days if is_overdue else 0
+        decorated.append(
+            (reason_rank[reason], task.due_date is None,
+             task.due_date or today, task.pk, task)
+        )
+    decorated.sort(key=lambda row: row[:4])
+    return [row[-1] for row in decorated]
 
 
 def can_view_all_tasks(user: User, project: Project) -> bool:

@@ -1,0 +1,140 @@
+{% extends 'storage/base.html' %}
+{% load static %}
+
+{# Этап 6 (спека 4.4): дашборд ГИПа — сводка по заданиям, таблица #}
+{# «Требуют внимания» и экспорт открытых заданий в Excel. Данные #}
+{# готовят сервисы task_summary_for_gip / tasks_requiring_attention; #}
+{# доступ закрыт во вьюхе (can_view_all_tasks — ГИП/админ проекта). #}
+{# Статичный Bootstrap + существующие классы redesign.css, без JS. #}
+
+{% block title %}Дашборд ГИПа — {{ project.name }} — Stream-CAD{% endblock %}
+
+{% block topbar %}
+    {% include 'storage/_topbar.html' with topbar_project=project topbar_title="Дашборд ГИПа" %}
+{% endblock %}
+
+{% block content %}
+<main class="container py-3 pb-5">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <div>
+            <h1 class="h4 mb-0">Дашборд ГИПа</h1>
+            <div class="small text-muted">
+                {{ project.code }} — {{ project.name }} · на сегодня: {{ today|date:"d.m.Y" }}
+            </div>
+        </div>
+        <div class="d-flex gap-2">
+            <a class="btn btn-sm btn-outline-secondary"
+               href="{% url 'storage:project_detail' project.pk %}?tab=tasks">
+                <i class="bi bi-arrow-left me-1" aria-hidden="true"></i>К списку заданий
+            </a>
+            <a class="btn btn-sm btn-primary"
+               href="{% url 'storage:task_dashboard_export' project.pk %}"
+               data-role="dashboard-export">
+                <i class="bi bi-download me-1" aria-hidden="true"></i>Экспорт в Excel
+            </a>
+        </div>
+    </div>
+
+    {# Сводка — 5 карточек (спека 4.4): всего, в работе, на проверке, #}
+    {# просрочено, на уточнении. Просрочка подсвечивается красным. #}
+    <div class="row g-3 mb-2" data-role="dashboard-summary">
+        {% for card in summary_cards %}
+            <div class="col-6 col-md">
+                <div class="card h-100 shadow-sm{% if card.key == 'overdue' and card.value > 0 %} border-danger{% endif %}">
+                    <div class="card-body py-3">
+                        <div class="d-flex align-items-center justify-content-between">
+                            <span class="text-muted small">{{ card.label }}</span>
+                            <i class="bi {{ card.icon }}{% if card.key == 'overdue' and card.value > 0 %} text-danger{% endif %}"
+                               aria-hidden="true"></i>
+                        </div>
+                        <div class="fs-3 fw-semibold{% if card.key == 'overdue' and card.value > 0 %} text-danger{% endif %}"
+                             data-role="summary-{{ card.key }}">{{ card.value }}</div>
+                    </div>
+                </div>
+            </div>
+        {% endfor %}
+    </div>
+
+    {# Чипы по всем 9 статусам (решение D3): клик — на вкладку «Задания» #}
+    {# с фильтром статуса. #}
+    <nav class="zone-segment mb-4" aria-label="Задания по статусам" data-role="dashboard-status-chips">
+        {% for chip in status_chips %}
+            <a class="zone-chip"
+               href="{% url 'storage:project_detail' project.pk %}?tab=tasks&amp;status={{ chip.value }}">
+                {{ chip.label }}
+                <span class="zone-count">{{ chip.count }}</span>
+            </a>
+        {% endfor %}
+    </nav>
+
+    {# Таблица «Требуют внимания» (спека 4.4): просроченные, ожидающие #}
+    {# проверки, на уточнении — одна таблица с колонкой «Причина» (D1). #}
+    <div class="card shadow-sm" data-role="dashboard-attention">
+        <div class="card-header bg-white d-flex align-items-center gap-2">
+            <span class="fw-semibold">
+                <i class="bi bi-exclamation-triangle me-2" aria-hidden="true"></i>Требуют внимания
+            </span>
+            <span class="badge text-bg-light border">{{ attention|length }}</span>
+        </div>
+        {% if attention %}
+            <div class="table-responsive">
+                <table class="table table-hover align-middle mb-0" data-role="attention-table">
+                    <thead class="table-light">
+                        <tr>
+                            <th>Причина</th>
+                            <th>Задание</th>
+                            <th>Источник → Цель</th>
+                            <th>Автор</th>
+                            <th>Исполнитель</th>
+                            <th>Срок</th>
+                            <th>Статус</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    {% for task in attention %}
+                        <tr>
+                            <td><span class="badge {{ task.reason_badge }}">{{ task.reason_label }}</span></td>
+                            <td>
+                                {# Заголовок — ссылка на карточку задания (спека 4.3). #}
+                                <a class="fw-semibold" href="{% url 'storage:task_detail' project.pk task.pk %}">{{ task.title }}</a>
+                                {% if task.priority == 'critical' %}
+                                    <span class="badge text-bg-danger">{{ task.get_priority_display }}</span>
+                                {% elif task.priority == 'high' %}
+                                    <span class="badge text-bg-warning">{{ task.get_priority_display }}</span>
+                                {% endif %}
+                                <div class="small text-muted">#{{ task.pk }}</div>
+                            </td>
+                            <td class="text-nowrap">
+                                <span class="badge text-bg-light border">{{ task.source_section.code }}</span>
+                                <i class="bi bi-arrow-right" aria-hidden="true"></i>
+                                <span class="badge text-bg-light border">{{ task.target_section.code }}</span>
+                            </td>
+                            <td>{{ task.author.get_full_name|default:task.author.username }}</td>
+                            <td>
+                                {% if task.assignee %}
+                                    {{ task.assignee.get_full_name|default:task.assignee.username }}
+                                {% else %}
+                                    <span class="text-muted">—</span>
+                                {% endif %}
+                            </td>
+                            <td class="cde-tnum {% if task.is_overdue %}text-danger fw-semibold{% endif %}">
+                                {% if task.due_date %}{{ task.due_date|date:"d.m.Y" }}{% else %}<span class="text-muted">—</span>{% endif %}
+                                {% if task.is_overdue %}
+                                    <span class="badge text-bg-danger ms-1">{{ task.overdue_days }} дн.</span>
+                                {% endif %}
+                            </td>
+                            <td><span class="badge {{ task.status_badge }}">{{ task.get_status_display }}</span></td>
+                        </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        {% else %}
+            <div class="card-body text-center text-muted py-5" data-role="attention-empty">
+                <i class="bi bi-check2-circle fs-2 d-block mb-2" aria-hidden="true"></i>
+                Просроченных и требующих проверки заданий нет.
+            </div>
+        {% endif %}
+    </div>
+</main>
+{% endblock %}

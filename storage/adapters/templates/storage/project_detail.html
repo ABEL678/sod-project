@@ -486,6 +486,13 @@
                                 <i class="bi bi-plus-lg me-1" aria-hidden="true"></i>Выдать задание
                             </a>
                         {% endif %}
+                        {# Этап 6 (спека 4.4): вход на дашборд ГИПа — только ГИП/админ. #}
+                        {% if can_view_all_tasks %}
+                            <a class="btn btn-sm btn-outline-primary" href="{% url 'storage:task_dashboard' project.pk %}"
+                               data-role="task-dashboard-link">
+                                <i class="bi bi-speedometer2 me-1" aria-hidden="true"></i>Дашборд
+                            </a>
+                        {% endif %}
                     </div>
                     <div class="ai-tabpane__scroll">
                         {# Сегмент-контрол направления (спека 4.1): ГИП/админ — «Все», #}
