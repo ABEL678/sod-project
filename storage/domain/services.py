@@ -34,6 +34,8 @@ from storage.domain.models import (
     MailRule,
     Project,
     ProjectMembership,
+    RfiTask,
+    RfiStatusLog,
     Section,
     Specification,
     TaskTemplate,
@@ -3298,10 +3300,12 @@ def upload_document(
     comment: str = "",
     folder: Folder | None = None,
     skip_ai_index: bool = False,
+    skip_section_write_check: bool = False,
+    skip_zone_check: bool = False,
 ) -> DocumentVersion:
     """Единственная точка создания версий документа.
 
-    - Проверка прав через check_write_permission.
+    - Проверка прав через check_write_permission (кроме skip_section_write_check).
     - Проверка прав по зоне через check_zone_permission.
     - Проверка соответствия section.project == project.
     - Поиск/создание документа.
@@ -3316,7 +3320,7 @@ def upload_document(
     - UI-аудит (треб. 2.1/3.1): пустой code → генерация шифра по
       ГОСТ Р 21.101; пустой doc_type → определение по расширению файла.
     """
-    if not check_write_permission(user, section):
+    if not skip_section_write_check and not check_write_permission(user, section):
         raise PermissionDenied("Нет прав на запись в этот раздел")
 
     # Спринт 5: валидация загружаемых файлов — расширение и размер.
@@ -3383,7 +3387,7 @@ def upload_document(
             raise ValueError("Папка относится к другому разделу")
 
         # Проверка прав по целевой зоне
-        if not check_zone_permission(user, folder, section):
+        if not skip_zone_check and not check_zone_permission(user, folder, section):
             zone_name = folder.get_zone_display()
             raise PermissionDenied(
                 f"Нет прав на запись в зону «{zone_name}»"
@@ -5579,6 +5583,405 @@ def _send_task_deadline_notifications(tasks, today, recipients_of, message_of) -
         len(tasks), len(rows),
     )
     return len(rows)
+
+
+# =====================================================================
+# RFI (Request For Information) — модуль Этапа R1
+# =====================================================================
+
+_RFI_STATUS_TRANSITIONS: dict[tuple[str, str], str] = {
+    ('open', 'sent'): 'send',
+    ('sent', 'answered'): 'answer',
+    ('escalated', 'answered'): 'answer',
+    ('answered', 'registered'): 'register',
+    ('sent', 'escalated'): 'escalate',
+    ('answered', 'escalated'): 'escalate',
+    ('registered', 'closed'): 'close',
+    ('escalated', 'closed'): 'close',
+    ('open', 'closed'): 'close',
+}
+
+_RFI_CAN_CHANGE = frozenset({'author', 'assignee', 'gip', 'admin'})
+
+_RFI_ALLOWED_TRANSITIONS: dict[str, frozenset[str]] = {
+    'send': frozenset({'author', 'assignee', 'gip', 'admin'}),
+    'answer': frozenset({'author', 'assignee', 'gip', 'admin'}),
+    'register': frozenset({'author', 'assignee', 'gip', 'admin'}),
+    'escalate': frozenset({'assignee', 'gip', 'admin'}),
+    'close': frozenset({'author', 'assignee', 'gip', 'admin'}),
+}
+
+
+def _rfi_check_can_change(rfi: RfiTask, user: User) -> bool:
+    """Проверяет, может ли user изменять RFI (D5 — author/assignee/gip/admin)."""
+    if user.is_superuser:
+        return True
+    if rfi.author_id == user.pk:
+        return True
+    if rfi.assignee_id == user.pk:
+        return True
+    if _is_gip_or_admin(user, rfi.project):
+        return True
+    return False
+
+
+def _rfi_url(rfi: RfiTask) -> str:
+    return f'/projects/{rfi.project_id}/rfis/{rfi.pk}/'
+
+
+def _rfi_notify(
+    rfi: RfiTask, recipient: User | None, actor: User, message: str,
+    verb: str = 'status_changed',
+) -> None:
+    """Уведомление по RFI через существующий Notification (по образцу _notify_task)."""
+    from issues.notify import create_notification
+
+    if not _is_project_participant(recipient, rfi.project):
+        return
+    create_notification(
+        recipient=recipient,
+        actor=actor,
+        verb=verb,
+        project=rfi.project,
+        message=message,
+        url=_rfi_url(rfi),
+    )
+
+
+def _rfi_write_status_log(
+    rfi: RfiTask, old_status: str, new_status: str, user: User, comment: str = '',
+) -> None:
+    RfiStatusLog.objects.create(
+        rfi=rfi, old_status=old_status, new_status=new_status,
+        changed_by=user, comment=comment or '',
+    )
+
+
+def _rfi_can_create(user: User, project: Project) -> bool:
+    """Может ли user создавать RFI в проекте (D5)."""
+    if user.is_superuser:
+        return True
+    profile = getattr(user, 'userprofile', None)
+    if profile is not None and profile.role == 'admin':
+        return True
+    membership = project.memberships.filter(
+        user=user,
+        role_in_project__in=('gip', 'developer', 'contractor'),
+    ).exists()
+    return membership
+
+
+def _rfi_folder(project: Project) -> Folder | None:
+    """Папка RFI в ИРД (существующая или None)."""
+    return Folder.objects.filter(
+        project=project, name='Запросы информации (RFI)', is_deleted=False,
+    ).first()
+
+
+def _rfi_project_access(user: User, project: Project) -> bool:
+    """Проверяет доступ к RFI проекта: участник, ГИП или админ."""
+    if user.is_superuser:
+        return True
+    if _is_gip_or_admin(user, project):
+        return True
+    return project.memberships.filter(user=user).exists()
+
+
+def create_rfi(
+    user: User,
+    project: Project,
+    subject: str,
+    reason: str,
+    assignee: User | None = None,
+    rfi_due_date=None,
+) -> RfiTask:
+    """Создаёт RFI со статусом open."""
+    if not _rfi_project_access(user, project):
+        raise PermissionDenied("Нет доступа к проекту")
+    if not _rfi_can_create(user, project):
+        raise PermissionDenied("Нет прав на создание запроса информации")
+    if not subject or not reason:
+        raise ValueError("Тема и суть запроса обязательны")
+    from django.db import IntegrityError
+
+    assignee = assignee or project.gip
+    for attempt in range(3):
+        max_num = RfiTask.objects.filter(project=project).aggregate(
+            max_num=Max('number'),
+        )['max_num'] or 0
+        try:
+            rfi = RfiTask.objects.create(
+                project=project, number=max_num + 1,
+                subject=subject.strip(), reason=reason.strip(),
+                author=user, assignee=assignee,
+                rfi_due_date=rfi_due_date,
+            )
+        except IntegrityError:
+            if attempt < 2:
+                continue
+            raise ValueError("Не удалось создать RFI (конфликт номера) — повторите")
+        else:
+            break
+    _rfi_write_status_log(rfi, '', 'open', user)
+    return rfi
+
+
+def _rfi_do_transition(
+    user: User, rfi: RfiTask, new_status: str, comment: str,
+) -> RfiTask:
+    """Общий каркас перехода: права, матрица, лог, таймстемп."""
+    if not _rfi_project_access(user, rfi.project):
+        raise PermissionDenied("Нет доступа к проекту")
+    old_status = rfi.status
+    action = _RFI_STATUS_TRANSITIONS.get((old_status, new_status))
+    if action is None:
+        raise ValueError(
+            f"Переход {old_status} → {new_status} запрещён матрицей"
+        )
+    allowed_roles = _RFI_ALLOWED_TRANSITIONS[action]
+    if not _rfi_check_can_change(rfi, user):
+        raise PermissionDenied("Нет прав на изменение статуса этого запроса")
+    user_roles = set()
+    if user.is_superuser:
+        user_roles.add('admin')
+    profile = getattr(user, 'userprofile', None)
+    if profile is not None and profile.role == 'admin':
+        user_roles.add('admin')
+    if rfi.author_id == user.pk:
+        user_roles.add('author')
+    if rfi.assignee_id == user.pk:
+        user_roles.add('assignee')
+    if _is_gip_or_admin(user, rfi.project):
+        user_roles.add('gip')
+    if not user_roles & allowed_roles:
+        raise PermissionDenied("Нет прав на этот переход")
+    rfi.status = new_status
+    rfi.save(update_fields=['status', 'updated_at'])
+    _rfi_write_status_log(rfi, old_status, new_status, user, comment)
+    return rfi
+
+
+def send_rfi(user: User, rfi: RfiTask, comment: str = '') -> RfiTask:
+    """Переход open → sent: обязателен document_request."""
+    if rfi.document_request_id is None:
+        raise ValueError("Нельзя отправить запрос без файла запроса")
+    rfi = _rfi_do_transition(user, rfi, 'sent', comment)
+    rfi.sent_at = timezone.now()
+    rfi.save(update_fields=['sent_at'])
+    return rfi
+
+
+def answer_rfi(user: User, rfi: RfiTask, comment: str = '') -> RfiTask:
+    """Переход sent/escalated → answered."""
+    rfi = _rfi_do_transition(user, rfi, 'answered', comment)
+    rfi.answered_at = timezone.now()
+    rfi.save(update_fields=['answered_at'])
+    return rfi
+
+
+def register_rfi_response(
+    user: User, rfi: RfiTask, document: Document,
+) -> RfiTask:
+    """Переход answered → registered: привязка документа ответа."""
+    if document.project_id != rfi.project_id:
+        raise ValueError("Документ должен принадлежать тому же проекту")
+    rfi = _rfi_do_transition(user, rfi, 'registered', '')
+    rfi.document_response = document
+    rfi.registered_at = timezone.now()
+    rfi.save(update_fields=['document_response_id', 'registered_at'])
+    return rfi
+
+
+def escalate_rfi(user: User, rfi: RfiTask, comment: str = '') -> RfiTask:
+    """Переход sent/answered → escalated."""
+    rfi = _rfi_do_transition(user, rfi, 'escalated', comment)
+    rfi.escalated_at = timezone.now()
+    rfi.save(update_fields=['escalated_at'])
+    return rfi
+
+
+def close_rfi(user: User, rfi: RfiTask, comment: str = '') -> RfiTask:
+    """Переход registered/escalated/open → closed."""
+    if rfi.status == 'open' and not comment:
+        raise ValueError("При отмене черновика запроса комментарий обязателен")
+    rfi = _rfi_do_transition(user, rfi, 'closed', comment)
+    rfi.closed_at = timezone.now()
+    rfi.closed_by = user
+    rfi.save(update_fields=['closed_at', 'closed_by'])
+    return rfi
+
+
+def get_or_create_rfi_folder(project: Project, actor: User) -> Folder:
+    """Идемпотентное создание папки RFI под корневой ИРД."""
+    existing = _rfi_folder(project)
+    if existing is not None:
+        return existing
+    ird_root = Folder.objects.filter(
+        project=project, parent__isnull=True,
+        is_system_zone=False, is_deleted=False,
+        name='Исходные данные (ИРД)',
+    ).first()
+    from storage.domain.models import Section
+
+    common = Section.objects.filter(project=project, code='COMMON').first()
+    folder = Folder.objects.create(
+        project=project, parent=ird_root,
+        section=common, name='Запросы информации (RFI)',
+        zone='WIP', created_by=actor, is_system_zone=False,
+    )
+    return folder
+
+
+def upload_rfi_document(
+    user: User, rfi: RfiTask, kind: str, file,
+    name: str = '',
+) -> Document:
+    """Загружает документ запроса (kind=request) или ответа (kind=response) в папку RFI."""
+    if kind not in ('request', 'response'):
+        raise ValueError("kind должен быть 'request' или 'response'")
+    if not _rfi_check_can_change(rfi, user):
+        raise PermissionDenied("Нет прав на загрузку документов в этот RFI")
+    folder = get_or_create_rfi_folder(rfi.project, user)
+    from storage.domain.models import Section
+
+    common = Section.objects.filter(project=rfi.project, code='COMMON').first()
+    if common is None:
+        raise ValueError("В проекте нет раздела COMMON")
+    suffix = 'Запрос' if kind == 'request' else 'Ответ'
+    doc_code = f'RFI-{rfi.number:02d}-{suffix}'
+    doc_name = name or (
+        f'RFI-{rfi.number:02d}: '
+        f'{"Запрос" if kind == "request" else "Ответ Заказчика"}'
+        f' — {rfi.subject[:80]}'
+    )
+    version = upload_document(
+        user, rfi.project, common, code=doc_code, name=doc_name,
+        doc_type='source_data', file=file, folder=folder,
+        skip_section_write_check=True,
+        skip_zone_check=True,
+    )
+    doc = version.document
+    if kind == 'request':
+        RfiTask.objects.filter(pk=rfi.pk).update(document_request=doc)
+        rfi.document_request = doc
+    else:
+        RfiTask.objects.filter(pk=rfi.pk).update(document_response=doc)
+        rfi.document_response = doc
+    return doc
+
+
+def attach_rfi_document(
+    user: User, rfi: RfiTask, kind: str, document: Document,
+) -> RfiTask:
+    """Привязывает уже существующий документ из папки RFI."""
+    if kind not in ('request', 'response'):
+        raise ValueError("kind должен быть 'request' или 'response'")
+    if not _rfi_check_can_change(rfi, user):
+        raise PermissionDenied("Нет прав на привязку документов к этому RFI")
+    if document.project_id != rfi.project_id:
+        raise ValueError("Документ должен принадлежать тому же проекту")
+    folder = _rfi_folder(rfi.project)
+    if folder is None or document.folder_id != folder.pk:
+        raise ValueError("Документ должен находиться в папке RFI")
+    if kind == 'request':
+        rfi.document_request = document
+    else:
+        rfi.document_response = document
+    rfi.save(update_fields=[
+        'document_request_id' if kind == 'request' else 'document_response_id',
+    ])
+    return rfi
+
+
+def list_rfis(
+    project: Project, user: User, status_filter: list[str] | None = None,
+) -> QuerySet:
+    """Список RFI проекта с правами на чтение."""
+    if not _rfi_project_access(user, project):
+        raise PermissionDenied("Нет доступа к проекту")
+    qs = RfiTask.objects.filter(project=project).select_related(
+        'author', 'assignee', 'document_request', 'document_response',
+    )
+    if status_filter:
+        qs = qs.filter(status__in=status_filter)
+    return qs
+
+
+def rfi_summary_for_gip(project: Project) -> dict[str, int]:
+    """Сводка по RFI для Сводки ГИПа."""
+    today = timezone.localdate()
+    qs = RfiTask.objects.filter(project=project)
+    total = qs.count()
+    by_status = {s: qs.filter(status=s).count() for s, _ in RfiTask.STATUS_CHOICES}
+    overdue = qs.filter(
+        status__in=('sent', 'escalated'),
+        rfi_due_date__lt=today,
+    ).count()
+    return {
+        'total': total,
+        'open': by_status.get('open', 0),
+        'sent': by_status.get('sent', 0),
+        'answered': by_status.get('answered', 0),
+        'registered': by_status.get('registered', 0),
+        'closed': by_status.get('closed', 0),
+        'escalated': by_status.get('escalated', 0),
+        'overdue': overdue,
+    }
+
+
+def rfis_requiring_attention(project: Project) -> list:
+    """RFI для блока «Требуют внимания» на Сводке."""
+    today = timezone.localdate()
+    rfis = list(
+        RfiTask.objects.filter(
+            project=project,
+            status__in=('sent', 'escalated'),
+        ).select_related('author', 'assignee')
+    )
+    for rfi in rfis:
+        rfi.is_overdue = bool(rfi.rfi_due_date and rfi.rfi_due_date < today)
+        rfi.overdue_days = (
+            (today - rfi.rfi_due_date).days
+            if rfi.rfi_due_date and rfi.rfi_due_date < today
+            else 0
+        )
+        if rfi.status == 'escalated':
+            rfi.attention_reason = 'escalated'
+        else:
+            rfi.attention_reason = 'overdue_sent'
+    rfis.sort(key=lambda r: (
+        0 if r.status == 'escalated' else 1,
+        r.rfi_due_date or today,
+    ))
+    return rfis
+
+
+def escalate_overdue_rfis() -> int:
+    """Автоэскалация просроченных sent-RFI (для beat)."""
+    from django.db.models import F
+
+    today = timezone.localdate()
+    overdue = list(
+        RfiTask.objects.filter(
+            status='sent', rfi_due_date__lt=today,
+        ).select_related('project').only(
+            'pk', 'status', 'assignee_id', 'project_id',
+        )
+    )
+    count = 0
+    for rfi in overdue:
+        try:
+            actor = rfi.assignee or rfi.project.gip
+            if actor is None:
+                continue
+            escalate_rfi(
+                actor, rfi,
+                comment='Автоэскалация: истёк срок ответа Заказчика',
+            )
+            count += 1
+        except Exception:
+            continue
+    return count
 
 
 def notify_tasks_due_soon() -> int:

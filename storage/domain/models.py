@@ -945,3 +945,104 @@ class DesignTaskChecklistItem(models.Model):
 
     def __str__(self):
         return f'{self.text[:50]} ({self.task_id})'
+
+
+class RfiTask(models.Model):
+    """Запрос внешних ИД у Заказчика (RFI).
+
+    Отдельная сущность, не флаг на DesignTask (решение D1).
+    Статусы строкой совпадают 1:1 с RfiState ГИП-Ассистента (D2).
+    """
+
+    STATUS_CHOICES = [
+        ('open', 'Открыт'),
+        ('sent', 'Отправлен'),
+        ('answered', 'Ответ получен'),
+        ('registered', 'ИД зарегистрированы'),
+        ('closed', 'Закрыт'),
+        ('escalated', 'Эскалирован'),
+    ]
+
+    project = models.ForeignKey(
+        Project, on_delete=models.CASCADE, related_name='rfi_tasks',
+        verbose_name="Проект",
+    )
+    number = models.PositiveIntegerField(verbose_name="Номер RFI")
+    subject = models.CharField(max_length=255, verbose_name="Тема запроса")
+    reason = models.TextField(verbose_name="Суть запроса")
+    author = models.ForeignKey(
+        User, on_delete=models.PROTECT, related_name='created_rfi_tasks',
+        verbose_name="Автор",
+    )
+    assignee = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='assigned_rfi_tasks', verbose_name="Ответственный",
+    )
+    status = models.CharField(
+        max_length=20, choices=STATUS_CHOICES, default='open', db_index=True,
+        verbose_name="Статус",
+    )
+    rfi_due_date = models.DateField(
+        null=True, blank=True, verbose_name="Срок ответа",
+    )
+    document_request = models.ForeignKey(
+        Document, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='rfi_as_request', verbose_name="Документ запроса",
+    )
+    document_response = models.ForeignKey(
+        Document, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='rfi_as_response', verbose_name="Документ ответа",
+    )
+    external_id = models.CharField(
+        max_length=100, null=True, blank=True, db_index=True,
+        verbose_name="External ID (ГИП-Ассистент)",
+    )
+    sent_at = models.DateTimeField(null=True, blank=True, verbose_name="Отправлен")
+    answered_at = models.DateTimeField(null=True, blank=True, verbose_name="Ответ получен")
+    registered_at = models.DateTimeField(null=True, blank=True, verbose_name="ИД зарегистрированы")
+    escalated_at = models.DateTimeField(null=True, blank=True, verbose_name="Эскалирован")
+    closed_at = models.DateTimeField(null=True, blank=True, verbose_name="Закрыт")
+    closed_by = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='closed_rfi_tasks', verbose_name="Кто закрыл",
+    )
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name="Создан")
+    updated_at = models.DateTimeField(auto_now=True, verbose_name="Обновлён")
+
+    class Meta:
+        unique_together = ('project', 'number')
+        indexes = [
+            models.Index(fields=['project', 'status']),
+            models.Index(fields=['project', 'rfi_due_date']),
+        ]
+        ordering = ['-number']
+        verbose_name = "Запрос информации (RFI)"
+        verbose_name_plural = "Запросы информации (RFI)"
+
+    def __str__(self):
+        return f'RFI-{self.number:02d}: {self.subject[:50]}'
+
+
+class RfiStatusLog(models.Model):
+    """История смены статусов RFI (по образцу DesignTaskStatusLog)."""
+
+    rfi = models.ForeignKey(
+        RfiTask, on_delete=models.CASCADE, related_name='status_logs',
+        verbose_name="RFI",
+    )
+    old_status = models.CharField(max_length=20, verbose_name="Прежний статус")
+    new_status = models.CharField(max_length=20, verbose_name="Новый статус")
+    changed_by = models.ForeignKey(
+        User, on_delete=models.PROTECT,
+        related_name='rfi_status_logs', verbose_name="Кто изменил",
+    )
+    comment = models.TextField(blank=True, default='', verbose_name="Комментарий")
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name="Дата")
+
+    class Meta:
+        ordering = ['created_at']
+        verbose_name = "Запись истории статусов RFI"
+        verbose_name_plural = "Истории статусов RFI"
+
+    def __str__(self):
+        return f'{self.old_status} → {self.new_status} (RFI-{self.rfi_id})'
