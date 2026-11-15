@@ -441,3 +441,74 @@ class CeleryTasksAndBeatTests(TestCase):
         with mock.patch.object(notify_task_due_today, 'apply_async') as mocked:
             notify_task_due_today.apply_async()
         mocked.assert_called_once()
+
+
+class EmailNotificationTests(DesignTaskTestBase):
+    """Email-уведомления при создании Notification (Этап 5.1)."""
+
+    def setUp(self):
+        super().setUp()
+        self.assignee.email = 'assignee@test.ru'
+        self.assignee.save()
+        self.author.email = 'author@test.ru'
+        self.author.save()
+        self.gip.email = 'gip@test.ru'
+        self.gip.save()
+
+    @mock.patch('django.core.mail.send_mail')
+    def test_issue_task_sends_email_to_assignee(self, mock_send_mail):
+        task = self._make_task(assignee=self.assignee)
+        issue_task(self.author, task)
+        mock_send_mail.assert_called_once()
+        args, _ = mock_send_mail.call_args
+        self.assertIn('Новое уведомление в Stream-CAD', args[0])
+        self.assertEqual(args[3], [self.assignee.email])
+
+    @mock.patch('django.core.mail.send_mail')
+    def test_skip_email_when_recipient_has_no_email(self, mock_send_mail):
+        self.assignee.email = ''
+        self.assignee.save()
+        task = self._make_task(assignee=self.assignee)
+        issue_task(self.author, task)
+        mock_send_mail.assert_not_called()
+
+    @mock.patch('django.core.mail.send_mail')
+    def test_status_change_sends_email(self, mock_send_mail):
+        task = self._task_in_progress()
+        add_task_attachment(
+            self.assignee, task, 'output',
+            file=self._uploaded('result.pdf', b'result'),
+        )
+        Notification.objects.all().delete()
+        mock_send_mail.reset_mock()
+        update_task_status(self.assignee, task, DesignTask.Status.COMPLETED)
+        self.assertEqual(mock_send_mail.call_count, 2)
+        call_emails = {call.args[3][0] for call in mock_send_mail.call_args_list}
+        self.assertIn(self.author.email, call_emails)
+        self.assertIn(self.gip.email, call_emails)
+
+    @mock.patch('django.core.mail.send_mail')
+    def test_actor_gets_no_email(self, mock_send_mail):
+        """Актор (кто изменил статус) не получает email о своём действии."""
+        task = self._task_in_progress()
+        add_task_attachment(
+            self.assignee, task, 'output',
+            file=self._uploaded('result.pdf', b'result'),
+        )
+        Notification.objects.all().delete()
+        mock_send_mail.reset_mock()
+        update_task_status(self.assignee, task, DesignTask.Status.COMPLETED)
+        for call in mock_send_mail.call_args_list:
+            self.assertNotEqual(call.args[3][0], self.assignee.email)
+
+    @mock.patch('django.core.mail.send_mail')
+    def test_eager_mode_sends_synchronously(self, mock_send_mail):
+        """С EAGER=True задача выполняется синхронно — письмо уходит сразу."""
+        task = self._make_task(assignee=self.assignee)
+        issue_task(self.author, task)
+        mock_send_mail.assert_called_once()
+
+    @staticmethod
+    def _uploaded(name, content):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        return SimpleUploadedFile(name, content)

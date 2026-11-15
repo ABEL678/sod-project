@@ -34,3 +34,18 @@ def notify_task_overdue() -> int:
     Незакрытыми считаются все статусы, кроме COMPLETED/ACCEPTED/CANCELLED.
     """
     return services.notify_tasks_overdue()
+
+
+@shared_task(name='storage.tasks.send_notification_email')
+def send_notification_email(recipient_email: str, subject: str, message: str) -> None:
+    """Отправляет email-уведомление получателю."""
+    from django.core.mail import send_mail
+    from django.conf import settings
+
+    send_mail(
+        subject,
+        message,
+        settings.DEFAULT_FROM_EMAIL,
+        [recipient_email],
+        fail_silently=True,
+    )

@@ -39,7 +39,7 @@ def create_notification(
     if recipient is None or recipient_id(recipient) == actor_id(actor):
         return None
     try:
-        return Notification.objects.create(
+        notification = Notification.objects.create(
             recipient=recipient,
             actor=actor,
             issue=issue,
@@ -49,8 +49,31 @@ def create_notification(
             message=message[:300],
             url=url[:300],
         )
+        _dispatch_email(notification)
+        return notification
     except Exception:  # pragma: no cover — уведомления не роняют основной сценарий
         return None
+
+
+def _dispatch_email(notification: Notification) -> None:
+    """Отправляет email через Celery (фоново), если у получателя есть email."""
+    email = (notification.recipient.email or '').strip()
+    if not email:
+        return
+    try:
+        from storage.tasks import send_notification_email
+
+        send_notification_email.delay(
+            recipient_email=email,
+            subject='Новое уведомление в Stream-CAD',
+            message=(
+                f'Здравствуйте!\n\n'
+                f'{notification.message}\n\n'
+                f'С уважением, Stream-CAD'
+            ),
+        )
+    except Exception:  # pragma: no cover
+        pass
 
 
 def recipient_id(user: User | None):
