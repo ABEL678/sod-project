@@ -230,8 +230,16 @@
                             <i class="bi bi-table" aria-hidden="true"></i>
                             Документы
                             <span class="badge text-bg-light border">{{ documents|length }}</span>
-                        </a>
-<a class="app-tab {% if active_tab == 'tasks' %}active{% endif %}"
+</a>
+        <a class="app-tab {% if active_tab == 'issues' %}active{% endif %}"
+           href="{% url 'storage:project_detail' project.pk %}?tab=issues"
+           role="tab"
+           aria-selected="{% if active_tab == 'issues' %}true{% else %}false{% endif %}">
+            <i class="bi bi-chat-left-text" aria-hidden="true"></i>
+            Замечания
+            {% if counts.total %}<span class="badge text-bg-light border">{{ counts.total }}</span>{% endif %}
+        </a>
+        <a class="app-tab {% if active_tab == 'tasks' %}active{% endif %}"
            href="{% url 'storage:project_detail' project.pk %}?tab=tasks"
            role="tab"
            aria-selected="{% if active_tab == 'tasks' %}true{% else %}false{% endif %}">
@@ -246,15 +254,7 @@
             <i class="bi bi-envelope-paper" aria-hidden="true"></i>
             Запросы
             {% if rfi_open_count %}<span class="badge text-bg-light border">{{ rfi_open_count }}</span>{% endif %}
-        </a>
-        <a class="app-tab {% if active_tab == 'issues' %}active{% endif %}"
-           href="{% url 'storage:project_detail' project.pk %}?tab=issues"
-           role="tab"
-           aria-selected="{% if active_tab == 'issues' %}true{% else %}false{% endif %}">
-            <i class="bi bi-chat-left-text" aria-hidden="true"></i>
-            Замечания
-            {% if counts.total %}<span class="badge text-bg-light border">{{ counts.total }}</span>{% endif %}
-        </a>
+</a>
                         {% if can_manage_participants %}
                         <a class="app-tab {% if active_tab == 'participants' %}active{% endif %}"
                            href="{% url 'storage:project_detail' project.pk %}?tab=participants"

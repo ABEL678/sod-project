@@ -17,4 +17,5 @@ urlpatterns = [
     path('issues/<int:issue_id>/delete-crop/', views.issue_delete_crop, name='issue_delete_crop'),
     path('issues/<int:issue_id>/detail/', views.issue_detail_htmx, name='issue_detail_htmx'),
     path('issues/<int:issue_id>/comment/', views.add_comment, name='add_comment'),
+    path('issues/<int:issue_id>/blocking/', views.IssueBlockingUpdateView.as_view(), name='issue_blocking'),
 ]

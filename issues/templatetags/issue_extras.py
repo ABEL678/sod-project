@@ -80,3 +80,9 @@ def status_badge_class(issue):
     красили статусы одинаково."""
     status = getattr(issue, "status", "")
     return ISSUE_STATUS_CLASS.get(status) or ISSUE_STATUS_CLASS[DEFAULT_STATUS]
+
+
+@register.filter
+def get_item(dictionary, key):
+    """Template filter для доступа к dict[key] (blocking_links[issue.pk])."""
+    return dictionary.get(key)

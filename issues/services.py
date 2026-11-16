@@ -138,7 +138,10 @@ def issue_summary(user, project):
         'review': groups['review'],
         'closed': groups['closed'],
         'overdue': overdue,
-        'blocking': 0,
+        'blocking': qs.filter(
+            Q(blocked_design_tasks__isnull=False)
+            | Q(blocked_rfi_tasks__isnull=False)
+        ).distinct().count(),
     }
 
 
@@ -188,9 +191,27 @@ def issues_requiring_attention(user, project):
 
 
 def blocking_links_map(user, project):
-    """Собирает блокирующие связи по всем замечаниям проекта (заглушка).
+    """Собирает блокирующие связи по всем замечаниям проекта.
 
-    Возвращает {issue_pk: {'design_tasks': [...], 'rfi_tasks': [...]}}.
-    Пока M2M нет — всегда пустой dict.
+    Возвращает {issue_pk: {'design_tasks': [(pk, title, ...), ...],
+                            'rfi_tasks': [(pk, subject, ...), ...]}}.
     """
-    return {}
+    pks = _readable_document_pks(user, project)
+    issues = Issue.objects.filter(document_id__in=pks).only('pk').prefetch_related(
+        'blocked_design_tasks', 'blocked_rfi_tasks',
+    )
+    result = {}
+    for issue in issues:
+        dt = [
+            (t.pk, t.title, t.number)
+            for t in issue.blocked_design_tasks.all()
+        ]
+        rt = [
+            (t.pk, t.subject, t.number)
+            for t in issue.blocked_rfi_tasks.all()
+        ]
+        result[issue.pk] = {
+            'design_tasks': dt,
+            'rfi_tasks': rt,
+        }
+    return result

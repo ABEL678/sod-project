@@ -70,6 +70,16 @@ class Issue(models.Model):
     revision = models.CharField(max_length=100, blank=True)
     answer_text = models.TextField(blank=True)
 
+    # Этап C (ISSUES_TAB_PLAN, раздел 3.4): M2M-связи блокировки.
+    blocked_design_tasks = models.ManyToManyField(
+        'storage.DesignTask', blank=True, related_name='blocking_issues',
+        verbose_name="Блокирует задания",
+    )
+    blocked_rfi_tasks = models.ManyToManyField(
+        'storage.RfiTask', blank=True, related_name='blocking_issues',
+        verbose_name="Блокирует RFI",
+    )
+
     class Meta:
         ordering = ['-created_at']
         constraints = [

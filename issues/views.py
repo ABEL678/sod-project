@@ -755,3 +755,65 @@ def notifications_read_all(request):
             return notifications_partial(request)
         return redirect('issues:my_issues')
     return HttpResponseForbidden('POST only')
+
+
+class IssueBlockingUpdateView(LoginRequiredMixin, View):
+    """Управление блокирующими связями замечания (POST add/remove).
+
+    POST параметры:
+      action — 'add' или 'remove'
+      target_type — 'task' или 'rfi'
+      target_id — pk DesignTask или RfiTask
+    """
+
+    def post(self, request, issue_id):
+        issue = get_object_or_404(Issue, pk=issue_id)
+        if not _can_change_issue(issue, request.user):
+            return HttpResponseForbidden("Нет прав на изменение замечания")
+        action = request.POST.get('action', '')
+        target_type = request.POST.get('target_type', '')
+        target_id = request.POST.get('target_id', '')
+        if not target_id.isdigit():
+            return JsonResponse({'error': 'Неверный ID цели'}, status=400)
+        target_id = int(target_id)
+        try:
+            if target_type == 'task':
+                from storage.domain.models import DesignTask
+                obj = get_object_or_404(DesignTask, pk=target_id, project=issue.document.project)
+                if action == 'add':
+                    issue.blocked_design_tasks.add(obj)
+                elif action == 'remove':
+                    issue.blocked_design_tasks.remove(obj)
+                else:
+                    return JsonResponse({'error': 'Неизвестное действие'}, status=400)
+            elif target_type == 'rfi':
+                from storage.domain.models import RfiTask
+                obj = get_object_or_404(RfiTask, pk=target_id, project=issue.document.project)
+                if action == 'add':
+                    issue.blocked_rfi_tasks.add(obj)
+                elif action == 'remove':
+                    issue.blocked_rfi_tasks.remove(obj)
+                else:
+                    return JsonResponse({'error': 'Неизвестное действие'}, status=400)
+            else:
+                return JsonResponse({'error': 'Неизвестный тип цели'}, status=400)
+        except Exception as exc:
+            return JsonResponse({'error': str(exc)}, status=400)
+        return JsonResponse({'status': 'ok'})
+
+
+def _can_change_issue(issue, user):
+    """Права на изменение замечания: автор, ответственный, ГИП/админ проекта."""
+    if user.is_superuser:
+        return True
+    if issue.author_id == user.pk:
+        return True
+    if issue.assignee_id == user.pk:
+        return True
+    project = issue.document.project
+    profile = getattr(user, 'userprofile', None)
+    if profile is not None and profile.role == 'admin':
+        return True
+    if project.gip_id == user.pk:
+        return True
+    return False

@@ -246,7 +246,28 @@
                                 {% endif %}
                             {% else %}—{% endif %}
                         </td>
-                        <td class="text-muted small">—</td>
+                        <td class="text-muted small">
+                            {% with issue.pk as ipk %}
+                                {% with blocking_links|default:"" as bmap %}
+                                    {% if bmap and bmap|get_item:ipk %}
+                                        {% with links=bmap|get_item:ipk %}
+                                            {% for t in links.design_tasks %}
+                                                <a class="badge text-bg-primary text-decoration-none me-1"
+                                                   href="{% url 'storage:task_detail' project.pk t.0 %}"
+                                                   title="Задание: {{ t.1 }}">З-{{ t.2 }}</a>
+                                            {% endfor %}
+                                            {% for t in links.rfi_tasks %}
+                                                <a class="badge text-bg-info text-decoration-none me-1"
+                                                   href="{% url 'storage:rfi_detail' project.pk t.0 %}"
+                                                   title="RFI: {{ t.1 }}">РИ-{{ t.2 }}</a>
+                                            {% endfor %}
+                                        {% endwith %}
+                                    {% else %}
+                                        —
+                                    {% endif %}
+                                {% endwith %}
+                            {% endwith %}
+                        </td>
                     </tr>
                 {% empty %}
                     <tr>

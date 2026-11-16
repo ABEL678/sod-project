@@ -1216,6 +1216,7 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
             ISSUE_STATUS_GROUPS,
             _readable_document_pks,
             apply_issue_filters,
+            blocking_links_map,
             issue_summary,
             issues_requiring_attention,
             project_issues,
@@ -1257,6 +1258,7 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
             issues_data.append(issue)
 
         attention = issues_requiring_attention(user, project)
+        block_map = blocking_links_map(user, project)
 
         return {
             'issues': issues_data,
@@ -1266,6 +1268,7 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
             'counts': counts,
             'issue_summary': counts,
             'issue_attention': attention,
+            'blocking_links': block_map,
             'status_choices': Issue.STATUS_CHOICES,
             'assignee_choices': assignee_choices,
             'filters': {

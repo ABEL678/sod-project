@@ -42,6 +42,15 @@
                     {# Живой дедлайн (спека 4.3): HTMX-поллинг раз в 60 секунд — фрагмент _task_deadline.html. #}
                     {% include 'storage/_task_deadline.html' %}
                 {% endif %}
+                {# Блокирующие замечания (Этап C) #}
+                {% with blocking_count=task.blocking_issues.all|length %}
+                    {% if blocking_count > 0 %}
+                        <span class="badge text-bg-danger">
+                            <i class="bi bi-exclamation-triangle me-1" aria-hidden="true"></i>
+                            Заблокировано замечаниями: {{ blocking_count }}
+                        </span>
+                    {% endif %}
+                {% endwith %}
             </div>
             <div class="small text-muted">
                 Задание #{{ task.pk }} ·
