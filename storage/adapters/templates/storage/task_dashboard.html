@@ -139,7 +139,7 @@
 
     {# Блок RFI на Сводке — 4 карточки-счётчика + мини-таблица #}
     <h2 class="h5 mt-4 mb-3">
-        <i class="bi bi-envelope-paper me-2" aria-hidden="true"></i>Запросы информации (RFI)
+        <i class="bi bi-envelope-paper me-2" aria-hidden="true"></i>Запросы информации
     </h2>
     <div class="row g-3 mb-3" data-role="rfi-summary">
         <div class="col-6 col-md-3">
@@ -186,7 +186,7 @@
         <div class="card shadow-sm mb-3" data-role="rfi-attention">
             <div class="card-header bg-white d-flex align-items-center gap-2">
                 <span class="fw-semibold">
-                    <i class="bi bi-exclamation-triangle me-2" aria-hidden="true"></i>RFI, требующие внимания
+                    <i class="bi bi-exclamation-triangle me-2" aria-hidden="true"></i>Запросы, требующие внимания
                 </span>
                 <span class="badge text-bg-light border">{{ rfi_attention|length }}</span>
             </div>
@@ -195,7 +195,7 @@
                     <thead class="table-light">
                         <tr>
                             <th>Причина</th>
-                            <th>RFI</th>
+                            <th>Запрос</th>
                             <th>Ответственный</th>
                             <th>Срок</th>
                             <th>Статус</th>
@@ -233,7 +233,7 @@
     {% else %}
         <div class="text-center text-muted py-4" data-role="rfi-attention-empty">
             <i class="bi bi-check2-circle fs-2 d-block mb-2" aria-hidden="true"></i>
-            Просроченных и эскалированных RFI нет.
+            Просроченных и эскалированных запросов нет.
         </div>
     {% endif %}
 </main>

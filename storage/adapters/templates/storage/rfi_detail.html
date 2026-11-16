@@ -99,7 +99,7 @@
                         <input type="hidden" name="kind" value="response">
                         <div class="input-group input-group-sm" style="max-width: 400px;">
                             <select class="form-select form-select-sm" name="document_id">
-                                <option value="">— Выбрать из папки RFI —</option>
+                                <option value="">— Выбрать из папки «Запросы информации» —</option>
                                 {% for doc in folder_documents %}
                                     <option value="{{ doc.pk }}">{{ doc.code }} — {{ doc.name }}</option>
                                 {% endfor %}

@@ -10,6 +10,7 @@ class ApiToken(models.Model):
         PROJECTS_READ = "projects:read", "Чтение проектов"
         ISSUES_SYNC = "issues:sync", "Синхронизация замечаний"
         ISSUES_READ = "issues:read", "Чтение замечаний"
+        TASKS_READ = "tasks:read", "Чтение заданий и RFI (ГИП-Ассистент)"
 
     company = models.ForeignKey(
         "storage.Company",

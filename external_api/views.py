@@ -22,13 +22,15 @@ from external_api.authentication import ApiTokenAuthentication
 from external_api.models import ApiToken
 from external_api.permissions import HasScope
 from external_api.serializers import (
+    ApiRfiReadSerializer,
+    ApiTaskReadSerializer,
     IssuePendingSerializer,
     IssueSyncSerializer,
     ProjectCreateSerializer,
     SpecificationSerializer,
     VorItemSerializer,
 )
-from storage.domain.models import Company, Project
+from storage.domain.models import Company, DesignTask, Project, RfiTask
 from storage.domain.services import (
     create_api_token,
     create_project_from_template,
@@ -37,8 +39,12 @@ from storage.domain.services import (
     get_project_specifications,
     get_user_company,
     list_api_tokens,
+    list_rfis,
+    list_tasks,
     revoke_api_token,
+    rfi_summary_for_gip,
     sync_issues,
+    task_summary_for_gip,
 )
 
 
@@ -427,3 +433,77 @@ def _tokens_url(user, company):
     if user.is_superuser:
         return f"{url}?company={company.pk}"
     return url
+
+
+_NOT_TERMINAL_TASK_STATUSES = frozenset({
+    DesignTask.Status.DRAFT,
+    DesignTask.Status.ISSUED,
+    DesignTask.Status.IN_PROGRESS,
+    DesignTask.Status.ON_HOLD,
+    DesignTask.Status.COMPLETED,
+    DesignTask.Status.REVIEW,
+    DesignTask.Status.RETURNED,
+})
+
+
+class ApiTaskListView(APIView):
+    """GET /api/v1/projects/<code>/tasks/ — полный список заданий."""
+
+    authentication_classes = [ApiTokenAuthentication]
+    permission_classes = [IsAuthenticated, HasScope]
+    throttle_classes = [UserRateThrottle]
+    required_scope = ApiToken.Scope.TASKS_READ
+
+    def get(self, request, code):
+        project = _api_project(request, code)
+        tasks = list_tasks(project, request.user, 'all')
+        today = timezone.localdate()
+        by_status = {}
+        for t in tasks:
+            by_status[t.status] = by_status.get(t.status, 0) + 1
+        summary = task_summary_for_gip(project)
+        return Response({
+            'project': {'code': project.code, 'name': project.name},
+            'generated_at': timezone.now().isoformat(),
+            'count': len(tasks),
+            'summary': {
+                'total': summary['total'],
+                'overdue': summary['overdue'],
+                'on_hold': summary['on_hold'],
+                'awaiting_review': summary['awaiting_review'],
+                'by_status': by_status,
+            },
+            'tasks': ApiTaskReadSerializer(tasks, many=True).data,
+        })
+
+
+class ApiRfiListView(APIView):
+    """GET /api/v1/projects/<code>/rfis/ — список RFI."""
+
+    authentication_classes = [ApiTokenAuthentication]
+    permission_classes = [IsAuthenticated, HasScope]
+    throttle_classes = [UserRateThrottle]
+    required_scope = ApiToken.Scope.TASKS_READ
+
+    def get(self, request, code):
+        project = _api_project(request, code)
+        raw_status = request.GET.get('status', '')
+        status_filter = (
+            [s.strip() for s in raw_status.split(',') if s.strip()]
+            if raw_status else None
+        )
+        attention_only = request.GET.get('attention') == '1'
+
+        rfis = list_rfis(project, request.user, status_filter)
+        if attention_only:
+            rfis = rfis.filter(status__in=('sent', 'escalated'))
+        rfis = list(rfis)
+
+        summary = rfi_summary_for_gip(project)
+        return Response({
+            'project': {'code': project.code, 'name': project.name},
+            'generated_at': timezone.now().isoformat(),
+            'count': len(rfis),
+            'summary': summary,
+            'rfis': ApiRfiReadSerializer(rfis, many=True).data,
+        })

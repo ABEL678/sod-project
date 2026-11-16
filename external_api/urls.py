@@ -1,6 +1,8 @@
 from django.urls import path
 
 from external_api.views import (
+    ApiRfiListView,
+    ApiTaskListView,
     IssuePendingView,
     IssueSyncView,
     ProjectCreateView,
@@ -33,5 +35,15 @@ urlpatterns = [
         "projects/<str:code>/issues/pending/",
         IssuePendingView.as_view(),
         name="api_project_issue_pending",
+    ),
+    path(
+        "projects/<str:code>/tasks/",
+        ApiTaskListView.as_view(),
+        name="api_project_tasks",
+    ),
+    path(
+        "projects/<str:code>/rfis/",
+        ApiRfiListView.as_view(),
+        name="api_project_rfis",
     ),
 ]
