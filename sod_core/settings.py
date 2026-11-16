@@ -325,6 +325,14 @@ CELERY_BEAT_SCHEDULE = {
         'task': 'storage.tasks.notify_task_overdue',
         'schedule': crontab(minute=0),
     },
+    's3-sync-dirty': {
+        'task': 'storage.tasks.sync_all_projects_to_s3',
+        'schedule': crontab(minute='*/15'),
+    },
+    's3-sync-full': {
+        'task': 'storage.tasks.sync_s3_full',
+        'schedule': crontab(hour=2, minute=0),
+    },
 }
 
 USE_I18N = True

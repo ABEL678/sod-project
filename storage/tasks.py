@@ -49,3 +49,58 @@ def send_notification_email(recipient_email: str, subject: str, message: str) ->
         [recipient_email],
         fail_silently=True,
     )
+
+
+# ─── S3 Data Lake (ГИП-Ассистент) — Этап B ───────────────────────────────────
+
+
+@shared_task(name='storage.tasks.sync_project_to_s3')
+def sync_project_to_s3(project_id: int) -> int:
+    """Выгрузка одного проекта в S3."""
+    from storage.domain.models import Project
+    from storage.domain.sync.export import export_project_to_s3
+
+    project = Project.objects.get(pk=project_id)
+    return export_project_to_s3(project)
+
+
+@shared_task(name='storage.tasks.sync_all_projects_to_s3')
+def sync_all_projects_to_s3() -> int:
+    """Выгрузка всех «грязных» проектов (плановый beat, раз в 15 минут)."""
+    from storage.domain.models import SyncState
+    from storage.domain.sync.export import export_project_to_s3
+
+    count = 0
+    for state in SyncState.objects.filter(dirty=True).select_related('project'):
+        try:
+            export_project_to_s3(state.project)
+            count += 1
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).exception(
+                "sync_all_projects_to_s3[%s]: %s", state.project.code, exc,
+            )
+    return count
+
+
+@shared_task(name='storage.tasks.sync_s3_full')
+def sync_s3_full() -> int:
+    """Полная выгрузка всех проектов (раз в сутки)."""
+    from storage.domain.models import Project, SyncState
+    from storage.domain.sync.export import export_project_to_s3
+
+    count = 0
+    for project in Project.objects.filter(is_deleted=False):
+        try:
+            export_project_to_s3(project)
+            count += 1
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).exception(
+                "sync_s3_full[%s]: %s", project.code, exc,
+            )
+    if count:
+        SyncState.objects.filter(project__is_deleted=False).update(
+            last_full_sync_at=timezone.now(),
+        )
+    return count
