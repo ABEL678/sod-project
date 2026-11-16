@@ -1789,11 +1789,13 @@ TASK_ATTENTION_BADGES = {
     'overdue': 'text-bg-danger',
     'review': 'text-bg-warning',
     'on_hold': 'text-bg-info',
+    'blocked': 'text-bg-secondary',
 }
 TASK_ATTENTION_LABELS = {
     'overdue': 'Просрочено',
     'review': 'Ожидает проверки',
     'on_hold': 'На уточнении',
+    'blocked': 'Блокировано замечанием',
 }
 
 

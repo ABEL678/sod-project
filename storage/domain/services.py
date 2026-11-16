@@ -5375,15 +5375,18 @@ def tasks_requiring_attention(project: Project) -> list[DesignTask]:
     """Задания «Требуют внимания» для дашборда ГИПа (спека 4.4, Этап 6).
 
     Просроченные (due_date < сегодня, статус не-терминальный),
-    ожидающие проверки (REVIEW) и на уточнении (ON_HOLD). Один запрос
-    с select_related, как в list_tasks (производительность); задание
-    попадает в результат один раз — причина выбирается по приоритету
-    overdue → review → on_hold (пересечения карточки сводки считают
-    независимо, как в task_summary_for_gip). Сортировка: группа
-    overdue → review → on_hold, внутри группы due_date по возрастанию
-    (без срока — в конец), затем pk.
+    ожидающие проверки (REVIEW), на уточнении (ON_HOLD) и задания,
+    заблокированные активными замечаниями (blocking_issues__status__in
+    ACTIVE_ISSUE_STATUSES). Один запрос с select_related, как в list_tasks
+    (производительность); задание попадает в результат один раз —
+    причина выбирается по приоритету overdue → blocked → review → on_hold.
+    Сортировка: группа по приоритету причины, внутри группы due_date
+    по возрастанию (без срока — в конец), затем pk.
     """
+    from issues.models import Issue
+
     today = timezone.localdate()
+    active_issue_statuses = ('NEW', 'IN_PROGRESS', 'REJECTED', 'DISCUSSION')
     rows = (
         DesignTask.objects.filter(project=project)
         .filter(
@@ -5393,13 +5396,22 @@ def tasks_requiring_attention(project: Project) -> list[DesignTask]:
             ))
             | Q(due_date__lt=today,
                 status__in=_NOT_TERMINAL_TASK_STATUSES)
+            | Q(blocking_issues__status__in=active_issue_statuses)
         )
         .select_related(
             'project', 'source_section', 'target_section',
             'author', 'assignee', 'template',
         )
+        .prefetch_related(
+            Prefetch(
+                'blocking_issues',
+                queryset=Issue.objects.filter(status__in=active_issue_statuses),
+                to_attr='_active_blocking',
+            ),
+        )
+        .distinct()
     )
-    reason_rank = {'overdue': 0, 'review': 1, 'on_hold': 2}
+    reason_rank = {'overdue': 0, 'blocked': 1, 'review': 2, 'on_hold': 3}
     decorated = []
     for task in rows:
         is_overdue = bool(
@@ -5409,6 +5421,8 @@ def tasks_requiring_attention(project: Project) -> list[DesignTask]:
         )
         if is_overdue:
             reason = 'overdue'
+        elif len(task._active_blocking) > 0:
+            reason = 'blocked'
         elif task.status == DesignTask.Status.REVIEW:
             reason = 'review'
         else:

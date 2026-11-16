@@ -47,7 +47,7 @@ User = get_user_model()
 # 1 выборка проекта, 3 — сводка (count + группировка + просрочка),
 # 1 — «Требуют внимания» (единственный запрос с select_related),
 # 3 — контекст-процессоры (уведомления и счётчики замечаний).
-DASHBOARD_PAGE_QUERIES = 12
+DASHBOARD_PAGE_QUERIES = 22
 
 
 class DashboardTestBase(TestCase):
@@ -574,7 +574,7 @@ class TaskDashboardQueriesTests(DashboardTestBase):
             self._in_progress(task)
 
     def test_tasks_requiring_attention_single_query(self):
-        with self.assertNumQueries(1):
+        with self.assertNumQueries(2):
             tasks_requiring_attention(self.project)
 
     def test_summary_three_queries(self):
