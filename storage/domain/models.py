@@ -1046,3 +1046,128 @@ class RfiStatusLog(models.Model):
 
     def __str__(self):
         return f'{self.old_status} → {self.new_status} (RFI-{self.rfi_id})'
+
+
+class SyncState(models.Model):
+    """Состояние S3-синхронизации проекта (S3_SYNC_PLAN.md §6.3)."""
+
+    project = models.OneToOneField(
+        Project, on_delete=models.CASCADE, related_name='sync_state',
+        verbose_name="Проект",
+    )
+    dirty = models.BooleanField(default=True, verbose_name="Требует выгрузки")
+    enabled = models.BooleanField(default=True, verbose_name="Синхронизация включена")
+    generation = models.PositiveIntegerField(default=0, verbose_name="Поколение выгрузки")
+    last_success_at = models.DateTimeField(
+        null=True, blank=True, verbose_name="Последняя успешная выгрузка",
+    )
+    last_full_sync_at = models.DateTimeField(
+        null=True, blank=True, verbose_name="Полная выгрузка (все проекты)",
+    )
+    last_error = models.TextField(blank=True, default='', verbose_name="Последняя ошибка")
+    consecutive_failures = models.PositiveIntegerField(default=0, verbose_name="Сбой подряд")
+    last_inbox_seq = models.PositiveIntegerField(
+        default=0, verbose_name="Посл. обраб. seq inbox",
+    )
+    last_ack_generation = models.PositiveIntegerField(
+        default=0, verbose_name="Подтвержд. поколение",
+    )
+    last_ack_at = models.DateTimeField(
+        null=True, blank=True, verbose_name="Последнее подтверждение",
+    )
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name="Создан")
+    updated_at = models.DateTimeField(auto_now=True, verbose_name="Обновлён")
+
+    class Meta:
+        verbose_name = "Состояние S3-синхронизации"
+        verbose_name_plural = "Состояния S3-синхронизации"
+
+    def __str__(self):
+        return f'SyncState({self.project.code}, gen={self.generation})'
+
+
+class SyncLog(models.Model):
+    """Лог S3-синхронизации (outbox/inbox)."""
+
+    class Direction(models.TextChoices):
+        OUT = "out", "Выгрузка"
+        IN = "in", "Загрузка"
+
+    class Level(models.TextChoices):
+        INFO = "info", "Info"
+        WARN = "warn", "Warning"
+        ERROR = "error", "Error"
+
+    project = models.ForeignKey(
+        Project, on_delete=models.CASCADE, related_name='sync_logs',
+        verbose_name="Проект",
+    )
+    direction = models.CharField(
+        max_length=3, choices=Direction.choices, verbose_name="Направление",
+    )
+    level = models.CharField(
+        max_length=5, choices=Level.choices, default=Level.INFO,
+        verbose_name="Уровень",
+    )
+    generation = models.PositiveIntegerField(default=0, verbose_name="Поколение")
+    message = models.CharField(max_length=500, verbose_name="Сообщение")
+    detail = models.JSONField(null=True, blank=True, verbose_name="Детали")
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name="Создан")
+
+    class Meta:
+        indexes = [
+            models.Index(fields=['project', '-created_at']),
+            models.Index(fields=['direction', 'level']),
+        ]
+        ordering = ['-created_at']
+        verbose_name = "Лог S3-синхронизации"
+        verbose_name_plural = "Логи S3-синхронизации"
+
+    def __str__(self):
+        return f'{self.direction}/{self.level} gen={self.generation}: {self.message[:60]}'
+
+
+class InboxCommand(models.Model):
+    """Команда из S3-бакета (inbox/commands.json)."""
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "Ожидает обработки"
+        IN_PROGRESS = "in_progress", "В обработке"
+        DONE = "done", "Выполнена"
+        FAILED = "failed", "Ошибка"
+
+    project = models.ForeignKey(
+        Project, on_delete=models.CASCADE, related_name='inbox_commands',
+        verbose_name="Проект",
+    )
+    command_id = models.CharField(
+        max_length=255, verbose_name="Идентификатор команды",
+    )
+    seq = models.PositiveIntegerField(verbose_name="Номер команды")
+    type = models.CharField(max_length=50, verbose_name="Тип команды")
+    status = models.CharField(
+        max_length=20, choices=Status.choices, default=Status.PENDING,
+        verbose_name="Статус обработки",
+    )
+    payload = models.JSONField(
+        null=True, blank=True, verbose_name="Тело команды",
+    )
+    error = models.TextField(blank=True, default='', verbose_name="Ошибка")
+    file_key = models.CharField(
+        max_length=500, blank=True, default='', verbose_name="Ключ файла",
+    )
+    received_at = models.DateTimeField(
+        auto_now_add=True, verbose_name="Получен",
+    )
+    processed_at = models.DateTimeField(
+        null=True, blank=True, verbose_name="Обработан",
+    )
+
+    class Meta:
+        unique_together = ('project', 'command_id')
+        ordering = ['seq']
+        verbose_name = "Inbox-команда"
+        verbose_name_plural = "Inbox-команды"
+
+    def __str__(self):
+        return f'Inbox({self.project.code}, seq={self.seq}, {self.type})'

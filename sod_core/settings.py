@@ -184,6 +184,15 @@ AI_LLM_PROVIDER = os.environ.get('AI_LLM_PROVIDER', 'gigachat')
 AI_LLM_MODEL = os.environ.get('AI_LLM_MODEL', 'GigaChat-2-Max')
 AI_LLM_TIMEOUT = int(os.environ.get('AI_LLM_TIMEOUT', '60'))
 
+# S3 Data Lake (ГИП-Ассистент) — MinIO (dev) / Cloud.ru (prod)
+# docs/S3_SYNC_PLAN.md, docs/S3_MAPPING_EXPORT_PLAN.md
+S3_SYNC_ENABLED = env_bool('S3_SYNC_ENABLED', False)
+S3_ENDPOINT = os.environ.get('S3_ENDPOINT', 'http://localhost:9000')
+S3_BUCKET_NAME = os.environ.get('S3_BUCKET_NAME', '')
+S3_ACCESS_KEY = os.environ.get('S3_ACCESS_KEY', '')
+S3_SECRET_KEY = os.environ.get('S3_SECRET_KEY', '')
+S3_REGION = os.environ.get('S3_REGION', 'us-east-1')
+
 
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
