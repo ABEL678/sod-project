@@ -247,6 +247,14 @@
             Запросы
             {% if rfi_open_count %}<span class="badge text-bg-light border">{{ rfi_open_count }}</span>{% endif %}
         </a>
+        <a class="app-tab {% if active_tab == 'issues' %}active{% endif %}"
+           href="{% url 'storage:project_detail' project.pk %}?tab=issues"
+           role="tab"
+           aria-selected="{% if active_tab == 'issues' %}true{% else %}false{% endif %}">
+            <i class="bi bi-chat-left-text" aria-hidden="true"></i>
+            Замечания
+            {% if counts.total %}<span class="badge text-bg-light border">{{ counts.total }}</span>{% endif %}
+        </a>
                         {% if can_manage_participants %}
                         <a class="app-tab {% if active_tab == 'participants' %}active{% endif %}"
                            href="{% url 'storage:project_detail' project.pk %}?tab=participants"
@@ -636,6 +644,8 @@
                     </div>
                 {% elif active_tab == 'rfi' %}
                     {% include 'storage/_rfi_tab.html' %}
+                {% elif active_tab == 'issues' %}
+                    {% include 'issues/_issues_panel.html' %}
                 {% endif %}
                     </div>{# /#mainTabContent #}
                 </div>{# /#mainTabs #}

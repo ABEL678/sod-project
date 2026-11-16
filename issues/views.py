@@ -353,15 +353,18 @@ def add_comment(request, issue_id):
 # Реестр замечаний проекта
 # ============================================================================
 
-# Группы статусов — те же, что в табах панели замечаний вьювера,
-# чтобы «Открытые» означало одно и то же на обоих экранах.
-ISSUE_STATUS_GROUPS = {
-    'open': ('NEW', 'REJECTED', 'DISCUSSION'),
-    'progress': ('IN_PROGRESS',),
-    'review': ('DONE',),
-    'closed': ('CLOSED', 'CANCELLED'),
-}
-ACTIVE_ISSUE_STATUSES = ISSUE_STATUS_GROUPS['open'] + ISSUE_STATUS_GROUPS['progress']
+# Группы статусов — импорт из сервисного модуля (Этап A).
+from .services import (
+    ACTIVE_ISSUE_STATUSES,
+    ISSUE_STATUS_GROUPS,
+    _readable_document_pks,
+    apply_issue_filters,
+    issue_summary,
+    project_issues,
+)
+
+ISSUE_STATUS_GROUPS = ISSUE_STATUS_GROUPS
+ACTIVE_ISSUE_STATUSES = ACTIVE_ISSUE_STATUSES
 
 
 def _safe_excel_value(value):
@@ -382,76 +385,21 @@ def _readable_document_pks(user, project):
 
 
 def _registry_issues(user, project):
-    """Все замечания проекта, видимые пользователю (по правам на документы)."""
-    pks = _readable_document_pks(user, project)
-    return Issue.objects.filter(document_id__in=pks).select_related(
-        'document',
-        'document__project',
-        'document__section',
-        'author',
-        'assignee',
-    )
+    """Все замечания проекта, видимые пользователю (делегирует сервису)."""
+    return project_issues(user, project)
 
 
-def _apply_registry_filters(queryset, params):
-    """Точечные GET-фильтры реестра (те же параметры принимает Excel-экспорт)."""
-    status = (params.get('status') or '').strip()
-    if status in dict(Issue.STATUS_CHOICES):
-        queryset = queryset.filter(status=status)
-
-    flag = (params.get('flag') or '').strip()
-    if flag == 'active':
-        queryset = queryset.filter(status__in=ACTIVE_ISSUE_STATUSES)
-    elif flag == 'open':
-        queryset = queryset.exclude(status__in=ISSUE_STATUS_GROUPS['closed'])
-    elif flag == 'closed':
-        queryset = queryset.filter(status__in=ISSUE_STATUS_GROUPS['closed'])
-    elif flag == 'overdue':
-        queryset = queryset.filter(
-            due_date__isnull=False,
-            due_date__lt=timezone.localdate(),
-            status__in=ACTIVE_ISSUE_STATUSES,
-        )
-
-    assignee = (params.get('assignee') or '').strip()
-    if assignee == 'none':
-        queryset = queryset.filter(assignee__isnull=True)
-    elif assignee.isdigit():
-        queryset = queryset.filter(assignee_id=int(assignee))
-
-    query = (params.get('q') or '').strip()
-    if query:
-        queryset = queryset.filter(
-            Q(description__icontains=query)
-            | Q(document__code__icontains=query)
-            | Q(document__name__icontains=query)
-        )
-    return queryset
+def _apply_registry_filters(queryset, params, user=None):
+    """Точечные GET-фильтры реестра (делегирует сервису)."""
+    if user is not None:
+        params = dict(params)
+        params['_user'] = user
+    return apply_issue_filters(queryset, params)
 
 
 def _registry_context_counts(user, project):
-    """Счётчики по группам статусов + просрочка (по полному, нефильнутому набору)."""
-    counts = dict(
-        _registry_issues(user, project)
-        .values_list('status')
-        .annotate(total=Count('pk'))
-    )
-    today = timezone.localdate()
-    overdue = _registry_issues(user, project).filter(
-        due_date__isnull=False,
-        due_date__lt=today,
-        status__in=ACTIVE_ISSUE_STATUSES,
-    ).count()
-    groups = {
-        group: sum(counts.get(status, 0) for status in statuses)
-        for group, statuses in ISSUE_STATUS_GROUPS.items()
-    }
-    return {
-        'total': sum(counts.values()),
-        'groups': groups,
-        'active': groups['open'] + groups['progress'],
-        'overdue': overdue,
-    }
+    """Сводка по замечаниям (делегирует сервису)."""
+    return issue_summary(user, project)
 
 
 class IssueRegistryView(LoginRequiredMixin, ListView):
@@ -476,6 +424,7 @@ class IssueRegistryView(LoginRequiredMixin, ListView):
         return _apply_registry_filters(
             _registry_issues(self.request.user, self.project),
             self.request.GET,
+            user=self.request.user,
         ).order_by('-created_at')
 
     def get_context_data(self, **kwargs):
@@ -527,6 +476,7 @@ class IssueRegistryExportView(LoginRequiredMixin, View):
             _apply_registry_filters(
                 _registry_issues(request.user, project),
                 request.GET,
+                user=request.user,
             ).order_by('document__code', 'pk')
         )
 

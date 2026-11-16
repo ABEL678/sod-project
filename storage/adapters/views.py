@@ -840,7 +840,7 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
         # Этап 3 (спека 4.1): вкладка «Задания» доступна всем участникам
         # проекта — исполнитель видит входящие задания без права
         # управления участниками; остальные вкладки — как прежде.
-        allowed_tabs = ('tasks', 'rfi')
+        allowed_tabs = ('tasks', 'rfi', 'issues')
         if can_manage_participants:
             allowed_tabs += (
                 'participants', 'trash', 'ai-search', 'ai-report', 'ai-kb',
@@ -1120,6 +1120,9 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
                 rfi.status_badge = RFI_STATUS_BADGES.get(rfi.status, 'text-bg-secondary')
             context['rfi_open_count'] = rfi_qs.filter(status__in=_RFI_OPEN_STATUSES).count()
 
+        if active_tab == 'issues':
+            context.update(self._get_issues_context(user, project))
+
         return context
 
     def _get_tasks_context(self, user, project, sections):
@@ -1204,6 +1207,76 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
             'can_issue_task': _can_issue_task(user, project),
             # Этап 6 (спека 4.4): вход на дашборд ГИПа из тулбара вкладки.
             'can_view_all_tasks': can_view_all,
+        }
+
+    def _get_issues_context(self, user, project):
+        """Данные вкладки «Замечания»: сводка, фильтры, таблица (по образцу _get_tasks_context)."""
+        from issues.services import (
+            ACTIVE_ISSUE_STATUSES,
+            ISSUE_STATUS_GROUPS,
+            _readable_document_pks,
+            apply_issue_filters,
+            issue_summary,
+            issues_requiring_attention,
+            project_issues,
+        )
+        from issues.tables import STATUS_BADGES
+        from django.core.paginator import Paginator
+
+        qs = project_issues(user, project)
+        counts = issue_summary(user, project)
+
+        params = dict(self.request.GET)
+        params['_user'] = user
+        filtered = apply_issue_filters(qs, params).order_by('-created_at')
+
+        paginator = Paginator(filtered, 50)
+        page_number = params.get('page', '1')
+        page_obj = paginator.get_page(page_number)
+
+        readable_pks = _readable_document_pks(user, project)
+        assignee_choices = list(
+            get_user_model()
+            .objects.filter(
+                assigned_issues__document_id__in=readable_pks,
+            )
+            .distinct()
+            .order_by('last_name', 'first_name')
+        )
+        today = timezone.localdate()
+
+        issues_data = []
+        for issue in page_obj:
+            issue.status_badge = STATUS_BADGES.get(issue.status, 'bg-secondary')
+            issue.is_overdue = bool(
+                issue.due_date and issue.due_date < today and issue.status in ACTIVE_ISSUE_STATUSES
+            )
+            issue.overdue_days = (
+                (today - issue.due_date).days if issue.is_overdue else 0
+            )
+            issues_data.append(issue)
+
+        attention = issues_requiring_attention(user, project)
+
+        return {
+            'issues': issues_data,
+            'page_obj': page_obj,
+            'paginator': paginator,
+            'is_paginated': paginator.num_pages > 1,
+            'counts': counts,
+            'issue_summary': counts,
+            'issue_attention': attention,
+            'status_choices': Issue.STATUS_CHOICES,
+            'assignee_choices': assignee_choices,
+            'filters': {
+                'status': params.get('status', ''),
+                'flag': params.get('flag', ''),
+                'assignee': params.get('assignee', ''),
+                'author': params.get('author', ''),
+                'document': params.get('document', ''),
+                'q': params.get('q', ''),
+            },
+            'today': today,
         }
 
 

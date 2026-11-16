@@ -1,0 +1,289 @@
+{% load static issue_extras %}
+
+<div id="issuesPanel" data-project-id="{{ project.pk }}">
+    {# ---- Сводка: 6 карточек ---- #}
+    <div class="row g-2 mb-3" data-role="issues-summary">
+        <div class="col-6 col-xl-2">
+            <a class="card shadow-sm h-100 text-decoration-none text-body"
+               href="{% url 'issues:issue_registry' project.pk %}"
+               title="Показать все замечания проекта">
+                <div class="card-body py-2">
+                    <div class="small text-muted">Всего</div>
+                    <div class="h4 mb-0 cde-tnum">{{ counts.total }}</div>
+                </div>
+            </a>
+        </div>
+        <div class="col-6 col-xl-2">
+            <a class="card shadow-sm h-100 text-decoration-none text-body"
+               href="?tab=issues&amp;flag=active"
+               title="Активные замечания">
+                <div class="card-body py-2">
+                    <div class="small text-muted">Открытые</div>
+                    <div class="h4 mb-0 cde-tnum">{{ counts.active }}</div>
+                </div>
+            </a>
+        </div>
+        <div class="col-6 col-xl-2">
+            <a class="card shadow-sm h-100 text-decoration-none text-body"
+               href="?tab=issues&amp;flag=progress"
+               title="В работе">
+                <div class="card-body py-2">
+                    <div class="small text-muted">В работе</div>
+                    <div class="h4 mb-0 cde-tnum">{{ issue_summary.in_progress }}</div>
+                </div>
+            </a>
+        </div>
+        <div class="col-6 col-xl-2">
+            <a class="card shadow-sm h-100 text-decoration-none text-body"
+               href="?tab=issues&amp;flag=review"
+               title="На проверке">
+                <div class="card-body py-2">
+                    <div class="small text-muted">На проверке</div>
+                    <div class="h4 mb-0 cde-tnum">{{ issue_summary.review }}</div>
+                </div>
+            </a>
+        </div>
+        <div class="col-6 col-xl-2">
+            <a class="card shadow-sm h-100 text-decoration-none text-body{% if counts.overdue %} border-danger{% endif %}"
+               href="?tab=issues&amp;flag=overdue"
+               title="Активные замечания с истёкшим сроком">
+                <div class="card-body py-2">
+                    <div class="small text-muted">
+                        <i class="bi bi-exclamation-triangle me-1" aria-hidden="true"></i>Просрочено
+                    </div>
+                    <div class="h4 mb-0 cde-tnum{% if counts.overdue %} text-danger{% endif %}">
+                        {{ counts.overdue }}
+                    </div>
+                </div>
+            </a>
+        </div>
+        <div class="col-6 col-xl-2">
+            <a class="card shadow-sm h-100 text-decoration-none text-body"
+               href="?tab=issues&amp;flag=blocking"
+               title="Замечания, блокирующие работу">
+                <div class="card-body py-2">
+                    <div class="small text-muted">Блокируют работу</div>
+                    <div class="h4 mb-0 cde-tnum">{{ issue_summary.blocking }}</div>
+                </div>
+            </a>
+        </div>
+    </div>
+
+    {# ---- Чипы-группы ---- #}
+    <nav class="zone-segment mb-3" aria-label="Группы замечаний" data-role="issue-groups">
+        <a class="zone-chip {% if filters.flag == 'active' or not filters.flag and not filters.status %}is-active{% endif %}"
+           href="?tab=issues">Все</a>
+        <a class="zone-chip {% if filters.flag == 'active' %}is-active{% endif %}"
+           href="?tab=issues&amp;flag=active">Открытые</a>
+        <a class="zone-chip {% if filters.flag == 'progress' %}is-active{% endif %}"
+           href="?tab=issues&amp;flag=progress">В работе</a>
+        <a class="zone-chip {% if filters.flag == 'review' %}is-active{% endif %}"
+           href="?tab=issues&amp;flag=review">На проверке</a>
+        <a class="zone-chip {% if filters.flag == 'overdue' %}is-active{% endif %}"
+           href="?tab=issues&amp;flag=overdue">Просрочено</a>
+        <a class="zone-chip {% if filters.flag == 'blocking' %}is-active{% endif %}"
+           href="?tab=issues&amp;flag=blocking">Блокируют</a>
+    </nav>
+
+    {# ---- Секция «Требуют внимания» ---- #}
+    {% if issue_attention %}
+        <div class="card shadow-sm mb-3 border-warning" data-role="issues-attention">
+            <div class="card-header bg-white d-flex align-items-center gap-2">
+                <span class="fw-semibold">
+                    <i class="bi bi-exclamation-triangle me-2 text-warning" aria-hidden="true"></i>Требуют внимания
+                </span>
+                <span class="badge text-bg-light border">{{ issue_attention|length }}</span>
+            </div>
+            <div class="table-responsive">
+                <table class="table table-hover align-middle mb-0">
+                    <thead class="table-light">
+                        <tr>
+                            <th>Причина</th>
+                            <th>Замечание</th>
+                            <th>Документ</th>
+                            <th>Срок</th>
+                            <th>Статус</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    {% for item in issue_attention %}
+                        <tr>
+                            <td><span class="badge {{ item.reason_badge }}">{{ item.reason_label }}</span></td>
+                            <td>
+                                <a class="fw-semibold" href="{% url 'storage:document_detail' item.issue.document_id %}">
+                                    #{{ item.issue.pk }} — {{ item.issue.description|truncatechars:60 }}
+                                </a>
+                            </td>
+                            <td>
+                                <a href="{% url 'storage:document_detail' item.issue.document_id %}">
+                                    {{ item.issue.document.code }}
+                                </a>
+                            </td>
+                            <td class="cde-tnum{% if item.is_overdue %} text-danger fw-semibold{% endif %}">
+                                {% if item.issue.due_date %}{{ item.issue.due_date|date:"d.m.Y" }}{% else %}<span class="text-muted">—</span>{% endif %}
+                                {% if item.is_overdue %}
+                                    <span class="badge text-bg-danger ms-1">{{ item.overdue_days }} дн.</span>
+                                {% endif %}
+                            </td>
+                            <td><span class="badge {{ item.issue.status_badge }}">{{ item.issue.get_status_display }}</span></td>
+                        </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    {% endif %}
+
+    {# ---- Фильтры ---- #}
+    <div class="card shadow-sm mb-3">
+        <form class="card-body py-2"
+              method="get"
+              action="{% url 'storage:project_detail' project.pk %}"
+              hx-get="{% url 'storage:project_detail' project.pk %}"
+              hx-target="#mainTabContent"
+              hx-select="#mainTabContent"
+              hx-swap="outerHTML"
+              hx-push-url="true"
+              hx-trigger="change, keyup changed delay:350ms from:#issuesSearch, submit">
+            <input type="hidden" name="tab" value="issues">
+            {% if filters.flag %}
+                <input type="hidden" name="flag" value="{{ filters.flag }}">
+            {% endif %}
+            <div class="d-flex flex-wrap align-items-end gap-2">
+                <div>
+                    <label class="form-label small text-muted mb-1" for="issuesStatus">Статус</label>
+                    <select class="form-select form-select-sm" id="issuesStatus" name="status">
+                        <option value="">Все статусы</option>
+                        {% for value, label in status_choices %}
+                            <option value="{{ value }}" {% if filters.status == value %}selected{% endif %}>{{ label }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div>
+                    <label class="form-label small text-muted mb-1" for="issuesAssignee">Ответственный</label>
+                    <select class="form-select form-select-sm" id="issuesAssignee" name="assignee">
+                        <option value="">Любой</option>
+                        <option value="none" {% if filters.assignee == 'none' %}selected{% endif %}>— не назначен —</option>
+                        {% for person in assignee_choices %}
+                            <option value="{{ person.pk }}" {% if filters.assignee == person.pk|stringformat:"s" %}selected{% endif %}>
+                                {{ person.get_full_name|default:person.username }}
+                            </option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div>
+                    <label class="form-label small text-muted mb-1" for="issuesSearch">Поиск</label>
+                    <input type="search" class="form-control form-control-sm" id="issuesSearch"
+                           name="q" value="{{ filters.q }}"
+                           placeholder="Текст, шифр или название документа">
+                </div>
+                <div class="d-flex gap-2">
+                    <button type="submit" class="visually-hidden">Найти</button>
+                    <a href="?tab=issues" class="btn btn-sm btn-outline-secondary" title="Сбросить фильтры">
+                        <i class="bi bi-x-lg" aria-hidden="true"></i> Сбросить
+                    </a>
+                    <a href="{% url 'issues:issue_registry' project.pk %}{% if request.GET.urlencode %}?{{ request.GET.urlencode }}{% endif %}"
+                       class="btn btn-sm btn-outline-secondary" title="Открыть реестр замечаний">
+                        <i class="bi bi-box-arrow-up-right me-1" aria-hidden="true"></i>Реестр
+                    </a>
+                </div>
+            </div>
+        </form>
+    </div>
+
+    {# ---- Таблица ---- #}
+    <div class="card shadow-sm">
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th>№</th>
+                        <th>Документ</th>
+                        <th>Статус</th>
+                        <th style="min-width: 280px;">Текст замечания</th>
+                        <th>Автор</th>
+                        <th>Ответственный</th>
+                        <th>Срок ответа</th>
+                        <th>Блокирует</th>
+                    </tr>
+                </thead>
+                <tbody>
+                {% for issue in issues %}
+                    <tr>
+                        <td><span class="cde-chip">{{ issue.pk }}</span></td>
+                        <td>
+                            <a href="{% url 'storage:document_detail' issue.document_id %}"
+                               class="fw-semibold text-decoration-none">
+                                {{ issue.document.code }}
+                            </a>
+                            <div class="small text-muted text-truncate" style="max-width: 220px;">
+                                {{ issue.document.name }}
+                            </div>
+                        </td>
+                        <td>
+                            <span class="badge {{ issue.status_badge }}">
+                                {{ issue.get_status_display }}
+                            </span>
+                        </td>
+                        <td>
+                            <span title="{{ issue.description }}">{{ issue.description|truncatechars:80 }}</span>
+                        </td>
+                        <td class="small">
+                            {{ issue.author.get_full_name|default:issue.author.username }}
+                        </td>
+                        <td class="small">
+                            {% if issue.assignee %}
+                                {{ issue.assignee.get_full_name|default:issue.assignee.username }}
+                            {% else %}—{% endif %}
+                        </td>
+                        <td>
+                            {% if issue.due_date %}
+                                <span class="cde-tnum{% if issue.is_overdue %} text-danger fw-semibold{% endif %}">
+                                    {{ issue.due_date|date:"d.m.Y" }}
+                                </span>
+                                {% if issue.is_overdue %}
+                                    <span class="badge text-bg-danger ms-1">{{ issue.overdue_days }} дн.</span>
+                                {% endif %}
+                            {% else %}—{% endif %}
+                        </td>
+                        <td class="text-muted small">—</td>
+                    </tr>
+                {% empty %}
+                    <tr>
+                        <td colspan="8" class="text-center text-muted py-4">
+                            {% if filters.q or filters.status or filters.flag or filters.assignee %}
+                                Ничего не найдено — измените фильтры.
+                            {% else %}
+                                <div>По проекту пока нет замечаний.</div>
+                                <div class="small mt-2">
+                                    Замечание создаётся кликом по листу в PDF-вьювере:
+                                    откройте документ и выделите область.
+                                </div>
+                            {% endif %}
+                        </td>
+                    </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        {% if is_paginated %}
+            <div class="card-footer bg-white d-flex justify-content-between align-items-center">
+                <span class="small text-muted cde-tnum">
+                    Показаны {{ page_obj.start_index }}–{{ page_obj.end_index }} из {{ paginator.count }}
+                </span>
+                <div class="btn-group btn-group-sm">
+                    {% if page_obj.has_previous %}
+                        <a class="btn btn-outline-secondary"
+                           href="?tab=issues{% for key, val in filters.items %}{% if val %}&amp;{{ key }}={{ val|urlencode }}{% endif %}{% endfor %}&amp;page={{ page_obj.previous_page_number }}">← Назад</a>
+                    {% endif %}
+                    <span class="btn btn-secondary disabled cde-tnum">{{ page_obj.number }} / {{ paginator.num_pages }}</span>
+                    {% if page_obj.has_next %}
+                        <a class="btn btn-outline-secondary"
+                           href="?tab=issues{% for key, val in filters.items %}{% if val %}&amp;{{ key }}={{ val|urlencode }}{% endif %}{% endfor %}&amp;page={{ page_obj.next_page_number }}">Вперёд →</a>
+                    {% endif %}
+                </div>
+            </div>
+        {% endif %}
+    </div>
+</div>
