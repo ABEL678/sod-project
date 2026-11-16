@@ -75,6 +75,27 @@ urlpatterns = [
         views.TaskDashboardApiView.as_view(),
         name='task_dashboard_api',
     ),
+    # Этап R2: RFI — запросы информации
+    path(
+        'projects/<int:project_id>/rfis/new/',
+        views.RfiCreateView.as_view(),
+        name='rfi_create',
+    ),
+    path(
+        'projects/<int:project_id>/rfis/<int:rfi_id>/',
+        views.RfiDetailView.as_view(),
+        name='rfi_detail',
+    ),
+    path(
+        'projects/<int:project_id>/rfis/<int:rfi_id>/action/',
+        views.RfiStatusActionView.as_view(),
+        name='rfi_status',
+    ),
+    path(
+        'projects/<int:project_id>/rfis/<int:rfi_id>/documents/',
+        views.RfiDocumentActionView.as_view(),
+        name='rfi_document',
+    ),
     # Этап 4 (спека 4.3): карточка задания и POST-действия (статус,
     # вложения, чек-лист). Вьюхи тонкие — матрица переходов и права
     # в сервисах update_task_status / add_task_attachment /

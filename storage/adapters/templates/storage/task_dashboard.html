@@ -136,5 +136,105 @@
             </div>
         {% endif %}
     </div>
+
+    {# Блок RFI на Сводке — 4 карточки-счётчика + мини-таблица #}
+    <h2 class="h5 mt-4 mb-3">
+        <i class="bi bi-envelope-paper me-2" aria-hidden="true"></i>Запросы информации (RFI)
+    </h2>
+    <div class="row g-3 mb-3" data-role="rfi-summary">
+        <div class="col-6 col-md-3">
+            <div class="card h-100 shadow-sm">
+                <div class="card-body py-3">
+                    <div class="text-muted small">Ждут ответа</div>
+                    <div class="fs-3 fw-semibold{% if rfi_summary.sent > 0 %} text-warning{% endif %}">
+                        {{ rfi_summary.sent }}
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-6 col-md-3">
+            <div class="card h-100 shadow-sm{% if rfi_summary.overdue > 0 %} border-danger{% endif %}">
+                <div class="card-body py-3">
+                    <div class="text-muted small">Просрочены</div>
+                    <div class="fs-3 fw-semibold{% if rfi_summary.overdue > 0 %} text-danger{% endif %}">
+                        {{ rfi_summary.overdue }}
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-6 col-md-3">
+            <div class="card h-100 shadow-sm{% if rfi_summary.escalated > 0 %} border-danger{% endif %}">
+                <div class="card-body py-3">
+                    <div class="text-muted small">Эскалированы</div>
+                    <div class="fs-3 fw-semibold{% if rfi_summary.escalated > 0 %} text-danger{% endif %}">
+                        {{ rfi_summary.escalated }}
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-6 col-md-3">
+            <div class="card h-100 shadow-sm">
+                <div class="card-body py-3">
+                    <div class="text-muted small">Всего открытых</div>
+                    <div class="fs-3 fw-semibold">{{ rfi_open_count }}</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    {% if rfi_attention %}
+        <div class="card shadow-sm mb-3" data-role="rfi-attention">
+            <div class="card-header bg-white d-flex align-items-center gap-2">
+                <span class="fw-semibold">
+                    <i class="bi bi-exclamation-triangle me-2" aria-hidden="true"></i>RFI, требующие внимания
+                </span>
+                <span class="badge text-bg-light border">{{ rfi_attention|length }}</span>
+            </div>
+            <div class="table-responsive">
+                <table class="table table-hover align-middle mb-0">
+                    <thead class="table-light">
+                        <tr>
+                            <th>Причина</th>
+                            <th>RFI</th>
+                            <th>Ответственный</th>
+                            <th>Срок</th>
+                            <th>Статус</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    {% for rfi in rfi_attention %}
+                        <tr>
+                            <td><span class="badge {{ rfi.reason_badge }}">{{ rfi.reason_label }}</span></td>
+                            <td>
+                                <a class="fw-semibold" href="{% url 'storage:rfi_detail' project.pk rfi.pk %}">
+                                    RFI-{{ rfi.number|stringformat:"02d" }} — {{ rfi.subject|truncatechars:60 }}
+                                </a>
+                            </td>
+                            <td>
+                                {% if rfi.assignee %}
+                                    {{ rfi.assignee.get_full_name|default:rfi.assignee.username }}
+                                {% else %}
+                                    <span class="text-muted">—</span>
+                                {% endif %}
+                            </td>
+                            <td class="cde-tnum{% if rfi.is_overdue %} text-danger fw-semibold{% endif %}">
+                                {% if rfi.rfi_due_date %}{{ rfi.rfi_due_date|date:"d.m.Y" }}{% else %}<span class="text-muted">—</span>{% endif %}
+                                {% if rfi.is_overdue %}
+                                    <span class="badge text-bg-danger ms-1">{{ rfi.overdue_days }} дн.</span>
+                                {% endif %}
+                            </td>
+                            <td><span class="badge {{ rfi.reason_badge }}">{{ rfi.get_status_display }}</span></td>
+                        </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    {% else %}
+        <div class="text-center text-muted py-4" data-role="rfi-attention-empty">
+            <i class="bi bi-check2-circle fs-2 d-block mb-2" aria-hidden="true"></i>
+            Просроченных и эскалированных RFI нет.
+        </div>
+    {% endif %}
 </main>
 {% endblock %}

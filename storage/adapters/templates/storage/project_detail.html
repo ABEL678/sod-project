@@ -231,14 +231,22 @@
                             Документы
                             <span class="badge text-bg-light border">{{ documents|length }}</span>
                         </a>
-                        <a class="app-tab {% if active_tab == 'tasks' %}active{% endif %}"
-                           href="{% url 'storage:project_detail' project.pk %}?tab=tasks"
-                           role="tab"
-                           aria-selected="{% if active_tab == 'tasks' %}true{% else %}false{% endif %}">
-                            <i class="bi bi-list-task" aria-hidden="true"></i>
-                            Задания
-                            {% if tasks %}<span class="badge text-bg-light border">{{ tasks|length }}</span>{% endif %}
-                        </a>
+<a class="app-tab {% if active_tab == 'tasks' %}active{% endif %}"
+           href="{% url 'storage:project_detail' project.pk %}?tab=tasks"
+           role="tab"
+           aria-selected="{% if active_tab == 'tasks' %}true{% else %}false{% endif %}">
+            <i class="bi bi-list-task" aria-hidden="true"></i>
+            Задания
+            {% if tasks %}<span class="badge text-bg-light border">{{ tasks|length }}</span>{% endif %}
+        </a>
+        <a class="app-tab {% if active_tab == 'rfi' %}active{% endif %}"
+           href="{% url 'storage:project_detail' project.pk %}?tab=rfi"
+           role="tab"
+           aria-selected="{% if active_tab == 'rfi' %}true{% else %}false{% endif %}">
+            <i class="bi bi-envelope-paper" aria-hidden="true"></i>
+            RFI
+            {% if rfi_open_count %}<span class="badge text-bg-light border">{{ rfi_open_count }}</span>{% endif %}
+        </a>
                         {% if can_manage_participants %}
                         <a class="app-tab {% if active_tab == 'participants' %}active{% endif %}"
                            href="{% url 'storage:project_detail' project.pk %}?tab=participants"
@@ -626,7 +634,9 @@
                             </div>
                         {% endif %}
                     </div>
-                    {% endif %}
+                {% elif active_tab == 'rfi' %}
+                    {% include 'storage/_rfi_tab.html' %}
+                {% endif %}
                     </div>{# /#mainTabContent #}
                 </div>{# /#mainTabs #}
             {% endif %}

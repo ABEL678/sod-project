@@ -1,0 +1,69 @@
+{% load static %}
+<div class="toolbar" data-role="rfi-toolbar">
+    <span class="fw-semibold">
+        <i class="bi bi-envelope-paper me-2" aria-hidden="true"></i>Запросы информации (RFI)
+    </span>
+    <span class="badge text-bg-light border">{{ rfi_list|length }}</span>
+    <span class="toolbar-spacer"></span>
+    {% if rfi_can_create %}
+        <a class="btn btn-sm btn-primary" href="{% url 'storage:rfi_create' project.pk %}">
+            <i class="bi bi-plus-lg me-1" aria-hidden="true"></i>Создать запрос информации
+        </a>
+    {% endif %}
+</div>
+<div class="ai-tabpane__scroll">
+    {% if rfi_list %}
+        <div class="table-responsive">
+            <table class="table table-hover align-middle" data-role="rfi-table">
+                <thead class="table-light">
+                    <tr>
+                        <th>№</th>
+                        <th>Название</th>
+                        <th>Автор</th>
+                        <th>Ответственный</th>
+                        <th>Срок ответа</th>
+                        <th>Статус</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                {% for rfi in rfi_list %}
+                    <tr>
+                        <td class="cde-tnum">RFI-{{ rfi.number|stringformat:"02d" }}</td>
+                        <td>
+                            <a class="fw-semibold" href="{% url 'storage:rfi_detail' project.pk rfi.pk %}">{{ rfi.subject }}</a>
+                        </td>
+                        <td>{{ rfi.author.get_full_name|default:rfi.author.username }}</td>
+                        <td>
+                            {% if rfi.assignee %}
+                                {{ rfi.assignee.get_full_name|default:rfi.assignee.username }}
+                            {% else %}
+                                <span class="text-muted">—</span>
+                            {% endif %}
+                        </td>
+                        <td class="cde-tnum{% if rfi.rfi_due_date and rfi.rfi_due_date < today %} text-danger fw-semibold{% endif %}">
+                            {% if rfi.rfi_due_date %}{{ rfi.rfi_due_date|date:"d.m.Y" }}{% else %}<span class="text-muted">—</span>{% endif %}
+                        </td>
+                        <td><span class="badge {{ rfi.status_badge }}">{{ rfi.get_status_display }}</span></td>
+                        <td>
+                            <a class="btn btn-sm btn-outline-secondary" href="{% url 'storage:rfi_detail' project.pk rfi.pk %}">
+                                Открыть
+                            </a>
+                        </td>
+                    </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    {% else %}
+        <div class="text-center text-muted py-5">
+            <i class="bi bi-envelope-paper fs-2 d-block mb-2" aria-hidden="true"></i>
+            Запросов информации пока нет.
+            {% if rfi_can_create %}
+                <a href="{% url 'storage:rfi_create' project.pk %}" class="btn btn-primary btn-sm mt-2">
+                    Создать первый запрос
+                </a>
+            {% endif %}
+        </div>
+    {% endif %}
+</div>

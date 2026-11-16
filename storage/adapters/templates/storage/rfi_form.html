@@ -1,0 +1,53 @@
+{% extends 'storage/base.html' %}
+{% load static %}
+
+{% block title %}Создать запрос информации — {{ project.name }} — Stream-CAD{% endblock %}
+
+{% block topbar %}
+    {% include 'storage/_topbar.html' with topbar_project=project topbar_title="Создать запрос информации" %}
+{% endblock %}
+
+{% block content %}
+<main class="container py-3 pb-5" style="max-width: 720px;">
+    <h1 class="h4 mb-4">Создать запрос информации</h1>
+    <form method="post" enctype="multipart/form-data">
+        {% csrf_token %}
+        <div class="mb-3">
+            <label class="form-label" for="id_subject">Тема запроса *</label>
+            <input class="form-control" id="id_subject" name="subject" required maxlength="255"
+                   placeholder="Например: ТУ на водоснабжение">
+        </div>
+        <div class="mb-3">
+            <label class="form-label" for="id_reason">Суть запроса *</label>
+            <textarea class="form-control" id="id_reason" name="reason" required rows="5"
+                      placeholder="Каких данных не хватает, почему, что блокирует"></textarea>
+        </div>
+        <div class="mb-3">
+            <label class="form-label" for="id_assignee">Ответственный</label>
+            <select class="form-select" id="id_assignee" name="assignee">
+                <option value="">— ГИП проекта (по умолчанию)</option>
+                {% for member in assignee_choices %}
+                    <option value="{{ member.user.pk }}">{{ member.user.get_full_name|default:member.user.username }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="mb-3">
+            <label class="form-label" for="id_rfi_due_date">Срок ответа</label>
+            <input class="form-control" id="id_rfi_due_date" name="rfi_due_date" type="date"
+                   placeholder="До какого числа ждём ответ">
+            <div class="form-text">До какого числа ждём ответ Заказчика.</div>
+        </div>
+        <div class="mb-3">
+            <label class="form-label" for="id_file">Файл запроса (опционально)</label>
+            <input class="form-control" id="id_file" name="document_request" type="file">
+            <div class="form-text">Можно загрузить позже из карточки запроса.</div>
+        </div>
+        <div class="d-flex gap-2">
+            <button type="submit" class="btn btn-primary">
+                <i class="bi bi-check-lg me-1" aria-hidden="true"></i>Создать запрос
+            </button>
+            <a class="btn btn-outline-secondary" href="{% url 'storage:project_detail' project.pk %}?tab=rfi">Отмена</a>
+        </div>
+    </form>
+</main>
+{% endblock %}

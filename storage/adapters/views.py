@@ -56,6 +56,8 @@ from storage.domain.models import (
     MailRule,
     Project,
     ProjectMembership,
+    RfiTask,
+    RfiStatusLog,
     Section,
     TaskTemplate,
     UserProfile,
@@ -125,6 +127,19 @@ from storage.domain.services import (
     revoke_share_link,
     task_summary_for_gip,
     tasks_requiring_attention,
+    create_rfi,
+    list_rfis,
+    rfi_summary_for_gip,
+    rfis_requiring_attention,
+    _rfi_can_create,
+    get_or_create_rfi_folder,
+    upload_rfi_document,
+    send_rfi,
+    answer_rfi,
+    register_rfi_response,
+    escalate_rfi,
+    close_rfi,
+    attach_rfi_document,
     document_actions,
     document_workflow_actions,
     _effective_zone,
@@ -825,7 +840,7 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
         # Этап 3 (спека 4.1): вкладка «Задания» доступна всем участникам
         # проекта — исполнитель видит входящие задания без права
         # управления участниками; остальные вкладки — как прежде.
-        allowed_tabs = ('tasks',)
+        allowed_tabs = ('tasks', 'rfi')
         if can_manage_participants:
             allowed_tabs += (
                 'participants', 'trash', 'ai-search', 'ai-report', 'ai-kb',
@@ -1092,6 +1107,18 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
         # отображения (статус/приоритет/срок) и декор строк для бейджей.
         if active_tab == 'tasks':
             context.update(self._get_tasks_context(user, project, sections))
+
+        if active_tab == 'rfi':
+            from storage.domain.services import _rfi_can_create
+
+            rfi_qs = list_rfis(project, user)
+            context['rfi_list'] = list(rfi_qs)
+            context['rfi_summary'] = rfi_summary_for_gip(project)
+            context['rfi_can_create'] = _rfi_can_create(user, project)
+            context['today'] = timezone.localdate()
+            for rfi in context['rfi_list']:
+                rfi.status_badge = RFI_STATUS_BADGES.get(rfi.status, 'text-bg-secondary')
+            context['rfi_open_count'] = rfi_qs.filter(status__in=_RFI_OPEN_STATUSES).count()
 
         return context
 
@@ -1737,12 +1764,23 @@ class TaskDashboardView(LoginRequiredMixin, View):
             )
             task.reason_badge = TASK_ATTENTION_BADGES[task.attention_reason]
             task.reason_label = TASK_ATTENTION_LABELS[task.attention_reason]
+        rfi_summary = rfi_summary_for_gip(project)
+        rfi_attention = rfis_requiring_attention(project)
+        for rfi in rfi_attention:
+            rfi.reason_badge = RFI_ATTENTION_BADGES[rfi.attention_reason]
+            rfi.reason_label = RFI_ATTENTION_LABELS[rfi.attention_reason]
+        open_rfi_count = sum(
+            rfi_summary[s] for s in ('open', 'sent', 'answered', 'registered', 'escalated')
+        )
         context = {
             'project': project,
             'summary': summary,
             'summary_cards': self._summary_cards(summary),
             'status_chips': self._status_chips(summary),
             'attention': attention,
+            'rfi_summary': rfi_summary,
+            'rfi_attention': rfi_attention,
+            'rfi_open_count': open_rfi_count,
             'today': timezone.localdate(),
         }
         return render(request, self.template_name, context)
@@ -2013,6 +2051,220 @@ class TaskDashboardApiView(LoginRequiredMixin, View):
                 for t in attention
             ],
         })
+
+
+# --- RFI (Request For Information) — Этап R2 ---------------------------------
+
+RFI_STATUS_BADGES = {
+    'open': 'text-bg-secondary',
+    'sent': 'text-bg-primary',
+    'answered': 'text-bg-info',
+    'registered': 'text-bg-success',
+    'closed': 'text-bg-dark',
+    'escalated': 'text-bg-danger',
+}
+
+RFI_ATTENTION_BADGES = {
+    'overdue_sent': 'text-bg-danger',
+    'escalated': 'text-bg-danger',
+}
+
+RFI_ATTENTION_LABELS = {
+    'overdue_sent': 'Просрочен',
+    'escalated': 'Эскалирован',
+}
+
+_RFI_OPEN_STATUSES = ('open', 'sent', 'answered', 'registered', 'escalated')
+
+
+class RfiCreateView(LoginRequiredMixin, View):
+    """Форма создания RFI."""
+
+    template_name = 'storage/rfi_form.html'
+
+    def _get_project(self, request, project_id):
+        return get_object_or_404(
+            get_accessible_projects(request.user), pk=project_id,
+        )
+
+    def get(self, request, project_id):
+        project = self._get_project(request, project_id)
+        if not _rfi_can_create(request.user, project):
+            raise PermissionDenied()
+        members = project.memberships.select_related('user').order_by(
+            'user__last_name', 'user__first_name', 'user__username',
+        )
+        return render(request, self.template_name, {
+            'project': project,
+            'assignee_choices': members,
+        })
+
+    def post(self, request, project_id):
+        project = self._get_project(request, project_id)
+        if not _rfi_can_create(request.user, project):
+            raise PermissionDenied()
+        assignee_pk = request.POST.get('assignee') or None
+        assignee = (
+            get_user_model().objects.filter(pk=assignee_pk).first()
+            if assignee_pk else None
+        )
+        rfi_due_date = request.POST.get('rfi_due_date') or None
+        from datetime import datetime as _dt
+
+        if rfi_due_date:
+            try:
+                rfi_due_date = _dt.strptime(rfi_due_date, '%Y-%m-%d').date()
+            except (ValueError, TypeError):
+                rfi_due_date = None
+        try:
+            rfi = create_rfi(
+                request.user, project,
+                subject=request.POST.get('subject', ''),
+                reason=request.POST.get('reason', ''),
+                assignee=assignee,
+                rfi_due_date=rfi_due_date,
+            )
+        except (PermissionDenied, ValueError) as exc:
+            messages.error(request, str(exc))
+            return self.get(request, project_id)
+        file = request.FILES.get('document_request')
+        if file:
+            try:
+                upload_rfi_document(request.user, rfi, 'request', file)
+            except (PermissionDenied, ValueError) as exc:
+                messages.warning(request, f'RFI создан, но файл не загружен: {exc}')
+        messages.success(
+            request,
+            f'Запрос информации RFI-{rfi.number:02d} создан',
+        )
+        return redirect('storage:rfi_detail', project_id=project.pk, rfi_id=rfi.pk)
+
+
+class RfiDetailView(LoginRequiredMixin, View):
+    """Карточка RFI."""
+
+    template_name = 'storage/rfi_detail.html'
+
+    def get(self, request, project_id, rfi_id):
+        project = get_object_or_404(
+            get_accessible_projects(request.user), pk=project_id,
+        )
+        rfi = get_object_or_404(RfiTask, pk=rfi_id, project=project)
+        status_badge = RFI_STATUS_BADGES.get(rfi.status, 'text-bg-secondary')
+        logs = RfiStatusLog.objects.filter(rfi=rfi).select_related('changed_by')
+        rfi_folder = Folder.objects.filter(
+            project=project, name='Запросы информации (RFI)', is_deleted=False,
+        ).first()
+        folder_documents = []
+        if rfi_folder:
+            folder_documents = Document.objects.filter(
+                project=project, folder=rfi_folder, is_deleted=False,
+            ).exclude(
+                pk__in=filter(None, [rfi.document_request_id, rfi.document_response_id]),
+            )
+        return render(request, self.template_name, {
+            'project': project,
+            'rfi': rfi,
+            'status_badge': status_badge,
+            'logs': logs,
+            'folder_documents': folder_documents,
+            'rfi_actions': self._available_actions(request.user, rfi),
+        })
+
+    def _available_actions(self, user, rfi):
+        """Список доступных кнопок по матрице переходов и правам."""
+        from storage.domain.services import _rfi_check_can_change
+
+        if not _rfi_check_can_change(rfi, user):
+            return []
+        actions = []
+        if rfi.status == 'open':
+            actions.append({'action': 'send', 'label': 'Отправить Заказчику', 'requires_file': True})
+            actions.append({'action': 'close', 'label': 'Отменить (закрыть)', 'requires_comment': True})
+        if rfi.status == 'sent':
+            actions.append({'action': 'answer', 'label': 'Ответ получен'})
+            actions.append({'action': 'escalate', 'label': 'Эскалировать', 'requires_comment': True})
+        if rfi.status == 'escalated':
+            actions.append({'action': 'answer', 'label': 'Ответ получен'})
+            actions.append({'action': 'close', 'label': 'Закрыть'})
+        if rfi.status == 'answered':
+            actions.append({'action': 'register', 'label': 'Зарегистрировать ИД', 'requires_file': True})
+            actions.append({'action': 'escalate', 'label': 'Эскалировать', 'requires_comment': True})
+        if rfi.status == 'registered':
+            actions.append({'action': 'close', 'label': 'Закрыть'})
+        return actions
+
+
+class RfiStatusActionView(LoginRequiredMixin, View):
+    """POST действие над RFI (send/answer/register/escalate/close)."""
+
+    def post(self, request, project_id, rfi_id):
+        project = get_object_or_404(
+            get_accessible_projects(request.user), pk=project_id,
+        )
+        rfi = get_object_or_404(RfiTask, pk=rfi_id, project=project)
+        action = request.POST.get('action', '')
+        comment = request.POST.get('comment', '')
+        try:
+            if action == 'send':
+                result = send_rfi(request.user, rfi, comment)
+            elif action == 'answer':
+                result = answer_rfi(request.user, rfi, comment)
+            elif action == 'register':
+                doc_id = request.POST.get('document_id') or ''
+                if doc_id:
+                    doc = get_object_or_404(Document, pk=doc_id, project=project)
+                    result = register_rfi_response(request.user, rfi, doc)
+                else:
+                    messages.error(request, 'Выберите документ с ответом')
+                    return redirect('storage:rfi_detail', project_id=project.pk, rfi_id=rfi.pk)
+            elif action == 'escalate':
+                result = escalate_rfi(request.user, rfi, comment)
+            elif action == 'close':
+                result = close_rfi(request.user, rfi, comment)
+            else:
+                messages.error(request, f'Неизвестное действие: {action}')
+                return redirect('storage:rfi_detail', project_id=project.pk, rfi_id=rfi.pk)
+            messages.success(request, f'Статус изменён: {result.get_status_display()}')
+        except (PermissionDenied, ValueError) as exc:
+            messages.error(request, str(exc))
+        return redirect('storage:rfi_detail', project_id=project.pk, rfi_id=rfi.pk)
+
+
+class RfiDocumentActionView(LoginRequiredMixin, View):
+    """Загрузка/привязка документа к RFI."""
+
+    def post(self, request, project_id, rfi_id):
+        project = get_object_or_404(
+            get_accessible_projects(request.user), pk=project_id,
+        )
+        rfi = get_object_or_404(RfiTask, pk=rfi_id, project=project)
+        kind = request.POST.get('kind', '')
+        if kind not in ('request', 'response'):
+            messages.error(request, 'Неизвестный тип документа')
+            return redirect('storage:rfi_detail', project_id=project.pk, rfi_id=rfi.pk)
+        file = request.FILES.get('file')
+        if file:
+            try:
+                upload_rfi_document(request.user, rfi, kind, file)
+                messages.success(
+                    request,
+                    f'Документ {"запроса" if kind == "request" else "ответа"} загружен',
+                )
+            except (PermissionDenied, ValueError) as exc:
+                messages.error(request, str(exc))
+        else:
+            doc_id = request.POST.get('document_id') or ''
+            if doc_id:
+                doc = get_object_or_404(Document, pk=doc_id, project=project)
+                try:
+                    attach_rfi_document(request.user, rfi, kind, doc)
+                    messages.success(request, 'Документ привязан')
+                except (PermissionDenied, ValueError) as exc:
+                    messages.error(request, str(exc))
+            else:
+                messages.error(request, 'Выберите файл или существующий документ')
+        return redirect('storage:rfi_detail', project_id=project.pk, rfi_id=rfi.pk)
 
 
 class TaskStatusActionView(LoginRequiredMixin, _DesignTaskCardMixin, View):

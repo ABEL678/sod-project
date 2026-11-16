@@ -1,0 +1,182 @@
+{% extends 'storage/base.html' %}
+{% load static %}
+
+{% block title %}RFI-{{ rfi.number|stringformat:"02d" }} — {{ rfi.subject }} — {{ project.name }} — Stream-CAD{% endblock %}
+
+{% block topbar %}
+    {% include 'storage/_topbar.html' with topbar_project=project topbar_title=rfi.subject %}
+{% endblock %}
+
+{% block content %}
+<main class="container py-3 pb-5" style="max-width: 900px;">
+    <nav aria-label="breadcrumb" class="mb-3">
+        <ol class="breadcrumb small">
+            <li class="breadcrumb-item"><a href="{% url 'storage:project_detail' project.pk %}?tab=rfi">Запросы информации</a></li>
+            <li class="breadcrumb-item active">RFI-{{ rfi.number|stringformat:"02d" }}</li>
+        </ol>
+    </nav>
+
+    <div class="d-flex align-items-center gap-3 mb-3">
+        <h1 class="h4 mb-0">RFI-{{ rfi.number|stringformat:"02d" }} — {{ rfi.subject }}</h1>
+        <span class="badge {{ status_badge }} fs-6">{{ rfi.get_status_display }}</span>
+    </div>
+
+    {% if rfi.rfi_due_date %}
+        <div class="mb-3 small">
+            {% if rfi.rfi_due_date < today %}
+                <span class="text-danger fw-semibold">
+                    <i class="bi bi-exclamation-triangle me-1" aria-hidden="true"></i>
+                    Просрочен на {{ today|timeuntil:rfi.rfi_due_date }}
+                </span>
+            {% else %}
+                <span class="text-muted">Срок ответа: {{ rfi.rfi_due_date|date:"d.m.Y" }}</span>
+            {% endif %}
+        </div>
+    {% endif %}
+
+    {# Блок «Суть запроса» #}
+    <div class="card shadow-sm mb-3">
+        <div class="card-header bg-white fw-semibold">
+            <i class="bi bi-question-circle me-2" aria-hidden="true"></i>Суть запроса
+        </div>
+        <div class="card-body">
+            <p class="mb-0">{{ rfi.reason|linebreaksbr }}</p>
+        </div>
+        <div class="card-footer bg-white text-muted small">
+            Автор: {{ rfi.author.get_full_name|default:rfi.author.username }} &middot;
+            Ответственный: {% if rfi.assignee %}{{ rfi.assignee.get_full_name|default:rfi.assignee.username }}{% else %}<span class="text-muted">—</span>{% endif %}
+        </div>
+    </div>
+
+    {# Блок «Документы» #}
+    <div class="card shadow-sm mb-3">
+        <div class="card-header bg-white fw-semibold">
+            <i class="bi bi-file-earmark me-2" aria-hidden="true"></i>Документы
+        </div>
+        <div class="card-body">
+            <div class="mb-3">
+                <strong>Файл запроса:</strong>
+                {% if rfi.document_request %}
+                    <a href="{% url 'storage:document_detail' rfi.document_request.pk %}">
+                        {{ rfi.document_request.code }} — {{ rfi.document_request.name }}
+                    </a>
+                {% else %}
+                    <span class="text-muted">не загружен</span>
+                {% endif %}
+                <form method="post" action="{% url 'storage:rfi_document' project.pk rfi.pk %}" enctype="multipart/form-data" class="mt-1">
+                    {% csrf_token %}
+                    <input type="hidden" name="kind" value="request">
+                    <div class="input-group input-group-sm" style="max-width: 400px;">
+                        <input class="form-control form-control-sm" type="file" name="file">
+                        <button class="btn btn-outline-primary btn-sm" type="submit">
+                            <i class="bi bi-upload me-1" aria-hidden="true"></i>Загрузить
+                        </button>
+                    </div>
+                </form>
+            </div>
+            <div>
+                <strong>Ответ Заказчика:</strong>
+                {% if rfi.document_response %}
+                    <a href="{% url 'storage:document_detail' rfi.document_response.pk %}">
+                        {{ rfi.document_response.code }} — {{ rfi.document_response.name }}
+                    </a>
+                {% else %}
+                    <span class="text-muted">не получен</span>
+                {% endif %}
+                <form method="post" action="{% url 'storage:rfi_document' project.pk rfi.pk %}" enctype="multipart/form-data" class="mt-1">
+                    {% csrf_token %}
+                    <input type="hidden" name="kind" value="response">
+                    <div class="input-group input-group-sm" style="max-width: 400px;">
+                        <input class="form-control form-control-sm" type="file" name="file">
+                        <button class="btn btn-outline-primary btn-sm" type="submit">
+                            <i class="bi bi-upload me-1" aria-hidden="true"></i>Загрузить ответ
+                        </button>
+                    </div>
+                </form>
+                {% if folder_documents %}
+                    <form method="post" action="{% url 'storage:rfi_document' project.pk rfi.pk %}" class="mt-2">
+                        {% csrf_token %}
+                        <input type="hidden" name="kind" value="response">
+                        <div class="input-group input-group-sm" style="max-width: 400px;">
+                            <select class="form-select form-select-sm" name="document_id">
+                                <option value="">— Выбрать из папки RFI —</option>
+                                {% for doc in folder_documents %}
+                                    <option value="{{ doc.pk }}">{{ doc.code }} — {{ doc.name }}</option>
+                                {% endfor %}
+                            </select>
+                            <button class="btn btn-outline-primary btn-sm" type="submit">
+                                <i class="bi bi-link me-1" aria-hidden="true"></i>Привязать
+                            </button>
+                        </div>
+                    </form>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    {# Панель действий #}
+    {% if rfi_actions %}
+        <div class="card shadow-sm mb-3">
+            <div class="card-header bg-white fw-semibold">
+                <i class="bi bi-gear me-2" aria-hidden="true"></i>Действия
+            </div>
+            <div class="card-body d-flex flex-wrap gap-2">
+                {% for action in rfi_actions %}
+                    {% if action.requires_file and not rfi.document_request %}
+                        <button class="btn btn-outline-secondary btn-sm" disabled title="Сначала загрузите файл запроса">
+                            <i class="bi bi-send me-1" aria-hidden="true"></i>{{ action.label }}
+                        </button>
+                    {% elif action.requires_comment %}
+                        <form method="post" action="{% url 'storage:rfi_status' project.pk rfi.pk %}"
+                              class="d-inline-flex align-items-center gap-1"
+                              onsubmit="return confirm('{{ action.label }}?')">
+                            {% csrf_token %}
+                            <input type="hidden" name="action" value="{{ action.action }}">
+                            <input class="form-control form-control-sm" type="text" name="comment"
+                                   placeholder="Комментарий (обязательно)" required style="width: 200px;">
+                            <button class="btn btn-outline-{% if action.action == 'escalate' %}danger{% else %}primary{% endif %} btn-sm" type="submit">
+                                {{ action.label }}
+                            </button>
+                        </form>
+                    {% else %}
+                        <form method="post" action="{% url 'storage:rfi_status' project.pk rfi.pk %}"
+                              class="d-inline"
+                              onsubmit="return confirm('{{ action.label }}?')">
+                            {% csrf_token %}
+                            <input type="hidden" name="action" value="{{ action.action }}">
+                            <button class="btn btn-outline-{% if action.action == 'close' %}secondary{% elif action.action == 'escalate' %}danger{% else %}primary{% endif %} btn-sm" type="submit">
+                                {{ action.label }}
+                            </button>
+                        </form>
+                    {% endif %}
+                {% endfor %}
+            </div>
+        </div>
+    {% endif %}
+
+    {# Блок «История» #}
+    <div class="card shadow-sm">
+        <div class="card-header bg-white fw-semibold">
+            <i class="bi bi-clock-history me-2" aria-hidden="true"></i>История
+        </div>
+        {% if logs %}
+            <ul class="list-group list-group-flush">
+                {% for log in logs %}
+                    <li class="list-group-item small">
+                        <span class="badge bg-light text-dark me-2">{{ log.old_status|default:"—" }} → {{ log.new_status }}</span>
+                        <span class="text-muted">{{ log.changed_by.get_full_name|default:log.changed_by.username }}</span>
+                        <span class="text-muted">{{ log.created_at|date:"d.m.Y H:i" }}</span>
+                        {% if log.comment %}
+                            <br><em>{{ log.comment }}</em>
+                        {% endif %}
+                    </li>
+                {% endfor %}
+            </ul>
+        {% else %}
+            <div class="card-body text-center text-muted py-3">
+                История пуста.
+            </div>
+        {% endif %}
+    </div>
+</main>
+{% endblock %}
