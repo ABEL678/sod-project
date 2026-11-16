@@ -73,6 +73,24 @@ def map_task_status(status: str) -> str:
         raise ValueError(f"map_task_status: неизвестный статус DesignTask: {status!r}")
 
 
+# Маппинг RfiState → TaskStatus (нижний регистр → верхний).
+RFI_STATE_TO_TASK_STATUS = {
+    "open": "NOT_STARTED",
+    "sent": "IN_PROGRESS",
+    "answered": "IN_PROGRESS",
+    "registered": "IN_PROGRESS",
+    "closed": "DONE",
+    "escalated": "IN_PROGRESS",
+}
+
+
+def map_rfi_state_to_task_status(rfi_status: str) -> str:
+    try:
+        return RFI_STATE_TO_TASK_STATUS[rfi_status]
+    except KeyError:
+        raise ValueError(f"map_rfi_state_to_task_status: неизвестный статус RfiTask: {rfi_status!r}")
+
+
 # ─── Время ────────────────────────────────────────────────────────────────────
 
 
@@ -155,6 +173,73 @@ def serialize_section(section) -> dict:
         "name": section.name,
         "full_code": section.full_code or None,
     }
+
+
+# ─── Сериализация RfiTask ─────────────────────────────────────────────────────
+
+
+def serialize_rfi_task(rfi, *, today=None, fingerprints=None) -> dict:
+    code = rfi.project.code
+    if today is None:
+        from django.utils import timezone
+        today = timezone.localdate()
+    fp = fingerprints or {}
+    return {
+        "id": uuid_for_rfi(code, rfi.pk),
+        "project_id": uuid_for_project(code),
+        "title": rfi.subject,
+        "description": rfi.reason,
+        "status": map_rfi_state_to_task_status(rfi.status),
+        "assignee_id": None,
+        "deadline": None,
+        "section_code": None,
+        "to_section_code": None,
+        "sort_order": 0,
+        "source": TASK_SOURCE,
+        "is_complex": False,
+        "decision_id": None,
+        "is_rfi": True,
+        "rfi_cause_decision_id": None,
+        "rfi_cause_goal_id": None,
+        "rfi_due_date": date_iso(rfi.rfi_due_date),
+        "rfi_state": rfi.status,
+        "premise_ids": [],
+        "created_at": iso_utc(rfi.created_at),
+        "updated_at": iso_utc(rfi.updated_at),
+        "stream_cad_number": f"RFI-{rfi.number:02d}",
+        "stream_cad_status": rfi.status,
+        "assignee_name": full_name(rfi.assignee),
+        "rfi_cause_design_task_id": None,
+        "linked_tasks": [],
+        "sent_at": iso_utc(rfi.sent_at),
+        "answered_at": iso_utc(rfi.answered_at),
+        "registered_at": iso_utc(rfi.registered_at),
+        "closed_at": iso_utc(rfi.closed_at),
+        "escalated_at": iso_utc(rfi.escalated_at),
+        "request_document": fingerprint_to_dict(fp.get("request")),
+        "response_document": fingerprint_to_dict(fp.get("response")),
+    }
+
+
+def build_document_fingerprint(document) -> dict | None:
+    """Метаданные документа RFI: код, имя, размер, sha256, updated_at."""
+    if document is None:
+        return None
+    version = getattr(document, 'current_version', None)
+    size = getattr(version, 'file_size', None) if version else None
+    sha256_val = getattr(version, 'file_hash', None) if version else None
+    updated = iso_utc(getattr(version, 'uploaded_at', None)) if version else None
+    return {
+        "code": document.code,
+        "name": document.name,
+        "size_bytes": size,
+        "sha256": sha256_val,
+        "updated_at": updated,
+    }
+
+
+def fingerprint_to_dict(fp) -> dict | None:
+    return fp
 
 
 # ─── Сериализатор JSON ────────────────────────────────────────────────────────

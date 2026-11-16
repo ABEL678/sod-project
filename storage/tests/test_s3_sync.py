@@ -28,6 +28,7 @@ from storage.domain.sync.mapping import (
     SOURCE_SYSTEM,
     TASK_STATUS_MAP,
     _json_bytes,
+    build_document_fingerprint,
     compute_deadline_metrics,
     date_iso,
     full_name,
@@ -35,6 +36,7 @@ from storage.domain.sync.mapping import (
     map_task_status,
     project_slug,
     serialize_design_task,
+    serialize_rfi_task,
     serialize_section,
     sha256_hex,
     uuid_for_design_task,
@@ -116,6 +118,25 @@ class MappingStatusTests(TestCase):
     def test_unknown_status_raises(self):
         with self.assertRaises(ValueError):
             map_task_status("BOGUS")
+
+    def test_rfi_status_mapping(self):
+        from storage.domain.sync.mapping import map_rfi_state_to_task_status
+
+        for rfi_status, expected in [
+            ('open', 'NOT_STARTED'),
+            ('sent', 'IN_PROGRESS'),
+            ('answered', 'IN_PROGRESS'),
+            ('registered', 'IN_PROGRESS'),
+            ('closed', 'DONE'),
+            ('escalated', 'IN_PROGRESS'),
+        ]:
+            self.assertEqual(map_rfi_state_to_task_status(rfi_status), expected)
+
+    def test_rfi_unknown_status_raises(self):
+        from storage.domain.sync.mapping import map_rfi_state_to_task_status
+
+        with self.assertRaises(ValueError):
+            map_rfi_state_to_task_status("BOGUS")
 
 
 class MappingDeadlineTests(TestCase):
@@ -206,6 +227,113 @@ class MappingSerializeSectionTests(TestCase):
 
         data = serialize_section(FakeSection())
         self.assertIsNone(data['full_code'])
+
+
+class MappingSerializeRfiTaskTests(TestCase):
+    _proj_counter = 0
+
+    def setUp(self):
+        MappingSerializeRfiTaskTests._proj_counter += 1
+        self.company = Company.objects.create(name='Test')
+        self.user = User.objects.create_user('rfi_tester')
+        _profile(self.user, 'developer')
+        self.project = Project.objects.create(
+            company=self.company, code=f'RFI-{self._proj_counter:02d}', name='RFI Test',
+            created_by=self.user,
+        )
+        self.section = Section.objects.create(
+            project=self.project, code='AR', name='АР', order=1,
+        )
+        self._rfi_num = 0
+
+    def _rfi(self, status='open', number=None, **kw):
+        from storage.domain.models import RfiTask
+        if number is None:
+            self._rfi_num += 1
+            number = self._rfi_num
+        defaults = dict(
+            project=self.project, number=number,
+            subject='Test RFI', reason='Need data',
+            author=self.user, assignee=self.user,
+            status=status,
+        )
+        defaults.update(kw)
+        return RfiTask.objects.create(**defaults)
+
+    def test_serialize_rfi_basic(self):
+        rfi = self._rfi()
+        data = serialize_rfi_task(rfi, today=date(2026, 11, 16))
+        self.assertEqual(data['title'], 'Test RFI')
+        self.assertEqual(data['description'], 'Need data')
+        self.assertEqual(data['is_rfi'], True)
+        self.assertEqual(data['rfi_state'], 'open')
+        self.assertEqual(data['status'], 'NOT_STARTED')
+        self.assertEqual(data['stream_cad_number'], 'RFI-01')
+        self.assertIsNone(data['section_code'])
+
+    def test_rfi_status_mapping(self):
+        for rfi_status, expected_ga in [
+            ('open', 'NOT_STARTED'),
+            ('sent', 'IN_PROGRESS'),
+            ('answered', 'IN_PROGRESS'),
+            ('registered', 'IN_PROGRESS'),
+            ('closed', 'DONE'),
+            ('escalated', 'IN_PROGRESS'),
+        ]:
+            rfi = self._rfi(status=rfi_status)
+            data = serialize_rfi_task(rfi)
+            self.assertEqual(data['status'], expected_ga, f'{rfi_status} -> {expected_ga}')
+
+    def test_rfi_state_passthrough(self):
+        rfi = self._rfi(status='escalated')
+        data = serialize_rfi_task(rfi)
+        self.assertEqual(data['rfi_state'], 'escalated')
+
+    def test_rfi_number_padding(self):
+        rfi = self._rfi(number=7)
+        data = serialize_rfi_task(rfi)
+        self.assertEqual(data['stream_cad_number'], 'RFI-07')
+
+    def test_rfi_number_three_digits(self):
+        rfi = self._rfi(number=101)
+        data = serialize_rfi_task(rfi)
+        self.assertEqual(data['stream_cad_number'], 'RFI-101')
+
+    def test_rfi_fingerprint_null(self):
+        """Без документов — request/response = None."""
+        rfi = self._rfi()
+        data = serialize_rfi_task(rfi)
+        self.assertIsNone(data['request_document'])
+        self.assertIsNone(data['response_document'])
+
+    def test_rfi_fingerprint_request_only(self):
+        from storage.domain.models import Document
+        doc = Document.objects.create(
+            project=self.project, section=self.section,
+            code='RFI-01-Запрос', name='Запрос ТУ',
+            created_by=self.user,
+        )
+        rfi = self._rfi()
+        rfi.document_request = doc
+        rfi.save()
+        data = serialize_rfi_task(rfi, fingerprints={
+            'request': build_document_fingerprint(doc),
+            'response': None,
+        })
+        self.assertIsNotNone(data['request_document'])
+        self.assertEqual(data['request_document']['code'], 'RFI-01-Запрос')
+        self.assertIsNone(data['response_document'])
+
+    def test_serialize_rfi_has_all_envelope_keys(self):
+        rfi = self._rfi()
+        data = serialize_rfi_task(rfi)
+        for key in (
+            'id', 'project_id', 'title', 'description', 'status',
+            'rfi_state', 'stream_cad_number', 'created_at', 'updated_at',
+            'request_document', 'response_document', 'sent_at', 'answered_at',
+            'registered_at', 'closed_at', 'escalated_at',
+        ):
+            self.assertIn(key, data, f'Missing key: {key}')
 
 
 class MappingUtilsTests(TestCase):
@@ -378,5 +506,29 @@ class DirtySignalTests(TestCase):
         # Сбросим флаг
         SyncState.objects.filter(project=self.project).update(dirty=False)
         task.delete()
+        self.state.refresh_from_db()
+        self.assertTrue(self.state.dirty)
+
+    def test_rfi_post_save_marks_dirty(self):
+        from storage.domain.models import RfiTask
+
+        RfiTask.objects.create(
+            project=self.project, number=1,
+            subject='Test', reason='Need',
+            author=self.user,
+        )
+        self.state.refresh_from_db()
+        self.assertTrue(self.state.dirty)
+
+    def test_rfi_post_delete_marks_dirty(self):
+        from storage.domain.models import RfiTask
+
+        rfi = RfiTask.objects.create(
+            project=self.project, number=1,
+            subject='Test', reason='Need',
+            author=self.user,
+        )
+        SyncState.objects.filter(project=self.project).update(dirty=False)
+        rfi.delete()
         self.state.refresh_from_db()
         self.assertTrue(self.state.dirty)

@@ -19,8 +19,10 @@ from storage.domain.sync.mapping import (
     SCHEMA_VERSION,
     SOURCE_SYSTEM,
     _json_bytes,
+    build_document_fingerprint,
     project_slug,
     serialize_design_task,
+    serialize_rfi_task,
     serialize_section,
     sha256_hex,
 )
@@ -61,6 +63,33 @@ def build_tasks_payload(project, generation: int, generated_at: str) -> dict:
         .order_by("pk")
     )
     items = [serialize_design_task(t) for t in tasks]
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "generated_at": generated_at,
+        "generation": generation,
+        "source_system": SOURCE_SYSTEM,
+        "project_code": project.code,
+        "items": items,
+    }
+
+
+def build_rfis_payload(project, generation: int, generated_at: str) -> dict:
+    rfis = (
+        project.rfi_tasks
+        .select_related(
+            "author", "assignee",
+            "document_request", "document_response",
+            "document_request__current_version",
+            "document_response__current_version",
+        )
+        .order_by("number")
+    )
+    items = []
+    for r in rfis:
+        items.append(serialize_rfi_task(r, fingerprints={
+            "request": build_document_fingerprint(r.document_request),
+            "response": build_document_fingerprint(r.document_response),
+        }))
     return {
         "schema_version": SCHEMA_VERSION,
         "generated_at": generated_at,
@@ -136,19 +165,12 @@ def export_project_to_s3(project) -> int:
         tasks_payload = build_tasks_payload(project, new_generation, generated_at)
         tasks_bytes = _json_bytes(tasks_payload)
 
-        rfis_payload = {
-            "schema_version": SCHEMA_VERSION,
-            "generated_at": generated_at,
-            "generation": new_generation,
-            "source_system": SOURCE_SYSTEM,
-            "project_code": project.code,
-            "items": [],
-        }
+        rfis_payload = build_rfis_payload(project, new_generation, generated_at)
         rfis_bytes = _json_bytes(rfis_payload)
 
         metadata_payload = build_metadata(
             project, new_generation, generated_at, tasks_bytes, rfis_bytes,
-            counts={"tasks": len(tasks_payload["items"]), "rfis": 0},
+            counts={"tasks": len(tasks_payload["items"]), "rfis": len(rfis_payload["items"])},
             sync_state=sync_state,
         )
         metadata_bytes = _json_bytes(metadata_payload)
@@ -193,7 +215,7 @@ def export_project_to_s3(project) -> int:
                 message="snapshot exported",
                 detail={
                     "tasks": len(tasks_payload["items"]),
-                    "rfis": 0,
+                    "rfis": len(rfis_payload["items"]),
                     "bytes": [len(tasks_bytes), len(rfis_bytes), len(metadata_bytes)],
                     "changed": True,
                 },

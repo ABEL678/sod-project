@@ -18,7 +18,7 @@ from django.db import IntegrityError
 from django.db.models.signals import post_delete, post_save
 from django.dispatch import receiver
 
-from storage.domain.models import Company, DesignTask, SyncState, UserProfile
+from storage.domain.models import Company, DesignTask, RfiTask, SyncState, UserProfile
 
 
 @receiver(post_save, sender=User, dispatch_uid='storage.create_user_profile')
@@ -60,4 +60,10 @@ def create_user_profile(sender, instance, created, **kwargs):
 @receiver([post_save, post_delete], sender=DesignTask, dispatch_uid='storage.mark_design_task_dirty')
 def mark_design_task_dirty(sender, instance, **kwargs):
     """Помечает проект как «грязный» при изменении задания (S3 Data Lake)."""
+    SyncState.objects.filter(project=instance.project).update(dirty=True)
+
+
+@receiver([post_save, post_delete], sender=RfiTask, dispatch_uid='storage.mark_rfi_task_dirty')
+def mark_rfi_task_dirty(sender, instance, **kwargs):
+    """Помечает проект как «грязный» при изменении RFI (S3 Data Lake)."""
     SyncState.objects.filter(project=instance.project).update(dirty=True)
