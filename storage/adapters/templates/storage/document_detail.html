@@ -419,6 +419,7 @@
              data-page="{{ issue.page_number|default:'' }}"
              data-status-label="{{ issue.get_status_display }}"
              onclick="selectIssue(null, {{ issue.pk }})">
+          <a id="issue-{{ issue.pk }}" class="anchor" aria-hidden="true"></a>
           <span class="mark-badge"
                 style="--mk: var(--status-{{ issue.status|lower }}); --mkb: var(--status-{{ issue.status|lower }}-bg); --mk-text: var(--status-{{ issue.status|lower }}-on);">
             {{ issue.pk|stringformat:"02d" }}
@@ -805,6 +806,56 @@
   });
 
   updateIssueCounters();
+
+  // Поддержка ?page=N + #issue-N из вкладки «Замечания»
+  function _goToPageThenHighlight() {
+    const hash = window.location.hash;
+    const issueId = hash && hash.startsWith('#issue-') ? hash.replace('#issue-', '') : null;
+    const urlPage = new URLSearchParams(window.location.search).get('page');
+    const pageNum = urlPage ? Number(urlPage) : 0;
+
+    if (!pageNum && !issueId) return;
+
+    const initialTotal = (document.getElementById('totalPages') || {}).textContent || '1';
+    const maxWait = 15000;
+    const pollDelay = 200;
+    let waited = 0;
+
+    function poll() {
+      waited += pollDelay;
+      if (waited > maxWait) return;
+      const viewerEl = document.getElementById('pdfViewer');
+      const hasPages = viewerEl && viewerEl.querySelector('.pdf-page');
+      const totalEl = document.getElementById('totalPages');
+      const totalChanged = totalEl && totalEl.textContent !== initialTotal;
+      if (!hasPages && !totalChanged) {
+        setTimeout(poll, pollDelay);
+        return;
+      }
+      // PDF готов — переходим на страницу
+      var afterPage = Promise.resolve();
+      if (pageNum > 0 && typeof goToPage === 'function') {
+        afterPage = goToPage(pageNum);
+      }
+      afterPage.then(function () {
+        // После рендера страницы — подсвечиваем замечание
+        if (issueId && typeof openIssueCard === 'function') {
+          setTimeout(function () {
+            openIssueCard(issueId);
+            // Скролл к замечанию в правой панели
+            var card = document.querySelector('#list .card[data-id="' + issueId + '"]');
+            if (card) {
+              card.scrollIntoView({ block: 'center', behavior: 'smooth' });
+              card.classList.add('is-active');
+            }
+          }, 500);
+        }
+      });
+    }
+    setTimeout(poll, pollDelay);
+  }
+
+  _goToPageThenHighlight();
 </script>
 </body>
 </html>
