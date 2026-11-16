@@ -333,6 +333,10 @@ CELERY_BEAT_SCHEDULE = {
         'task': 'storage.tasks.sync_s3_full',
         'schedule': crontab(hour=2, minute=0),
     },
+    's3-sync-inbox': {
+        'task': 'storage.tasks.process_s3_inbox',
+        'schedule': crontab(minute='*/5'),
+    },
 }
 
 USE_I18N = True

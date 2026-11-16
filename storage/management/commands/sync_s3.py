@@ -98,4 +98,16 @@ class Command(BaseCommand):
 
     def _sync_project(self, project, direction: str):
         self.stdout.write(f"Синхронизация {project.code} ({direction or 'out'})")
-        self.stdout.write(self.style.WARNING("export_project_to_s3 ещё не реализован"))
+        if direction == 'in':
+            from storage.domain.sync.inbox import process_project_inbox
+            count = process_project_inbox(project)
+            self.stdout.write(self.style.SUCCESS(f"Обработано команд: {count}"))
+        elif direction == 'out' or not direction:
+            from storage.domain.sync.export import export_project_to_s3
+            try:
+                gen = export_project_to_s3(project)
+                self.stdout.write(self.style.SUCCESS(f"Выгружено поколение: {gen}"))
+            except Exception as exc:
+                self.stdout.write(self.style.ERROR(f"Ошибка выгрузки: {exc}"))
+        else:
+            self.stdout.write(self.style.WARNING(f"Неизвестное направление: {direction}"))

@@ -10,7 +10,7 @@ import json
 from datetime import date, timedelta
 from unittest import mock
 
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.utils import timezone
 
 from storage.domain.models import (
@@ -532,3 +532,77 @@ class DirtySignalTests(TestCase):
         rfi.delete()
         self.state.refresh_from_db()
         self.assertTrue(self.state.dirty)
+
+
+@override_settings(S3_SYNC_ENABLED=True)
+class InboxTests(TestCase):
+    def setUp(self):
+        self.company = Company.objects.create(name='Test')
+        self.user = User.objects.create_user('gip')
+        _profile(self.user, 'gip')
+        self.project = Project.objects.create(
+            company=self.company, code='INBOX', name='Inbox',
+            created_by=self.user, gip=self.user,
+        )
+        self.section = Section.objects.create(
+            project=self.project, code='AR', name='AР', order=1,
+        )
+        self.state = SyncState.objects.create(project=self.project, enabled=True)
+        from storage.domain.sync.mapping import project_slug
+        self._slug = project_slug(self.project.code)
+
+    def _command_key(self, seq, ctype, cid):
+        return f"projects/{self._slug}/inbox/commands/{seq}_{ctype}_{cid}.json"
+
+    def _make_command(self, seq=1, ctype='ack.import', cid='cmd-001', payload=None):
+        return {"id": cid, "type": ctype, "payload": payload or {"generation": 1}}
+
+    @mock.patch('storage.domain.sync.inbox.get_s3_gateway')
+    def test_ack_import_processed(self, mock_gateway_cls):
+        from storage.domain.sync.inbox import process_project_inbox
+        gateway = mock.Mock()
+        mock_gateway_cls.return_value = gateway
+        gateway.list_keys.return_value = [self._command_key(1, 'ack.import', 'cmd-001')]
+        gateway.get_json_object.return_value = self._make_command(1, 'ack.import', 'cmd-001', {"generation": 5})
+        result = process_project_inbox(self.project)
+        self.assertEqual(result, 1)
+        self.state.refresh_from_db()
+        self.assertEqual(self.state.last_inbox_seq, 1)
+        self.assertEqual(self.state.last_ack_generation, 5)
+
+    @mock.patch('storage.domain.sync.inbox.get_s3_gateway')
+    def test_idempotent_by_command_id(self, mock_gateway_cls):
+        from storage.domain.models import InboxCommand
+        from storage.domain.sync.inbox import process_project_inbox
+        InboxCommand.objects.create(
+            project=self.project, command_id='cmd-001',
+            seq=1, type='ack.import', status=InboxCommand.Status.DONE,
+        )
+        self.state.last_inbox_seq = 1
+        self.state.save()
+        gateway = mock.Mock()
+        mock_gateway_cls.return_value = gateway
+        gateway.list_keys.return_value = [self._command_key(1, 'ack.import', 'cmd-001')]
+        gateway.get_json_object.return_value = self._make_command(1, 'ack.import', 'cmd-001')
+        result = process_project_inbox(self.project)
+        self.assertEqual(result, 0)
+
+    @mock.patch('storage.domain.sync.inbox.get_s3_gateway')
+    def test_rfi_escalate_success(self, mock_gateway_cls):
+        from storage.domain.models import RfiTask
+        from storage.domain.sync.inbox import process_project_inbox
+        RfiTask.objects.create(
+            project=self.project, number=1,
+            subject='Test RFI', reason='Need',
+            author=self.user, status='sent',
+        )
+        gateway = mock.Mock()
+        mock_gateway_cls.return_value = gateway
+        gateway.list_keys.return_value = [self._command_key(1, 'rfi.escalate', 'cmd-rfi')]
+        gateway.get_json_object.return_value = self._make_command(
+            1, 'rfi.escalate', 'cmd-rfi', payload={"rfi_number": 1},
+        )
+        result = process_project_inbox(self.project)
+        self.assertEqual(result, 1)
+        gateway.move_object.assert_called_once()
+        self.assertIn('done/', gateway.move_object.call_args[0][1])

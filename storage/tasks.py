@@ -104,3 +104,10 @@ def sync_s3_full() -> int:
             last_full_sync_at=timezone.now(),
         )
     return count
+
+
+@shared_task(name='storage.tasks.process_s3_inbox')
+def process_s3_inbox() -> int:
+    """Разбор inbox-команд для всех включённых проектов (beat, раз в 5 минут)."""
+    from storage.domain.sync.inbox import process_all_inboxes
+    return process_all_inboxes()
