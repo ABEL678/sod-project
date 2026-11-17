@@ -1627,12 +1627,16 @@ def upload_knowledge_document(
     title: str,
     doc_type: str,
     tenant_scope: str,
+    folder=None,
 ) -> InternalDocument:
     """Загрузка документа в базу знаний (файл — через storage/FileField).
 
     Создаёт storage.Document + версию сервисом upload_document (единый
     FileStorage-путь проекта), затем InternalDocument с tenant_scope.
     Индексация запускается отдельно (Celery-задача).
+
+    folder — необязательная папка ИРД (например, «Внутренние стандарты»);
+    если задана, документ сохраняется в неё.
     """
     from uuid import uuid4
 
@@ -1644,9 +1648,13 @@ def upload_knowledge_document(
     if tenant_scope not in ('project', 'company'):
         raise ValueError('Область видимости: только проект или компания')
 
-    section = (
-        Section.objects.filter(project=project).order_by('order', 'pk').first()
-    )
+    if folder is not None and getattr(folder, 'section_id', None):
+        section = folder.section
+    else:
+        section = (
+            Section.objects.filter(project=project)
+            .order_by('order', 'pk').first()
+        )
     if section is None:
         raise ValueError(
             'В проекте нет разделов — нельзя сохранить файл базы знаний',
@@ -1660,6 +1668,7 @@ def upload_knowledge_document(
         name=title or uploaded_file.name,
         doc_type='report',
         file=uploaded_file,
+        folder=folder,
         # База знаний индексируется в InternalChunk, а не в проектный
         # индекс ProjectDocumentChunk (треб. 6: тип источника
         # «проект» = PDF-документы проекта, «стандарт» = база знаний).

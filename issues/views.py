@@ -18,7 +18,7 @@ from django.views import View
 from django.views.generic import CreateView, ListView
 from io import BytesIO
 from openpyxl import Workbook
-from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
 from storage.adapters.views import _issue_payload
 from storage.domain.design_colors import (
@@ -392,7 +392,9 @@ def _registry_issues(user, project):
 def _apply_registry_filters(queryset, params, user=None):
     """Точечные GET-фильтры реестра (делегирует сервису)."""
     if user is not None:
-        params = dict(params)
+        # copy() сохраняет QueryDict-семантику (get → одиночное значение).
+        # dict(QueryDict) даёт списки значений и ломает фильтры.
+        params = params.copy() if hasattr(params, 'copy') else dict(params)
         params['_user'] = user
     return apply_issue_filters(queryset, params)
 
@@ -490,13 +492,34 @@ class IssueRegistryExportView(LoginRequiredMixin, View):
             'Создано', 'Ответ', 'Закрыто',
         ]
         sheet.append(headers)
-        header_fill = PatternFill('solid', fgColor=EXCEL_HEADER_FILL)
-        for cell in sheet[1]:
-            cell.font = Font(bold=True)
+
+        # Красивое оформление (по образцу экспорта заданий / Сводки ГИПа):
+        # тёмно-синяя шапка с белым жирным текстом, тонкие границы,
+        # чередование строк, автофильтр по диапазону шапки.
+        header_fill = PatternFill(
+            start_color='0056B3', end_color='0056B3', fill_type='solid',
+        )
+        header_font = Font(bold=True, color='FFFFFF')
+        thin_border = Border(
+            left=Side(style='thin'),
+            right=Side(style='thin'),
+            top=Side(style='thin'),
+            bottom=Side(style='thin'),
+        )
+        alt_fill = PatternFill(
+            start_color='F2F2F2', end_color='F2F2F2', fill_type='solid',
+        )
+        header_count = len(headers)
+        for col_idx in range(1, header_count + 1):
+            cell = sheet.cell(row=1, column=col_idx)
+            cell.font = header_font
             cell.fill = header_fill
-            cell.alignment = Alignment(vertical='center')
+            cell.alignment = Alignment(vertical='center', wrap_text=True)
+            cell.border = thin_border
         sheet.freeze_panes = 'A2'
-        sheet.auto_filter.ref = sheet.dimensions
+        sheet.auto_filter.ref = 'A1:L{last}'.format(
+            last=max(1, len(issues) + 1),
+        )
 
         today = timezone.localdate()
         for row, issue in enumerate(issues, start=2):
@@ -508,6 +531,9 @@ class IssueRegistryExportView(LoginRequiredMixin, View):
             )
             code_cell.hyperlink = request.build_absolute_uri(
                 reverse('storage:document_detail', args=[doc.pk])
+                + '?page={page}#issue-{issue}'.format(
+                    page=issue.page_number or 1, issue=issue.pk,
+                )
             )
             code_cell.font = Font(color=EXCEL_LINK, underline='single')
 
@@ -563,6 +589,13 @@ class IssueRegistryExportView(LoginRequiredMixin, View):
                     if issue.closed_at else ''
                 ),
             )
+
+            # Границы для всех ячеек строки + заливка чётных строк.
+            for col_idx in range(1, header_count + 1):
+                cell = sheet.cell(row=row, column=col_idx)
+                cell.border = thin_border
+                if row % 2 == 0:
+                    cell.fill = alt_fill
 
         for column, width in {
             'A': 6, 'B': 18, 'C': 10, 'D': 16, 'E': 52, 'F': 24, 'G': 24,

@@ -5846,6 +5846,42 @@ def get_or_create_rfi_folder(project: Project, actor: User) -> Folder:
     return folder
 
 
+def get_or_create_ird_subfolder(
+    project: Project, actor: User, name: str,
+) -> Folder:
+    """Идемпотентно создаёт подпапку в «Прочие исходные данные» (ИРД).
+
+    Используется базой знаний: документы стандартов сохраняются в
+    соответствующую папку ИРД, а не «в корень» проекта.
+    """
+    common = _get_or_create_common_section(project)
+    ird_root = Folder.objects.filter(
+        project=project, parent__isnull=True,
+        is_system_zone=False, is_deleted=False,
+        name='Исходные данные (ИРД)',
+    ).first()
+    source_data = Folder.objects.filter(
+        project=project, parent=ird_root, is_deleted=False,
+        name='Прочие исходные данные',
+    ).first()
+    if source_data is None:
+        source_data = Folder.objects.create(
+            project=project, parent=ird_root, section=common,
+            name='Прочие исходные данные', zone='WIP',
+            created_by=actor, is_system_zone=False,
+        )
+    folder = Folder.objects.filter(
+        project=project, parent=source_data, is_deleted=False,
+        name=name,
+    ).first()
+    if folder is not None:
+        return folder
+    return Folder.objects.create(
+        project=project, parent=source_data, section=common,
+        name=name, zone='WIP', created_by=actor, is_system_zone=False,
+    )
+
+
 def upload_rfi_document(
     user: User, rfi: RfiTask, kind: str, file,
     name: str = '',

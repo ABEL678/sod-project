@@ -50,6 +50,13 @@ from storage.domain.models import Document, DocumentVersion
 
 logger = logging.getLogger(__name__)
 
+# База знаний: тип документа → папка в «Прочие исходные данные» (ИРД).
+_KB_FOLDER_BY_DOC_TYPE = {
+    'customer_req': 'Требования заказчика',
+    'internal_standard': 'Внутренние стандарты',
+    'past_issues': 'Прошлые замечания',
+}
+
 # Треб. 8: пример-подсказка (чип) для формы ИИ-поиска.
 RAG_EXAMPLE_QUESTIONS = (
     'Какие нагрузки из ОВ учтены в ЭОМ?',
@@ -664,9 +671,19 @@ def kb_upload(request, project_id: int):
     doc_type = (request.POST.get('doc_type') or '').strip()
     tenant_scope = (request.POST.get('tenant_scope') or 'project').strip()
     title = (request.POST.get('title') or '').strip()[:255]
+    # Документ базы знаний кладём в соответствующую папку ИРД
+    # («Прочие исходные данные» → подпапка по типу документа).
+    from storage.domain.services import get_or_create_ird_subfolder
+
+    folder = get_or_create_ird_subfolder(
+        project, request.user, _KB_FOLDER_BY_DOC_TYPE.get(
+            doc_type, 'Внутренние стандарты',
+        ),
+    )
     try:
         internal = upload_knowledge_document(
             request.user, project, uploaded, title, doc_type, tenant_scope,
+            folder=folder,
         )
     except ValueError:
         return _render_kb_table(request, project)

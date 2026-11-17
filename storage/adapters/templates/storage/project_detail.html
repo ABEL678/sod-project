@@ -284,7 +284,7 @@
                                role="tab"
                                aria-selected="{% if active_tab == 'ai-search' %}true{% else %}false{% endif %}">
                                 <i class="bi bi-robot" aria-hidden="true"></i>
-                                ИИ-поиск
+                                Поиск
                             </a>
                         {% endif %}
                         {% if ai_report_allowed %}
@@ -299,7 +299,7 @@
                                role="tab"
                                aria-selected="{% if active_tab == 'ai-report' %}true{% else %}false{% endif %}">
                                 <i class="bi bi-file-earmark-bar-graph" aria-hidden="true"></i>
-                                Отчёт ГИПу
+                                Отчёты
                             </a>
                         {% endif %}
                         {% if ai_knowledge_allowed %}
@@ -323,6 +323,10 @@
                     {# P0-1: единственная панель вкладки — колонка с собственной #}
                     {# прокруткой (.ai-tabpane), контент замещается, а не #}
                     {# вставляется между вкладкой и таблицей документов. #}
+                    {# На вкладке «Документы» панель вкладок не нужна — её контент #}
+                    {# рендерится отдельно ниже, поэтому пустой .ai-tabpane не выводим #}
+                    {# (убирает пустое пространство над списком документов). #}
+                    {% if active_tab != 'documents' %}
                     <div id="mainTabContent" class="ai-tabpane">
                         {% if active_tab == 'participants' and can_manage_participants %}
                 <div class="toolbar" data-role="participants-toolbar">
@@ -648,6 +652,7 @@
                     {% include 'issues/_issues_panel.html' %}
                 {% endif %}
                     </div>{# /#mainTabContent #}
+                    {% endif %}
                 </div>{# /#mainTabs #}
             {% endif %}
 

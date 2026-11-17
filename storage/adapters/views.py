@@ -1211,6 +1211,8 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
 
     def _get_issues_context(self, user, project):
         """Данные вкладки «Замечания»: сводка, фильтры, таблица (по образцу _get_tasks_context)."""
+        from urllib.parse import urlencode
+
         from issues.services import (
             ACTIVE_ISSUE_STATUSES,
             ISSUE_STATUS_GROUPS,
@@ -1218,7 +1220,6 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
             apply_issue_filters,
             blocking_links_map,
             issue_summary,
-            issues_requiring_attention,
             project_issues,
         )
         from issues.tables import STATUS_BADGES
@@ -1227,8 +1228,11 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
         qs = project_issues(user, project)
         counts = issue_summary(user, project)
 
-        params = dict(self.request.GET)
+        params = self.request.GET.copy()
         params['_user'] = user
+        # Для select-фильтра «Автор» параметр 'me' раскрываем в pk текущего пользователя.
+        if params.get('author') == 'me':
+            params['author'] = str(user.pk)
         filtered = apply_issue_filters(qs, params).order_by('-created_at')
 
         paginator = Paginator(filtered, 50)
@@ -1244,6 +1248,21 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
             .distinct()
             .order_by('last_name', 'first_name')
         )
+        author_choices = list(
+            get_user_model()
+            .objects.filter(
+                created_issues__document_id__in=readable_pks,
+            )
+            .distinct()
+            .order_by('last_name', 'first_name')
+        )
+        document_choices = list(
+            Document.objects.filter(
+                pk__in=readable_pks, issues__isnull=False, is_deleted=False,
+            )
+            .distinct()
+            .order_by('code')
+        )
         today = timezone.localdate()
 
         issues_data = []
@@ -1257,8 +1276,22 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
             )
             issues_data.append(issue)
 
-        attention = issues_requiring_attention(user, project)
         block_map = blocking_links_map(user, project)
+
+        filters = {
+            'status': params.get('status', ''),
+            'flag': params.get('flag', ''),
+            'assignee': params.get('assignee', ''),
+            'author': params.get('author', ''),
+            'document': params.get('document', ''),
+            'q': params.get('q', ''),
+        }
+        export_params = {k: v for k, v in filters.items() if v}
+        export_url = reverse(
+            'issues:issue_registry_export', args=[project.pk],
+        )
+        if export_params:
+            export_url += '?' + urlencode(export_params)
 
         return {
             'issues': issues_data,
@@ -1267,18 +1300,13 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
             'is_paginated': paginator.num_pages > 1,
             'counts': counts,
             'issue_summary': counts,
-            'issue_attention': attention,
             'blocking_links': block_map,
             'status_choices': Issue.STATUS_CHOICES,
             'assignee_choices': assignee_choices,
-            'filters': {
-                'status': params.get('status', ''),
-                'flag': params.get('flag', ''),
-                'assignee': params.get('assignee', ''),
-                'author': params.get('author', ''),
-                'document': params.get('document', ''),
-                'q': params.get('q', ''),
-            },
+            'author_choices': author_choices,
+            'document_choices': document_choices,
+            'filters': filters,
+            'export_url': export_url,
             'today': today,
         }
 

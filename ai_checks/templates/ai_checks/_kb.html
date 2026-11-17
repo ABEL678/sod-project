@@ -58,7 +58,7 @@
       <form hx-post="{% url 'ai_checks:kb_upload' project.pk %}"
             hx-target="#kbTableWrap" hx-swap="innerHTML"
             hx-encoding="multipart/form-data"
-            hx-on::after-request="if (event.detail.successful) { bootstrap.Modal.getInstance(document.getElementById('kbUploadModal')).hide(); this.reset(); }">
+            hx-on::after-request="if (event.detail.successful) { bootstrap.Modal.getInstance(document.getElementById('kbUploadModal')).hide(); this.reset(); kbDropShowName(); }">
         {% csrf_token %}
         <div class="modal-header">
           <h5 class="modal-title" id="kbUploadModalLabel">Загрузить документ в базу знаний</h5>
@@ -67,8 +67,23 @@
         <div class="modal-body">
           <div class="mb-3">
             <label class="form-label small" for="kbFile">Файл (PDF)</label>
-            <input type="file" class="form-control form-control-sm"
-                   id="kbFile" name="file" accept=".pdf,application/pdf" required>
+            <div id="kbDropZone"
+                 class="kb-dropzone"
+                 data-role="kb-dropzone"
+                 role="button"
+                 tabindex="0"
+                 onclick="document.getElementById('kbFile').click()"
+                 onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();document.getElementById('kbFile').click();}"
+                 ondragover="return kbDropOver(event)"
+                 ondragleave="return kbDropLeave(event)"
+                 ondrop="return kbDropFile(event)">
+              <i class="bi bi-cloud-arrow-up fs-3 d-block mb-1" aria-hidden="true"></i>
+              <div class="small">Перетащите PDF сюда или <span class="text-primary">выберите файл</span></div>
+              <div class="small text-muted mt-1" id="kbDropFileName">Файл не выбран</div>
+            </div>
+            <input type="file" class="visually-hidden"
+                   id="kbFile" name="file" accept=".pdf,application/pdf" required
+                   onchange="kbDropShowName()">
           </div>
           <div class="mb-3">
             <label class="form-label small" for="kbTitle">Название (необязательно)</label>
@@ -100,3 +115,56 @@
     </div>
   </div>
 </div>
+
+<style>
+.kb-dropzone {
+  border: 2px dashed var(--bs-border-color, #ced4da);
+  border-radius: .5rem;
+  padding: 1rem;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color .15s ease, background-color .15s ease;
+  background: var(--bs-body-bg, #fff);
+}
+.kb-dropzone:hover { border-color: var(--bs-primary, #4674a4); }
+.kb-dropzone.is-dragover {
+  border-color: var(--bs-primary, #4674a4);
+  background: rgba(70, 116, 164, .08);
+}
+</style>
+<script>
+function kbDropShowName() {
+  var input = document.getElementById('kbFile');
+  var nameEl = document.getElementById('kbDropFileName');
+  if (!nameEl) { return; }
+  nameEl.textContent = (input && input.files && input.files.length)
+    ? input.files[0].name : 'Файл не выбран';
+}
+function kbDropOver(event) {
+  event.preventDefault();
+  event.stopPropagation();
+  var zone = document.getElementById('kbDropZone');
+  if (zone) { zone.classList.add('is-dragover'); }
+  return false;
+}
+function kbDropLeave(event) {
+  event.preventDefault();
+  event.stopPropagation();
+  var zone = document.getElementById('kbDropZone');
+  if (zone) { zone.classList.remove('is-dragover'); }
+  return false;
+}
+function kbDropFile(event) {
+  event.preventDefault();
+  event.stopPropagation();
+  var zone = document.getElementById('kbDropZone');
+  if (zone) { zone.classList.remove('is-dragover'); }
+  var input = document.getElementById('kbFile');
+  var files = event.dataTransfer && event.dataTransfer.files;
+  if (input && files && files.length) {
+    try { input.files = files; } catch (e) { /* старые браузеры */ }
+    kbDropShowName();
+  }
+  return false;
+}
+</script>

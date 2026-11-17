@@ -40,6 +40,20 @@ def project_issues(user, project):
     )
 
 
+def _single(params, key):
+    """Возвращает одиночное строковое значение параметра.
+
+    Устойчиво к QueryDict, dict и dict-of-lists (dict(QueryDict) даёт
+    списки значений — фильтры не должны на этом падать).
+    """
+    value = params.get(key)
+    if value is None:
+        return ''
+    if isinstance(value, (list, tuple)):
+        value = value[0] if value else ''
+    return str(value).strip()
+
+
 def apply_issue_filters(queryset, params):
     """GET-фильтры реестра (status/flag/assignee/author/document/q).
 
@@ -51,11 +65,11 @@ def apply_issue_filters(queryset, params):
       document — pk
       q        — поиск по тексту/коду/имени документа
     """
-    status = (params.get('status') or '').strip()
+    status = _single(params, 'status')
     if status in dict(Issue.STATUS_CHOICES):
         queryset = queryset.filter(status=status)
 
-    flag = (params.get('flag') or '').strip()
+    flag = _single(params, 'flag')
     if flag == 'active':
         queryset = queryset.filter(status__in=ACTIVE_ISSUE_STATUSES)
     elif flag == 'open':
@@ -78,23 +92,23 @@ def apply_issue_filters(queryset, params):
             | Q(blocked_rfi_tasks__isnull=False)
         ).distinct()
 
-    assignee = (params.get('assignee') or '').strip()
+    assignee = _single(params, 'assignee')
     if assignee == 'none':
         queryset = queryset.filter(assignee__isnull=True)
     elif assignee.isdigit():
         queryset = queryset.filter(assignee_id=int(assignee))
 
-    author = (params.get('author') or '').strip()
+    author = _single(params, 'author')
     if author == 'me':
         queryset = queryset.filter(author=params.get('_user'))
     elif author.isdigit():
         queryset = queryset.filter(author_id=int(author))
 
-    document = (params.get('document') or '').strip()
+    document = _single(params, 'document')
     if document.isdigit():
         queryset = queryset.filter(document_id=int(document))
 
-    query = (params.get('q') or '').strip()
+    query = _single(params, 'q')
     if query:
         queryset = queryset.filter(
             Q(description__icontains=query)
