@@ -51,17 +51,19 @@ body { background: var(--c-bg-app); font-family: 'Golos Text', 'Inter', system-u
 
 .brand-text {
     font-size: 18px;
-    font-weight: 600;
+    font-weight: 800;
     letter-spacing: 1px;
     color: var(--c-text-on-dark);
+    text-shadow: 0 1px 4px rgba(0,0,0,0.35);
 }
 
-.brand-slogan {
+    .brand-slogan {
     display: block;
-    font-size: 10px;
-    color: var(--c-text-on-dark-muted);
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--c-text-on-dark);
     margin-top: 1px;
-}
+    }
 
 /* T85: header/breadcrumbs/table polish.
    Спринт 8 (правка): --c-bg-header — тёмный графит #1E293B (см. tokens.json). */

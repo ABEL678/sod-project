@@ -66,26 +66,26 @@
             {% endif %}
         {% endif %}
 
-        {# T68: сводный реестр замечаний текущего проекта #}
         {% if topbar_project %}
-            <a href="{% url 'issues:issue_registry' topbar_project.pk %}"
-               class="btn btn-sm btn-outline-secondary topbar-action-desktop{% if request.resolver_match.url_name == 'issue_registry' %} active{% endif %}"
-               title="Замечания проекта {{ topbar_project.code }}"
-               {% if request.resolver_match.url_name == 'issue_registry' %}aria-current="page"{% endif %}>
-                <i class="bi bi-list-check" aria-hidden="true"></i>
-                <span class="d-none d-xl-inline ms-1">Замечания проекта</span>
+            <a href="{% url 'issues:my_issues' %}" class="btn btn-sm btn-outline-secondary position-relative topbar-action-desktop"
+               title="Мои замечания — назначенные мне и созданные мной">
+                <i class="bi bi-chat-left-text" aria-hidden="true"></i>
+                <span class="d-none d-xl-inline ms-1">Мои замечания</span>
+                {% if my_open_issues_count %}
+                    <span class="badge rounded-pill text-bg-primary ms-1">{{ my_open_issues_count }}</span>
+                {% endif %}
+            </a>
+        {% else %}
+            {# Волна 3: личный инбокс замечаний + колокольчик уведомлений #}
+            <a href="{% url 'issues:my_issues' %}" class="btn btn-sm btn-outline-secondary position-relative topbar-action-desktop"
+               title="Мои замечания — назначенные мне и созданные мной">
+                <i class="bi bi-chat-left-text" aria-hidden="true"></i>
+                <span class="d-none d-xl-inline ms-1">Мои замечания</span>
+                {% if my_open_issues_count %}
+                    <span class="badge rounded-pill text-bg-primary ms-1">{{ my_open_issues_count }}</span>
+                {% endif %}
             </a>
         {% endif %}
-
-        {# Волна 3: личный инбокс замечаний + колокольчик уведомлений #}
-        <a href="{% url 'issues:my_issues' %}" class="btn btn-sm btn-outline-secondary position-relative topbar-action-desktop"
-           title="Мои замечания — назначенные мне и созданные мной">
-            <i class="bi bi-chat-left-text" aria-hidden="true"></i>
-            <span class="d-none d-xl-inline ms-1">Мои замечания</span>
-            {% if my_open_issues_count %}
-                <span class="badge rounded-pill text-bg-primary ms-1">{{ my_open_issues_count }}</span>
-            {% endif %}
-        </a>
 
         {# 2B: кнопка обратной связи #}
         <button type="button"
@@ -111,13 +111,36 @@
                 {% endif %}
             </button>
             <div class="dropdown-menu notif-menu"
-                 hx-get="{% url 'issues:notifications_partial' %}"
-                 hx-trigger="show.bs.dropdown from:closest .dropdown"
-                 hx-swap="innerHTML"
                  aria-label="Список уведомлений">
-                <div class="notif-empty"><i class="bi bi-bell me-1" aria-hidden="true"></i>Загрузка…</div>
+                {% include 'issues/_notifications_list.html' %}
             </div>
         </div>
+        <script>
+        (function() {
+            document.addEventListener('click', function(e) {
+                var item = e.target.closest('.notif-item');
+                if (!item) return;
+                var href = item.getAttribute('href');
+                if (!href || href === '#') return;
+                // Извлекаем ID уведомления из data-notif-id или из URL
+                var notifId = item.dataset.notifId;
+                if (!notifId) {
+                    var m = href.match(/\/issues\/issues\/(\d+)/);
+                    if (m) notifId = m[1];
+                }
+                if (!notifId) return;
+                var token = document.querySelector('[name=csrfmiddlewaretoken]');
+                if (!token) return;
+                fetch('{% url "issues:notification_mark_read" 0 %}'.replace('0', notifId), {
+                    method: 'POST',
+                    headers: {
+                        'X-CSRFToken': token.value,
+                        'X-Requested-With': 'XMLHttpRequest'
+                    }
+                }).catch(function() {});
+            });
+        })();
+        </script>
 
         <div class="avatar" title="{{ user.get_full_name|default:user.username }}">
             {{ user.username|slice:":2"|upper }}

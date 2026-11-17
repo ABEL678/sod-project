@@ -790,6 +790,21 @@ def notifications_read_all(request):
     return HttpResponseForbidden('POST only')
 
 
+@login_required
+def notification_mark_read(request, notification_id):
+    """Пометить одно уведомление прочитанным (AJAX POST)."""
+    if request.method == 'POST':
+        notif = get_object_or_404(
+            Notification,
+            pk=notification_id,
+            recipient=request.user,
+        )
+        notif.is_read = True
+        notif.save(update_fields=['is_read'])
+        return JsonResponse({'status': 'ok'})
+    return HttpResponseForbidden('POST only')
+
+
 class IssueBlockingUpdateView(LoginRequiredMixin, View):
     """Управление блокирующими связями замечания (POST add/remove).
 

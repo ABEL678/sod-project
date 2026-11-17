@@ -17,6 +17,7 @@ def notifications_badges(request):
         return {
             'unread_notifications_count': 0,
             'my_open_issues_count': 0,
+            'notifications': [],
         }
     unread = Notification.objects.filter(
         recipient=request.user, is_read=False,
@@ -28,7 +29,13 @@ def notifications_badges(request):
         status__in=ACTIVE_STATUSES,
         document__is_deleted=False,
     ).exclude(author_id=request.user.pk).count()
+    notifications = list(
+        Notification.objects.filter(recipient=request.user)
+        .select_related('actor')
+        .order_by('-created_at')[:10]
+    )
     return {
         'unread_notifications_count': unread,
         'my_open_issues_count': my_open,
+        'notifications': notifications,
     }

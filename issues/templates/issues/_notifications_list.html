@@ -14,7 +14,8 @@
 </div>
 {% for n in notifications %}
     <a class="notif-item {% if not n.is_read %}is-unread{% endif %}"
-       href="{{ n.url|default:'#' }}">
+       href="{{ n.url|default:'#' }}"
+       data-notif-id="{{ n.pk }}">
         <div class="d-flex gap-2 align-items-start">
             <i class="bi {% if n.verb == 'assigned' %}bi-person-check
                         {% elif n.verb == 'commented' %}bi-chat-dots
@@ -30,7 +31,7 @@
                     {% if n.actor %}· {{ n.actor.get_full_name|default:n.actor.username }}{% endif %}
                 </div>
             </div>
-            {% if not n.is_read %}<span class="badge rounded-pill text-bg-primary mt-1">new</span>{% endif %}
+            {% if not n.is_read %}<span class="badge rounded-pill text-bg-primary mt-1" data-notif-new-badge>Новое</span>{% endif %}
         </div>
     </a>
 {% empty %}

@@ -61,6 +61,7 @@
                     </div>
                 {% endif %}
 
+                {% if not project_folders %}
                 {% for section in section_nodes %}
                     <div class="section-node list-group-item"
                          data-section-node="{{ section.pk }}"
@@ -115,6 +116,7 @@
                         <div class="sidebar-empty">Разделов пока нет</div>
                     {% endif %}
                 {% endfor %}
+                {% endif %}
             </div>
 
 <div id="dndToast" class="dnd-toast d-none" role="status" aria-live="polite"></div>
@@ -221,7 +223,7 @@
                 {# вкладка «Задания» нужна исполнителям без права управления #}
                 {# участниками; «Участники»/«Корзина»/ИИ-вкладки — как прежде, #}
                 {# только для управляющих. #}
-                <div id="mainTabs" class="app-tabs-wrap">
+                <div id="mainTabs" class="app-tabs-wrap{% if active_tab == 'documents' %} app-tabs-wrap--no-grow{% endif %}">
                     <nav class="app-tabs" role="tablist" aria-label="Разделы проекта">
                         <a class="app-tab {% if active_tab == 'documents' %}active{% endif %}"
                            href="{% url 'storage:project_detail' project.pk %}{% if selected_view %}?view={{ selected_view.pk }}{% endif %}"
@@ -539,6 +541,15 @@
                                     <option value="">Все статусы</option>
                                     {% for value, label in task_status_choices %}
                                         <option value="{{ value }}" {% if task_status_filter == value %}selected{% endif %}>{{ label }}</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                            <div>
+                                <label class="form-label small text-muted mb-1" for="taskSectionFilter">Раздел</label>
+                                <select name="task_section" id="taskSectionFilter" class="form-select form-select-sm">
+                                    <option value="">Все разделы</option>
+                                    {% for s in section_choices %}
+                                        <option value="{{ s.pk }}" {% if task_section_filter|stringformat:"s" == s.pk|stringformat:"s" %}selected{% endif %}>{{ s.code }} — {{ s.name }}</option>
                                     {% endfor %}
                                 </select>
                             </div>

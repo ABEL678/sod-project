@@ -11,6 +11,24 @@
         </a>
     {% endif %}
 </div>
+<div class="d-flex flex-wrap gap-2 mb-3 mt-2" data-role="rfi-filters">
+    <form method="get" action="{% url 'storage:project_detail' project.pk %}" class="d-inline-flex align-items-end gap-2">
+        <input type="hidden" name="tab" value="rfi">
+        <div>
+            <label class="form-label small text-muted mb-1" for="rfiSectionFilter">Раздел</label>
+            <select name="rfi_section" id="rfiSectionFilter" class="form-select form-select-sm"
+                    onchange="this.form.submit()">
+                <option value="">Все разделы</option>
+                {% for s in section_choices %}
+                    <option value="{{ s.pk }}" {% if rfi_section_filter == s.pk|stringformat:"s" %}selected{% endif %}>{{ s.code }} — {{ s.name }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div>
+            <a href="?tab=rfi" class="btn btn-sm btn-outline-secondary" title="Сбросить">Сбросить</a>
+        </div>
+    </form>
+</div>
 <div class="ai-tabpane__scroll">
     {% if rfi_list %}
         <div class="table-responsive">

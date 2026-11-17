@@ -10,6 +10,7 @@ urlpatterns = [
     path('my-issues/', views.MyIssuesView.as_view(), name='my_issues'),
     path('notifications/', views.notifications_partial, name='notifications_partial'),
     path('notifications/read-all/', views.notifications_read_all, name='notifications_read_all'),
+    path('notifications/<int:notification_id>/read/', views.notification_mark_read, name='notification_mark_read'),
     path('documents/<int:document_id>/issues/create/', views.IssueCreateView.as_view(), name='issue_create'),
     path('issues/<int:issue_id>/status/', views.IssueUpdateStatusView.as_view(), name='issue_status'),
     path('issues/<int:issue_id>/answer/', views.IssueAnswerUpdateView.as_view(), name='issue_answer'),

@@ -844,10 +844,10 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
         # Этап 3 (спека 4.1): вкладка «Задания» доступна всем участникам
         # проекта — исполнитель видит входящие задания без права
         # управления участниками; остальные вкладки — как прежде.
-        allowed_tabs = ('tasks', 'rfi', 'issues')
+        allowed_tabs = ('tasks', 'rfi', 'issues', 'ai-search', 'ai-report', 'ai-kb')
         if can_manage_participants:
             allowed_tabs += (
-                'participants', 'trash', 'ai-search', 'ai-report', 'ai-kb',
+                'participants', 'trash',
             )
         if requested_tab in allowed_tabs:
             active_tab = requested_tab
@@ -1111,15 +1111,28 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
         # отображения (статус/приоритет/срок) и декор строк для бейджей.
         if active_tab == 'tasks':
             context.update(self._get_tasks_context(user, project, sections))
+            # Разделы для фильтра (все разделы проекта).
+            context['section_choices'] = Section.objects.filter(
+                project=project,
+            ).order_by('order').values('pk', 'code', 'name')
 
         if active_tab == 'rfi':
             from storage.domain.services import _rfi_can_create
 
             rfi_qs = list_rfis(project, user)
+            # Фильтр по разделу: если ?rfi_section задан, фильтруем по
+            # document_request__section_id (источник запроса).
+            rfi_section = self.request.GET.get('rfi_section') or ''
+            if rfi_section.isdigit() and len(rfi_section) == len(str(int(rfi_section))):
+                rfi_qs = rfi_qs.filter(
+                    Q(document_request__section_id=int(rfi_section))
+                    | Q(document_response__section_id=int(rfi_section)),
+                ).distinct()
             context['rfi_list'] = list(rfi_qs)
             context['rfi_summary'] = rfi_summary_for_gip(project)
             context['rfi_can_create'] = _rfi_can_create(user, project)
             context['today'] = timezone.localdate()
+            context['rfi_section_filter'] = rfi_section
             for rfi in context['rfi_list']:
                 rfi.status_badge = RFI_STATUS_BADGES.get(rfi.status, 'text-bg-secondary')
             context['rfi_open_count'] = rfi_qs.filter(status__in=_RFI_OPEN_STATUSES).count()
@@ -1183,6 +1196,12 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
                 and t.status not in final_statuses
             ]
 
+        # Фильтр по разделу (источник или цель).
+        task_section_filter = self.request.GET.get('task_section') or ''
+        if task_section_filter.isdigit() and len(task_section_filter) == len(str(int(task_section_filter))):
+            sid = int(task_section_filter)
+            tasks = [t for t in tasks if t.source_section_id == sid or t.target_section_id == sid]
+
         # Декор строк для шаблона: бейдж статуса, просрочка, доступность
         # кнопки «Выдать» (черновик + автор/ГИП/админ; сама проверка прав
         # выполняется в issue_task — здесь только подсказка UI).
@@ -1206,6 +1225,7 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
             'task_status_filter': status_filter,
             'task_priority_filter': priority_filter,
             'task_due_filter': due_filter,
+            'task_section_filter': task_section_filter,
             'task_status_choices': DesignTask.Status.choices,
             'task_priority_choices': DesignTask.Priority.choices,
             'can_issue_task': _can_issue_task(user, project),

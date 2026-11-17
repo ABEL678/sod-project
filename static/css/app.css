@@ -687,6 +687,8 @@ body.app-body {
 .ai-tabpane:empty { display: none; }
 
 /* Подсказка о загрузке при переключении вкладки (hx-indicator). */
+.app-tabs-wrap--no-grow { flex: 0 0 auto; height: auto; }
+
 .app-tabs-wrap.htmx-request {
     opacity: .55;
     transition: opacity .15s ease;
@@ -706,7 +708,6 @@ body.app-body {
     padding: 4px 10px;
     border-bottom: 1px solid var(--app-border);
     background: var(--c-text-inverse);
-    overflow: visible;
 }
 
 .toolbar-left {
