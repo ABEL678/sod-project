@@ -9,6 +9,13 @@
 элемент получает id и hx-swap-oob и заменяет контейнер целиком).
 {% endcomment %}
 <div {% if oob %}id="aiRagHistory" hx-swap-oob="true"{% endif %}>
+  <div class="history-head{% if can_delete and page_obj.object_list %} history-head--actions{% endif %}">
+    <div class="d-flex align-items-center justify-content-between mb-1">
+      <span class="fw-semibold small">
+        <i class="bi bi-clock-history me-1" aria-hidden="true"></i>История запросов
+      </span>
+      <span class="text-muted small">видна всем участникам проекта</span>
+    </div>
   <form class="row g-1 align-items-end small mb-1"
         hx-get="{% url 'ai_checks:rag_history' project.pk %}"
         hx-target="#aiRagHistory" hx-swap="innerHTML" hx-trigger="submit">
@@ -53,8 +60,8 @@
   </form>
 
   {% if page_obj.object_list %}
-    {% if can_delete %}
-    <div class="d-flex align-items-center gap-2 mb-1">
+    {% if can_delete and page_obj.object_list %}
+    <div class="d-flex align-items-center gap-2 mb-0">
       <button type="button" id="ragHistoryBulkDeleteBtn" class="btn btn-sm btn-outline-danger py-0" disabled
               hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
               hx-post="{% url 'ai_checks:rag_history_bulk_delete' project.pk %}"
@@ -71,6 +78,7 @@
       </button>
     </div>
     {% endif %}
+  </div>{# /.history-head #}
 
     <div class="table-responsive">
       <table class="table table-sm align-middle mb-0" id="ragHistoryTable">

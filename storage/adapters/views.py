@@ -844,10 +844,10 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
         # Этап 3 (спека 4.1): вкладка «Задания» доступна всем участникам
         # проекта — исполнитель видит входящие задания без права
         # управления участниками; остальные вкладки — как прежде.
-        allowed_tabs = ('tasks', 'rfi', 'issues', 'ai-search', 'ai-report', 'ai-kb')
+        allowed_tabs = ('tasks', 'rfi', 'issues')
         if can_manage_participants:
             allowed_tabs += (
-                'participants', 'trash',
+                'participants', 'trash', 'ai-search', 'ai-report', 'ai-kb',
             )
         if requested_tab in allowed_tabs:
             active_tab = requested_tab

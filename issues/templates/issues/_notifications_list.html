@@ -14,8 +14,9 @@
 </div>
 {% for n in notifications %}
     <a class="notif-item {% if not n.is_read %}is-unread{% endif %}"
-       href="{{ n.url|default:'#' }}"
-       data-notif-id="{{ n.pk }}">
+       href="{% if n.url %}{{ n.url }}{% else %}{% url 'issues:my_issues' %}{% endif %}"
+       data-notif-id="{{ n.pk }}"
+       data-mark-url="{% url 'issues:notification_mark_read' n.pk %}">
         <div class="d-flex gap-2 align-items-start">
             <i class="bi {% if n.verb == 'assigned' %}bi-person-check
                         {% elif n.verb == 'commented' %}bi-chat-dots

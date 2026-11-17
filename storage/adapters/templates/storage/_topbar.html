@@ -111,36 +111,11 @@
                 {% endif %}
             </button>
             <div class="dropdown-menu notif-menu"
-                 aria-label="Список уведомлений">
-                {% include 'issues/_notifications_list.html' %}
-            </div>
+                 hx-get="{% url 'issues:notifications_partial' %}"
+                 hx-trigger="show.bs.dropdown from:closest .dropdown"
+                 hx-swap="innerHTML"
+                 aria-label="Список уведомлений"><div class="notif-empty">Загрузка…</div></div>
         </div>
-        <script>
-        (function() {
-            document.addEventListener('click', function(e) {
-                var item = e.target.closest('.notif-item');
-                if (!item) return;
-                var href = item.getAttribute('href');
-                if (!href || href === '#') return;
-                // Извлекаем ID уведомления из data-notif-id или из URL
-                var notifId = item.dataset.notifId;
-                if (!notifId) {
-                    var m = href.match(/\/issues\/issues\/(\d+)/);
-                    if (m) notifId = m[1];
-                }
-                if (!notifId) return;
-                var token = document.querySelector('[name=csrfmiddlewaretoken]');
-                if (!token) return;
-                fetch('{% url "issues:notification_mark_read" 0 %}'.replace('0', notifId), {
-                    method: 'POST',
-                    headers: {
-                        'X-CSRFToken': token.value,
-                        'X-Requested-With': 'XMLHttpRequest'
-                    }
-                }).catch(function() {});
-            });
-        })();
-        </script>
 
         <div class="avatar" title="{{ user.get_full_name|default:user.username }}">
             {{ user.username|slice:":2"|upper }}

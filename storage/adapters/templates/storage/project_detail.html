@@ -223,7 +223,7 @@
                 {# вкладка «Задания» нужна исполнителям без права управления #}
                 {# участниками; «Участники»/«Корзина»/ИИ-вкладки — как прежде, #}
                 {# только для управляющих. #}
-                <div id="mainTabs" class="app-tabs-wrap{% if active_tab == 'documents' %} app-tabs-wrap--no-grow{% endif %}">
+                <div id="mainTabs" class="app-tabs-wrap">
                     <nav class="app-tabs" role="tablist" aria-label="Разделы проекта">
                         <a class="app-tab {% if active_tab == 'documents' %}active{% endif %}"
                            href="{% url 'storage:project_detail' project.pk %}{% if selected_view %}?view={{ selected_view.pk }}{% endif %}"
@@ -325,12 +325,10 @@
                     {# P0-1: единственная панель вкладки — колонка с собственной #}
                     {# прокруткой (.ai-tabpane), контент замещается, а не #}
                     {# вставляется между вкладкой и таблицей документов. #}
-                    {# На вкладке «Документы» панель вкладок не нужна — её контент #}
-                    {# рендерится отдельно ниже, поэтому пустой .ai-tabpane не выводим #}
-                    {# (убирает пустое пространство над списком документов). #}
-                    {% if active_tab != 'documents' %}
                     <div id="mainTabContent" class="ai-tabpane">
-                        {% if active_tab == 'participants' and can_manage_participants %}
+                        {% if active_tab == 'documents' %}
+                            {% include 'storage/_documents_panel.html' %}
+                        {% elif active_tab == 'participants' and can_manage_participants %}
                 <div class="toolbar" data-role="participants-toolbar">
                     <span class="fw-semibold">Участники проекта</span>
                     <span class="badge text-bg-light border">{{ participants|length }}</span>
@@ -408,6 +406,7 @@
                     {% endif %}
                     <span class="text-muted small">Удалённые элементы можно восстановить</span>
                 </div>
+                <div class="ai-tabpane__scroll">
                 <div class="trash-wrap">
                     <h6 class="trash-title">Документы</h6>
                     <div class="table-responsive">
@@ -481,20 +480,15 @@
                         </table>
                     </div>
                 </div>
+                </div>
                 {# UX-аудит P0-1/P0-2: панели ИИ-вкладок — взаимоисключающие #}
                 {# ветки той же цепочки: рендерится только активная вкладка. #}
                 {% elif active_tab == 'ai-search' and ai_checks_enabled %}
-                    <div class="ai-tabpane__scroll">
-                        {% include 'ai_checks/_rag.html' %}
-                    </div>
+                    {% include 'ai_checks/_rag.html' %}
                 {% elif active_tab == 'ai-report' and ai_report_allowed %}
-                    <div class="ai-tabpane__scroll">
-                        {% include 'ai_checks/_report.html' %}
-                    </div>
+                    {% include 'ai_checks/_report.html' %}
                 {% elif active_tab == 'ai-kb' and ai_knowledge_allowed %}
-                    <div class="ai-tabpane__scroll">
-                        {% include 'ai_checks/_kb.html' %}
-                    </div>
+                    {% include 'ai_checks/_kb.html' %}
                 {% elif active_tab == 'tasks' %}
                     {# Этап 3 (спека 4.1): список заданий между смежными разделами. #}
                     <div class="toolbar" data-role="tasks-toolbar">
@@ -663,16 +657,7 @@
                     {% include 'issues/_issues_panel.html' %}
                 {% endif %}
                     </div>{# /#mainTabContent #}
-                    {% endif %}
                 </div>{# /#mainTabs #}
-            {% endif %}
-
-            {# Панель документов — всегда видна (для управляющих внутри вкладки #}
-            {# «Документы», для остальных — единственный контент). Многострочные #}
-            {# шаблонные комментарии Django не поддерживает — они рендерятся #}
-            {# на странице как текст, поэтому комментарий разбит на строки. #}
-            {% if active_tab == 'documents' %}
-                {% include 'storage/_documents_panel.html' %}
             {% endif %}
         </main>
     </div>

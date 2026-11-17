@@ -68,20 +68,17 @@
   {% endfor %}
 </div>
 
+<div class="ai-tabpane__scroll">
 <div id="aiRagResults" class="px-2 pt-2"></div>
 
 <div class="px-2 pt-3">
-  <div class="d-flex align-items-center justify-content-between mb-1">
-    <span class="fw-semibold small">
-      <i class="bi bi-clock-history me-1" aria-hidden="true"></i>История запросов
-    </span>
-    <span class="text-muted small">видна всем участникам проекта</span>
-  </div>
   {# Треб. 9/10: ленивая загрузка истории; OOB-обновление после поиска. #}
+  {# Заголовок «История запросов» — в sticky-контейнере .history-head внутри фрагмента. #}
   <div id="aiRagHistory"
        hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
        hx-get="{% url 'ai_checks:rag_history' project.pk %}"
        hx-trigger="load" hx-swap="innerHTML">
     <div class="text-muted small">Загрузка…</div>
   </div>
+</div>
 </div>

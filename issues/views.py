@@ -801,7 +801,10 @@ def notification_mark_read(request, notification_id):
         )
         notif.is_read = True
         notif.save(update_fields=['is_read'])
-        return JsonResponse({'status': 'ok'})
+        unread = Notification.objects.filter(
+            recipient=request.user, is_read=False,
+        ).count()
+        return JsonResponse({'status': 'ok', 'unread_count': unread})
     return HttpResponseForbidden('POST only')
 
 

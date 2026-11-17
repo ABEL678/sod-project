@@ -683,12 +683,6 @@ body.app-body {
     padding: 0 10px 12px;   /* сетка тулбара: 10 px */
 }
 
-/* Пустые контейнеры не занимают места и не дают отступ. */
-.ai-tabpane:empty { display: none; }
-
-/* Подсказка о загрузке при переключении вкладки (hx-indicator). */
-.app-tabs-wrap--no-grow { flex: 0 0 auto; height: auto; }
-
 .app-tabs-wrap.htmx-request {
     opacity: .55;
     transition: opacity .15s ease;
@@ -1945,6 +1939,40 @@ body.modal-open {
     flex: 1 1 auto;
     min-height: 0;
 }
+
+/* L1.3: корень панели замечаний — плейсхолдер панели вкладки:
+   сводка и фильтры снаружи скролла, таблица внутри .ai-tabpane__scroll. */
+#issuesPanel {
+    display: flex;
+    flex-direction: column;
+    flex: 1 1 auto;
+    min-height: 0;
+}
+
+/* A/симптом-2: sticky-шапки таблиц внутри скролла вкладок.
+   .table-responsive нейтрализуем, чтобы ближним скролл-предком thead был
+   .ai-tabpane__scroll (горизонтальный скролл широкой таблицы берёт на себя
+   он же: overflow-y: auto → overflow-x вычисляется в auto). Непрозрачный фон
+   шапок обеспечивает Bootstrap 5.3.8 (--bs-table-bg: var(--bs-body-bg));
+   Участники (.participant-table) и Документы (.doc-table) — вне этого
+   селектора, их собственные sticky-правила сохраняются. */
+.ai-tabpane__scroll .table-responsive { overflow: visible; }
+.ai-tabpane__scroll thead th { position: sticky; top: 0; z-index: 3; }
+
+/* Отчёты: полоса «История отчётов» — sticky НАД шапкой таблицы (симптом-3);
+   полоса в разметке всегда, top шапки безусловный. */
+.history-band { position: sticky; top: 0; z-index: 4; background: var(--bs-body-bg); }
+#aiReportHistory thead th { top: 17px; }
+
+/* Поиск (симптом-4): заголовок «История запросов», фильтровая форма и панель
+   «Удалить выбранные» — один sticky-контейнер .history-head (z 4) НАД шапкой
+   таблицы; top шапки = высота контейнера (52/79 px: 16.49+4+31[+4+23],
+   округлено вверх). Панель действий — только при праве удаления и наличии
+   строк → модификатор контейнера. Узкое окно (перенос строк формы) —
+   вне этого правила, вернуться с media query по замеру. */
+.history-head { position: sticky; top: 0; z-index: 4; background: var(--bs-body-bg); }
+.history-head ~ .table-responsive thead th { top: 52px; }
+.history-head--actions ~ .table-responsive thead th { top: 79px; }
 
 .toolbar {
     flex: 0 0 auto;

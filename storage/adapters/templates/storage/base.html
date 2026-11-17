@@ -29,7 +29,7 @@ document_detail — у него своя разметка и свой набор
     <link rel="stylesheet" href="{% static 'fonts/fonts.css' %}">
     <link rel="stylesheet" href="{% static 'css/redesign.css' %}?v=20261112-t10">
     <link rel="stylesheet" href="{% static 'fonts/bootstrap-icons/bootstrap-icons.min.css' %}">
-    <link rel="stylesheet" href="{% static 'css/app.css' %}?v=20261111-a6">
+    <link rel="stylesheet" href="{% static 'css/app.css' %}?v=20261117-l4">
     {% block extra_css %}{% endblock %}
 </head>
 <body class="{% block body_class %}bg-light{% endblock %}">
@@ -48,6 +48,7 @@ document_detail — у него своя разметка и свой набор
 <script src="{% static 'js/palette.js' %}?v=20261107-s6" defer></script>
 {% if user.is_authenticated %}
     <script src="{% static 'js/feedback.js' %}?v=20261104-2b" defer></script>
+    <script src="{% static 'js/notifications.js' %}?v=20261117-n1" defer></script>
 {% endif %}
 <script>
     /* Волна 3: PWA — регистрация сервис-воркера из корня (scope '/') */
