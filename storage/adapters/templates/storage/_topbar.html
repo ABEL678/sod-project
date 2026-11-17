@@ -28,18 +28,6 @@
     <div class="spacer"></div>
 
     {% if user.is_authenticated %}
-    {% if topbar_project and request.resolver_match.url_name == 'project_detail' and active_tab != 'documents' %}
-        <button type="button"
-                class="topbar-icon-btn topbar-mobile-sidebar"
-                data-role="sidebar-mobile-toggle"
-                aria-controls="projectSidebar"
-                aria-expanded="false"
-                title="Разделы проекта"
-                aria-label="Открыть разделы проекта">
-            <i class="bi bi-list" aria-hidden="true"></i>
-        </button>
-    {% endif %}
-
     <div class="dropdown topbar-mobile-menu">
         <button type="button"
                 class="topbar-icon-btn"

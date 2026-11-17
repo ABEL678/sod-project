@@ -197,7 +197,8 @@
                             </div>
                         </td>
                         <td>
-                            <span class="badge {{ issue.status_badge }}">
+                            <span class="badge"
+                                  style="background: {{ issue.status_color }}; color: #fff;">
                                 {{ issue.get_status_display }}
                             </span>
                         </td>

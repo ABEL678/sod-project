@@ -62,7 +62,11 @@ from storage.domain.models import (
     TaskTemplate,
     UserProfile,
 )
-from storage.domain.design_colors import EXCEL_LINK, EXCEL_OVERDUE_TEXT
+from storage.domain.design_colors import (
+    EXCEL_LINK,
+    EXCEL_OVERDUE_TEXT,
+    ISSUE_STATUS_HEX,
+)
 from storage.domain.services import (
     _NOT_TERMINAL_TASK_STATUSES,
     ALLOWED_UPLOAD_EXTENSIONS,
@@ -1268,6 +1272,9 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
         issues_data = []
         for issue in page_obj:
             issue.status_badge = STATUS_BADGES.get(issue.status, 'bg-secondary')
+            # Тот же цвет, что у пина на PDF (statusColor в pdf_viewer.js):
+            # единый источник — tokens.json → design_colors.ISSUE_STATUS_HEX.
+            issue.status_color = ISSUE_STATUS_HEX.get(issue.status, '#5D6770')
             issue.is_overdue = bool(
                 issue.due_date and issue.due_date < today and issue.status in ACTIVE_ISSUE_STATUSES
             )

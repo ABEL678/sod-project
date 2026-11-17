@@ -2,6 +2,7 @@ import django_tables2 as tables
 from django.utils.html import format_html
 
 from issues.models import Issue
+from storage.domain.design_colors import DEFAULT_STATUS, ISSUE_STATUS_HEX
 
 
 STATUS_BADGES = {
@@ -79,8 +80,9 @@ class IssueTable(tables.Table):
         }
 
     def render_status(self, value, record):
+        color = ISSUE_STATUS_HEX.get(value) or ISSUE_STATUS_HEX[DEFAULT_STATUS]
         return format_html(
-            '<span class="badge {}">{}</span>',
-            STATUS_BADGES.get(value, 'bg-secondary'),
+            '<span class="badge" style="background: {}; color: #fff;">{}</span>',
+            color,
             record.get_status_display(),
         )
