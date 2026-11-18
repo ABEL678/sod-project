@@ -15,5 +15,5 @@
 - CSS: красный пульс (issue-pin-pulse), is-active согласован между
   app.css и viewer.css, prefers-reduced-motion уважается;
 - bump'ы кэша: pdf_viewer p3, sync s2, viewer c1, app c2.
-Коммит: 6bc817b.
+Коммит: ddd9711.
 База: 77fe00b.
