@@ -1,0 +1,473 @@
+diff --git a/issues/templates/issues/_card.html b/issues/templates/issues/_card.html
+index 3a8d6ca..a0a47dc 100644
+--- a/issues/templates/issues/_card.html
++++ b/issues/templates/issues/_card.html
+@@ -1,3 +1,4 @@
++{% load issue_extras %}
+ <div class="issue-card-detail" data-issue-id="{{ issue.pk }}">
+     <div class="d-flex justify-content-between align-items-center mb-2">
+         <div class="fw-semibold small">ИД: {{ issue.pk }}</div>
+@@ -54,7 +55,12 @@
+                     </span>
+                 </dt>
+                 <dd class="col-sm-7">
+-                    {% if issue.due_date %}{{ issue.due_date|date:"d.m.Y" }}{% else %}—{% endif %}
++                    {% if issue.due_date %}
++                        <span class="cde-tnum">{{ issue.due_date|date:"d.m.Y" }}</span>
++                        {% if issue|deadline_label %}
++                            <span class="cde-badge {{ issue|deadline_class }}">{{ issue|deadline_label }}</span>
++                        {% endif %}
++                    {% else %}—{% endif %}
+                 </dd>
+ 
+                 <dt class="col-sm-5">Ответ</dt>
+@@ -112,7 +118,7 @@
+             <div class="d-flex align-items-center mb-2">
+                 <strong class="me-2">Статус:</strong>
+                 {% if allowed_status_options %}
+-                    <select class="form-select form-select-sm" style="width: auto;" onchange="changeStatus({{ issue.pk }}, this.value)">
++                    <select class="form-select form-select-sm" style="width: auto;" onchange="changeStatus({{ issue.pk }}, this.value, this.selectedOptions[0] ? this.selectedOptions[0].textContent.trim() : '')">
+                         {% if issue.status not in allowed_statuses %}
+                             <option value="{{ issue.status }}" selected disabled>{{ issue.get_status_display }}</option>
+                         {% endif %}
+diff --git a/issues/templatetags/__init__.py b/issues/templatetags/__init__.py
+new file mode 100644
+index 0000000..e69de29
+diff --git a/issues/templatetags/issue_extras.py b/issues/templatetags/issue_extras.py
+new file mode 100644
+index 0000000..bb53f13
+--- /dev/null
++++ b/issues/templatetags/issue_extras.py
+@@ -0,0 +1,60 @@
++"""Живой дедлайн-бейдж для карточки замечания.
++
++Возвращает человеческий ярлык («осталось 5 дней», «просрочено на 2 дня»)
++и CSS-класс из дизайн-токенов (cde-deadline / --soon / --overdue).
++Использование:
++    {% load issue_extras %}
++    {{ issue|deadline_label }}
++    {{ issue|deadline_class }}
++"""
++from datetime import date
++
++from django import template
++
++register = template.Library()
++
++# Живой срок показываем только по активным замечаниям:
++# у закрытых и аннулированных дедлайн уже не давит.
++ACTIVE_STATUSES = {"NEW", "IN_PROGRESS", "DISCUSSION", "REJECTED"}
++
++
++def _days_left(issue):
++    due = getattr(issue, "due_date", None)
++    if not due or getattr(issue, "status", "") not in ACTIVE_STATUSES:
++        return None
++    return (due - date.today()).days
++
++
++def _plural_days(number):
++    number = abs(number)
++    if number % 10 == 1 and number % 100 != 11:
++        return "день"
++    if 2 <= number % 10 <= 4 and not 12 <= number % 100 <= 14:
++        return "дня"
++    return "дней"
++
++
++@register.filter
++def deadline_label(issue):
++    """Текст живого бейджа срока ответа."""
++    days = _days_left(issue)
++    if days is None:
++        return ""
++    if days > 0:
++        return "осталось {} {}".format(days, _plural_days(days))
++    if days == 0:
++        return "срок сегодня"
++    return "просрочено на {} {}".format(abs(days), _plural_days(days))
++
++
++@register.filter
++def deadline_class(issue):
++    """CSS-классы живого бейджа (см. .cde-deadline в tokens.css)."""
++    days = _days_left(issue)
++    if days is None:
++        return ""
++    if days < 0:
++        return "cde-deadline cde-deadline--overdue"
++    if days <= 3:
++        return "cde-deadline cde-deadline--soon"
++    return "cde-deadline"
+diff --git a/static/css/redesign.css b/static/css/redesign.css
+index 1e8ae8b..1aa6182 100644
+--- a/static/css/redesign.css
++++ b/static/css/redesign.css
+@@ -114,3 +114,9 @@ body { background: #F6F6F4; font-family: 'Golos Text', 'Inter', system-ui, sans-
+ .clickable-row:hover {
+     background: #F0FDF4;
+ }
++
++/* Sprint 1 (аудит 2.0): кликабельные строки списка проектов */
++tr[data-href],
++.project-row {
++    cursor: pointer;
++}
+diff --git a/static/css/viewer.css b/static/css/viewer.css
+index d095d19..de5598e 100644
+--- a/static/css/viewer.css
++++ b/static/css/viewer.css
+@@ -1,18 +1,25 @@
+ :root {
+     --status-new: var(--s-wait-solid);
+     --status-new-bg: var(--s-wait-subtle);
++    --status-new-on: var(--s-wait-on);
+     --status-in_progress: var(--s-progress-solid);
+     --status-in_progress-bg: var(--s-progress-subtle);
++    --status-in_progress-on: var(--s-progress-on);
+     --status-discussion: var(--s-review-solid);
+     --status-discussion-bg: var(--s-review-subtle);
++    --status-discussion-on: var(--s-review-on);
+     --status-rejected: var(--s-attention-solid);
+     --status-rejected-bg: var(--s-attention-subtle);
++    --status-rejected-on: var(--s-attention-on);
+     --status-done: var(--s-done-solid);
+     --status-done-bg: var(--s-done-subtle);
++    --status-done-on: var(--s-done-on);
+     --status-closed: var(--s-closed-solid);
+     --status-closed-bg: var(--s-closed-subtle);
++    --status-closed-on: var(--s-closed-on);
+     --status-cancelled: var(--s-canceled-solid);
+     --status-cancelled-bg: var(--s-canceled-subtle);
++    --status-cancelled-on: var(--s-canceled-on);
+ }
+ 
+ body {
+diff --git a/static/js/pdf_viewer.js b/static/js/pdf_viewer.js
+index 802a565..f6c80a9 100644
+--- a/static/js/pdf_viewer.js
++++ b/static/js/pdf_viewer.js
+@@ -1047,11 +1047,11 @@
+         renderPages();
+     };
+ 
+-    window.fitToPage = function () {
++    window.fitWidth = function () {
+         if (!pdfDocument) {
+             return;
+         }
+-        pdfDocument.getPage(1).then(function (page) {
++        pdfDocument.getPage(currentPage).then(function (page) {
+             const base = page.getViewport({
+                 scale: 1,
+                 rotation: currentRotation,
+@@ -1061,6 +1061,24 @@
+         });
+     };
+ 
++    window.fitPage = function () {
++        if (!pdfDocument) {
++            return;
++        }
++        pdfDocument.getPage(currentPage).then(function (page) {
++            const base = page.getViewport({
++                scale: 1,
++                rotation: currentRotation,
++            });
++            const availableW = Math.max(200, viewer.clientWidth - 24);
++            const availableH = Math.max(200, viewer.clientHeight - 24);
++            window.setZoom(Math.min(availableW / base.width, availableH / base.height));
++        });
++    };
++
++    // Обратная совместимость: старое имя работало как «по ширине».
++    window.fitToPage = window.fitWidth;
++
+     window.togglePan = function () {
+         panMode = !panMode;
+         textMode = false;
+@@ -1096,6 +1114,17 @@
+         return currentPage;
+     };
+ 
++    // Смена статуса без перезагрузки: обновляем внутренний список и маркеры на листе.
++    document.addEventListener('issue:status-changed', function (event) {
++        const target = issues.find(function (item) {
++            return item.id === Number(event.detail.id);
++        });
++        if (target) {
++            target.status = event.detail.status;
++        }
++        drawMarks(currentPage);
++    });
++
+     initToolbar();
+     initPan();
+     initContextMenu();
+diff --git a/static/js/sync.js b/static/js/sync.js
+index 6c7857a..126896a 100644
+--- a/static/js/sync.js
++++ b/static/js/sync.js
+@@ -89,22 +89,98 @@ window.selectIssueFromPdf = function (issueId) {
+     window.centerMarkup(issueId);
+ };
+ 
+-window.changeStatus = function (issueId, newStatus) {
+-    const csrfInput = document.querySelector(
+-        'input[name="csrfmiddlewaretoken"]'
+-    );
+-    const token = csrfInput ? csrfInput.value : '';
++function csrfToken() {
++    const csrfInput = document.querySelector('input[name="csrfmiddlewaretoken"]');
++    return csrfInput ? csrfInput.value : '';
++}
++
++function setStatusVars(element, status) {
++    const key = String(status).toLowerCase();
++    element.style.setProperty('--sfg', 'var(--status-' + key + '-on)');
++    element.style.setProperty('--sbg', 'var(--status-' + key + '-bg)');
++}
++
++function setMarkVars(element, status) {
++    const key = String(status).toLowerCase();
++    element.style.setProperty('--mk', 'var(--status-' + key + ')');
++    element.style.setProperty('--mkb', 'var(--status-' + key + '-bg)');
++    element.style.setProperty('--mk-text', 'var(--status-' + key + '-on)');
++}
++
++function refreshIssueAfterStatusChange(issueId, newStatus, label) {
++    // 1. Строка в списке: датасет, бейджи, маркер-шильдик.
++    const row = document.getElementById('issue-row-' + issueId);
++    if (row) {
++        row.dataset.status = newStatus;
++        if (label) {
++            row.dataset.statusLabel = label;
++        }
++        row.querySelectorAll('.badge').forEach(function (badge) {
++            if (label) {
++                badge.textContent = label;
++            }
++            setStatusVars(badge, newStatus);
++        });
++        const markBadge = row.querySelector('.mark-badge');
++        if (markBadge) {
++            setMarkVars(markBadge, newStatus);
++        }
++    }
++
++    // 2. Шапка карточки (если открыта).
++    const headBadge = document.getElementById('dBadge');
++    if (headBadge && document.getElementById('detail').style.display !== 'none') {
++        if (label) {
++            headBadge.textContent = label;
++        }
++        setStatusVars(headBadge, newStatus);
++    }
++
++    // 3. Счётчики табов.
++    if (typeof window.updateIssueCounters === 'function') {
++        window.updateIssueCounters();
++    }
++
++    // 4. Если активен фильтр статуса — скрыть строку, выпавшую из него.
++    const activeTab = document.querySelector('#statusTabs .status-tab.active');
++    if (
++        row
++        && activeTab
++        && activeTab.dataset.filter !== 'all'
++        && typeof window.statusGroup === 'function'
++        && window.statusGroup(newStatus) !== activeTab.dataset.filter
++    ) {
++        row.style.display = 'none';
++    }
++
++    // 5. Перерисовать маркеры на листе PDF (слушатель внутри pdf_viewer.js).
++    document.dispatchEvent(new CustomEvent('issue:status-changed', {
++        detail: {id: issueId, status: newStatus},
++    }));
++
++    // 6. Обновить карточку: у новой статуса другая матрица допустимых переходов.
++    const detail = document.getElementById('detail');
++    if (
++        detail
++        && detail.style.display !== 'none'
++        && typeof window.openIssueCard === 'function'
++    ) {
++        window.openIssueCard(issueId);
++    }
++}
++
++window.changeStatus = function (issueId, newStatus, label) {
+     fetch('/issues/' + issueId + '/status/', {
+         method: 'POST',
+         headers: {
+-            'X-CSRFToken': token,
++            'X-CSRFToken': csrfToken(),
+             'Content-Type': 'application/json',
+         },
+         body: JSON.stringify({status: newStatus}),
+         credentials: 'same-origin',
+     }).then(function (response) {
+         if (response.ok) {
+-            window.location.reload();
++            refreshIssueAfterStatusChange(issueId, newStatus, label);
+             return;
+         }
+         return response.json().then(function (data) {
+@@ -115,6 +191,39 @@ window.changeStatus = function (issueId, newStatus) {
+     });
+ };
+ 
++// Комментарий без перезагрузки: перехватываем сабмит и обновляем карточку.
++document.addEventListener('submit', function (event) {
++    const form = event.target;
++    if (!form.matches || !form.matches('form[action*="/comment/"]')) {
++        return;
++    }
++    if (!document.getElementById('detail')) {
++        return;
++    }
++    event.preventDefault();
++    const match = form.action.match(/issues\/(\d+)\/comment\//);
++    const issueId = match ? Number(match[1]) : null;
++    const formData = new FormData(form);
++    fetch(form.action, {
++        method: 'POST',
++        body: formData,
++        credentials: 'same-origin',
++        headers: {
++            'X-Requested-With': 'XMLHttpRequest',
++            'X-CSRFToken': formData.get('csrfmiddlewaretoken') || csrfToken(),
++        },
++    }).then(function (response) {
++        if (!response.ok) {
++            throw new Error('Не удалось отправить комментарий');
++        }
++        if (issueId && typeof window.openIssueCard === 'function') {
++            window.openIssueCard(issueId);
++        }
++    }).catch(function (error) {
++        window.alert(error.message);
++    });
++});
++
+ function initTooltips(root) {
+     if (!window.bootstrap || !window.bootstrap.Tooltip) {
+         return;
+diff --git a/storage/adapters/templates/storage/document_detail.html b/storage/adapters/templates/storage/document_detail.html
+index 7f4119a..9f98765 100644
+--- a/storage/adapters/templates/storage/document_detail.html
++++ b/storage/adapters/templates/storage/document_detail.html
+@@ -3,8 +3,10 @@
+ <html lang="ru">
+ <head>
+ <meta charset="UTF-8">
++<meta name="viewport" content="width=device-width, initial-scale=1">
+ <title>{{ document.code }} — {{ document.name }}</title>
+ <link href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
++<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+ <link rel="stylesheet" href="{% static 'css/bootstrap.min.css' %}">
+ <link rel="stylesheet" href="{% static 'design-tokens/tokens.css' %}?v=20261031-viewer">
+ <link rel="stylesheet" href="{% static 'css/redesign.css' %}">
+@@ -108,6 +110,14 @@
+     <button class="tbtn" onclick="zoomIn()" title="Увеличить" type="button">+</button>
+   </div>
+   <span class="divider"></span>
++  <div class="group">
++    <button class="tbtn" onclick="fitWidth()" title="По ширине" type="button" aria-label="По ширине">
++      <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M1.5 8h13M4.5 5 1.5 8l3 3M11.5 5l3 3-3 3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
++    </button>
++    <button class="tbtn" onclick="fitPage()" title="Вся страница" type="button" aria-label="Вся страница">
++      <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M2 6V2.5h4.5M14 6V2.5H9.5M2 10v3.5h4.5M14 10v3.5H9.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
++    </button>
++  </div>
+   <div class="group">
+     <button class="tbtn" onclick="rotatePage()" title="Повернуть" type="button">⟲</button>
+     <button class="tbtn" onclick="togglePan()" title="Рука" type="button">✋</button>
+@@ -169,7 +179,7 @@
+              data-status-label="{{ issue.get_status_display }}"
+              onclick="selectIssue(null, {{ issue.pk }})">
+           <span class="mark-badge"
+-                style="--mk: var(--status-{{ issue.status|lower }}); --mkb: var(--status-{{ issue.status|lower }}-bg); --mk-text: var(--status-{{ issue.status|lower }});">
++                style="--mk: var(--status-{{ issue.status|lower }}); --mkb: var(--status-{{ issue.status|lower }}-bg); --mk-text: var(--status-{{ issue.status|lower }}-on);">
+             {{ issue.pk|stringformat:"02d" }}
+           </span>
+           <div class="card-body">
+@@ -179,7 +189,7 @@
+               <span>·</span>
+               <span>{{ issue.created_at|date:"d.m.Y" }}</span>
+               <span class="badge"
+-                    style="margin-left:auto; --sfg: var(--status-{{ issue.status|lower }}); --sbg: var(--status-{{ issue.status|lower }}-bg);">
++                    style="margin-left:auto; --sfg: var(--status-{{ issue.status|lower }}-on); --sbg: var(--status-{{ issue.status|lower }}-bg);">
+                 {{ issue.get_status_display }}
+               </span>
+             </div>
+@@ -374,7 +384,7 @@
+     const badge = document.getElementById('dBadge');
+     number.textContent = '№ ' + String(id).padStart(2, '0');
+     badge.textContent = card.dataset.statusLabel || '';
+-    badge.style.setProperty('--sfg', 'var(--status-' + card.dataset.status.toLowerCase() + ')');
++    badge.style.setProperty('--sfg', 'var(--status-' + card.dataset.status.toLowerCase() + '-on)');
+     badge.style.setProperty('--sbg', 'var(--status-' + card.dataset.status.toLowerCase() + '-bg)');
+ 
+     fetch(url, {credentials: 'same-origin'})
+diff --git a/storage/adapters/templates/storage/project_list.html b/storage/adapters/templates/storage/project_list.html
+index fa93740..79e0302 100644
+--- a/storage/adapters/templates/storage/project_list.html
++++ b/storage/adapters/templates/storage/project_list.html
+@@ -6,6 +6,7 @@
+     <meta name="viewport" content="width=device-width, initial-scale=1">
+     <title>Проекты — Stream-CAD</title>
+     <link rel="stylesheet" href="{% static 'css/bootstrap.min.css' %}">
++    <link rel="stylesheet" href="{% static 'design-tokens/tokens.css' %}?v=20261101">
+     <link rel="stylesheet" href="{% static 'css/redesign.css' %}">
+     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+     <link rel="stylesheet" href="{% static 'css/app.css' %}">
+@@ -39,27 +40,23 @@
+                         <th>Название</th>
+                         <th>Заказчик</th>
+                         <th>Статус</th>
+-                        <th></th>
+                     </tr>
+                 </thead>
+                 <tbody>
+                 {% for project in projects %}
+-                    <tr>
+-                        <td class="fw-semibold">{{ project.code }}</td>
++                    <tr data-href="{% url 'storage:project_detail' project.pk %}" class="project-row" title="Открыть проект {{ project.name }}">
++                        <td class="fw-semibold"><span class="cde-chip">{{ project.code }}</span></td>
+                         <td><a href="{% url 'storage:project_detail' project.pk %}">{{ project.name }}</a></td>
+                         <td>{{ project.customer|default:"—" }}</td>
+                         <td>
+-                            <span class="badge {% if project.status == 'active' %}bg-success{% else %}bg-secondary{% endif %}">
++                            <span class="cde-badge {% if project.status == 'active' %}cde-badge--done{% else %}cde-badge--closed{% endif %}">
+                                 {{ project.get_status_display }}
+                             </span>
+                         </td>
+-                        <td class="text-end">
+-                            <a class="btn btn-sm btn-outline-primary" href="{% url 'storage:project_detail' project.pk %}">Открыть</a>
+-                        </td>
+                     </tr>
+                 {% empty %}
+                     <tr>
+-                        <td colspan="5" class="text-center text-muted py-4">Проектов пока нет</td>
++                        <td colspan="4" class="text-center text-muted py-4">Проектов пока нет</td>
+                     </tr>
+                 {% endfor %}
+                 </tbody>
+@@ -126,5 +123,15 @@
+     </div>
+     <script src="{% static 'js/vendor/bootstrap.bundle.min.js' %}"></script>
+ {% endif %}
++<script>
++    document.querySelectorAll('tr[data-href]').forEach(function (row) {
++        row.addEventListener('click', function (event) {
++            if (event.target.closest('a, button, form, input, select')) {
++                return;
++            }
++            window.location.href = row.dataset.href;
++        });
++    });
++</script>
+ </body>
+ </html>
