@@ -14,7 +14,7 @@
 | `storage/adapters/views.py` | `TaskDashboardView` (сводка + «Требуют внимания» + чипы 9 статусов, D3) и `TaskDashboardExportView` (xlsx по образцу реестра замечаний: жирная шапка, hyperlink карточки, красная просрочка, `reestr_zadanij_<code>.xlsx`); гейт `can_view_all_tasks` (403) + `get_accessible_projects` (404); в контекст вкладки добавлен `can_view_all_tasks` (additive) |
 | `storage/adapters/urls.py` | `projects/<int:project_id>/tasks/dashboard/` и `.../dashboard/export/` — объявлены до `tasks/<int:task_id>/` |
 | `storage/adapters/templates/storage/task_dashboard.html` | Новый: 5 карточек сводки (просрочка красная при >0), чипы статусов с переходами `?tab=tasks&status=X`, таблица внимания с колонкой «Причина» (D1) и пустым состоянием; только Bootstrap/redesign.css, без JS |
-| `storage/adapters/templates/storage/project_detail.html` | Кнопка «Дашборд» в тулбаре вкладки «Задания» (только для ГИП/админ) |
+| `storage/adapters/templates/storage/project_detail.html` | Кнопка «Сводка» в тулбаре вкладки «Задания» (только для ГИП/админ); при применении патча подпись была «Дашборд», переименована в `f0514da` |
 | `storage/tests/test_design_tasks_dashboard.py` | Новый: 24 теста — матрица прав, сводка (граница due==today, терминальные вне overdue), внимание (приоритет причины, без дублей, порядок групп), экспорт (заголовки, только открытые, hyperlink, красный шрифт, пустой проект), кнопка-вход, `assertNumQueries` (сервис 1+3, страница 12) |
 | `docs/PROGRESS.md` | Запись Этапа 6 (Шаг 6 плана) |
 
@@ -28,7 +28,7 @@ Celery/beat Этапа 5 не затронуты. Отклонение от бу
 1. `manage.py check` — 0 проблем (в рабочей копии и на чистом клоне).
 2. `manage.py makemigrations --check` — ноль миграций.
 3. `python manage.py test storage.tests.test_design_tasks_dashboard --noinput` — **24/24 OK** (в рабочей копии и на чистом клоне после `git apply`).
-4. Смоук (чек-лист п. 3): `create_project_from_template('residential')` → разделы АР/КР, задания IN_PROGRESS (просрочено)/ON_HOLD/REVIEW → карточки `total=3, in_progress=1, awaiting_review=1, overdue=1, on_hold=1`, таблица внимания `overdue → review → on_hold`, экспорт открывается openpyxl (шапка + 3 строки, `SMK6` в имени), исполнитель: страница 403, кнопки «Дашборд» на вкладке нет.
+4. Смоук (чек-лист п. 3): `create_project_from_template('residential')` → разделы АР/КР, задания IN_PROGRESS (просрочено)/ON_HOLD/REVIEW → карточки `total=3, in_progress=1, awaiting_review=1, overdue=1, on_hold=1`, таблица внимания `overdue → review → on_hold`, экспорт открывается openpyxl (шапка + 3 строки, `SMK6` в имени), исполнитель: страница 403, кнопки «Сводка» на вкладке нет.
 5. RuntimeWarning в тестах Этапа 6 — нет.
 
 ## Важно: 9 предсуществующих падений на 7fd3f92 (НЕ от Этапа 6)
