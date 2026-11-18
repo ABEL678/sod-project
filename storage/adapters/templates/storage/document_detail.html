@@ -13,8 +13,8 @@
 <link rel="stylesheet" href="{% static 'css/bootstrap.min.css' %}">
 <link rel="stylesheet" href="{% static 'design-tokens/tokens.css' %}?v=20261111-a6">
 <link rel="stylesheet" href="{% static 'css/redesign.css' %}?v=20261112-t10">
-<link rel="stylesheet" href="{% static 'css/viewer.css' %}?v=20261111-a6">
-<link rel="stylesheet" href="{% static 'css/app.css' %}?v=20261111-a6">
+<link rel="stylesheet" href="{% static 'css/viewer.css' %}?v=20261118-c1">
+<link rel="stylesheet" href="{% static 'css/app.css' %}?v=20261118-c2">
 </head>
 <body>
 
@@ -419,7 +419,7 @@
              data-page="{{ issue.page_number|default:'' }}"
              data-status-label="{{ issue.get_status_display }}"
              onclick="selectIssue(null, {{ issue.pk }})">
-          <a id="issue-{{ issue.pk }}" class="anchor" aria-hidden="true"></a>
+          <a class="anchor" aria-hidden="true"></a>
           <span class="mark-badge"
                 style="--mk: var(--status-{{ issue.status|lower }}); --mkb: var(--status-{{ issue.status|lower }}-bg); --mk-text: var(--status-{{ issue.status|lower }}-on);">
             {{ issue.pk|stringformat:"02d" }}
@@ -576,9 +576,9 @@
 <script src="{% static 'js/vendor/bootstrap.bundle.min.js' %}"></script>
 <script src="{% static 'js/pdfjs/pdf.min.js' %}"></script>
 <script src="{% static 'js/design-tokens.js' %}?v=20261109-h6"></script>
-<script src="{% static 'js/sync.js' %}?v=20261109-h6"></script>
+<script src="{% static 'js/sync.js' %}?v=20261118-s2"></script>
 <script src="{% static 'js/feedback.js' %}?v=20261104-2b" defer></script>
-<script src="{% static 'js/pdf_viewer.js' %}?v=20261112-t8"></script>
+<script src="{% static 'js/pdf_viewer.js' %}?v=20261118-p3"></script>
 <script src="{% static 'js/splitter.js' %}?v=20261109-h6"></script>
 <script src="{% static 'js/palette.js' %}?v=20261109-h6" defer></script>
 {# Этап 19: HTMX для ИИ-вкладок проекта (поиск/отчёт/база знаний) #}
@@ -809,12 +809,18 @@
 
   // Поддержка ?page=N + #issue-N из вкладки «Замечания»
   function _goToPageThenHighlight() {
+    window.scrollTo(0, 0);
     const hash = window.location.hash;
     const issueId = hash && hash.startsWith('#issue-') ? hash.replace('#issue-', '') : null;
-    const urlPage = new URLSearchParams(window.location.search).get('page');
-    const pageNum = urlPage ? Number(urlPage) : 0;
+    const urlPage = Number(new URLSearchParams(window.location.search).get('page')) || 0;
+    if (!urlPage && !issueId) return;
 
-    if (!pageNum && !issueId) return;
+    // Якорь есть, ?page= нет — берём страницу из data-page карточки.
+    let pageNum = urlPage;
+    if (!pageNum && issueId) {
+      const card = document.querySelector('#list .card[data-id="' + issueId + '"]');
+      pageNum = card && card.dataset.page ? Number(card.dataset.page) : 0;
+    }
 
     const initialTotal = (document.getElementById('totalPages') || {}).textContent || '1';
     const maxWait = 15000;
@@ -833,22 +839,16 @@
         return;
       }
       // PDF готов — переходим на страницу
-      var afterPage = Promise.resolve();
-      if (pageNum > 0 && typeof goToPage === 'function') {
-        afterPage = goToPage(pageNum);
-      }
+      const afterPage = Promise.resolve(
+        (pageNum > 0 && typeof window.goToPage === 'function')
+          ? window.goToPage(pageNum) : null
+      );
       afterPage.then(function () {
-        // После рендера страницы — подсвечиваем замечание
-        if (issueId && typeof openIssueCard === 'function') {
-          setTimeout(function () {
-            openIssueCard(issueId);
-            // Скролл к замечанию в правой панели
-            var card = document.querySelector('#list .card[data-id="' + issueId + '"]');
-            if (card) {
-              card.scrollIntoView({ block: 'center', behavior: 'smooth' });
-              card.classList.add('is-active');
-            }
-          }, 500);
+        if (!issueId) return;
+        // drawMarks выполнен в хвосте promise рендера; подсветка приедет по
+        // цепочке openIssueCard → window.selectIssue → focusIssue(navigate:false).
+        if (typeof openIssueCard === 'function') {
+          openIssueCard(issueId);
         }
       });
     }

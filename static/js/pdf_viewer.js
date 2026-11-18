@@ -144,9 +144,9 @@
 
     function selectIssue(issueId, options) {
         const issue = findIssue(issueId);
-        if (!issue || !details) {
-            return;
-        }
+        if (!issue) return;
+        focusIssue(issue.id, { navigate: options ? options.scrollMark !== false : true }); // пин: всегда
+        if (!details) return;                    // ← ранний выход ТОЛЬКО для панели деталей (сейчас он убивает и пин)
         selectedIssueId = issue.id;
         clearHighlight();
         const card = document.querySelector(
@@ -237,15 +237,112 @@
         }
     }
 
+    function scrollWithinViewport(el) {
+        let node = el;
+        while (node && node !== document.body) {
+            const st = window.getComputedStyle(node);
+            if ((st.overflowY === 'auto' || st.overflowY === 'scroll')
+                && node.scrollHeight > node.clientHeight) {
+                node.scrollTo({
+                    top: node.scrollTop + el.getBoundingClientRect().top
+                        - node.getBoundingClientRect().top
+                        - (node.clientHeight - el.offsetHeight) / 2,
+                    behavior: 'smooth',
+                });
+                return;
+            }
+            node = node.parentElement;
+        }
+    }
+
     function scrollToMark(issue) {
         const mark = document.querySelector(
             '.pdf-markup[data-issue-id="' + issue.id + '"], .pdf-pin[data-issue-id="' + issue.id + '"]'
         );
         if (mark) {
-            mark.scrollIntoView({behavior: 'smooth', block: 'center'});
+            scrollWithinViewport(mark);
             mark.classList.add('is-active');
         }
     }
+
+    function clearPinHighlight() {
+        // Снять все визуальные состояния подсветки со всех пинов и кластеров.
+        document.querySelectorAll(
+            '.pdf-markup.is-active, .pdf-markup.is-flash, .pdf-markup.border-danger'
+        ).forEach(function (m) {
+            m.classList.remove('is-active', 'is-flash', 'border-danger');
+        });
+        document.querySelectorAll('.pdf-pin-cluster.is-active, .pdf-pin-cluster.is-flash')
+            .forEach(function (b) { b.classList.remove('is-active', 'is-flash'); });
+    }
+
+    function focusIssue(issueId, options) {
+        const issue = findIssue(issueId);
+        if (!issue || !issue.page_number) return Promise.resolve(false); // без пина подсвечивать нечего
+        if (comparison.active) return Promise.resolve(false);            // режим сравнения: пинов нет
+
+        const navigate = !(options && options.navigate === false);
+
+        const doFocus = function () {
+            selectedIssueId = Number(issue.id);      // персистентность: drawMarksInto:374-381 восстановит is-active при каждой перерисовке
+            clearPinHighlight();
+            drawMarks(Number(issue.page_number));    // перерисовать текущий лист (drawMarks сам гвардит isCurrentView)
+
+            const page = pages.get(Number(issue.page_number));
+            if (!page) return false;
+            const container = document.querySelector('.stage')
+                || document.getElementById('pdfViewer');
+            const mark = page.layer.querySelector(
+                '.pdf-markup[data-issue-id="' + issue.id + '"]'
+            );
+            if (mark) {
+                if (container) {
+                    const rect = mark.getBoundingClientRect();
+                    const contRect = container.getBoundingClientRect();
+                    container.scrollTo({
+                        left: container.scrollLeft + (rect.left - contRect.left)
+                            - (contRect.width / 2) + (rect.width / 2),
+                        top: container.scrollTop + (rect.top - contRect.top)
+                            - (contRect.height / 2) + (rect.height / 2),
+                        behavior: 'smooth',
+                    });
+                }
+                mark.classList.add('is-flash');      // транзиентный пульс
+                mark.addEventListener('animationend', function () {
+                    mark.classList.remove('is-flash');
+                }, { once: true });
+            } else {
+                // Пин схлопнут в кластер — подсвечиваем бейдж кластера (§3.6).
+                const cluster = page.layer.querySelector(
+                    '.pdf-pin-cluster[data-issue-ids~="' + issue.id + '"]'
+                );
+                if (cluster) {
+                    cluster.classList.add('is-active', 'is-flash');
+                    if (container) {
+                        const rect = cluster.getBoundingClientRect();
+                        const contRect = container.getBoundingClientRect();
+                        container.scrollTo({
+                            left: container.scrollLeft + (rect.left - contRect.left)
+                                - (contRect.width / 2) + (rect.width / 2),
+                            top: container.scrollTop + (rect.top - contRect.top)
+                                - (contRect.height / 2) + (rect.height / 2),
+                            behavior: 'smooth',
+                        });
+                    }
+                }
+            }
+            return true;
+        };
+
+        if (navigate && Number(window.getCurrentPage()) !== Number(issue.page_number)) {
+            const result = window.goToPage(Number(issue.page_number));
+            if (result && typeof result.then === 'function') {
+                return result.then(doFocus);
+            }
+        }
+        return Promise.resolve(doFocus());
+    }
+    window.focusIssue = focusIssue;
 
     function drawMarks(pageNumber) {
         if (!isCurrentView) {
@@ -508,6 +605,7 @@
             ? '#212529'
             : '#fff';
         badge.textContent = String(cluster.items.length);
+        badge.dataset.issueIds = cluster.items.map(function (i) { return String(i.issue.id); }).join(' ');
         badge.title = 'Замечаний в группе: ' + cluster.items.length
             + ' — клик приблизит, повторный клик раскроет список';
         badge.setAttribute('aria-label', 'Группа из ' + cluster.items.length + ' замечаний');
@@ -2602,7 +2700,7 @@
                     drawMarks(issue.page_number);
                     const page = pages.get(Number(issue.page_number));
                     if (page) {
-                        page.wrapper.scrollIntoView({behavior: 'smooth', block: 'center'});
+                        scrollWithinViewport(page.wrapper);
                     }
                 }
                 appendIssueCard(issue);
@@ -2861,7 +2959,9 @@
     initThumbRailSplitter();
     updateThumbsVisibility();
     if (issues.length) {
-        selectIssue(issues[0].id);
+        // init: автофокус пина при открытии не выполняется — подсветка только
+        // по deep-link (#issue-N) или явному выбору пользователя (шаги 2-4).
+        // selectIssue(issues[0].id);
     }
 
     /* Блок 3 бэта-фиксов 2026-11-08: панель «ИИ-нормоконтроль» берёт

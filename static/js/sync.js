@@ -46,7 +46,11 @@ window.selectIssue = function (event, issueId) {
     );
     const pageNumber = card ? Number(card.dataset.page) : 0;
     const finish = function () {
-        window.centerMarkup(issueId);
+        if (typeof window.focusIssue === 'function') {
+            window.focusIssue(issueId, { navigate: false }); // страницу уже перешли выше
+        } else {
+            window.centerMarkup(issueId);                    // fallback
+        }
     };
 
     if (
@@ -83,10 +87,24 @@ window.selectIssueFromPdf = function (issueId) {
     const row = document.getElementById('issue-row-' + issueId);
     if (row) {
         row.classList.add('table-active');
-        row.scrollIntoView({behavior: 'smooth', block: 'nearest'});
+        let n = row;
+        while (n && n !== document.body) {
+            const st = window.getComputedStyle(n);
+            if ((st.overflowY === 'auto' || st.overflowY === 'scroll')
+                && n.scrollHeight > n.clientHeight) {
+                n.scrollTo({ top: n.scrollTop + row.offsetTop - n.offsetTop
+                    - (n.clientHeight - row.offsetHeight) / 2, behavior: 'smooth' });
+                return;
+            }
+            n = n.parentElement;
+        }
     }
 
-    window.centerMarkup(issueId);
+    if (typeof window.focusIssue === 'function') {
+        window.focusIssue(issueId, { navigate: true });
+    } else {
+        window.centerMarkup(issueId);
+    }
 };
 
 function csrfToken() {

@@ -992,3 +992,38 @@ body {
   border-color: var(--c-accent, #3D5A98);
   color: var(--c-accent, #3D5A98);
 }
+
+/* ==========================================================================
+   Подсветка выбранного замечания на листе (issue-pin-highlight)
+   ========================================================================== */
+
+/* Персистентная подсветка пина: тот же красный, что и у .border-danger. */
+.pdf-markup.is-active {
+    box-shadow: 0 0 0 2px rgba(180, 78, 72, 0.55),
+                0 0 12px rgba(180, 78, 72, 0.35);
+}
+
+@keyframes issue-pin-pulse {
+    0%   { box-shadow: 0 0 0 0 rgba(180, 78, 72, 0.55); }
+    70%  { box-shadow: 0 0 0 12px rgba(180, 78, 72, 0); }
+    100% { box-shadow: 0 0 0 0 rgba(180, 78, 72, 0); }
+}
+
+.pdf-markup.is-flash,
+.pdf-pin-cluster.is-flash {
+    animation: issue-pin-pulse 1.2s ease-out 3;
+}
+
+.pdf-pin-cluster.is-active {
+    outline: 3px solid rgba(180, 78, 72, 0.6);
+    outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .pdf-markup.is-flash,
+    .pdf-pin-cluster.is-flash {
+        animation: none;
+        box-shadow: 0 0 0 2px rgba(180, 78, 72, 0.55),
+                    0 0 12px rgba(180, 78, 72, 0.35);
+    }
+}

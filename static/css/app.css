@@ -2340,7 +2340,7 @@ body.modal-open {
 .pdf-pin--cancelled { background: var(--s-closed-solid); }
 
 .pdf-pin.is-active {
-    outline: 3px solid var(--c-accent);
+    outline: 3px solid rgba(180, 78, 72, 0.6);
     outline-offset: 2px;
     transform: translate(-50%, -50%) scale(1.25);
 }
@@ -2391,7 +2391,7 @@ body.modal-open {
 }
 
 .pdf-markup.is-active {
-    box-shadow: 0 0 0 2px var(--c-accent), 0 0 12px color-mix(in srgb, var(--c-accent) 55%, transparent);
+    box-shadow: 0 0 0 2px rgba(180, 78, 72, 0.55), 0 0 12px rgba(180, 78, 72, 0.35);
 }
 
 .textLayer {

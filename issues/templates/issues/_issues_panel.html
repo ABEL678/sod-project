@@ -204,8 +204,13 @@
                             </span>
                         </td>
                         <td>
+                            {% if issue.page_number %}
                             <a class="text-decoration-none" href="{% url 'storage:document_detail' issue.document_id %}?page={{ issue.page_number }}#issue-{{ issue.pk }}"
-   title="{{ issue.description }}">{{ issue.description|truncatechars:80 }}</a>
+                               title="{{ issue.description }}">{{ issue.description|truncatechars:80 }}</a>
+                            {% else %}
+                            <a class="text-decoration-none" href="{% url 'storage:document_detail' issue.document_id %}"
+                               title="{{ issue.description }}">{{ issue.description|truncatechars:80 }}</a>
+                            {% endif %}
                         </td>
                         <td class="small">
                             {{ issue.author.get_full_name|default:issue.author.username }}
