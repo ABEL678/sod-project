@@ -255,8 +255,17 @@
            aria-selected="{% if active_tab == 'rfi' %}true{% else %}false{% endif %}">
             <i class="bi bi-envelope-paper" aria-hidden="true"></i>
             Запросы
-            {% if rfi_open_count %}<span class="badge text-bg-light border">{{ rfi_open_count }}</span>{% endif %}
+             {% if rfi_open_count %}<span class="badge text-bg-light border">{{ rfi_open_count }}</span>{% endif %}
 </a>
+                        {% if can_view_matrix %}
+                        <a class="app-tab {% if active_tab == 'matrix' %}active{% endif %}"
+                           href="{% url 'storage:project_detail' project.pk %}?tab=matrix"
+                           role="tab"
+                           aria-selected="{% if active_tab == 'matrix' %}true{% else %}false{% endif %}">
+                            <i class="bi bi-grid-3x3" aria-hidden="true"></i>
+                            Матрица
+                        </a>
+                        {% endif %}
                         {% if can_manage_participants %}
                         <a class="app-tab {% if active_tab == 'participants' %}active{% endif %}"
                            href="{% url 'storage:project_detail' project.pk %}?tab=participants"
@@ -651,6 +660,8 @@
                             </div>
                         {% endif %}
                     </div>
+                {% elif active_tab == 'matrix' and can_view_matrix %}
+                    {% include 'storage/_tasks_matrix.html' %}
                 {% elif active_tab == 'rfi' %}
                     {% include 'storage/_rfi_tab.html' %}
                 {% elif active_tab == 'issues' %}

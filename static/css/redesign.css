@@ -1012,3 +1012,35 @@ tr.doc-row-flash > td { animation: wf-row-flash 1.5s ease; }
         display: none !important;
     }
 }
+
+/* ==========================================================================
+   M3: «Матрица заданий» (вкладка ?tab=matrix). Цвета — токены --s-* из
+   design-tokens/tokens.css; статус всегда дублируется иконкой и словом.
+   ========================================================================== */
+.task-matrix th,
+.task-matrix td {
+    min-width: 7.5rem;
+    vertical-align: middle;
+}
+.task-matrix__cell a,
+.task-matrix__cell .task-matrix__link {
+    display: block;
+    padding: 0.25rem 0.4rem;
+    color: inherit;
+}
+.task-matrix__cell--done { background: var(--s-done-subtle); color: var(--s-done-on); }
+.task-matrix__cell--overdue,
+.task-matrix__cell--rework { background: var(--s-attention-subtle); color: var(--s-attention-on); }
+.task-matrix__cell--waiting_info { background: var(--s-closed-subtle); color: var(--s-closed-on); }
+.task-matrix__cell--not_started { background: var(--s-wait-subtle); color: var(--s-wait-on); }
+.task-matrix__cell--review { background: var(--s-review-subtle); color: var(--s-review-on); }
+.task-matrix__cell--in_progress { background: var(--s-progress-subtle); color: var(--s-progress-on); }
+.task-matrix__overdue { color: var(--s-attention-on); font-weight: 600; }
+.task-matrix__legend {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    padding: 0.15rem 0.5rem;
+    border-radius: 0.375rem;
+    font-size: 0.8rem;
+}

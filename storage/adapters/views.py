@@ -130,6 +130,7 @@ from storage.domain.services import (
     issue_task,
     revoke_share_link,
     task_summary_for_gip,
+    tasks_matrix_for_project,
     tasks_requiring_attention,
     create_rfi,
     list_rfis,
@@ -282,6 +283,18 @@ TASK_STATUS_BADGES = {
     DesignTask.Status.ACCEPTED: 'text-bg-success',
     DesignTask.Status.RETURNED: 'text-bg-danger',
     DesignTask.Status.CANCELLED: 'text-bg-dark',
+}
+
+# M3 («Матрица заданий»): подписи и иконки статусов ячейки (план §4.3).
+# Цвета — токены --s-* через класс task-matrix__cell--<status> (redesign.css).
+MATRIX_CELL_STATUS_META = {
+    'DONE': ('Готово', 'bi-check2-circle'),
+    'OVERDUE': ('Просрочено', 'bi-exclamation-triangle'),
+    'REWORK': ('Доработка', 'bi-arrow-counterclockwise'),
+    'WAITING_INFO': ('Пауза', 'bi-pause-circle'),
+    'REVIEW': ('На проверке', 'bi-eye'),
+    'IN_PROGRESS': ('В работе', 'bi-arrow-repeat'),
+    'NOT_STARTED': ('Не начато', 'bi-circle'),
 }
 
 HIGHLIGHT_ROW_SECONDS = 5
@@ -803,7 +816,7 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
             # Этап 3: вкладка «Задания» тоже полная страница — вкладка
             # рендерится без htmx (обычные ссылки, как «Участники»).
             if self.request.GET.get('tab') in (
-                    'ai-search', 'ai-report', 'ai-kb', 'tasks',
+                    'ai-search', 'ai-report', 'ai-kb', 'tasks', 'matrix',
             ):
                 return [self.template_name]
             return ['storage/_documents_panel.html']
@@ -844,7 +857,12 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
         # Этап 3 (спека 4.1): вкладка «Задания» доступна всем участникам
         # проекта — исполнитель видит входящие задания без права
         # управления участниками; остальные вкладки — как прежде.
+        # M3 (план §4.2): вкладка «Матрица заданий» — гейт can_view_all_tasks
+        # (ГИП/админ), не-ГИП получает откат на documents (прецедент §3.1).
+        can_view_matrix = can_view_all_tasks(user, project)
         allowed_tabs = ('tasks', 'rfi', 'issues')
+        if can_view_matrix:
+            allowed_tabs += ('matrix',)
         if can_manage_participants:
             allowed_tabs += (
                 'participants', 'trash', 'ai-search', 'ai-report', 'ai-kb',
@@ -1116,6 +1134,11 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
                 project=project,
             ).order_by('order').values('pk', 'code', 'name')
 
+        # M3 (план §4.2 п.3): контекст вкладки «Матрица заданий».
+        if active_tab == 'matrix':
+            context.update(self._get_matrix_context(project))
+        context['can_view_matrix'] = can_view_matrix
+
         if active_tab == 'rfi':
             from storage.domain.services import _rfi_can_create
 
@@ -1141,6 +1164,36 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
             context.update(self._get_issues_context(user, project))
 
         return context
+
+    def _get_matrix_context(self, project):
+        """Данные вкладки «Матрица заданий» (M3, план §4.2 п.4–5, §4.5).
+
+        Права проверяются в get_context_data (гейт can_view_all_tasks).
+        Решётка — декартово произведение осей сервиса: ячейка из cells
+        или None (пустая пара, в шаблоне «—»). Задачи не материализуются.
+        """
+        matrix = tasks_matrix_for_project(project)
+        sections = matrix['sections']
+        cells = matrix['cells']
+        grid = []
+        for source in sections:
+            row = []
+            for target in sections:
+                cell = cells.get((source.pk, target.pk))
+                if cell is not None:
+                    label, icon = MATRIX_CELL_STATUS_META[cell['status']]
+                    cell = dict(cell, label=label, icon=icon)
+                row.append({'source': source, 'target': target, 'cell': cell})
+            grid.append({'source': source, 'cells': row})
+        return {
+            'matrix_sections': sections,
+            'matrix_grid': grid,
+            'matrix_today': matrix['today'],
+            'matrix_legend': [
+                {'status': status, 'label': label, 'icon': icon}
+                for status, (label, icon) in MATRIX_CELL_STATUS_META.items()
+            ],
+        }
 
     def _get_tasks_context(self, user, project, sections):
         """Данные вкладки «Задания»: role_filter, фильтры, декор строк."""

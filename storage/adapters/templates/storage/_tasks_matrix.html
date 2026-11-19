@@ -1,0 +1,69 @@
+{# Вкладка «Матрица заданий» (M3, план §4.1–4.5). Только для ГИПа/админа. #}
+<div class="task-matrix-tab" data-role="tasks-matrix">
+    <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3">
+        <h2 class="h5 mb-0">Матрица заданий</h2>
+        <span class="text-muted small">на {{ matrix_today|date:"d.m.Y" }}</span>
+    </div>
+
+    {% if matrix_sections %}
+    <div class="table-responsive">
+        <table class="table table-bordered table-sm task-matrix">
+            <thead>
+                <tr>
+                    <th scope="col" class="text-muted small">Источник \ Цель</th>
+                    {% for section in matrix_sections %}
+                    <th scope="col" class="text-center" title="{{ section.name }}">{{ section.code }}</th>
+                    {% endfor %}
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in matrix_grid %}
+                <tr>
+                    <th scope="row" class="text-nowrap" title="{{ row.source.name }}">{{ row.source.code }}</th>
+                    {% for item in row.cells %}
+                        {% if item.source.pk == item.target.pk %}
+                        <td class="text-center text-muted task-matrix__diag">—</td>
+                        {% elif item.cell %}
+                        <td class="task-matrix__cell task-matrix__cell--{{ item.cell.status|lower }}">
+                            <a class="task-matrix__link text-decoration-none"
+                               href="{% url 'storage:project_detail' project.pk %}?tab=tasks&amp;role_filter=all&amp;task_source={{ item.source.pk }}&amp;task_target={{ item.target.pk }}"
+                               title="{{ item.cell.label }}: всего {{ item.cell.total }}, в работе {{ item.cell.in_progress }}, просрочено {{ item.cell.overdue }}, завершено {{ item.cell.done }}">
+                                <span class="d-block fw-semibold"><i class="bi {{ item.cell.icon }}" aria-hidden="true"></i> {{ item.cell.label }}</span>
+                                <span class="task-matrix__counts small">
+                                    <span title="всего">{{ item.cell.total }}</span>
+                                    · <span title="в работе">{{ item.cell.in_progress }}</span>
+                                    · <span class="task-matrix__overdue" title="просрочено">{{ item.cell.overdue }}</span>
+                                    · <span title="завершено">{{ item.cell.done }}</span>
+                                </span>
+                            </a>
+                        </td>
+                        {% else %}
+                        <td class="text-center text-muted task-matrix__empty">—</td>
+                        {% endif %}
+                    {% endfor %}
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <div class="small text-muted mb-2">
+        Просрочено = срок прошёл, работа не сдана (COMPLETED, ACCEPTED, REVIEW и CANCELLED срок не просрочивают).
+    </div>
+    <div class="d-flex flex-wrap gap-2" data-role="tasks-matrix-legend">
+        {% for item in matrix_legend %}
+        <span class="task-matrix__legend task-matrix__cell--{{ item.status|lower }}">
+            <i class="bi {{ item.icon }}" aria-hidden="true"></i> {{ item.label }}
+        </span>
+        {% endfor %}
+    </div>
+    <div class="small text-muted mt-2">
+        В ячейке: всего · в работе · просрочено · завершено.
+    </div>
+    {% else %}
+    <div class="text-center text-muted py-5" data-role="tasks-matrix-empty">
+        <i class="bi bi-grid-3x3 d-block mb-2" style="font-size: 2rem;" aria-hidden="true"></i>
+        <p class="mb-0">В проекте нет разделов для матрицы</p>
+    </div>
+    {% endif %}
+</div>
