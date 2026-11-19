@@ -99,10 +99,10 @@ class ProjectTemplateTests(TestCase):
         )
 
         non_common = project.sections.exclude(code='COMMON')
-        self.assertEqual(non_common.count(), 9)
+        self.assertEqual(non_common.count(), 11)
         section_codes = set(non_common.values_list('code', flat=True))
         expected_rd_codes = {
-            'АР', 'КР', 'КЖ', 'КМ', 'ОВ', 'ВК', 'ЭО', 'СС', 'ТХ',
+            'АР', 'КР', 'КЖ', 'КМ', 'ОВ', 'ВК', 'ЭОМ', 'СС', 'ТХ', 'СПА', 'АК',
         }
         self.assertEqual(section_codes, expected_rd_codes)
 
@@ -120,12 +120,12 @@ class ProjectTemplateTests(TestCase):
         )
 
         non_common = project.sections.exclude(code='COMMON')
-        self.assertEqual(non_common.count(), 19)
+        self.assertEqual(non_common.count(), 21)
         section_codes = set(non_common.values_list('code', flat=True))
         expected_codes = {
             'ПЗ', 'ПЗУ', 'АР', 'КР', 'ИОС', 'ТХ', 'ПОС', 'ООС', 'ПБ',
             'ТБЭ', 'ОДИ', 'СМ', 'ИД',  # 13 ПД
-            'КЖ', 'КМ', 'ОВ', 'ВК', 'ЭО', 'СС',  # 6 доп РД (АР/КР/ТХ дедуп)
+            'КЖ', 'КМ', 'ОВ', 'ВК', 'ЭОМ', 'СС', 'СПА', 'АК',  # 8 доп РД (АР/КР/ТХ дедуп)
         }
         self.assertEqual(section_codes, expected_codes)
 

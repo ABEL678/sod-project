@@ -297,7 +297,27 @@ MATRIX_CELL_STATUS_META = {
     'NOT_STARTED': ('Не начато', 'bi-circle'),
 }
 
+# M3: «краткое правило» статуса — текст title/aria-label чипа легенды
+# (план §4.4, дословно).
+MATRIX_LEGEND_RULES = {
+    'DONE': 'все задания пары закрыты',
+    'OVERDUE': 'есть просрочка по сроку',
+    'REWORK': 'есть возврат на доработку',
+    'WAITING_INFO': 'есть пауза (жду ИД)',
+    'REVIEW': 'есть задание на проверке',
+    'IN_PROGRESS': 'есть задание в работе',
+    'NOT_STARTED': 'задания не начаты',
+}
+# Счётчики ячейки матрицы, которые суммируются в итоги (служебные ключи не входят).
+MATRIX_COUNT_KEYS = ('total', 'in_progress', 'overdue', 'done')
+MATRIX_REWORK_WAIT_STATUSES = frozenset({'REWORK', 'WAITING_INFO'})
+
 HIGHLIGHT_ROW_SECONDS = 5
+
+
+def _matrix_sum(cells):
+    """Сумма четырёх отображаемых счётчиков по списку ячеек матрицы (M3, G)."""
+    return {key: sum(cell[key] for cell in cells) for key in MATRIX_COUNT_KEYS}
 
 
 def _document_column_defs(config):
@@ -1176,21 +1196,50 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
         sections = matrix['sections']
         cells = matrix['cells']
         grid = []
-        for source in sections:
+        column_cells = [[] for _ in sections]
+        # Видимые пары — без диагонали (source == target). Итоги и плашки
+        # считаются только по ним (Python, без новых запросов).
+        visible = []
+        for i, source in enumerate(sections):
             row = []
-            for target in sections:
+            row_cells = []
+            for j, target in enumerate(sections):
                 cell = cells.get((source.pk, target.pk))
                 if cell is not None:
                     label, icon = MATRIX_CELL_STATUS_META[cell['status']]
                     cell = dict(cell, label=label, icon=icon)
+                    if i != j:
+                        row_cells.append(cell)
+                        column_cells[j].append(cell)
+                        visible.append(cell)
                 row.append({'source': source, 'target': target, 'cell': cell})
-            grid.append({'source': source, 'cells': row})
+            grid.append({
+                'source': source,
+                'cells': row,
+                'totals': _matrix_sum(row_cells),
+            })
         return {
             'matrix_sections': sections,
             'matrix_grid': grid,
+            'matrix_col_totals': [_matrix_sum(column) for column in column_cells],
+            'matrix_summary': {
+                'overdue_tasks': sum(cell['overdue'] for cell in visible),
+                'overdue_pairs': sum(1 for cell in visible if cell['overdue'] >= 1),
+                'rework_wait_pairs': sum(
+                    1 for cell in visible
+                    if cell['status'] in MATRIX_REWORK_WAIT_STATUSES
+                ),
+                'done_tasks': sum(cell['done'] for cell in visible),
+                'total_tasks': sum(cell['total'] for cell in visible),
+            },
             'matrix_today': matrix['today'],
             'matrix_legend': [
-                {'status': status, 'label': label, 'icon': icon}
+                {
+                    'status': status,
+                    'label': label,
+                    'icon': icon,
+                    'hint': MATRIX_LEGEND_RULES[status],
+                }
                 for status, (label, icon) in MATRIX_CELL_STATUS_META.items()
             ],
         }

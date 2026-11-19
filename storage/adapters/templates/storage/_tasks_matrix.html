@@ -6,6 +6,17 @@
     </div>
 
     {% if matrix_sections %}
+    <div class="d-flex flex-wrap gap-2 mb-3" data-role="tasks-matrix-summary">
+        <span class="task-matrix__stat task-matrix__stat--overdue">
+            Просрочено: {{ matrix_summary.overdue_tasks }} заданий в {{ matrix_summary.overdue_pairs }} парах
+        </span>
+        <span class="task-matrix__stat task-matrix__stat--rework">
+            На доработке и в паузе: {{ matrix_summary.rework_wait_pairs }} пар
+        </span>
+        <span class="task-matrix__stat task-matrix__stat--done">
+            Завершено: {{ matrix_summary.done_tasks }} из {{ matrix_summary.total_tasks }}
+        </span>
+    </div>
     <div class="table-responsive">
         <table class="table table-bordered table-sm task-matrix">
             <thead>
@@ -14,6 +25,7 @@
                     {% for section in matrix_sections %}
                     <th scope="col" class="text-center" title="{{ section.name }}">{{ section.code }}</th>
                     {% endfor %}
+                    <th scope="col" class="task-matrix__total text-center" title="Итого по разделу-источнику" aria-label="Итого по разделу-источнику">Итого</th>
                 </tr>
             </thead>
             <tbody>
@@ -22,7 +34,7 @@
                     <th scope="row" class="text-nowrap" title="{{ row.source.name }}">{{ row.source.code }}</th>
                     {% for item in row.cells %}
                         {% if item.source.pk == item.target.pk %}
-                        <td class="text-center text-muted task-matrix__diag">—</td>
+                        <td class="text-center task-matrix__diag" title="Та же дисциплина" aria-label="Та же дисциплина">—</td>
                         {% elif item.cell %}
                         <td class="task-matrix__cell task-matrix__cell--{{ item.cell.status|lower }}">
                             <a class="task-matrix__link text-decoration-none"
@@ -38,21 +50,39 @@
                             </a>
                         </td>
                         {% else %}
-                        <td class="text-center text-muted task-matrix__empty">—</td>
+                        <td class="text-center text-muted task-matrix__empty" title="Заданий между разделами нет" aria-label="Заданий между разделами нет">—</td>
                         {% endif %}
                     {% endfor %}
+                    <td class="task-matrix__total text-center">
+                        <span class="task-matrix__counts small" title="всего · в работе · просрочено · завершено" aria-label="всего {{ row.totals.total }}, в работе {{ row.totals.in_progress }}, просрочено {{ row.totals.overdue }}, завершено {{ row.totals.done }}">
+                            {{ row.totals.total }} · {{ row.totals.in_progress }} · <span class="task-matrix__overdue">{{ row.totals.overdue }}</span> · {{ row.totals.done }}
+                        </span>
+                    </td>
                 </tr>
                 {% endfor %}
             </tbody>
+            <tfoot>
+                <tr>
+                    <th scope="row" class="task-matrix__total text-nowrap" title="Итого по разделу-цели" aria-label="Итого по разделу-цели">Итого</th>
+                    {% for totals in matrix_col_totals %}
+                    <td class="task-matrix__total text-center">
+                        <span class="task-matrix__counts small" title="всего · в работе · просрочено · завершено" aria-label="всего {{ totals.total }}, в работе {{ totals.in_progress }}, просрочено {{ totals.overdue }}, завершено {{ totals.done }}">
+                            {{ totals.total }} · {{ totals.in_progress }} · <span class="task-matrix__overdue">{{ totals.overdue }}</span> · {{ totals.done }}
+                        </span>
+                    </td>
+                    {% endfor %}
+                    <td class="task-matrix__total"></td>
+                </tr>
+            </tfoot>
         </table>
     </div>
 
     <div class="small text-muted mb-2">
-        Просрочено = срок прошёл, работа не сдана (COMPLETED, ACCEPTED, REVIEW и CANCELLED срок не просрочивают).
+        Просрочено = срок прошёл, работа не сдана (Выполнено, Принято, На проверке и Отменено срок не просрочивают).
     </div>
     <div class="d-flex flex-wrap gap-2" data-role="tasks-matrix-legend">
         {% for item in matrix_legend %}
-        <span class="task-matrix__legend task-matrix__cell--{{ item.status|lower }}">
+        <span class="task-matrix__legend task-matrix__cell--{{ item.status|lower }}" title="{{ item.label }}: {{ item.hint }}" aria-label="{{ item.label }}: {{ item.hint }}">
             <i class="bi {{ item.icon }}" aria-hidden="true"></i> {{ item.label }}
         </span>
         {% endfor %}

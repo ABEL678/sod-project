@@ -1,10 +1,10 @@
 """Тесты синхронизации разделов (sections-sync).
 
 8 сценариев из плана Аудитора:
-1. create_project_from_template(FULL) → 19 Section, порядок/коды, дедуп.
+1. create_project_from_template(FULL) → 21 Section, порядок/коды, дедуп.
 2. Папка «Архитектурные решения» (РД) → folder.section.code == 'АР'.
 3. Загрузка документа в «Комплект» внутри РД/АР → document.section.code == 'АР'.
-4. get_sections_with_counts возвращает 19 без COMMON; форма задания показывает АР/КЖ.
+4. get_sections_with_counts возвращает 21 без COMMON; форма задания показывает АР/КЖ.
 5. check_write_permission: ГИП — True; contractor без allowed_sections — False.
 6. Команда sync_project_sections: dry-run, прогон, повтор, переименованная папка.
 7. reset_project_structure пересоздаёт разделы и привязывает папки.
@@ -47,8 +47,8 @@ class TestEnsureProjectSections(TestCase):
         )
         self.company = Company.objects.create(name='Синхронизация')
 
-    def test_full_template_creates_19_sections(self):
-        """Сценарий 1: FULL → 19 Section, дедуп АР/КР/ТХ."""
+    def test_full_template_creates_21_sections(self):
+        """Сценарий 1: FULL → 21 Section, дедуп АР/КР/ТХ."""
         project = create_project_from_template(
             company=self.company,
             code='FULL-1',
@@ -62,16 +62,18 @@ class TestEnsureProjectSections(TestCase):
 
         # COMMON создаётся как технический контейер — исключаем его
         non_common = project.sections.exclude(code='COMMON')
-        self.assertEqual(non_common.count(), 19)
+        self.assertEqual(non_common.count(), 21)
         codes = set(non_common.values_list('code', flat=True))
-        # ПД: 13 + РД доп: 6 (АР/КР/ТХ уже есть в ПД)
+        # ПД: 13 + РД доп: 8 (АР/КР/ТХ уже есть в ПД)
         self.assertIn('АР', codes)
         self.assertIn('КР', codes)
         self.assertIn('КЖ', codes)
         self.assertIn('КМ', codes)
         self.assertIn('ОВ', codes)
         self.assertIn('ВК', codes)
-        self.assertIn('ЭО', codes)
+        self.assertIn('ЭОМ', codes)
+        self.assertIn('СПА', codes)
+        self.assertIn('АК', codes)
         self.assertIn('СС', codes)
         self.assertIn('ТХ', codes)
         self.assertIn('ИОС', codes)
@@ -99,8 +101,8 @@ class TestEnsureProjectSections(TestCase):
         self.assertIn('ИОС', codes)
         self.assertNotIn('КЖ', codes)
 
-    def test_rd_gost_creates_9_sections(self):
-        """RD_GOST → 9 разделов РД."""
+    def test_rd_gost_creates_11_sections(self):
+        """RD_GOST → 11 разделов РД."""
         project = create_project_from_template(
             company=self.company,
             code='RD-1',
@@ -113,7 +115,7 @@ class TestEnsureProjectSections(TestCase):
         )
 
         non_common = project.sections.exclude(code='COMMON')
-        self.assertEqual(non_common.count(), 9)
+        self.assertEqual(non_common.count(), 11)
         codes = set(non_common.values_list('code', flat=True))
         self.assertIn('АР', codes)
         self.assertIn('КЖ', codes)
@@ -217,7 +219,7 @@ class TestSectionsWithContext(TestCase):
         sections = list(get_sections_with_counts(self.user, project))
         codes = [s.code for s in sections]
         self.assertNotIn('COMMON', codes)
-        self.assertEqual(len(sections), 19)
+        self.assertEqual(len(sections), 21)
 
     def test_task_form_sections_populated(self):
         """Форма задания показывает разделы (не пусто)."""
@@ -378,14 +380,14 @@ class TestResetProjectStructure(TestCase):
         )
 
         initial_sections = project.sections.exclude(code='COMMON').count()
-        self.assertEqual(initial_sections, 19)
+        self.assertEqual(initial_sections, 21)
 
         from storage.domain.services import reset_project_structure
         result = reset_project_structure(self.user, project)
 
-        # COMMON пересоздаётся тоже — итого 20, но non-common = 19
+        # COMMON пересоздаётся тоже — итого 22, но non-common = 21
         non_common_after = project.sections.exclude(code='COMMON').count()
-        self.assertEqual(non_common_after, 19)
+        self.assertEqual(non_common_after, 21)
 
 
 class TestResidentialTemplate(TestCase):

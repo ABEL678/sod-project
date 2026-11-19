@@ -1028,13 +1028,41 @@ tr.doc-row-flash > td { animation: wf-row-flash 1.5s ease; }
     padding: 0.25rem 0.4rem;
     color: inherit;
 }
-.task-matrix__cell--done { background: var(--s-done-subtle); color: var(--s-done-on); }
-.task-matrix__cell--overdue,
-.task-matrix__cell--rework { background: var(--s-attention-subtle); color: var(--s-attention-on); }
-.task-matrix__cell--waiting_info { background: var(--s-closed-subtle); color: var(--s-closed-on); }
-.task-matrix__cell--not_started { background: var(--s-wait-subtle); color: var(--s-wait-on); }
-.task-matrix__cell--review { background: var(--s-review-subtle); color: var(--s-review-on); }
-.task-matrix__cell--in_progress { background: var(--s-progress-subtle); color: var(--s-progress-on); }
+/* ЗM3-1: тонировка с родителем .task-matrix-tab (0,2,0) — перебивает
+   .table > :not(caption) > * > * (0,1,1) и покрывает td решётки и чипы легенды
+   (чипы вне таблицы). Новые правила на td — только с этим префиксом. */
+.task-matrix-tab .task-matrix__cell--done { background: var(--s-done-subtle); color: var(--s-done-on); }
+.task-matrix-tab .task-matrix__cell--overdue,
+.task-matrix-tab .task-matrix__cell--rework { background: var(--s-attention-subtle); color: var(--s-attention-on); }
+.task-matrix-tab .task-matrix__cell--waiting_info { background: var(--s-closed-subtle); color: var(--s-closed-on); }
+.task-matrix-tab .task-matrix__cell--not_started { background: var(--s-wait-subtle); color: var(--s-wait-on); }
+.task-matrix-tab .task-matrix__cell--review { background: var(--s-review-subtle); color: var(--s-review-on); }
+.task-matrix-tab .task-matrix__cell--in_progress { background: var(--s-progress-subtle); color: var(--s-progress-on); }
+.task-matrix-tab td.task-matrix__diag {
+    background: repeating-linear-gradient(
+        45deg,
+        var(--s-closed-subtle) 0 6px,
+        transparent 6px 12px
+    );
+    color: var(--s-closed-on);
+    cursor: default;
+}
+.task-matrix-tab td.task-matrix__total,
+.task-matrix-tab th.task-matrix__total {
+    background: var(--s-closed-subtle);
+    color: var(--s-closed-on);
+    font-weight: 600;
+}
+.task-matrix-tab .task-matrix__stat {
+    display: inline-block;
+    padding: 0.2rem 0.6rem;
+    border-radius: 0.375rem;
+    font-size: 0.85rem;
+    border: 1px solid transparent;
+}
+.task-matrix-tab .task-matrix__stat--overdue { background: var(--s-attention-subtle); color: var(--s-attention-on); }
+.task-matrix-tab .task-matrix__stat--rework { background: var(--s-closed-subtle); color: var(--s-closed-on); }
+.task-matrix-tab .task-matrix__stat--done { background: var(--s-done-subtle); color: var(--s-done-on); }
 .task-matrix__overdue { color: var(--s-attention-on); font-weight: 600; }
 .task-matrix__legend {
     display: inline-flex;
