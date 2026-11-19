@@ -58,6 +58,20 @@ CELL_STATUSES = (
     CELL_STATUS_NOT_STARTED,
 )
 
+# Ключи счётчиков, которые читает compute_cell_status. Реестр нужен сервису
+# tasks_matrix_for_project, чтобы собрать dict ровно в этом составе (З2:
+# ядро принимает dict, NamedTuple не используется).
+COUNTER_KEYS = (
+    'non_cancelled',
+    'done',
+    'overdue',
+    'returned',
+    'on_hold',
+    'review',
+    'in_progress',
+)
+
+
 def compute_cell_status(counters):
     """Статус ячейки матрицы по счётчикам пары разделов.
 

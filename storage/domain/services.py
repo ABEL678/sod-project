@@ -59,6 +59,17 @@ from storage.domain.project_templates import (
     ROOT_SUPERFOLDERS,
     ROOT_SUPERFOLDER_NAMES,
 )
+from storage.domain.tasks_matrix import (
+    CELL_CANCELLED_STATUSES,
+    CELL_DONE_STATUSES,
+    CELL_IN_PROGRESS_STATUSES,
+    CELL_OVERDUE_STATUSES,
+    CELL_REVIEW_STATUSES,
+    CELL_REWORK_STATUSES,
+    CELL_WAITING_INFO_STATUSES,
+    COUNTER_KEYS,
+    compute_cell_status,
+)
 
 
 DOCUMENT_VIEW_COLUMNS = (
@@ -5436,6 +5447,83 @@ def tasks_requiring_attention(project: Project) -> list[DesignTask]:
         )
     decorated.sort(key=lambda row: row[:4])
     return [row[-1] for row in decorated]
+
+
+def tasks_matrix_for_project(project: Project, today=None) -> dict:
+    """Матрица заданий проекта: агрегированный статус по парам разделов.
+
+    Источник — существующие DesignTask (К2): ноль новых моделей, ноль
+    миграций. Оси — Section проекта без COMMON (прецедент
+    get_sections_with_counts, :550–551), порядок (order, code). Ячейка
+    показывает 7-статусную цепочку К1 (compute_cell_status) и четыре
+    честных счётчика К3/Ф3.
+
+    Запросы: один на оси + один GROUP BY по
+    (source_section_id, target_section_id) — префикс индекса
+    design_task_proj_src_tgt_idx (models.py:807–814).
+
+    Права не проверяет: гейт — во вьюхе, как у task_summary_for_gip
+    (прецедент views.py:1885–1888).
+    """
+    if today is None:
+        today = timezone.localdate()
+
+    sections = list(
+        Section.objects.filter(project=project)
+        .exclude(code='COMMON')
+        .order_by('order', 'code')
+    )
+    section_ids = {section.pk for section in sections}
+
+    not_cancelled = ~Q(status__in=CELL_CANCELLED_STATUSES)
+    rows = (
+        DesignTask.objects.filter(project=project)
+        .values('source_section_id', 'target_section_id')
+        .annotate(
+            non_cancelled=Count('id', filter=not_cancelled),
+            done=Count('id', filter=Q(status__in=CELL_DONE_STATUSES)),
+            overdue=Count(
+                'id',
+                filter=Q(
+                    due_date__lt=today,
+                    status__in=CELL_OVERDUE_STATUSES,
+                ),
+            ),
+            returned=Count('id', filter=Q(status__in=CELL_REWORK_STATUSES)),
+            on_hold=Count('id', filter=Q(status__in=CELL_WAITING_INFO_STATUSES)),
+            review=Count('id', filter=Q(status__in=CELL_REVIEW_STATUSES)),
+            in_progress=Count('id', filter=Q(status__in=CELL_IN_PROGRESS_STATUSES)),
+        )
+    )
+
+    cells = {}
+    for row in rows:
+        source_id = row['source_section_id']
+        target_id = row['target_section_id']
+        # Пары с разделом вне осей (COMMON) в решётку не попадают.
+        if source_id not in section_ids or target_id not in section_ids:
+            continue
+        counters = {key: row[key] for key in COUNTER_KEYS}
+        # Ячейка — dict (З2: без NamedTuple); в шаблоне работает и как
+        # cell.status, и как cell['status'].
+        # Служебные ключи — не для шаблона (внутренние счётчики правил 1/3/4/5):
+        #   non_cancelled, returned, on_hold, review.
+        # Отображаемых счётчиков ровно 4 (К3, план §3.2): total, in_progress, overdue, done.
+        cells[(source_id, target_id)] = {
+            'source_section_id': source_id,
+            'target_section_id': target_id,
+            'status': compute_cell_status(counters),
+            'total': counters['non_cancelled'],
+            'in_progress': counters['in_progress'],
+            'overdue': counters['overdue'],
+            'done': counters['done'],
+            'non_cancelled': counters['non_cancelled'],
+            'returned': counters['returned'],
+            'on_hold': counters['on_hold'],
+            'review': counters['review'],
+        }
+
+    return {'sections': sections, 'cells': cells, 'today': today}
 
 
 def can_view_all_tasks(user: User, project: Project) -> bool:
