@@ -482,8 +482,8 @@ class TasksMatrixDrillDownTests(TestCase):
         response = self._drill(self.gip, task_section=self.ar.pk)
         self.assertEqual(self._titles(response), ['ar-kr', 'ov-ar'])
 
-    def test_diagonal_pair_returns_200_and_empty_list(self):
-        """Решение 3: диагональный URL → 200, пустой список, без 404."""
+    def test_diagonal_pair_no_special_case_returns_200(self):
+        """ЗM4-1: диагональная задача возвращается фильтром пары; спецкейса нет, ответ 200."""
         self._task(self.ar, self.ar, title='диагональ')
         response = self._drill(self.gip, task_source=self.ar.pk, task_target=self.ar.pk)
         self.assertEqual(response.status_code, 200)
