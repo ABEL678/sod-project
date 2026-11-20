@@ -185,6 +185,70 @@ class RagAnswerTests(TestCase):
         self.assertIn('Матрица заданий (автосводка)', user_message)
         self.assertIn('Задач всего: 1', user_message)
 
+    def test_matrix_summary_task_lines_in_context(self):
+        """M6.1: построчный список заданий после агрегатов автосводки.
+
+        Формат строки «источник → цель — статус»; CANCELLED и пара с
+        COMMON вне универсума (как в агрегатах); больше 30 строк —
+        первые 30 и «…и ещё N».
+        """
+        from ai_checks.tests.mocks import MockLLMProvider
+        from storage.domain.models import DesignTask, Section
+
+        section_ar = Section.objects.filter(
+            project=self.project_a, code='АР',
+        ).first()
+        section_kr = Section.objects.create(
+            project=self.project_a, code='КР', name='Конструкции', order=2,
+        )
+        section_common = Section.objects.create(
+            project=self.project_a, code='COMMON', name='Общий', order=0,
+        )
+
+        def _task(source, target, title, status):
+            return DesignTask.objects.create(
+                project=self.project_a,
+                source_section=source,
+                target_section=target,
+                author=self.user,
+                title=title,
+                description='Описание',
+                status=status,
+            )
+
+        for _ in range(30):
+            _task(section_ar, section_kr, 'Задание RAG',
+                  DesignTask.Status.IN_PROGRESS)
+        _task(section_kr, section_ar, 'За лимитом', DesignTask.Status.DRAFT)
+        _task(section_ar, section_kr, 'Отменённое',
+              DesignTask.Status.CANCELLED)
+        _task(section_ar, section_common, 'Вне осей',
+              DesignTask.Status.IN_PROGRESS)
+
+        llm = MockLLMProvider()
+        result = rag_answer(
+            self.question,
+            project_id=self.project_a.pk,
+            embedding_service=self.embedding,
+            vector_backend=self.backend,
+            llm_provider=llm,
+        )
+
+        self.assertEqual(result['sources'], [])
+        user_message = llm.calls[0]['messages'][-1]['content']
+        # Список — после агрегатов, формат строки «источник → цель — статус».
+        self.assertLess(
+            user_message.index('Задач всего'),
+            user_message.index('Задания:'),
+        )
+        self.assertIn('- АР → КР — В работе', user_message)
+        self.assertIn('Задач всего: 31', user_message)
+        # 31-е задание за лимитом; CANCELLED и пара с COMMON — вне списка.
+        self.assertIn('…и ещё 1', user_message)
+        self.assertNotIn('- КР → АР — Черновик', user_message)
+        self.assertNotIn('Отменено', user_message)
+        self.assertNotIn('АР → COMMON', user_message)
+
     def test_project_scope_requires_project_context(self):
         internal = self._internal_doc(
             self.project_a, 'Проектное знание', tenant_scope='project',

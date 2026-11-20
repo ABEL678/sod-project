@@ -41,7 +41,7 @@ from ai_checks.domain.models import (
     RagQuery,
 )
 from ai_checks.ports.embedding import EmbeddingService
-from storage.domain.models import Document, DocumentVersion, Project
+from storage.domain.models import DesignTask, Document, DocumentVersion, Project
 
 logger = logging.getLogger(__name__)
 
@@ -335,6 +335,46 @@ def reindex_project(project_id: int, user=None) -> int:
     return len(versions)
 
 
+# M6.1 (решение Управляющего): построчный список заданий в блоке
+# автосводки матрицы — модель отвечает о конкретных заданиях, а не
+# только об агрегатах («2 задачи, 1 в работе»).
+RAG_MATRIX_TASK_LINE_LIMIT = 30
+
+
+def _matrix_task_lines_text(project) -> str:
+    """Построчный список заданий проекта для блока автосводки (M6.1).
+
+    Одна строка на задание — «источник → цель — статус» (лейбл Status).
+    Универсум — как у агрегатов матрицы: CANCELLED вне решётки
+    (non_cancelled), диагональ и пары с COMMON в решётку не попадают
+    (tasks_matrix_for_project) — те же фильтры, чтобы строки сходились
+    с числами агрегатов. Порядок по id — детерминированный. Больше
+    30 строк — первые 30 и «…и ещё N».
+    """
+    tasks = (
+        DesignTask.objects.filter(project=project)
+        .exclude(status=DesignTask.Status.CANCELLED)
+        .exclude(source_section=db_models.F('target_section'))
+        .exclude(source_section__code='COMMON')
+        .exclude(target_section__code='COMMON')
+        .order_by('id')
+        .select_related('source_section', 'target_section')
+    )
+    total = tasks.count()
+    if total == 0:
+        return ''
+    status_labels = dict(DesignTask.Status.choices)
+    lines = [
+        f'- {task.source_section.code} → {task.target_section.code}'
+        f' — {status_labels.get(task.status, task.status)}'
+        for task in tasks[:RAG_MATRIX_TASK_LINE_LIMIT]
+    ]
+    hidden = total - len(lines)
+    if hidden:
+        lines.append(f'…и ещё {hidden}')
+    return '\n'.join(['Задания:'] + lines)
+
+
 def rag_answer(
     question: str,
     project_id: int | None = None,
@@ -508,6 +548,7 @@ def rag_answer(
     # кнопок и триггера. В sources не попадает (схема ответа и UI
     # сохранены); в контексте LLM несёт свой номер [N] для цитат.
     matrix_summary_text = ''
+    matrix_task_lines_text = ''
     if project_id is not None and source_type in (None, 'project'):
         from storage.domain.services import tasks_matrix_for_project
         from storage.domain.tasks_matrix import build_ai_summary
@@ -517,6 +558,10 @@ def rag_answer(
             matrix_summary_text = build_ai_summary(
                 tasks_matrix_for_project(project_row),
             )
+            # M6.1: построчный список заданий после агрегатов —
+            # «источник → цель — статус», лимит 30 + «…и ещё N».
+            if matrix_summary_text:
+                matrix_task_lines_text = _matrix_task_lines_text(project_row)
 
     answer = RAG_NO_INFO_ANSWER
     used_model = model or ''
@@ -535,10 +580,16 @@ def rag_answer(
                 f'{source["text"][:600]}'
             )
         if matrix_summary_text:
-            source_lines.append(
+            matrix_block = (
                 f'[{len(source_lines) + 1}] Матрица заданий (автосводка):\n'
                 f'{matrix_summary_text[:1200]}'
             )
+            if matrix_task_lines_text:
+                # M6.1: список добавляется после агрегатов целиком;
+                # его длину ограничивает 30-строчный отбор, срез [:1200]
+                # агрегатов не трогаем.
+                matrix_block += '\n' + matrix_task_lines_text
+            source_lines.append(matrix_block)
         context_text = '\n\n'.join(source_lines)
 
         # LLM-синтез ответа с цитатами (модель выбирается в UI, треб. 14).
