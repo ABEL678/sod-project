@@ -19,7 +19,7 @@
 ## Стек
 - Python 3.14
 - Django 5+
-- SQLite (на старте), PostgreSQL (на сервере через переменные окружения)
+- PostgreSQL (единственное хранилище; sqlite выведен из эксплуатации 20.11.2026, архив %TEMP%\kilo\archive\)
 - Bootstrap 5 + ванильный JS (без React/Vue)
 - ИИ-агент Kilo (PyCharm) для разработки
 - Тестирование: `pytest-django` (110+ тестов)
