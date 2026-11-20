@@ -61,6 +61,17 @@
 
 ## Журнал (Changelog)
 
+### 2026-11-20 — Вкладка «Помощь»: этап H1 (каркас) — реализовано, тесты зелёные
+План: docs/HELP_TAB_PLAN.md, §10 этап H1.
+- Приложение `help/`: `apps.py`, `urls.py` (`help:home`, `help:article`), `views.py` (HelpHomeView, HelpArticleView), `content.py` (загрузчик статей: PyYAML + markdown-it-py + mdit-py-plugins, кэш по mtime, пропуск битых файлов).
+- Шаблоны: `help/article.html` (каркас TOC + статья, мобильный TOC в `<details>`), `help/_toc.html`; стили `static/css/help.css` (только токены).
+- Топбар: кнопка «Помощь» (статичная ссылка на `start`) и пункт в мобильном меню.
+- Контент-каркасы `docs/help/`: start, documents, issues (order 30), tasks, feedback-howto.
+- `sw-bypass-list.js` перегенерирован скриптом `build_design_tokens.py`.
+- Тесты: `help/tests/` — 17 тестов, OK. `check`, `makemigrations --check` — чисто. `check_raw_hex.py` — чисто.
+- Зависимости: markdown-it-py==4.2.0, mdit-py-plugins==0.7.0.
+- Вне скоупа H1: поиск (H2), контекстность (H3), QUESTION и CTA (H4), ИИ (H5).
+
 ### 2026-11-18 — Пин-подсветка замечаний: закрыто
 
 План «persistent pin highlight» выполнен полностью (шаги 1-7).
