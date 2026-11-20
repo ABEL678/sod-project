@@ -75,6 +75,13 @@ urlpatterns = [
         views.TaskDashboardApiView.as_view(),
         name='task_dashboard_api',
     ),
+    # M6 (план :283): выгрузка «Матрицы заданий» — одна вьюха
+    # ?format=xlsx|pdf (формат обязателен), доступ — ГИП/админ.
+    path(
+        'projects/<int:project_id>/tasks/matrix/export/',
+        views.MatrixExportView.as_view(),
+        name='task_matrix_export',
+    ),
     # Этап R2: RFI — запросы информации
     path(
         'projects/<int:project_id>/rfis/new/',

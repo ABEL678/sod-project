@@ -115,3 +115,136 @@ def compute_cell_status(counters):
     if in_progress >= 1:
         return CELL_STATUS_IN_PROGRESS
     return CELL_STATUS_NOT_STARTED
+
+
+# ─── Итоги решётки и автосводка (M6, решения Координатора 1 и 5) ─────────────
+
+# Русские подписи статусов ячейки (план §4.3): единый словарь для
+# ИИ-сводки и экспорта XLSX/PDF. Иконки/бейджи UI остаются во вьюхе.
+CELL_STATUS_LABELS = {
+    CELL_STATUS_DONE: 'Готово',
+    CELL_STATUS_OVERDUE: 'Просрочено',
+    CELL_STATUS_REWORK: 'Доработка',
+    CELL_STATUS_WAITING_INFO: 'Пауза',
+    CELL_STATUS_REVIEW: 'На проверке',
+    CELL_STATUS_IN_PROGRESS: 'В работе',
+    CELL_STATUS_NOT_STARTED: 'Не начато',
+}
+
+# Отображаемые счётчики ячейки (К3/Ф3) — состав итогов строк/столбцов.
+MATRIX_COUNT_KEYS = ('total', 'in_progress', 'overdue', 'done')
+
+# Пары в доработке или паузе — показатель rework_wait_pairs (M3.2, G).
+REWORK_WAIT_CELL_STATUSES = frozenset({CELL_STATUS_REWORK, CELL_STATUS_WAITING_INFO})
+
+
+def matrix_sum(cells):
+    """Сумма четырёх отображаемых счётчиков по списку ячеек (M3, G).
+
+    Чистая функция; вынесена из views.py (`_matrix_sum`) в M6 по решению
+    Координатора 5 — числа M3 не изменяются (проверяет локальный регресс).
+    """
+    return {key: sum(cell[key] for cell in cells) for key in MATRIX_COUNT_KEYS}
+
+
+def visible_cells(sections, cells):
+    """Видимые ячейки решётки: фактические пары вне диагонали.
+
+    Диагональ (source == target) отображается «—» (ЗM3-2) и не учитывается
+    в итогах и сводке. Порядок повторяет обход решётки — по строкам, оси
+    уже отсортированы сервисом (order, code).
+    """
+    visible = []
+    for i, source in enumerate(sections):
+        for j, target in enumerate(sections):
+            if i == j:
+                continue
+            cell = cells.get((source.pk, target.pk))
+            if cell is not None:
+                visible.append(cell)
+    return visible
+
+
+def matrix_summary(sections, cells):
+    """Пять показателей сводки по видимым ячейкам (M3, G).
+
+    Возвращает dict с теми же ключами, что раньше собирала вьюха
+    (`_get_matrix_context`): overdue_tasks, overdue_pairs,
+    rework_wait_pairs, done_tasks, total_tasks. Вынесено в M6
+    (решение Координатора 5).
+    """
+    visible = visible_cells(sections, cells)
+    return {
+        'overdue_tasks': sum(cell['overdue'] for cell in visible),
+        'overdue_pairs': sum(1 for cell in visible if cell['overdue'] >= 1),
+        'rework_wait_pairs': sum(
+            1 for cell in visible
+            if cell['status'] in REWORK_WAIT_CELL_STATUSES
+        ),
+        'done_tasks': sum(cell['done'] for cell in visible),
+        'total_tasks': sum(cell['total'] for cell in visible),
+    }
+
+
+def build_ai_summary(matrix):
+    """Плоский текст автосводки «Матрицы заданий» для ИИ-поиска.
+
+    Вход — данные `tasks_matrix_for_project` (dict с ключами
+    sections/cells/today); выход — детерминированный plain text, ноль I/O
+    (M6, решение Координатора 1). Числа в тексте совпадают с
+    `matrix_summary` и счётчиками ячеек — один и тот же универсум:
+    видимые пары (без диагонали ЗM3-2), оси без COMMON.
+    Построчные списки задач по парам не включаются (решение 4).
+    Проект без заданий → пустая строка: контур ИИ ничего не встраивает.
+    """
+    sections = matrix.get('sections') or []
+    cells = matrix.get('cells') or {}
+    today = matrix.get('today')
+    visible = visible_cells(sections, cells)
+    summary = matrix_summary(sections, cells)
+    if summary['total_tasks'] == 0:
+        return ''
+
+    sums = matrix_sum(visible)
+    lines = []
+    header = 'Матрица заданий'
+    if today is not None:
+        header += f' на {today.isoformat()}'
+    lines.append(header + ' (сводка по парам разделов, без COMMON).')
+    lines.append(
+        f"Задач всего: {sums['total']}; "
+        f"в работе: {sums['in_progress']}; "
+        f"просрочено: {sums['overdue']}; "
+        f"завершено: {sums['done']}."
+    )
+    lines.append(
+        f"Пар с заданиями: {len(visible)}; "
+        f"пар с просрочкой: {summary['overdue_pairs']}; "
+        f"пар в доработке или паузе: {summary['rework_wait_pairs']}."
+    )
+    status_counts = {
+        status: sum(1 for cell in visible if cell['status'] == status)
+        for status in CELL_STATUSES
+    }
+    lines.append(
+        'Статусы пар: '
+        + ', '.join(
+            f'{CELL_STATUS_LABELS[status]} {status_counts[status]}'
+            for status in CELL_STATUSES
+        ) + '.'
+    )
+    overdue_pairs = [cell for cell in visible if cell['overdue'] >= 1]
+    if overdue_pairs:
+        lines.append(
+            'Пары с просроченными заданиями (код: просрочено из всего):'
+        )
+        by_id = {section.pk: section for section in sections}
+        for cell in overdue_pairs:
+            source = by_id[cell['source_section_id']]
+            target = by_id[cell['target_section_id']]
+            lines.append(
+                f"- {source.code} ({source.name}) — "
+                f"{target.code} ({target.name}): "
+                f"просрочено {cell['overdue']} из {cell['total']}."
+            )
+    return '\n'.join(lines)

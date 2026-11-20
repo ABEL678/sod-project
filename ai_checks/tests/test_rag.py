@@ -142,6 +142,49 @@ class RagAnswerTests(TestCase):
         )
         self.assertEqual(result['sources'], [])
 
+    def test_matrix_summary_injected_into_context(self):
+        """M6: автосводка «Матрицы заданий» встраивается в контекст RAG.
+
+        Проект с заданиями, но без проиндексированных PDF: векторный поиск
+        пуст, ответ всё равно синтезируется — сводка матрицы попадает в
+        контекст LLM (строится на лету из tasks_matrix_for_project,
+        ноль новых SQL/моделей, без триггера). В sources сводка не
+        попадает — схема ответа и UI не меняются.
+        """
+        from ai_checks.domain.services import RAG_NO_INFO_ANSWER
+        from ai_checks.tests.mocks import MockLLMProvider
+        from storage.domain.models import DesignTask, Section
+
+        section_kr = Section.objects.create(
+            project=self.project_a, code='KR', name='Конструкции', order=2,
+        )
+        DesignTask.objects.create(
+            project=self.project_a,
+            source_section=Section.objects.filter(
+                project=self.project_a, code='АР',
+            ).first(),
+            target_section=section_kr,
+            author=self.user,
+            title='Задание RAG',
+            description='Описание',
+            status=DesignTask.Status.IN_PROGRESS,
+        )
+
+        llm = MockLLMProvider()
+        result = rag_answer(
+            self.question,
+            project_id=self.project_a.pk,
+            embedding_service=self.embedding,
+            vector_backend=self.backend,
+            llm_provider=llm,
+        )
+
+        self.assertNotEqual(result['answer'], RAG_NO_INFO_ANSWER)
+        self.assertEqual(result['sources'], [])
+        user_message = llm.calls[0]['messages'][-1]['content']
+        self.assertIn('Матрица заданий (автосводка)', user_message)
+        self.assertIn('Задач всего: 1', user_message)
+
     def test_project_scope_requires_project_context(self):
         internal = self._internal_doc(
             self.project_a, 'Проектное знание', tenant_scope='project',

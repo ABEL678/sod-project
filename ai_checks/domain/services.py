@@ -41,7 +41,7 @@ from ai_checks.domain.models import (
     RagQuery,
 )
 from ai_checks.ports.embedding import EmbeddingService
-from storage.domain.models import Document, DocumentVersion
+from storage.domain.models import Document, DocumentVersion, Project
 
 logger = logging.getLogger(__name__)
 
@@ -502,9 +502,25 @@ def rag_answer(
     # Регрессия 0951fd8: при пустом списке источников used_model не был
     # определён — RagQuery.objects.create падал с NameError. Инициализируем
     # до ветки LLM-синтеза.
+    # M6 (план :283, решение Координатора 1): автосводка «Матрицы заданий»
+    # встраивается в контекст ИИ-поиска на лету — строится из
+    # tasks_matrix_for_project, ноль новых SQL/моделей, без эндпоинта,
+    # кнопок и триггера. В sources не попадает (схема ответа и UI
+    # сохранены); в контексте LLM несёт свой номер [N] для цитат.
+    matrix_summary_text = ''
+    if project_id is not None and source_type in (None, 'project'):
+        from storage.domain.services import tasks_matrix_for_project
+        from storage.domain.tasks_matrix import build_ai_summary
+
+        project_row = Project.objects.filter(pk=project_id).first()
+        if project_row is not None:
+            matrix_summary_text = build_ai_summary(
+                tasks_matrix_for_project(project_row),
+            )
+
     answer = RAG_NO_INFO_ANSWER
     used_model = model or ''
-    if sources:
+    if sources or matrix_summary_text:
         # Формируем контекст для LLM-синтеза.
         source_lines = []
         for index, source in enumerate(sources, start=1):
@@ -517,6 +533,11 @@ def rag_answer(
             source_lines.append(
                 f'[{index}] {source["document_title"]}{meta}:\n'
                 f'{source["text"][:600]}'
+            )
+        if matrix_summary_text:
+            source_lines.append(
+                f'[{len(source_lines) + 1}] Матрица заданий (автосводка):\n'
+                f'{matrix_summary_text[:1200]}'
             )
         context_text = '\n\n'.join(source_lines)
 

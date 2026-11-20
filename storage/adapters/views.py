@@ -181,6 +181,11 @@ from storage.domain.services import (
 
 from issues.models import Issue
 from storage.domain.project_templates import ROOT_SUPERFOLDER_NAMES
+from storage.domain.tasks_matrix import (
+    CELL_STATUS_LABELS,
+    matrix_sum,
+    matrix_summary,
+)
 
 
 RECENT_DOCUMENTS_SESSION_KEY = 'recent_documents'
@@ -308,16 +313,8 @@ MATRIX_LEGEND_RULES = {
     'IN_PROGRESS': 'есть задание в работе',
     'NOT_STARTED': 'задания не начаты',
 }
-# Счётчики ячейки матрицы, которые суммируются в итоги (служебные ключи не входят).
-MATRIX_COUNT_KEYS = ('total', 'in_progress', 'overdue', 'done')
-MATRIX_REWORK_WAIT_STATUSES = frozenset({'REWORK', 'WAITING_INFO'})
 
 HIGHLIGHT_ROW_SECONDS = 5
-
-
-def _matrix_sum(cells):
-    """Сумма четырёх отображаемых счётчиков по списку ячеек матрицы (M3, G)."""
-    return {key: sum(cell[key] for cell in cells) for key in MATRIX_COUNT_KEYS}
 
 
 def _document_column_defs(config):
@@ -1198,8 +1195,8 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
         grid = []
         column_cells = [[] for _ in sections]
         # Видимые пары — без диагонали (source == target). Итоги и плашки
-        # считаются только по ним (Python, без новых запросов).
-        visible = []
+        # считаются только по ним (Python, без новых запросов); состав
+        # итогов вынесен в чистые функции tasks_matrix (M6, решение 5).
         for i, source in enumerate(sections):
             row = []
             row_cells = []
@@ -1211,27 +1208,17 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
                     if i != j:
                         row_cells.append(cell)
                         column_cells[j].append(cell)
-                        visible.append(cell)
                 row.append({'source': source, 'target': target, 'cell': cell})
             grid.append({
                 'source': source,
                 'cells': row,
-                'totals': _matrix_sum(row_cells),
+                'totals': matrix_sum(row_cells),
             })
         return {
             'matrix_sections': sections,
             'matrix_grid': grid,
-            'matrix_col_totals': [_matrix_sum(column) for column in column_cells],
-            'matrix_summary': {
-                'overdue_tasks': sum(cell['overdue'] for cell in visible),
-                'overdue_pairs': sum(1 for cell in visible if cell['overdue'] >= 1),
-                'rework_wait_pairs': sum(
-                    1 for cell in visible
-                    if cell['status'] in MATRIX_REWORK_WAIT_STATUSES
-                ),
-                'done_tasks': sum(cell['done'] for cell in visible),
-                'total_tasks': sum(cell['total'] for cell in visible),
-            },
+            'matrix_col_totals': [matrix_sum(column) for column in column_cells],
+            'matrix_summary': matrix_summary(sections, cells),
             'matrix_today': matrix['today'],
             'matrix_legend': [
                 {
@@ -2245,6 +2232,439 @@ class TaskDashboardExportView(LoginRequiredMixin, View):
                 '.spreadsheetml.sheet'
             ),
         )
+
+
+# ─── M6: экспорт «Матрицы заданий» (XLSX/PDF) и ИИ-сводка ────────────────────
+# План :283, решения Координатора 1–5: одна вьюха ?format=xlsx|pdf (без
+# дефолта, невалидное значение → 404), гейт как у TaskDashboardExportView,
+# один лист/страница — решётка (оси без COMMON, 4 счётчика), итоги
+# строк/столбцов, блок сводки (5 показателей matrix_summary), легенда.
+# Построчные списки задач по парам не включаются; составы просрочки Р2
+# не унифицируются с Сводкой. HTML @media print не делается.
+
+
+def _matrix_cell_text(cell):
+    """Текст ячейки выгрузки: статус + четыре счётчика (К3/Ф3)."""
+    label = CELL_STATUS_LABELS.get(cell['status'], cell['status'])
+    return (
+        f'{label}\n'
+        f"всего {cell['total']} · в работе {cell['in_progress']} · "
+        f"просрочено {cell['overdue']} · завершено {cell['done']}"
+    )
+
+
+def _matrix_totals_text(totals):
+    """Текст итога строки/столбца решётки."""
+    return (
+        f"всего {totals['total']} · в работе {totals['in_progress']} · "
+        f"просрочено {totals['overdue']} · завершено {totals['done']}"
+    )
+
+
+def _matrix_pdf_font():
+    """TTF-шрифт с кириллицей для PDF-выгрузки матрицы.
+
+    Порядок поиска — по прецеденту ai_checks/domain/services.py:1035
+    (`_register_cyrillic_font`): static/fonts/GolosText-Regular.ttf →
+    DejaVuSans.ttf → системный DejaVuSans. Возвращает пару (regular, bold);
+    bold может совпадать с regular. Без TTF — RuntimeError (битая
+    кириллица в PDF хуже честного сбоя экспорта).
+    """
+    import sys
+    from pathlib import Path
+
+    from django.conf import settings as dj_settings
+
+    from reportlab.lib.fonts import addMapping
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+
+    roots = []
+    base_dir = getattr(dj_settings, 'BASE_DIR', None)
+    if base_dir is not None:
+        roots.append(Path(base_dir))
+    roots.append(Path(__file__).resolve().parents[2])
+
+    regular_candidates = []
+    bold_candidates = []
+    for root in roots:
+        fonts_dir = root / 'static' / 'fonts'
+        regular_candidates.extend([
+            ('GolosText', fonts_dir / 'GolosText-Regular.ttf'),
+            ('GolosText', fonts_dir / 'GolosText.ttf'),
+            ('DejaVuSans', fonts_dir / 'DejaVuSans.ttf'),
+        ])
+        bold_candidates.extend([
+            ('GolosText-Bold', fonts_dir / 'GolosText-Bold.ttf'),
+            ('DejaVuSans-Bold', fonts_dir / 'DejaVuSans-Bold.ttf'),
+        ])
+    if sys.platform != 'win32':
+        system_fonts = Path('/usr/share/fonts/truetype/dejavu')
+        regular_candidates.append(
+            ('DejaVuSans', system_fonts / 'DejaVuSans.ttf'),
+        )
+        bold_candidates.append(
+            ('DejaVuSans-Bold', system_fonts / 'DejaVuSans-Bold.ttf'),
+        )
+
+    for name, path in regular_candidates:
+        if not path.exists():
+            continue
+        pdfmetrics.registerFont(TTFont(name, str(path)))
+        bold_name = name
+        for bold_name_candidate, bold_path in bold_candidates:
+            if bold_path.exists():
+                pdfmetrics.registerFont(
+                    TTFont(bold_name_candidate, str(bold_path)),
+                )
+                bold_name = bold_name_candidate
+                break
+        addMapping(name, 0, 0, name)
+        addMapping(name, 1, 0, bold_name)
+        return name, bold_name
+
+    searched = '\n'.join(f'  - {path}' for _name, path in regular_candidates)
+    raise RuntimeError(
+        'Экспорт PDF матрицы недоступен: не найден TTF-шрифт с кириллицей. '
+        'Положите GolosText-Regular.ttf или DejaVuSans.ttf в static/fonts/. '
+        f'Проверенные пути:\n{searched}'
+    )
+
+
+def _matrix_export_xlsx(project, matrix):
+    """XLSX «Матрицы заданий»: один лист — решётка, итоги, сводка, легенда."""
+    sections = matrix['sections']
+    cells = matrix['cells']
+    today = matrix['today']
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = 'Матрица заданий'
+
+    thin_border = Border(
+        left=Side(style='thin'),
+        right=Side(style='thin'),
+        top=Side(style='thin'),
+        bottom=Side(style='thin'),
+    )
+    header_fill = PatternFill(start_color='0056B3', end_color='0056B3', fill_type='solid')
+    header_font = Font(bold=True, color='FFFFFF')
+    alt_fill = PatternFill(start_color='F2F2F2', end_color='F2F2F2', fill_type='solid')
+
+    # Шапка листа (термин «Сводка», Р8: без слова «дашборд»).
+    title = (
+        f'Матрица заданий — {project.name} '
+        f'(сводка на {today.strftime("%d.%m.%Y")})'
+    )
+    sheet.cell(row=1, column=1, value=title).font = Font(bold=True)
+
+    # Решётка: строки — источники, колонки — цели (оси без COMMON).
+    grid_start_row = 3
+    grid_start_col = 2
+    header_row = grid_start_row
+    corner = sheet.cell(
+        row=header_row, column=grid_start_col, value='Источник \\ Цель',
+    )
+    corner.font = header_font
+    corner.fill = header_fill
+    corner.border = thin_border
+    for col_index, target in enumerate(sections, start=grid_start_col + 1):
+        head = sheet.cell(
+            row=header_row, column=col_index,
+            value=_safe_excel_value(f'{target.code} — {target.name}'),
+        )
+        head.font = header_font
+        head.fill = header_fill
+        head.border = thin_border
+    totals_head_top = sheet.cell(
+        row=header_row, column=grid_start_col + len(sections) + 1, value='Итог',
+    )
+    totals_head_top.font = header_font
+    totals_head_top.fill = header_fill
+    totals_head_top.border = thin_border
+
+    for row_index, row in enumerate(sections, start=header_row + 1):
+        row_cells = []
+        source_head = sheet.cell(
+            row=row_index, column=grid_start_col,
+            value=_safe_excel_value(f'{row.code} — {row.name}'),
+        )
+        source_head.font = header_font
+        source_head.fill = header_fill
+        source_head.border = thin_border
+        for col_index, target in enumerate(sections, start=grid_start_col + 1):
+            cell = sheet.cell(row=row_index, column=col_index)
+            cell.border = thin_border
+            if row.pk == target.pk:
+                cell.value = '—'
+                continue
+            pair = cells.get((row.pk, target.pk))
+            if pair is None:
+                cell.value = '—'
+                continue
+            row_cells.append(pair)
+            cell.value = _safe_excel_value(_matrix_cell_text(pair))
+            cell.alignment = Alignment(wrap_text=True, vertical='top')
+            if (row_index - header_row) % 2 == 0:
+                cell.fill = alt_fill
+        totals = sheet.cell(
+            row=row_index, column=grid_start_col + len(sections) + 1,
+            value=_safe_excel_value(_matrix_totals_text(matrix_sum(row_cells))),
+        )
+        totals.font = Font(bold=True)
+        totals.border = thin_border
+        totals.alignment = Alignment(wrap_text=True, vertical='top')
+
+    totals_row = header_row + len(sections) + 1
+    totals_head = sheet.cell(
+        row=totals_row, column=grid_start_col, value='Итог по столбцу',
+    )
+    totals_head.font = Font(bold=True)
+    totals_head.border = thin_border
+    for col_index, target in enumerate(sections, start=grid_start_col + 1):
+        column_cells = [
+            cells.get((source.pk, target.pk))
+            for source in sections
+            if source.pk != target.pk
+        ]
+        column_cells = [cell for cell in column_cells if cell is not None]
+        cell = sheet.cell(
+            row=totals_row, column=col_index,
+            value=_safe_excel_value(
+                _matrix_totals_text(matrix_sum(column_cells)),
+            ),
+        )
+        cell.font = Font(bold=True)
+        cell.border = thin_border
+        cell.alignment = Alignment(wrap_text=True, vertical='top')
+
+    # Блок сводки: ровно 5 показателей matrix_summary (решение 4).
+    summary_row = totals_row + 2
+    sheet.cell(row=summary_row, column=grid_start_col, value='Сводка').font = (
+        Font(bold=True)
+    )
+    summary = matrix_summary(sections, cells)
+    summary_lines = [
+        f"Всего задач в парах: {summary['total_tasks']}",
+        f"Просрочено задач: {summary['overdue_tasks']}",
+        f"Пар с просрочкой: {summary['overdue_pairs']}",
+        f"Пар в доработке или паузе: {summary['rework_wait_pairs']}",
+        f"Завершено задач: {summary['done_tasks']}",
+    ]
+    for offset, line in enumerate(summary_lines, start=1):
+        sheet.cell(row=summary_row + offset, column=grid_start_col, value=line)
+
+    # Легенда под решёткой: 7 статусов — слово + краткое правило (§4.4).
+    legend_row = summary_row + len(summary_lines) + 2
+    sheet.cell(row=legend_row, column=grid_start_col, value='Легенда').font = (
+        Font(bold=True)
+    )
+    for offset, (status, rule) in enumerate(MATRIX_LEGEND_RULES.items(), start=1):
+        label = CELL_STATUS_LABELS.get(status, status)
+        sheet.cell(
+            row=legend_row + offset, column=grid_start_col,
+            value=f'{label} — {rule}',
+        )
+
+    sheet.column_dimensions['A'].width = 3
+    sheet.column_dimensions['B'].width = 26
+    for index in range(len(sections) + 1):
+        letter = sheet.cell(
+            row=1, column=grid_start_col + 1 + index,
+        ).column_letter
+        sheet.column_dimensions[letter].width = 30
+
+    buffer = BytesIO()
+    workbook.save(buffer)
+    buffer.seek(0)
+    filename = 'matrix_zadanij_{code}.xlsx'.format(
+        code=get_valid_filename(project.code or project.pk),
+    )
+    return FileResponse(
+        buffer,
+        as_attachment=True,
+        filename=filename,
+        content_type=(
+            'application/vnd.openxmlformats-officedocument'
+            '.spreadsheetml.sheet'
+        ),
+    )
+
+
+def _matrix_export_pdf(project, matrix):
+    """PDF «Матрицы заданий»: та же структура одной страницей (reportlab)."""
+    import io
+
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4, landscape
+    from reportlab.lib.styles import ParagraphStyle
+    from reportlab.lib.units import mm
+    from reportlab.platypus import (
+        Paragraph,
+        SimpleDocTemplate,
+        Spacer,
+        Table,
+        TableStyle,
+    )
+
+    font, font_bold = _matrix_pdf_font()
+    sections = matrix['sections']
+    cells = matrix['cells']
+    today = matrix['today']
+
+    styles = {
+        'title': ParagraphStyle(
+            'matrix-title', fontName=font_bold, fontSize=11, leading=14,
+        ),
+        'heading': ParagraphStyle(
+            'matrix-heading', fontName=font_bold, fontSize=9, leading=11,
+        ),
+        'cell': ParagraphStyle(
+            'matrix-cell', fontName=font, fontSize=6, leading=7.5,
+        ),
+        'text': ParagraphStyle(
+            'matrix-text', fontName=font, fontSize=8, leading=10.5,
+        ),
+    }
+
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=landscape(A4),
+        leftMargin=10 * mm,
+        rightMargin=10 * mm,
+        topMargin=10 * mm,
+        bottomMargin=10 * mm,
+        title='Матрица заданий',
+        author='СОД',
+    )
+    story = [
+        Paragraph(
+            f'Матрица заданий — {project.name} '
+            f'(сводка на {today.strftime("%d.%m.%Y")})',
+            styles['title'],
+        ),
+        Spacer(1, 4 * mm),
+    ]
+
+    grid_data = [[
+        Paragraph('<b>Источник \\ Цель</b>', styles['cell']),
+        *[
+            Paragraph(
+                f'<b>{section.code} — {section.name}</b>', styles['cell'],
+            )
+            for section in sections
+        ],
+        Paragraph('<b>Итог</b>', styles['cell']),
+    ]]
+    for source in sections:
+        row_cells = []
+        cells_row = [
+            Paragraph(f'<b>{source.code} — {source.name}</b>', styles['cell']),
+        ]
+        for target in sections:
+            if source.pk == target.pk:
+                cells_row.append(Paragraph('—', styles['cell']))
+                continue
+            pair = cells.get((source.pk, target.pk))
+            if pair is None:
+                cells_row.append(Paragraph('—', styles['cell']))
+                continue
+            row_cells.append(pair)
+            text = _matrix_cell_text(pair).replace('\n', '<br/>')
+            cells_row.append(Paragraph(text, styles['cell']))
+        totals = matrix_sum(row_cells)
+        cells_row.append(Paragraph(
+            _matrix_totals_text(totals).replace('\n', '<br/>'),
+            styles['cell'],
+        ))
+        grid_data.append(cells_row)
+
+    column_totals_row = [
+        Paragraph('<b>Итог по столбцу</b>', styles['cell']),
+    ]
+    for target in sections:
+        column_cells = [
+            cells.get((source.pk, target.pk))
+            for source in sections
+            if source.pk != target.pk
+        ]
+        column_cells = [cell for cell in column_cells if cell is not None]
+        column_totals_row.append(Paragraph(
+            _matrix_totals_text(matrix_sum(column_cells)).replace('\n', '<br/>'),
+            styles['cell'],
+        ))
+    column_totals_row.append(Paragraph('', styles['cell']))
+    grid_data.append(column_totals_row)
+
+    grid_style = TableStyle([
+        ('GRID', (0, 0), (-1, -1), 0.4, colors.grey),
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#0056B3')),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+        ('BACKGROUND', (0, 1), (0, -1), colors.HexColor('#0056B3')),
+        ('TEXTCOLOR', (0, 1), (0, -1), colors.white),
+        ('BACKGROUND', (-1, 1), (-1, -2), colors.HexColor('#F2F2F2')),
+        ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor('#F2F2F2')),
+    ])
+    story.append(Table(grid_data, style=grid_style, hAlign='LEFT'))
+    story.append(Spacer(1, 5 * mm))
+
+    summary = matrix_summary(sections, cells)
+    story.append(Paragraph('Сводка', styles['heading']))
+    for line in (
+        f"Всего задач в парах: {summary['total_tasks']}",
+        f"Просрочено задач: {summary['overdue_tasks']}",
+        f"Пар с просрочкой: {summary['overdue_pairs']}",
+        f"Пар в доработке или паузе: {summary['rework_wait_pairs']}",
+        f"Завершено задач: {summary['done_tasks']}",
+    ):
+        story.append(Paragraph(line, styles['text']))
+    story.append(Spacer(1, 4 * mm))
+
+    story.append(Paragraph('Легенда', styles['heading']))
+    for status, rule in MATRIX_LEGEND_RULES.items():
+        label = CELL_STATUS_LABELS.get(status, status)
+        story.append(Paragraph(f'{label} — {rule}', styles['text']))
+
+    doc.build(story)
+    buffer.seek(0)
+    filename = 'matrix_zadanij_{code}.pdf'.format(
+        code=get_valid_filename(project.code or project.pk),
+    )
+    return FileResponse(
+        buffer,
+        as_attachment=True,
+        filename=filename,
+        content_type='application/pdf',
+    )
+
+
+class MatrixExportView(LoginRequiredMixin, View):
+    """Выгрузка «Матрицы заданий» в XLSX/PDF (M6, план :283).
+
+    GET /projects/<id>/tasks/matrix/export/?format=xlsx|pdf — одна вьюха;
+    format обязателен, невалидное значение → 404 (дефолта нет, решение 3).
+    Гейт — как у TaskDashboardExportView: только ГИП/админ проекта (403).
+    Данные — tasks_matrix_for_project на лету (без новых SQL и моделей).
+    """
+
+    def get(self, request, project_id):
+        project = get_object_or_404(
+            get_accessible_projects(request.user),
+            pk=project_id,
+        )
+        if not can_view_all_tasks(request.user, project):
+            raise PermissionDenied(
+                'Матрица заданий доступна только ГИПу или админу проекта'
+            )
+        export_format = request.GET.get('format') or ''
+        if export_format not in ('xlsx', 'pdf'):
+            raise Http404('Параметр format обязателен: xlsx или pdf')
+        matrix = tasks_matrix_for_project(project)
+        if export_format == 'xlsx':
+            return _matrix_export_xlsx(project, matrix)
+        return _matrix_export_pdf(project, matrix)
 
 
 class TaskDashboardApiView(LoginRequiredMixin, View):
