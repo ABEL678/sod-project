@@ -153,7 +153,20 @@ class RagSearchViewTests(MediaIsolationMixin, TestCase):
         self.assertContains(response, 'Раздел')
         self.assertContains(response, 'Тип источника')
         self.assertContains(response, 'Какие нагрузки из ОВ учтены в ЭОМ?')
-        self.assertContains(response, 'История запросов')
+        # История ленивая (0e3e43c): в панели — плейсхолдер и hx-get на
+        # эндпоинт истории; заголовок «История запросов» отдаёт фрагмент.
+        self.assertContains(response, 'id="aiRagHistory"')
+        self.assertContains(response, 'hx-trigger="load"')
+        self.assertContains(response, 'Загрузка…')
+        self.assertContains(
+            response,
+            reverse('ai_checks:rag_history', args=[self.project.pk]),
+        )
+        history = self.client.get(
+            reverse('ai_checks:rag_history', args=[self.project.pk]),
+        )
+        self.assertEqual(history.status_code, 200)
+        self.assertContains(history, 'История запросов')
 
     def test_rag_search_finds_project_document(self):
         """Сквозной поиск: PDF проиндексирован, ответ содержит источник."""
