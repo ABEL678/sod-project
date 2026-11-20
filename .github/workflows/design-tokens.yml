@@ -27,6 +27,12 @@ on:
 jobs:
   drift-check:
     runs-on: ubuntu-latest
+    # Импорт sod_core/settings.py требует POSTGRES_DB (иначе ImproperlyConfigured).
+    # Скрипту генерации БД не нужна: значения-заглушки, подключения не будет.
+    env:
+      POSTGRES_DB: ci-dummy
+      POSTGRES_USER: ci
+      POSTGRES_PASSWORD: ci
     steps:
       - uses: actions/checkout@v4
 
