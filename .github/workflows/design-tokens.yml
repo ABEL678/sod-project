@@ -11,6 +11,8 @@ on:
       - 'static/js/design-tokens.js'
       - 'storage/domain/design_colors.py'
       - 'scripts/build_design_tokens.py'
+      - 'static/js/sw-bypass-list.js'
+      - 'sod_core/urls.py'
       - '.github/workflows/design-tokens.yml'
   pull_request:
     paths:
@@ -18,6 +20,8 @@ on:
       - 'static/js/design-tokens.js'
       - 'storage/domain/design_colors.py'
       - 'scripts/build_design_tokens.py'
+      - 'static/js/sw-bypass-list.js'
+      - 'sod_core/urls.py'
       - '.github/workflows/design-tokens.yml'
 
 jobs:

@@ -481,8 +481,25 @@ def render_sw_bypass() -> str:
             return ''
         return head
 
+    def _is_admin_route(pattern) -> bool:
+        """Маршрут относится к админке Django, а не к пользовательскому разделу.
+
+        Признаки: вложенный include с app_name='admin' (сам admin.site.urls)
+        либо callback из django.contrib.admin (ModelAdmin/AdminSite-вьюхи,
+        включая сгенерированные для моделей вида admin/<app>/<model>/).
+        Админ-маршруты зависят от INSTALLED_APPS и флагов моделей (например,
+        AI_CHECKS_ENABLED), поэтому в выход генератора они не попадают.
+        """
+        if getattr(pattern, 'app_name', None) == 'admin':
+            return True
+        callback = getattr(pattern, 'callback', None)
+        module = getattr(callback, '__module__', '') or ''
+        return module.startswith('django.contrib.admin')
+
     def walk(patterns) -> None:
         for pattern in patterns:
+            if _is_admin_route(pattern):
+                continue
             head = _head(getattr(pattern, 'pattern', None))
             if head and head != 'sw.js':
                 prefixes.add('/{head}/'.format(head=head))

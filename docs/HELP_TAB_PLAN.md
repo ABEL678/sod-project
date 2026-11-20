@@ -68,6 +68,8 @@
 | Роутинг приложений: `issues`, `storage`, `external_api`, `ai_checks` включены в корень | `sod_core/urls.py:27-30` (urlpatterns `:23`, ai_checks `:33`) | Приложение `help` добавляется одной строкой `path('help/', include('help.urls'))` |
 | SW-bypass-лист автогенерируется из urls.py (правка руками запрещена, CI ловит дрейф) | `static/js/sw-bypass-list.js:1-4` | После добавления маршрутов `/help/` — перегенерация скриптом, иначе страницы справки попадут в кэш сервис-воркера |
 
+**Контракт sw-bypass-list.js (FIX-2):** файл содержит только пользовательские префиксы. Маршруты админки Django (`admin/…`, включая вложенные `admin/<app>/<model>/` и `admin/r/`) исключаются генератором по признаку (`app_name='admin'` или callback из `django.contrib.admin`), поэтому выход не зависит от `INSTALLED_APPS`-моделей и флагов (например, `AI_CHECKS_ENABLED`). Проверка детерминизма: два прогона с флагом True и False дают идентичный файл. CI-триггер покрывает `sod_core/urls.py` и `static/js/sw-bypass-list.js`.
+
 ---
 
 ## 4. Архитектура решения
