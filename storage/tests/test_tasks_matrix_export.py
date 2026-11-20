@@ -365,6 +365,43 @@ class MatrixExportViewTests(TestCase):
         response = self.client.get(self.url, {'format': 'xlsx'})
         self.assertEqual(response.status_code, 302)
 
+    # ─── UI-вход экспорта (МАЖОР СТОП-6, оговорка 1) ─────────────────────────
+
+    def _detail_tab(self, user):
+        self.client.force_login(user)
+        return self.client.get(
+            reverse('storage:project_detail', args=[self.project.pk]),
+            {'tab': 'matrix'},
+        )
+
+    def test_matrix_tab_shows_export_buttons_for_gip(self):
+        response = self._detail_tab(self.gip)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context['active_tab'], 'matrix')
+        content = response.content.decode('utf-8')
+        self.assertIn('Экспорт матрицы заданий', content)
+        self.assertIn(
+            f'href="/projects/{self.project.pk}/tasks/matrix/export/?format=xlsx"',
+            content,
+        )
+        self.assertIn(
+            f'href="/projects/{self.project.pk}/tasks/matrix/export/?format=pdf"',
+            content,
+        )
+        self.assertIn('Скачать XLSX', content)
+        self.assertIn('Скачать PDF', content)
+        # Терминология Р8.
+        self.assertNotIn('дашборд', content.lower())
+
+    def test_matrix_tab_hides_export_buttons_for_developer(self):
+        response = self._detail_tab(self.developer)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context['active_tab'], 'documents')
+        content = response.content.decode('utf-8')
+        self.assertNotIn('Экспорт матрицы заданий', content)
+        self.assertNotIn('tasks/matrix/export/?format=xlsx', content)
+        self.assertNotIn('tasks/matrix/export/?format=pdf', content)
+
     # ─── Содержимое XLSX (решение 4) ─────────────────────────────────────────
 
     def _workbook(self):

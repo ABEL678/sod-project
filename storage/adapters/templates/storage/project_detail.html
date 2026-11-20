@@ -665,6 +665,23 @@
                         {% endif %}
                     </div>
                 {% elif active_tab == 'matrix' and can_view_matrix %}
+                    {# M6 (МАЖОР СТОП-6, оговорка 1): UI-вход экспорта матрицы. #}
+                    {# Права — те же, что у вкладки (can_view_matrix), #}
+                    {# отдельного гейта нет; стиль — по прецеденту кнопки #}
+                    {# экспорта Сводки (task_dashboard.html:30–34). #}
+                    <div class="d-flex justify-content-end gap-2 mb-2" data-role="matrix-export-actions">
+                        <span class="small text-muted align-self-center me-auto">Экспорт матрицы заданий</span>
+                        <a class="btn btn-sm btn-primary"
+                           href="{% url 'storage:task_matrix_export' project.pk %}?format=xlsx"
+                           data-role="matrix-export-xlsx">
+                            <i class="bi bi-download me-1" aria-hidden="true"></i>Скачать XLSX
+                        </a>
+                        <a class="btn btn-sm btn-primary"
+                           href="{% url 'storage:task_matrix_export' project.pk %}?format=pdf"
+                           data-role="matrix-export-pdf">
+                            <i class="bi bi-download me-1" aria-hidden="true"></i>Скачать PDF
+                        </a>
+                    </div>
                     {% include 'storage/_tasks_matrix.html' %}
                 {% elif active_tab == 'rfi' %}
                     {% include 'storage/_rfi_tab.html' %}
