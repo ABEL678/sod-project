@@ -61,7 +61,6 @@
                     </div>
                 {% endif %}
 
-                {% if not project_folders %}
                 {% for section in section_nodes %}
                     <div class="section-node list-group-item"
                          data-section-node="{{ section.pk }}"
@@ -116,7 +115,6 @@
                         <div class="sidebar-empty">Разделов пока нет</div>
                     {% endif %}
                 {% endfor %}
-                {% endif %}
             </div>
 
 <div id="dndToast" class="dnd-toast d-none" role="status" aria-live="polite"></div>
