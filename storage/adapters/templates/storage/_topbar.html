@@ -53,6 +53,11 @@
                     {% endif %}
                 </a>
             </li>
+            <li>
+                <a class="dropdown-item" href="{% url 'help:article' 'start' %}">
+                    <i class="bi bi-question-circle me-2" aria-hidden="true"></i>Помощь
+                </a>
+            </li>
         </ul>
     </div>
 
@@ -86,6 +91,14 @@
                 {% endif %}
             </a>
         {% endif %}
+
+        {# Вкладка «Помощь» (H1: статичная ссылка на start; контекстность — H3) #}
+        <a href="{% url 'help:article' 'start' %}"
+           class="btn btn-sm btn-outline-secondary topbar-action-desktop"
+           title="Помощь" aria-label="Помощь">
+            <i class="bi bi-question-circle" aria-hidden="true"></i>
+            <span class="d-none d-xl-inline ms-1">Помощь</span>
+        </a>
 
         {# 2B: кнопка обратной связи #}
         <button type="button"

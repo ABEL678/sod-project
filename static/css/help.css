@@ -1,0 +1,164 @@
+/* Справка «Помощь»: каркас двухколоночной страницы статьи и оглавление.
+   Цвета — только через CSS-переменные из design-tokens/tokens.css. */
+
+.help-page {
+    padding-top: var(--sp-6);
+    padding-bottom: var(--sp-12);
+}
+
+.help-layout {
+    display: grid;
+    grid-template-columns: 260px minmax(0, 1fr);
+    gap: var(--sp-8);
+    align-items: start;
+}
+
+.help-sidebar {
+    position: sticky;
+    top: var(--sp-4);
+    background: var(--c-bg-surface);
+    border: 1px solid var(--c-border-hairline);
+    border-radius: var(--r-md);
+    padding: var(--sp-4);
+}
+
+.help-mobile-toc {
+    grid-column: 1 / -1;
+    background: var(--c-bg-surface);
+    border: 1px solid var(--c-border-hairline);
+    border-radius: var(--r-md);
+    padding: var(--sp-3) var(--sp-4);
+}
+
+.help-mobile-toc > summary {
+    cursor: pointer;
+    font-weight: 600;
+    color: var(--c-text-primary);
+}
+
+.help-mobile-toc .help-toc {
+    margin-top: var(--sp-3);
+}
+
+/* Оглавление */
+.help-toc__section + .help-toc__section {
+    margin-top: var(--sp-4);
+}
+
+.help-toc__section-title {
+    font-size: var(--text-caption);
+    line-height: var(--lh-caption);
+    color: var(--c-text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-bottom: var(--sp-2);
+}
+
+.help-toc__list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+.help-toc__list li + li {
+    margin-top: var(--sp-1);
+}
+
+.help-toc__link {
+    display: block;
+    padding: var(--sp-1) var(--sp-2);
+    border-radius: var(--r-sm);
+    color: var(--c-text-secondary);
+    text-decoration: none;
+    font-size: var(--text-body);
+    line-height: var(--lh-body);
+}
+
+.help-toc__link:hover {
+    background: var(--c-bg-surface-hover);
+    color: var(--c-text-primary);
+}
+
+.help-toc__link.is-current {
+    background: var(--c-accent-subtle);
+    color: var(--c-accent-on-subtle);
+    font-weight: 600;
+}
+
+/* Статья */
+.help-article {
+    background: var(--c-bg-surface);
+    border: 1px solid var(--c-border-hairline);
+    border-radius: var(--r-md);
+    padding: var(--sp-8);
+    min-width: 0;
+}
+
+.help-breadcrumbs {
+    font-size: var(--text-caption);
+    line-height: var(--lh-caption);
+    color: var(--c-text-muted);
+    margin-bottom: var(--sp-3);
+}
+
+.help-breadcrumbs a {
+    color: var(--c-accent);
+    text-decoration: none;
+}
+
+.help-breadcrumbs__sep {
+    margin: 0 var(--sp-2);
+}
+
+.help-article__title {
+    font-size: var(--text-h1, 24px);
+    color: var(--c-text-primary);
+    margin-bottom: var(--sp-6);
+}
+
+.help-article__body {
+    color: var(--c-text-primary);
+    font-size: var(--text-body);
+    line-height: var(--lh-body);
+}
+
+.help-article__body h2,
+.help-article__body h3 {
+    margin-top: var(--sp-6);
+    margin-bottom: var(--sp-3);
+}
+
+.help-article__body a {
+    color: var(--c-accent);
+}
+
+.help-article__footer {
+    margin-top: var(--sp-10);
+    padding-top: var(--sp-4);
+    border-top: 1px solid var(--c-border-hairline);
+}
+
+.help-article__updated {
+    font-size: var(--text-caption);
+    line-height: var(--lh-caption);
+    color: var(--c-text-muted);
+    margin-bottom: var(--sp-3);
+}
+
+.help-article__pager {
+    display: flex;
+    justify-content: space-between;
+    gap: var(--sp-3);
+    flex-wrap: wrap;
+}
+
+@media (max-width: 767.98px) {
+    .help-layout {
+        grid-template-columns: minmax(0, 1fr);
+        gap: var(--sp-4);
+    }
+
+    .help-article {
+        padding: var(--sp-4);
+    }
+}
