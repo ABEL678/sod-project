@@ -525,7 +525,7 @@
                         <nav class="zone-segment" aria-label="Направление заданий" data-role="task-segments">
                             {% for segment in task_segments %}
                                 <a class="zone-chip {% if segment.value == active_role_filter %}is-active{% endif %}"
-                                   href="?tab=tasks&amp;role_filter={{ segment.value }}">
+                                   href="?tab=tasks&amp;role_filter={{ segment.value }}&amp;task_source=&amp;task_target=">
                                     <i class="bi {% if segment.value == 'all' %}bi-collection{% elif segment.value == 'incoming' %}bi-arrow-down-right{% else %}bi-arrow-up-right{% endif %}" aria-hidden="true"></i>
                                     {{ segment.label }}
                                 </a>
@@ -538,6 +538,10 @@
                               aria-label="Фильтры заданий" data-role="tasks-filters">
                             <input type="hidden" name="tab" value="tasks">
                             <input type="hidden" name="role_filter" value="{{ active_role_filter }}">
+                            {% if task_source_filter and task_target_filter %}
+                                <input type="hidden" name="task_source" value="{{ task_source_filter }}">
+                                <input type="hidden" name="task_target" value="{{ task_target_filter }}">
+                            {% endif %}
                             <div>
                                 <label class="form-label small text-muted mb-1" for="taskStatusFilter">Статус</label>
                                 <select name="status" id="taskStatusFilter" class="form-select form-select-sm">
@@ -575,7 +579,7 @@
                             </div>
                             <button type="submit" class="btn btn-sm btn-outline-secondary">Применить</button>
                             <a class="btn btn-sm btn-outline-secondary"
-                               href="?tab=tasks&amp;role_filter={{ active_role_filter }}">Сбросить</a>
+                               href="?tab=tasks&amp;role_filter={{ active_role_filter }}&amp;task_source=&amp;task_target=">Сбросить</a>
                         </form>
 
                         {% if tasks %}
@@ -645,10 +649,10 @@
                             {# Пустое состояние (спека 4.1) #}
                             <div class="text-center text-muted py-5" data-role="tasks-empty">
                                 <i class="bi bi-inbox d-block mb-2" style="font-size: 2rem;" aria-hidden="true"></i>
-                                {% if task_status_filter or task_priority_filter or task_due_filter %}
+                                {% if task_status_filter or task_priority_filter or task_due_filter or task_section_filter or task_source_filter %}
                                     <p class="mb-3">По выбранным фильтрам заданий нет</p>
                                     <a class="btn btn-sm btn-outline-secondary"
-                                       href="?tab=tasks&amp;role_filter={{ active_role_filter }}">Сбросить фильтры</a>
+                                       href="?tab=tasks&amp;role_filter={{ active_role_filter }}&amp;task_source=&amp;task_target=">Сбросить фильтры</a>
                                 {% else %}
                                     <p class="mb-3">Заданий нет{% if can_issue_task %}. Выдайте первое задание{% endif %}</p>
                                     {% if can_issue_task %}

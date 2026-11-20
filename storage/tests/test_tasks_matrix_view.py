@@ -399,3 +399,153 @@ class TasksMatrixViewTests(TestCase):
         ]
         self.assertEqual(len(designtask_sql), 1)
         self.assertIn('GROUP BY', designtask_sql[0].upper())
+
+
+class TasksMatrixDrillDownTests(TestCase):
+    """M4 (план §4.6, §6.3): drill-down пары source/target в списке заданий."""
+
+    def setUp(self):
+        self.company = Company.objects.create(name='Компания M4')
+        self.other_company = Company.objects.create(name='Чужая компания M4')
+        self.gip = User.objects.create_user('gip_m4', password='pass')
+        UserProfile.objects.update_or_create(
+            user=self.gip, defaults={'role': 'gip', 'company': self.company},
+        )
+        self.developer = User.objects.create_user('dev_m4', password='pass')
+        UserProfile.objects.update_or_create(
+            user=self.developer, defaults={'role': 'developer', 'company': self.company},
+        )
+        self.project = Project.objects.create(
+            company=self.company, code='DD-M4', name='Проект drill-down M4',
+            status='active', created_by=self.gip, gip=self.gip,
+        )
+        self.ar = Section.objects.create(project=self.project, code='AR', name='Архитектура', order=1)
+        self.kr = Section.objects.create(project=self.project, code='KR', name='Конструкции', order=2)
+        self.ov = Section.objects.create(project=self.project, code='OV', name='Вентиляция', order=3)
+        ProjectMembership.objects.create(project=self.project, user=self.gip, role_in_project='gip')
+        ProjectMembership.objects.create(project=self.project, user=self.developer, role_in_project='developer')
+        self.url = reverse('storage:project_detail', args=[self.project.pk])
+
+    def _task(self, source, target, status=DesignTask.Status.DRAFT, title='Задание'):
+        return DesignTask.objects.create(
+            project=self.project, source_section=source, target_section=target,
+            author=self.gip, title=title, description='Описание', status=status,
+        )
+
+    def _drill(self, user, **params):
+        self.client.force_login(user)
+        query = {'tab': 'tasks', 'role_filter': 'all'}
+        query.update(params)
+        return self.client.get(self.url, query)
+
+    def _titles(self, response):
+        return sorted(t.title for t in response.context['tasks'])
+
+    def test_and_logic_two_sources_one_target_returns_only_intersection(self):
+        """И-логика: AR→KR и OV→KR; drill-down AR→KR отдаёт только AR→KR."""
+        self._task(self.ar, self.kr, title='ar-kr')
+        self._task(self.ov, self.kr, title='ov-kr')
+        self._task(self.kr, self.ar, title='kr-ar')
+        response = self._drill(
+            self.gip, task_source=self.ar.pk, task_target=self.kr.pk,
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self._titles(response), ['ar-kr'])
+
+    def test_cancelled_excluded_from_drilldown(self):
+        """Решение 1: CANCELLED не попадает в drill-down пары."""
+        self._task(self.ar, self.kr, title='живое')
+        self._task(self.ar, self.kr, status=DesignTask.Status.CANCELLED, title='отменено')
+        response = self._drill(
+            self.gip, task_source=self.ar.pk, task_target=self.kr.pk,
+        )
+        self.assertEqual(self._titles(response), ['живое'])
+
+    def test_drilldown_count_matches_matrix_total_cell(self):
+        """Решение 2 / Р3: «всего» ячейки == число строк drill-down (с CANCELLED)."""
+        self._task(self.ar, self.kr, status=DesignTask.Status.IN_PROGRESS)
+        self._task(self.ar, self.kr, status=DesignTask.Status.COMPLETED)
+        self._task(self.ar, self.kr, status=DesignTask.Status.CANCELLED)
+        self._task(self.ov, self.kr)  # другая пара, в ячейку AR→KR не входит
+        self.client.force_login(self.gip)
+        matrix = self.client.get(self.url, {'tab': 'matrix'})
+        cell = matrix.context['matrix_grid'][0]['cells'][1]['cell']
+        drill = self._drill(self.gip, task_source=self.ar.pk, task_target=self.kr.pk)
+        self.assertEqual(cell['total'], len(drill.context['tasks']))
+        self.assertEqual(cell['total'], 2)
+
+    def test_task_section_filter_unchanged(self):
+        """СТОП-4 «?task_section не сломан»: ИЛИ по разделу, как до M4."""
+        self._task(self.ar, self.kr, title='ar-kr')
+        self._task(self.ov, self.ar, title='ov-ar')
+        self._task(self.ov, self.kr, title='ov-kr')
+        response = self._drill(self.gip, task_section=self.ar.pk)
+        self.assertEqual(self._titles(response), ['ar-kr', 'ov-ar'])
+
+    def test_diagonal_pair_returns_200_and_empty_list(self):
+        """Решение 3: диагональный URL → 200, пустой список, без 404."""
+        self._task(self.ar, self.ar, title='диагональ')
+        response = self._drill(self.gip, task_source=self.ar.pk, task_target=self.ar.pk)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self._titles(response), ['диагональ'])
+
+    def test_diagonal_pair_without_tasks_is_empty(self):
+        response = self._drill(self.gip, task_source=self.ar.pk, task_target=self.ar.pk)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context['tasks'], [])
+
+    def test_invalid_pair_params_ignored(self):
+        """Нецифровые параметры не ломают страницу и не фильтруют."""
+        self._task(self.ar, self.kr, title='ar-kr')
+        response = self._drill(self.gip, task_source='abc', task_target=self.kr.pk)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self._titles(response), ['ar-kr'])
+        self.assertEqual(response.context['task_source_filter'], '')
+
+    def test_reset_clears_all_three_params(self):
+        """Решение 6: кнопки «Сбросить» и «Сбросить фильтры» чистят пару и task_section."""
+        self._task(self.ar, self.kr)
+        self.client.force_login(self.gip)
+        # Пара без заданий (AR→OV): рендерится пустое состояние с кнопкой.
+        response = self.client.get(self.url, {
+            'tab': 'tasks', 'role_filter': 'all',
+            'task_source': self.ar.pk, 'task_target': self.ov.pk,
+        })
+        html = response.content.decode('utf-8')
+        self.assertContains(response, 'data-role="tasks-empty"')
+        self.assertIn('task_source=&amp;task_target=">Сбросить</a>', html)
+        # Кнопка «Сбросить фильтры» — в пустом состоянии (атрибут href и текст
+        # разделены переносом строки в шаблоне); проверяем href и текст отдельно.
+        self.assertRegex(
+            html,
+            r'href="\?tab=tasks&amp;role_filter=all&amp;task_source=&amp;task_target="\s*>\s*Сбросить фильтры</a>',
+        )
+        # Пара не уходит в форму, если активна только фильтрация по статусу —
+        # hidden-поля присутствуют при активной паре (сохраняются при «Применить»).
+        self.assertIn('name="task_source" value="%d"' % self.ar.pk, html)
+
+    def test_reset_empty_state_clears_pair(self):
+        """Пустое состояние с активной парой: «Сбросить фильтры» чистит пару."""
+        self.client.force_login(self.gip)
+        response = self.client.get(self.url, {
+            'tab': 'tasks', 'role_filter': 'all',
+            'task_source': self.ar.pk, 'task_target': self.kr.pk,
+        })
+        self.assertContains(response, 'data-role="tasks-empty"')
+        self.assertContains(response, 'task_source=&amp;task_target=">Сбросить фильтры</a>')
+
+    def test_non_gip_direct_url_role_all_matches_incoming_behaviour(self):
+        """Решение 7: не-ГИП с role_filter=all получает поведение incoming (без 403)."""
+        mine = self._task(self.ar, self.kr, title='мне')
+        mine.assignee = self.developer
+        mine.save(update_fields=['assignee'])
+        self._task(self.ar, self.kr, title='чужое')
+        url_params = {
+            'task_source': self.ar.pk, 'task_target': self.kr.pk,
+        }
+        forced = self._drill(self.developer, **url_params)
+        incoming = self._drill(self.developer, role_filter='incoming', **url_params)
+        self.assertEqual(forced.status_code, 200)
+        self.assertEqual(forced.context['active_role_filter'], 'incoming')
+        self.assertEqual(self._titles(forced), self._titles(incoming))
+        self.assertEqual(self._titles(forced), ['мне'])

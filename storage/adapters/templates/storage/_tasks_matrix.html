@@ -39,7 +39,8 @@
                         <td class="task-matrix__cell task-matrix__cell--{{ item.cell.status|lower }}">
                             <a class="task-matrix__link text-decoration-none"
                                href="{% url 'storage:project_detail' project.pk %}?tab=tasks&amp;role_filter=all&amp;task_source={{ item.source.pk }}&amp;task_target={{ item.target.pk }}"
-                               title="{{ item.cell.label }}: всего {{ item.cell.total }}, в работе {{ item.cell.in_progress }}, просрочено {{ item.cell.overdue }}, завершено {{ item.cell.done }}">
+                               title="{{ item.cell.label }}: всего {{ item.cell.total }}, в работе {{ item.cell.in_progress }}, просрочено {{ item.cell.overdue }}, завершено {{ item.cell.done }}. Открыть задания пары"
+                               aria-label="{{ item.cell.label }}: всего {{ item.cell.total }}, в работе {{ item.cell.in_progress }}, просрочено {{ item.cell.overdue }}, завершено {{ item.cell.done }}. Открыть задания пары">
                                 <span class="d-block fw-semibold"><i class="bi {{ item.cell.icon }}" aria-hidden="true"></i> {{ item.cell.label }}</span>
                                 <span class="task-matrix__counts small">
                                     <span title="всего">{{ item.cell.total }}</span>

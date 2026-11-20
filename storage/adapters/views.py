@@ -1304,6 +1304,28 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
             sid = int(task_section_filter)
             tasks = [t for t in tasks if t.source_section_id == sid or t.target_section_id == sid]
 
+        # M4 (drill-down из ячейки матрицы): пара source AND target, без
+        # CANCELLED (решение Координатора 20.11.2026: «всего» ячейки не
+        # учитывает отменённые — Ф3 плана). Существующий ?task_section (ИЛИ)
+        # выше не меняется.
+        task_source_filter = self.request.GET.get('task_source') or ''
+        task_target_filter = self.request.GET.get('task_target') or ''
+        if (
+            task_source_filter.isdigit() and task_target_filter.isdigit()
+            and len(task_source_filter) == len(str(int(task_source_filter)))
+            and len(task_target_filter) == len(str(int(task_target_filter)))
+        ):
+            src_id = int(task_source_filter)
+            tgt_id = int(task_target_filter)
+            tasks = [
+                t for t in tasks
+                if t.source_section_id == src_id
+                and t.target_section_id == tgt_id
+                and t.status != DesignTask.Status.CANCELLED
+            ]
+        else:
+            task_source_filter = task_target_filter = ''
+
         # Декор строк для шаблона: бейдж статуса, просрочка, доступность
         # кнопки «Выдать» (черновик + автор/ГИП/админ; сама проверка прав
         # выполняется в issue_task — здесь только подсказка UI).
@@ -1328,6 +1350,8 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
             'task_priority_filter': priority_filter,
             'task_due_filter': due_filter,
             'task_section_filter': task_section_filter,
+            'task_source_filter': task_source_filter,
+            'task_target_filter': task_target_filter,
             'task_status_choices': DesignTask.Status.choices,
             'task_priority_choices': DesignTask.Priority.choices,
             'can_issue_task': _can_issue_task(user, project),
