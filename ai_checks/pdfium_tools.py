@@ -211,7 +211,9 @@ def open_pdf(source) -> pdfium.PdfDocument:
 
     Данные читаются в bytes до передачи в pypdfium2 (см. _read_source):
     str-путь не идёт в нативный FPDF_LoadDocument, file-like не нужно
-    держать открытым. Если PDFium не смог разобрать корректно
+    держать открытым. Ошибки чтения источника (нет файла, текстовый
+    режим) выходят PdfiumError с путём источника, а не низкоуровневым
+    OSError/UnicodeDecodeError. Если PDFium не смог разобрать корректно
     прочитанные данные (FPDF_ERR_FORMAT «Data format error» — например,
     у файла нет xref-таблицы из-за обрыва при передаче; PyMuPDF такие
     файлы открывал молча), выполняется пересборка xref (_rebuild_xref)
@@ -220,7 +222,17 @@ def open_pdf(source) -> pdfium.PdfDocument:
     Если ремонт xref не помог — пробуем переконвертацию через pypdf
     (нормализует структуру файла, которую pypdfium2 не понимает).
     """
-    data = _read_source(source)
+    try:
+        data = _read_source(source)
+    except pdfium.PdfiumError:
+        raise
+    except FileNotFoundError as exc:
+        raise PdfiumError(f'Файл не найден: {source}') from exc
+    except UnicodeDecodeError as exc:
+        raise PdfiumError(
+            'Файл открыт в текстовом режиме — нужен open(path, "rb") '
+            f'(источник: {source}): {exc}'
+        ) from exc
     
     # Попытка 1: прямой открытие.
     try:
