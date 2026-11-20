@@ -30,6 +30,7 @@
             <h1 class="help-article__title">{{ article.title }}</h1>
 
             <div class="help-article__body">
+                {# экранирование гарантирует html=False в content.py — не включать html=True #}
                 {{ article.html|safe }}
             </div>
 

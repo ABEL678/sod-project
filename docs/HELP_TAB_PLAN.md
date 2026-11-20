@@ -154,7 +154,7 @@ class Article:
 slug: issues
 title: Замечания
 section: Замечания
-order: 50
+order: 30
 keywords: [пин, статус, экспорт, блокировка]
 updated: 2026-11-18
 ---

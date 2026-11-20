@@ -26,7 +26,7 @@ class HelpArticleView(LoginRequiredMixin, TemplateView):
             raise Http404('Статья справки не найдена')
 
         articles = load_articles()
-        ordered = sorted(articles.values(), key=lambda a: a.order)
+        ordered = sorted(articles.values(), key=lambda a: (a.order, a.slug))
         index = next(i for i, a in enumerate(ordered) if a.slug == slug)
 
         context.update({
