@@ -141,15 +141,14 @@ class CreateDemoProjectTests(TestCase):
             .order_by('order')
             .values_list('code', 'order')
         )
-        # COMMON (order 0) создаётся отдельно при инициализации проекта,
-        # канонические разделы — ровно 7 из SECTION_SPECS.
+        # COMMON (order 0) — служебный раздел, далее ровно 7 канонических.
         self.assertEqual(
-            [code for code, _ in pairs if code != 'COMMON'],
-            ['АР', 'КР', 'ОВ', 'ВК', 'ЭОМ', 'СПА', 'АК'],
-        )
-        self.assertEqual(
-            [order for code, order in pairs if code != 'COMMON'],
-            [1, 2, 3, 4, 5, 6, 7],
+            pairs,
+            [
+                ('COMMON', 0),
+                ('АР', 1), ('КР', 2), ('ОВ', 3), ('ВК', 4),
+                ('ЭОМ', 5), ('СПА', 6), ('АК', 7),
+            ],
         )
         self.assertEqual(Section.objects.filter(project=project).exclude(code='COMMON').count(), 7)
         eom = Section.objects.get(project=project, code='ЭОМ')

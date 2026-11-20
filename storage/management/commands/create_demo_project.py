@@ -193,10 +193,16 @@ class Command(BaseCommand):
             base_code=DEMO_BASE_CODE,
         )
 
+        if section_mode == 'canon':
+            # canon: служебный COMMON (order 0) + канонические разделы, создаются
+            # без подхвата существующих; шаблон не разворачивается.
+            create_section(
+                project, 'COMMON', 'Общие документы', 0, user=actor,
+            )
+
         sections = {}
         for index, (code, name, _folder_name) in enumerate(SECTION_SPECS, start=1):
             if section_mode == 'canon':
-                # canon: разделы создаются, без подхвата существующих.
                 sections[code] = create_section(
                     project, code, name, index, user=actor,
                 )
