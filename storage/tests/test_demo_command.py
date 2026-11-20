@@ -14,6 +14,7 @@ from storage.domain.models import (
     Document,
     DocumentVersion,
     Project,
+    Section,
     UserProfile,
 )
 from storage.management.commands.create_demo_project import (
@@ -129,3 +130,33 @@ class CreateDemoProjectTests(TestCase):
         project = Project.objects.get(code=DEMO_CODE)
         self.assertEqual(project.company_id, company.pk)
         self.assertEqual(project.created_by_id, admin.pk)
+
+    def test_sections_canon_creates_exactly_seven_canon_sections_without_pd(self):
+        self._run(sections='canon')
+
+        project = Project.objects.get(code=DEMO_CODE)
+        self.assertEqual(project.template_key, 'canon')
+        pairs = list(
+            Section.objects.filter(project=project)
+            .order_by('order')
+            .values_list('code', 'order')
+        )
+        # COMMON (order 0) создаётся отдельно при инициализации проекта,
+        # канонические разделы — ровно 7 из SECTION_SPECS.
+        self.assertEqual(
+            [code for code, _ in pairs if code != 'COMMON'],
+            ['АР', 'КР', 'ОВ', 'ВК', 'ЭОМ', 'СПА', 'АК'],
+        )
+        self.assertEqual(
+            [order for code, order in pairs if code != 'COMMON'],
+            [1, 2, 3, 4, 5, 6, 7],
+        )
+        self.assertEqual(Section.objects.filter(project=project).exclude(code='COMMON').count(), 7)
+        eom = Section.objects.get(project=project, code='ЭОМ')
+        self.assertEqual(
+            eom.name,
+            'Силовое электрооборудование и электрическое освещение',
+        )
+        # Никаких PD/RD-разделов из RD_SECTIONS (например, КЖ, КМ, СС, ТХ).
+        for pd_code in ('КЖ', 'КМ', 'СС', 'ТХ', 'ПЗ', 'ПЗУ'):
+            self.assertFalse(Section.objects.filter(project=project, code=pd_code).exists())

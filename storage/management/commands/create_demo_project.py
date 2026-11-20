@@ -1,8 +1,13 @@
 """Создаёт демонстрационный проект для бета-тестирования.
 
-Команда наполняет СОД реалистичным набором данных: проект по шаблону FULL,
-разделы АР/КР/ОВ/ВК, папки, документы с версиями, замечания в разных
-статусах, зоны WIP/SHARED/PUBLISHED/ARCHIVE и публичную share-ссылку.
+Команда наполняет СОД реалистичным набором данных: документы с версиями,
+замечания в разных статусах, зоны WIP/SHARED/PUBLISHED/ARCHIVE и публичную
+share-ссылку.
+
+Режим разделов задаётся --sections:
+- full (по умолчанию): проект по шаблону FULL, разделы развёрнуты из RD_SECTIONS;
+- canon: разделы строго по SECTION_SPECS (АР, КР, ОВ, ВК, ЭОМ, СПА, АК) без
+  шаблонных PD/RD-разделов; шаблон проекта не разворачивается.
 
 Все доменные сущности создаются через сервисы storage.domain.services.
 Исключения — bootstrap компании/пользователей и членство в проекте:
@@ -58,6 +63,10 @@ DEMO_NAME = 'Демо-проект ЖК Солнечный'
 DEMO_CUSTOMER = 'ООО Застройщик'
 DEMO_BASE_CODE = '2345-12'
 DEMO_TEMPLATE = 'FULL'
+# Служебный ключ канон-режима: вне PROJECT_TEMPLATES, поэтому
+# create_project_from_template не разворачивает RD_SECTIONS.
+DEMO_CANON_TEMPLATE = 'canon'
+DEMO_SECTION_MODES = ('full', 'canon')
 DEMO_PASSWORD = 'demo12345'
 
 SECTION_SPECS = (
@@ -95,6 +104,15 @@ class Command(BaseCommand):
             help='Удалить существующий DEMO-2026 и создать заново.',
         )
         parser.add_argument(
+            '--sections',
+            choices=DEMO_SECTION_MODES,
+            default='full',
+            help=(
+                'full — разделы по шаблону FULL (RD_SECTIONS); '
+                'canon — ровно 7 разделов SECTION_SPECS (АР…АК).'
+            ),
+        )
+        parser.add_argument(
             '--force',
             action='store_true',
             help=(
@@ -126,6 +144,7 @@ class Command(BaseCommand):
                     company_id=options['company_id'],
                     username=options['user_username'],
                     reset=options['reset'],
+                    section_mode=options['sections'],
                 )
         except Exception:
             storage = LocalFileStorage()
@@ -139,7 +158,14 @@ class Command(BaseCommand):
     # Сценарий создания
     # ------------------------------------------------------------------
 
-    def _create_demo(self, *, company_id: int | None, username: str | None, reset: bool) -> dict:
+    def _create_demo(
+        self,
+        *,
+        company_id: int | None,
+        username: str | None,
+        reset: bool,
+        section_mode: str = 'full',
+    ) -> dict:
         company, company_created = self._resolve_company(company_id)
         maintainer = self._resolve_maintainer(company)
         actor = self._resolve_actor(company, username, maintainer)
@@ -153,6 +179,9 @@ class Command(BaseCommand):
             self._remove_existing(existing, company, maintainer)
 
         gip = self._resolve_gip(company, actor, maintainer)
+        # canon: служебный ключ вне PROJECT_TEMPLATES — шаблон не разворачивается,
+        # разделы создаются только из SECTION_SPECS.
+        template_key = DEMO_CANON_TEMPLATE if section_mode == 'canon' else DEMO_TEMPLATE
         project = create_project_from_template(
             company=company,
             code=DEMO_CODE,
@@ -160,12 +189,18 @@ class Command(BaseCommand):
             customer=DEMO_CUSTOMER,
             gip=gip,
             created_by=actor,
-            template_key=DEMO_TEMPLATE,
+            template_key=template_key,
             base_code=DEMO_BASE_CODE,
         )
 
         sections = {}
         for index, (code, name, _folder_name) in enumerate(SECTION_SPECS, start=1):
+            if section_mode == 'canon':
+                # canon: разделы создаются, без подхвата существующих.
+                sections[code] = create_section(
+                    project, code, name, index, user=actor,
+                )
+                continue
             try:
                 sections[code] = create_section(
                     project, code, name, index, user=actor,
