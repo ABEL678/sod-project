@@ -29,6 +29,9 @@ reportlab==4.4.9
 pypdf==6.6.0
 python-dotenv==1.2.4
 PyYAML==6.0.3
+# Рендер статей справки (help): markdown-it-py + плагины якорей заголовков.
+markdown-it-py==4.2.0
+mdit-py-plugins==0.7.0
 sqlparse==0.6.0
 tablib==3.10.0
 tabulate==0.10.0

@@ -5,22 +5,16 @@
 (function () {
     'use strict';
     self.SOD_SW_BYPASS = [
-        '/add/',
-        '/admin/',
         '/ai/',
         '/api-tokens/',
         '/api/',
-        '/auth/',
-        '/autocomplete/',
         '/dashboard/',
-        '/document/',
         '/documents/',
         '/download/',
         '/feedback/',
-        '/finding/',
         '/folders/',
+        '/help/',
         '/issues/',
-        '/jsi18n/',
         '/login/',
         '/logout/',
         '/media/',
@@ -28,12 +22,10 @@
         '/notifications/',
         '/offline/',
         '/palette/',
-        '/password_change/',
         '/project/',
         '/projects/',
-        '/r/',
+        '/rag/',
         '/report/',
         '/sections/',
-        '/storage/',
     ];
 })();

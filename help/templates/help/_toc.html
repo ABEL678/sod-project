@@ -1,0 +1,16 @@
+<nav class="help-toc" aria-label="Содержание справки">
+    {% for section in sections %}
+        <div class="help-toc__section">
+            <div class="help-toc__section-title">{{ section.name }}</div>
+            <ul class="help-toc__list">
+                {% for item in section.articles %}
+                    <li>
+                        <a href="{% url 'help:article' item.slug %}"
+                           class="help-toc__link{% if item.slug == article.slug %} is-current{% endif %}"
+                           {% if item.slug == article.slug %}aria-current="page"{% endif %}>{{ item.title }}</a>
+                    </li>
+                {% endfor %}
+            </ul>
+        </div>
+    {% endfor %}
+</nav>

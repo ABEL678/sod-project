@@ -1,0 +1,55 @@
+{% extends 'storage/base.html' %}
+{% load static %}
+
+{% block title %}{{ article.title }} — Помощь{% endblock %}
+
+{% block extra_css %}
+    <link rel="stylesheet" href="{% static 'css/help.css' %}?v=20261120-h1">
+{% endblock %}
+
+{% block content %}
+<main id="main-content" class="help-page container-fluid">
+    <div class="help-layout">
+        <aside class="help-sidebar d-none d-md-block">
+            {% include 'help/_toc.html' %}
+        </aside>
+
+        <details class="help-mobile-toc d-md-none">
+            <summary>Содержание</summary>
+            {% include 'help/_toc.html' %}
+        </details>
+
+        <article class="help-article">
+            <nav class="help-breadcrumbs" aria-label="Навигация">
+                {% for label, url in breadcrumbs %}
+                    {% if url %}<a href="{{ url }}">{{ label }}</a>{% else %}<span>{{ label }}</span>{% endif %}
+                    {% if not forloop.last %}<span class="help-breadcrumbs__sep">/</span>{% endif %}
+                {% endfor %}
+            </nav>
+
+            <h1 class="help-article__title">{{ article.title }}</h1>
+
+            <div class="help-article__body">
+                {# экранирование гарантирует html=False в content.py — не включать html=True #}
+                {{ article.html|safe }}
+            </div>
+
+            <footer class="help-article__footer">
+                {% if article.updated %}
+                    <p class="help-article__updated">Обновлено: {{ article.updated }}</p>
+                {% endif %}
+                <div class="help-article__pager">
+                    {% if prev_article %}
+                        <a href="{% url 'help:article' prev_article.slug %}" class="btn btn-sm btn-outline-secondary">&larr; {{ prev_article.title }}</a>
+                    {% else %}
+                        <span></span>
+                    {% endif %}
+                    {% if next_article %}
+                        <a href="{% url 'help:article' next_article.slug %}" class="btn btn-sm btn-outline-secondary">{{ next_article.title }} &rarr;</a>
+                    {% endif %}
+                </div>
+            </footer>
+        </article>
+    </div>
+</main>
+{% endblock %}
