@@ -1128,7 +1128,7 @@ class SyncLog(models.Model):
 
 
 class InboxCommand(models.Model):
-    """Команда из S3-бакета (inbox/commands.json)."""
+    """Команда из S3-бакета (inbox/commands/{seq}_{type}_{cid}.json)."""
 
     class Status(models.TextChoices):
         PENDING = "pending", "Ожидает обработки"

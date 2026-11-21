@@ -531,6 +531,8 @@ sod_project/
 
 **Без уникальности:** одно задание может содержать несколько одинаковых пунктов.
 
+**Планируется (S3-sync, `docs/S3_SYNC_PLAN.md` §3.3.3; NOT IMPLEMENTED):** в `RfiTask` — поля `cause_design_task` (FK → DesignTask, null=True) и `linked_tasks` (связь «RFI блокирует задания» с DesignTask). Требуется миграция; до неё контракт `rfis.json` выдаёт `null` / `[]`.
+
 ### 3.3. Связи
 
 User 1─1 UserProfile

@@ -22,7 +22,7 @@ FastAPI/SQLAlchemy с UUID-PK), и связывать их напрямую оч
 | Структура бакета | Один бакет, префикс `projects/{slug-проекта}/`, два под-префикса: `outbox/` (пишет Stream-CAD) и `inbox/` (пишет ГИП-Ассистент). В outbox — `tasks.json`, `rfis.json`, `metadata.json` (манифест с чексуммами и справочником разделов) |
 | Формат файлов | Снапшоты — обычный JSON с envelope (`schema_version`, `generated_at`, `items[]`). Команды во входящих — по одному JSON-файлу на команду (не JSONL; обоснование в §3.2) |
 | Выгрузка | Celery-задача `sync_project_to_s3` (имя `storage.tasks.sync_project_to_s3`): собирает снапшот из БД, кладёт 3 файла через boto3. Beat: каждые 15 минут по «грязным» проектам + полный пересинк ежедневно в 02:30. «Грязность» — флаг `dirty` в новой модели `SyncState`, выставляется сигналами `post_save/post_delete` на `DesignTask` |
-| Входящие | Celery-beat `process_s3_inbox` каждые 5 минут: `list_objects_v2` по `inbox/pending/`, валидация, применение команды (allowlist типов), перенос файла в `processed/` или `failed/` |
+| Входящие | Celery-beat `process_s3_inbox` каждые 5 минут: `list_objects_v2` по `inbox/commands/`, валидация, применение команды (allowlist типов), перенос файла в `done/` или `failed/` |
 | Настройки | `S3_ENDPOINT`, `S3_BUCKET_NAME`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_REGION`, `S3_SYNC_ENABLED` — по существующей конвенции `os.environ.get` |
 | Безопасность | Два независимых комплекта ключей IAM: у Stream-CAD — write в `outbox/` + read в `inbox/`, у ГИП-Ассистента — зеркально. Плюс allowlist типов команд, лимит размера, sha256-манифест, SSE-шифрование бакета |
 | Новые модели | `SyncState`, `SyncLog`, `InboxCommand` (миграция `0034_s3_sync_models`; `0033` занята `0033_rfi_task_stage1`) |
@@ -121,10 +121,10 @@ s3://{S3_BUCKET_NAME}/
       rfis.json                  # полный список запросов информации (RfiTask)
       metadata.json              # манифест: generation, чексуммы, справочник разделов
     inbox/
-      pending/                   # ВЛАДЕЛЕЦ ЗАПИСИ: ГИП-Ассистент. Разбирает Stream-CAD.
-        0001-2026-11-16T090000Z-{command_id}.json
-        0002-...
-      processed/                 # переносит Stream-CAD после успешной обработки
+      commands/                  # ВЛАДЕЛЕЦ ЗАПИСИ: ГИП-Ассистент. Разбирает Stream-CAD.
+        1_ack.import_{command_id}.json
+        2_rfi.proposal_...json
+      done/                      # переносит Stream-CAD после успешной обработки
       failed/                    # переносит Stream-CAD после 3 неудачных попыток
 ```
 
@@ -466,7 +466,7 @@ storage/tasks.py                   # тонкие Celery-обёртки (кон�
 | `storage.tasks.sync_all_projects_to_s3` | каждые 15 минут | выбирает проекты: `SyncState.dirty=True` ИЛИ `last_success_at IS NULL` (новые); на каждый — `sync_project_to_s3.delay(project_id)` |
 | `storage.tasks.sync_project_to_s3` | по требованию (delay) + вручную | снапшот проекта → 3 файла в `outbox/` → `SyncState` (generation+1, dirty=False, last_success_at) → `SyncLog` |
 | `storage.tasks.sync_s3_full` | ежедневно 02:30 | полный пересинк всех проектов с `SyncState.enabled=True` (защита от потерянных dirty-маркеров) |
-| `storage.tasks.process_s3_inbox` | каждые 5 минут | для каждого проекта с `enabled=True`: разобрать `inbox/pending/` (§3.5) |
+| `storage.tasks.process_s3_inbox` | каждые 5 минут | для каждого проекта с `enabled=True`: разобрать `inbox/commands/` (§3.5) |
 | `storage.tasks.cleanup_sync_logs` | еженедельно, вс 03:00 | удалить `SyncLog` старше 90 дней |
 
 Почему «каждые 15 минут» для выгрузки: ГИП-Ассистент живёт в суточном цикле
@@ -505,15 +505,10 @@ storage/tasks.py                   # тонкие Celery-обёртки (кон�
 
 #### 3.5.1. Формат входящего файла
 
-Ключ по плану: `projects/{slug}/inbox/pending/{seq:06d}-{ts}-{command_id}.json`.
-
-> **NOT RESOLVED — расхождение ключа с кодом.** `storage/domain/sync/inbox.py:28-30`
-> фактически разбирает ключ `projects/<slug>/inbox/commands/<seq>_<type>_<cid>.json`
-> (перенос в `inbox/done/` и `inbox/failed/`), а не `pending/` и `processed/`.
-> Ключ в плане и ключ в коде различаются по префиксу, разделителям и порядку полей.
-> Выбор варианта (привести план к коду или код к плану) — за Координатором.
-> Код на этом шаге не менялся; докстринг `InboxCommand` (`models.py:1131`,
-> «inbox/commands.json») также не исправлен — требуется отдельная правка кода.
+Ключ: `projects/{slug}/inbox/commands/{seq}_{type}_{cid}.json`, где `seq` — номер команды
+(без ведущих нулей), `type` — тип из §3.5.2 (точки заменены на `.`, например `ack.import`),
+`cid` — `command_id`. Перенос после обработки: `inbox/done/{seq}_{type}_{cid}.json`
+или `inbox/failed/{seq}_{type}_{cid}.json`. Формат соответствует `storage/domain/sync/inbox.py:28-30`.
 
 Пример тела команды:
 
@@ -532,7 +527,7 @@ storage/tasks.py                   # тонкие Celery-обёртки (кон�
 }
 ```
 
-Имена файлов сортируются лексикографически в порядке `seq` — отправитель
+Обработка идёт по возрастанию `seq` (разбор ключа из имени файла, §3.5.3); отправитель
 обязан нумеровать команды монотонно в рамках проекта.
 
 #### 3.5.2. Allowlist типов команд (MVP)
@@ -552,7 +547,7 @@ storage/tasks.py                   # тонкие Celery-обёртки (кон�
 
 #### 3.5.3. Алгоритм `process_s3_inbox` (на проект)
 
-1. `list_keys("projects/{slug}/inbox/pending/")` → сортировка по имени (по `seq`).
+1. `list_keys("projects/{slug}/inbox/commands/")` → сортировка по `seq` (из имени ключа).
 2. Для каждого файла:
    - скачать и распарсить JSON; невалидный → перенос в `failed/`, `SyncLog(error)`, к следующим;
    - валидация: `type` ∈ allowlist; `seq > SyncState.last_inbox_seq` (защита от
@@ -561,7 +556,7 @@ storage/tasks.py                   # тонкие Celery-обёртки (кон�
    - применить команду (§3.5.2) в транзакции: `InboxCommand(status=in_progress → done|failed)`
      с payload и ошибкой;
    - перенос файла: `move_object` (CopyObject → DeleteObject) в
-     `inbox/processed/` (или `inbox/failed/` после 3 неудачных попыток обработки).
+     `inbox/done/` (или `inbox/failed/` после 3 неудачных попыток обработки).
 3. Обновить `SyncState.last_inbox_seq = max(seq)`, `SyncLog(direction=in)`.
 
 Poison-файл (кривой JSON) не блокирует очередь — обработка продолжается со
@@ -605,8 +600,8 @@ Evolution Object Storage. Матрица прав (в нотации S3-дейс
 | Префикс | Stream-CAD (наши ключи) | ГИП-Ассистент (их ключи) |
 |---|---|---|
 | `projects/*/outbox/*` | **PutObject** | GetObject, ListBucket |
-| `projects/*/inbox/pending/*` | GetObject, ListBucket, DeleteObject (после обработки) | **PutObject** |
-| `projects/*/inbox/processed/*`, `projects/*/inbox/failed/*` | PutObject (перенос), GetObject, ListBucket | нет |
+| `projects/*/inbox/commands/*` | GetObject, ListBucket, DeleteObject (после обработки) | **PutObject** |
+| `projects/*/inbox/done/*`, `projects/*/inbox/failed/*` | PutObject (перенос), GetObject, ListBucket | нет |
 | корень бакета, `projects/*/` | ListBucket (только для разбора inbox) | ListBucket (только для разбора outbox) |
 | прочие действия (DeleteBucket, PutBucketPolicy, ...) | нет | нет |
 
@@ -791,6 +786,8 @@ AWS policy-документа: `Effect/Action/Resource` на префиксы б
 | **D. Входящие** | inbox-процессор, allowlist §3.5.2, `ack.import`, `rfi.escalate`, `rfi.proposal`, `task.deadline_update` + подтверждения в UI | B (для RFI-команд — C) | двухсторонний контур закрыт: квитанции и команды работают |
 | **E. Приёмка** | совместное тестирование с командой ГИП-Ассистента (их импортер против наших файлов), мониторинг `SyncLog`, документация (`ARCHITECTURE.md`, `HANDOFF.md`) | D | контракт подписан обеими сторонами |
 | **F. (опция) Файлы RFI** | зеркалирование файлов «ИРД → RFI» в `outbox/documents/` | C + решение §6.8 | ГИП-Ассистент получает сами документы ответов |
+
+Примечание: требование «3 неудачных попыток» (§3.5.3) реализуется на Шаге 4 (`inbox.py`, этап 4 backlog); текущее расхождение с кодом — в backlog (`docs/PROGRESS.md`).
 
 ---
 
