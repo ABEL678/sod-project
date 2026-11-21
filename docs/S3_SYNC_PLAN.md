@@ -25,7 +25,7 @@ FastAPI/SQLAlchemy с UUID-PK), и связывать их напрямую оч
 | Входящие | Celery-beat `process_s3_inbox` каждые 5 минут: `list_objects_v2` по `inbox/pending/`, валидация, применение команды (allowlist типов), перенос файла в `processed/` или `failed/` |
 | Настройки | `S3_ENDPOINT`, `S3_BUCKET_NAME`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_REGION`, `S3_SYNC_ENABLED` — по существующей конвенции `os.environ.get` |
 | Безопасность | Два независимых комплекта ключей IAM: у Stream-CAD — write в `outbox/` + read в `inbox/`, у ГИП-Ассистента — зеркально. Плюс allowlist типов команд, лимит размера, sha256-манифест, SSE-шифрование бакета |
-| Новые модели | `SyncState`, `SyncLog`, `InboxCommand` (миграция `0033_s3_sync`) |
+| Новые модели | `SyncState`, `SyncLog`, `InboxCommand` (миграция `0034_s3_sync_models`; `0033` занята `0033_rfi_task_stage1`) |
 | Зависимости | `boto3` — новая зависимость requirements.txt; `moto` — dev-зависимость для тестов |
 | Зависимость от RFI-модуля | `tasks.json` раскатывается без RFI-модуля (в `rfis.json` — пустой `items[]`). Полноценный `rfis.json` требует `RfiTask` — отдельный план `RFI_MODULE_PLAN.md` |
 
@@ -102,7 +102,7 @@ FastAPI/SQLAlchemy с UUID-PK), и связывать их напрямую оч
 | Статус задачи | 9 состояний | 6 состояний | Таблица маппинга — §3.3.2; наш сырой статус всегда передаётся в расширении |
 | Идентификатор проекта | `Project.code` (шифр) | UUID | `metadata.json` несёт и `code`, и uuid5-проекта; их импортер сопоставляет |
 | Исполнитель | `User` (наш) | UUID `executors` | `assignee_id = null`, ФИО/логин в расширении `assignee_name` |
-| Причина RFI | связанный `DesignTask` | `Decision` XOR `Goal` | Их строгие поля отдаём `null`; причину несёт расширение `rfi_cause_design_task_id` — §3.3.3 |
+| Причина RFI | связанный `DesignTask` | `Decision` XOR `Goal` | Их строгие поля отдаём `null`; причину несёт расширение `rfi_cause_design_task_id` — **NOT IMPLEMENTED**, вариант выбирает Координатор, §3.3.3 |
 | Время | `USE_TZ=True` | `created_at/updated_at` | ISO 8601 в UTC (`...Z`) в JSON |
 
 ---
@@ -310,7 +310,7 @@ s3://{S3_BUCKET_NAME}/
       "stream_cad_number": "РИ-007",
       "stream_cad_status": "escalated",
       "assignee_name": "Петрова А.А.",
-      "rfi_cause_design_task_id": "3f8a1c2e-...-uuid5",
+      "rfi_cause_design_task_id": "3f8a1c2e-...-uuid5",  // NOT IMPLEMENTED, см. статус ниже
       "escalated_at": "2026-11-15T16:40:00Z",
       "sent_at": "2026-11-09T11:30:00Z",
       "answered_at": null,
@@ -324,11 +324,29 @@ s3://{S3_BUCKET_NAME}/
         "updated_at": "2026-11-09T11:29:00Z"
       },
       "response_document": null,
-      "linked_tasks": ["3f8a1c2e-...-uuid5"]
+      "linked_tasks": ["3f8a1c2e-...-uuid5"]  // NOT IMPLEMENTED, см. статус ниже
     }
   ]
 }
 ```
+
+> **Статус полей `rfi_cause_design_task_id` и `linked_tasks`: NOT IMPLEMENTED.
+> Решение не принято; выбор варианта A или B — за Координатором.**
+>
+> Факт: модель `RfiTask` (`storage/domain/models.py:950`) не содержит ни FK на `DesignTask`,
+> ни M2M на него; миграция `0033_rfi_task_stage1` их не создаёт. Сейчас
+> `storage/domain/sync/mapping.py:212-213` выдаёт оба поля константами `null` / `[]`.
+>
+> - **Вариант A — убрать из контракта.** Удалить оба поля из примера выше, из правил ниже,
+>   из §2.2 и §5. Связь RFI → задание в Data Lake не передаётся; при необходимости — отдельный
+>   план. Для реализации требуется правка `mapping.py` (вне этого шага).
+> - **Вариант B — оставить как планируемые.** Требуется миграция: FK `RfiTask.cause_design_task`
+>   (null=True, на `DesignTask`) для `rfi_cause_design_task_id`; для `linked_tasks` — M2M или
+>   обратный FK «RFI блокирует задания». До миграции `mapping.py` выдаёт `null` / `[]`.
+>   Миграция требует обновления `docs/ARCHITECTURE.md` (раздел 3.2 не содержит `RfiTask`).
+>
+> Пока решение не принято, оба поля в контракте считаются непроверенными и не входят в
+> обязательный набор полей для приёмки (Этап E).
 
 Правила:
 
@@ -342,7 +360,7 @@ s3://{S3_BUCKET_NAME}/
 - `rfi_cause_decision_id` / `rfi_cause_goal_id` = `null`: их XOR-ограничение
   `ck_tasks_rfi_cause` действует в **их** БД; наш RFI проистекает из задания
   смежнику, а не из их `Decision`. Причину несёт расширение
-  `rfi_cause_design_task_id` (uuid5 связанного задания, если есть). Их импортеру
+  `rfi_cause_design_task_id` (**NOT IMPLEMENTED**, см. статус выше; вариант A/B — за Координатором). Их импортеру
   при создании локальной копии RFI придётся либо сопоставить причину с их
   `Decision`, либо ослабить ограничение для импортированных строк (`source =
   'stream_cad'`) — это их выбор, мы фиксируем его в контракте как рекомендацию.
@@ -352,7 +370,7 @@ s3://{S3_BUCKET_NAME}/
   они остаются в СОД Stream-CAD, куда отвечает Заказчик. Опция следующего этапа —
   зеркалирование файлов в `projects/{slug}/outbox/documents/{РИ-xxx}/`
   (см. §7, этап F).
-- `linked_tasks` — uuid5 заданий, заблокированных этим запросом (ГИП-Ассистент
+- `linked_tasks` — **NOT IMPLEMENTED** (см. статус выше; вариант A/B — за Координатором); uuid5 заданий, заблокированных этим запросом (ГИП-Ассистент
   получает возможность построить связку «RFI блокирует задачи матрицы»).
 - Состав выгрузки: все RFI проекта; приоритет Координатора — «особенно escalated»
   — покрывается тем, что escalated присутствует в общем списке со своим
@@ -487,7 +505,17 @@ storage/tasks.py                   # тонкие Celery-обёртки (кон�
 
 #### 3.5.1. Формат входящего файла
 
-`projects/{slug}/inbox/pending/{seq:06d}-{ts}-{command_id}.json`:
+Ключ по плану: `projects/{slug}/inbox/pending/{seq:06d}-{ts}-{command_id}.json`.
+
+> **NOT RESOLVED — расхождение ключа с кодом.** `storage/domain/sync/inbox.py:28-30`
+> фактически разбирает ключ `projects/<slug>/inbox/commands/<seq>_<type>_<cid>.json`
+> (перенос в `inbox/done/` и `inbox/failed/`), а не `pending/` и `processed/`.
+> Ключ в плане и ключ в коде различаются по префиксу, разделителям и порядку полей.
+> Выбор варианта (привести план к коду или код к плану) — за Координатором.
+> Код на этом шаге не менялся; докстринг `InboxCommand` (`models.py:1131`,
+> «inbox/commands.json») также не исправлен — требуется отдельная правка кода.
+
+Пример тела команды:
 
 ```json
 {
@@ -512,9 +540,9 @@ storage/tasks.py                   # тонкие Celery-обёртки (кон�
 | Тип | Смысл | Сторона-инициатор | Обработка |
 |---|---|---|---|
 | `ack.import` | квитанция: ГИП-Ассистент импортировал generation N, ошибки | их импортер | автоматически: `SyncState.last_ack_generation`, `SyncLog(level=info)`; `errors` непустые → `level=warn` |
-| `rfi.escalate` | их агент RFI эскалировал наш RFI (например, просрочен `rfi_due_date`) | их агент RFI | автоматически, если переход разрешён матрицей RFI-модуля (`sent`/`answered` → `escalated`); иначе `rejected` с причиной |
-| `rfi.proposal` | предложение создать RFI (аналог их `RfiProposal`: `formulation`, `rationale`, `rfi_due_date`) | их агент RFI | `InboxCommand(status=pending_approval)`; ГИП подтверждает в UI проекта (вкладка RFI), после подтверждения — `create_rfi` сервиса RFI-модуля |
-| `task.deadline_update` | ГИП скорректировал срок задания в своей модели | ГИП | `pending_approval`; после подтверждения — `due_date` меняется только для открытых статусов (`ISSUED`/`IN_PROGRESS`/`ON_HOLD`/`REVIEW`), всё пишется в `SyncLog` |
+| `rfi.escalate` | их агент RFI эскалировал наш RFI (например, просрочен `rfi_due_date`) | их агент RFI | автоматически, если переход разрешён матрицей RFI-модуля (`sent`/`answered` → `escalated`); иначе `InboxCommand(status=failed)` с причиной в `error` |
+| `rfi.proposal` | предложение создать RFI (аналог их `RfiProposal`: `formulation`, `rationale`, `rfi_due_date`) | их агент RFI | `InboxCommand(status=pending)`; ГИП подтверждает в UI проекта (вкладка RFI), после подтверждения — `create_rfi` сервиса RFI-модуля |
+| `task.deadline_update` | ГИП скорректировал срок задания в своей модели | ГИП | `InboxCommand(status=pending)`; после подтверждения — `due_date` меняется только для открытых статусов (`ISSUED`/`IN_PROGRESS`/`ON_HOLD`/`REVIEW`), всё пишется в `SyncLog` |
 
 Принцип: команды, меняющие данные, не применяются молча — создающие/правящие
 команды требуют подтверждения ГИПа (соответствует их же правилу «без
@@ -530,7 +558,7 @@ storage/tasks.py                   # тонкие Celery-обёртки (кон�
    - валидация: `type` ∈ allowlist; `seq > SyncState.last_inbox_seq` (защита от
      повторной доставки старых файлов); `command_id` не встречается в
      `InboxCommand` (идемпотентность);
-   - применить команду (§3.5.2) в транзакции: `InboxCommand(status=applied|rejected)`
+   - применить команду (§3.5.2) в транзакции: `InboxCommand(status=in_progress → done|failed)`
      с payload и ошибкой;
    - перенос файла: `move_object` (CopyObject → DeleteObject) в
      `inbox/processed/` (или `inbox/failed/` после 3 неудачных попыток обработки).
@@ -621,7 +649,7 @@ AWS policy-документа: `Effect/Action/Resource` на префиксы б
 
 Кодер реализует следующее (здесь — только перечень, не код):
 
-### Шаг 1. Модели и миграция — `storage/domain/models.py`, `storage/migrations/0033_s3_sync.py`
+### Шаг 1. Модели и миграция — `storage/domain/models.py`, `storage/migrations/0034_s3_sync_models.py` (факт; `0033` занята `0033_rfi_task_stage1`)
 
 - `SyncState` (1:1 с `Project`): `dirty`, `enabled`, `generation` (int, default 0),
   `last_success_at`, `last_full_sync_at`, `last_error`, `consecutive_failures`,
@@ -631,7 +659,7 @@ AWS policy-документа: `Effect/Action/Resource` на префиксы б
   `direction` (`out`/`in`), `level` (`info`/`warn`/`error`), `generation`,
   `message`, `detail` (JSON), `created_at`. Индекс `(project, -created_at)`.
 - `InboxCommand` (FK `Project`): `command_id` (UUID, **unique** — идемпотентность),
-  `seq` (int), `type`, `status` (`pending_approval`/`applied`/`rejected`/`failed`),
+  `seq` (int), `type`, `status` (`pending`/`in_progress`/`done`/`failed` — фактические значения `InboxCommand.Status`, `models.py:1133-1137`),
   `payload` (JSON), `error` (Text, null), `file_key`, `received_at`, `processed_at`.
   Индекс `(project, status)` для очереди подтверждений.
 - Регистрация в админке (read-only) — для аудита.
@@ -663,8 +691,8 @@ AWS policy-документа: `Effect/Action/Resource` на префиксы б
 - `process_project_inbox(project) -> int` — алгоритм §3.5.3.
 - `apply_command(project, command) -> bool` — allowlist §3.5.2; для
   `rfi.escalate` в Этапе D подключается матрица переходов RFI-модуля;
-  до Этапа C типы `rfi.*` возвращают `rejected` с причиной «RFI-модуль не
-  установлен».
+  до Этапа C типы `rfi.*` завершаются с `InboxCommand(status=failed)` и причиной в `error`
+  («RFI-модуль не установлен»).
 
 ### Шаг 5. Celery и расписание — `storage/tasks.py`, `sod_core/settings.py`
 
@@ -718,7 +746,7 @@ AWS policy-документа: `Effect/Action/Resource` на префиксы б
 - сроки: `rfi_due_date` (срок ответа Заказчика);
 - документы: `request_document` / `response_document` → `Document` в подпапке
   «Запросы информации (RFI)» (для экспорта достаточно FK + метаданные);
-- связи: `linked_tasks` (M2M на `DesignTask`, «RFI блокирует задания»);
+- связи: `linked_tasks` (**NOT IMPLEMENTED**: модель не содержит связи с `DesignTask`; вариант A — поле убрать из контракта, вариант B — миграция M2M/FK, решает Координатор, §3.3.3);
 - аудит: `sent_at`, `answered_at`, `registered_at`, `closed_at`, `escalated_at`.
 
 Порядок раскатки это учитывает: Этап B (tasks.json) не ждёт RFI-модуля —
@@ -738,7 +766,7 @@ AWS policy-документа: `Effect/Action/Resource` на префиксы б
    требование Координатора); их матрица сама агрегирует. Если ГИП-Ассистент
    попросит исключить черновики — фильтр на этапе сериализации (одна строка).
 4. **Подтверждение команд.** Рекомендация: создающие/правящие команды
-   (`rfi.proposal`, `task.deadline_update`) — через `pending_approval` с
+   (`rfi.proposal`, `task.deadline_update`) — через `InboxCommand(status=pending)` с
    подтверждением ГИПа; `ack.import` и `rfi.escalate` — автоматически (§3.5.2).
 5. **Стабильность `Project.code`.** Смена шифра меняет все uuid5 проекта.
    Рекомендация: при включённом s3-sync запретить смену шифра (проверка в
@@ -757,7 +785,7 @@ AWS policy-документа: `Effect/Action/Resource` на префиксы б
 
 | Этап | Содержание | Зависимости | Результат |
 |---|---|---|---|
-| **A. Инфраструктура** | настройки, модели `0033`, порт/адаптер S3, `boto3`/`moto` | бакет в Cloud.ru, два IAM-пользователя, политики §3.7.1 | `sync_s3 --status` отвечает |
+| **A. Инфраструктура** | настройки, модели `0034`, порт/адаптер S3, `boto3`/`moto` | бакет в Cloud.ru, два IAM-пользователя, политики §3.7.1 | `sync_s3 --status` отвечает |
 | **B. Выгрузка заданий** | `mapping` (DesignTask), `tasks.json` + `metadata.json`, Celery + beat, dirty-сигналы | A | ГИП-Ассистент впервые читает полный список заданий; `rfis.json` — валидный пустой |
 | **C. RFI** | `serialize_rfi_task` (по `RFI_MODULE_PLAN.md`) | B + RFI-модуль | `rfis.json` полный, escalated виден |
 | **D. Входящие** | inbox-процессор, allowlist §3.5.2, `ack.import`, `rfi.escalate`, `rfi.proposal`, `task.deadline_update` + подтверждения в UI | B (для RFI-команд — C) | двухсторонний контур закрыт: квитанции и команды работают |
