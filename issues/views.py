@@ -865,6 +865,4 @@ def _can_change_issue(issue, user):
     profile = getattr(user, 'userprofile', None)
     if profile is not None and profile.role == 'admin':
         return True
-    if project.gip_id == user.pk:
-        return True
-    return False
+    return project.memberships.filter(user=user, role_in_project='gip').exists()

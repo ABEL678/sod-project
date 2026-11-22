@@ -25,6 +25,7 @@ from storage.domain.models import (
     DesignTask,
     DesignTaskAttachment,
     DesignTaskChecklistItem,
+    Customer,
     DesignTaskStatusLog,
     Document,
     DocumentVersion,
@@ -479,10 +480,7 @@ def can_manage_project_participants(user: User, project: Project) -> bool:
     if profile.role == 'admin':
         return True
 
-    if project.gip_id == user.id:
-        return True
-
-    return project.memberships.filter(user=user, role_in_project='gip').exists()
+    return _is_project_gip(user, project)
 
 
 def list_project_participants(actor: User, project: Project):
@@ -713,15 +711,23 @@ def update_project_member_role(
     if role == 'gip':
         _validate_gip_role(membership.user)
 
-    if membership.role_in_project == 'gip' and role != 'gip':
-        other_gips = membership.project.memberships.filter(
-            role_in_project='gip',
-        ).exclude(pk=membership.pk)
-        if not other_gips.exists() and membership.project.gip_id is None:
-            raise ValueError("Нельзя снять роль последнего ГИП проекта")
+    with transaction.atomic():
+        if membership.role_in_project == 'gip' and role != 'gip':
+            # Снять роль ГИП можно только если останется другой ГИП в составе.
+            other_gips = membership.project.memberships.filter(
+                role_in_project='gip',
+            ).exclude(pk=membership.pk)
+            if not other_gips.exists():
+                raise ValueError("Нельзя снять роль последнего ГИП проекта")
 
-    membership.role_in_project = role
-    membership.save(update_fields=['role_in_project'])
+        if role == 'gip' and membership.role_in_project != 'gip':
+            # Назначение нового ГИП снимает роль с прежнего: один действующий ГИП.
+            membership.project.memberships.filter(
+                role_in_project='gip',
+            ).exclude(pk=membership.pk).update(role_in_project='developer')
+
+        membership.role_in_project = role
+        membership.save(update_fields=['role_in_project'])
     return membership
 
 
@@ -1108,6 +1114,15 @@ def generate_gost_code(
     return '-'.join(parts)
 
 
+def _resolve_customer(company: Company, name: str | None) -> Customer | None:
+    """Карточка заказчика компании по наименованию (создаётся при первом упоминании)."""
+    name = (name or '').strip()
+    if not name:
+        return None
+    customer, _ = Customer.objects.get_or_create(company=company, name=name)
+    return customer
+
+
 def create_project(
     company: Company,
     code: str,
@@ -1155,8 +1170,7 @@ def create_project(
         project.company = company
         project.base_code = (base_code or '').strip()
         project.name = name
-        project.customer = customer
-        project.gip = gip
+        project.customer_org = _resolve_customer(company, customer)
         project.created_by = actor
         project.status = 'active'
         project.is_deleted = False
@@ -1166,14 +1180,23 @@ def create_project(
                 'company',
                 'base_code',
                 'name',
-                'customer',
-                'gip',
+                'customer_org',
                 'created_by',
                 'status',
                 'is_deleted',
                 'deleted_at',
             ]
         )
+        # Состав команды: старый ГИП снимается, новый (если задан) назначается.
+        project.memberships.filter(role_in_project='gip').update(
+            role_in_project='developer'
+        )
+        if gip is not None:
+            ProjectMembership.objects.update_or_create(
+                project=project,
+                user=gip,
+                defaults={'role_in_project': 'gip'},
+            )
         if old_base_code != project.base_code:
             _refresh_project_full_codes(project, old_base_code)
         restored = True
@@ -1183,11 +1206,16 @@ def create_project(
             code=code,
             base_code=(base_code or '').strip(),
             name=name,
-            customer=customer,
-            gip=gip,
+            customer_org=_resolve_customer(company, customer),
             status='active',
             created_by=actor,
         )
+        if gip is not None:
+            ProjectMembership.objects.create(
+                project=project,
+                user=gip,
+                role_in_project='gip',
+            )
 
     _ensure_project_zones(project, actor)
     project._restored_from_trash = restored
@@ -1303,8 +1331,8 @@ def update_project(
         update_fields.append('name')
 
     if customer is not None:
-        project.customer = customer.strip()
-        update_fields.append('customer')
+        project.customer_org = _resolve_customer(project.company, customer)
+        update_fields.append('customer_org')
 
     base_changed = False
     if base_code is not None:
@@ -1323,13 +1351,26 @@ def update_project(
         update_fields.append('status')
 
     if gip is not _UNSET:
-        gip_changed = (gip.pk if gip is not None else None) != project.gip_id
+        current = project.gip
+        gip_changed = (gip.pk if gip is not None else None) != (
+            current.pk if current is not None else None
+        )
         if gip is not None and gip_changed:
             if not _check_company_access(gip, project.company_id):
                 raise PermissionDenied("ГИП должен принадлежать компании проекта")
             _validate_gip_role(gip)
-        project.gip = gip
-        update_fields.append('gip')
+        if gip_changed:
+            with transaction.atomic():
+                # Смена ГИП: прежний снимается, новый назначается (один действующий).
+                project.memberships.filter(role_in_project='gip').update(
+                    role_in_project='developer'
+                )
+                if gip is not None:
+                    ProjectMembership.objects.update_or_create(
+                        project=project,
+                        user=gip,
+                        defaults={'role_in_project': 'gip'},
+                    )
 
     if update_fields:
         project.save(update_fields=update_fields)
@@ -2447,14 +2488,7 @@ def check_write_permission(user: User, section: Section) -> bool:
         return True
 
     if role == 'gip':
-        project = section.project
-        # ГИП может писать, если его gip_id совпадает с gip проекта
-        # ИЛИ если есть запись ProjectMembership с ролью gip
-        if project.gip_id == user.id:
-            return True
-        if project.memberships.filter(user=user, role_in_project='gip').exists():
-            return True
-        return False
+        return _is_project_gip(user, section.project)
 
     if role in ('developer', 'contractor'):
         return section in profile.allowed_sections.all()
@@ -2511,12 +2545,7 @@ def check_zone_permission(
         if profile.role == 'admin':
             return True
         if profile.role == 'gip' and project is not None:
-            if project.gip_id == user.id:
-                return True
-            if project.memberships.filter(
-                user=user, role_in_project='gip'
-            ).exists():
-                return True
+            return _is_project_gip(user, project)
         return False
 
     # WIP — стандартные правила записи
@@ -2527,13 +2556,7 @@ def check_zone_permission(
     if profile.role == 'gip':
         if project is None:
             return False
-        if project.gip_id == user.id:
-            return True
-        if project.memberships.filter(
-            user=user, role_in_project='gip'
-        ).exists():
-            return True
-        return False
+        return _is_project_gip(user, project)
     if profile.role in ('developer', 'contractor'):
         # Разработчик и смежник пишут в WIP только в выданные разделы
         if section is not None:
@@ -2568,11 +2591,7 @@ def check_read_permission(user: User, document: Document) -> bool:
         return True
 
     if role == 'gip':
-        if project.gip_id == user.id:
-            return True
-        return project.memberships.filter(
-            user=user, role_in_project='gip'
-        ).exists()
+        return _is_project_gip(user, project)
 
     if role == 'developer':
         return project.memberships.filter(
@@ -2628,9 +2647,8 @@ def get_readable_documents(user: User, project: Project | None = None):
         return qs
     if role == 'gip':
         return qs.filter(
-            Q(project__gip_id=user.id)
-            | Q(project__memberships__user=user,
-                project__memberships__role_in_project='gip')
+            project__memberships__user=user,
+            project__memberships__role_in_project='gip',
         ).distinct()
     if role == 'developer':
         return qs.filter(
@@ -2927,15 +2945,6 @@ def _zone_filter_q(zone: str) -> Q:
             )
         )
     )
-
-
-def _is_project_gip(user: User, project: Project) -> bool:
-    """ГИП проекта: прямой owner или членство с ролью gip."""
-    if project.gip_id == user.id:
-        return True
-    return project.memberships.filter(
-        user=user, role_in_project='gip'
-    ).exists()
 
 
 def _workflow_role_allowed(user: User, document: Document, action_code: str) -> bool:
@@ -4897,16 +4906,29 @@ def _design_task_url(task: DesignTask) -> str:
 
 
 def _is_project_gip(user: User, project: Project) -> bool:
-    """ГИП именно этого проекта: Project.gip или ProjectMembership(role=gip).
+    """ГИП именно этого проекта: членство в составе с ролью gip.
 
     UserProfile.role == 'gip' сам по себе права на чужой проект не даёт —
     в отличие от роли 'admin', которая глобальна.
     """
     if user.is_superuser:
         return True
-    if project.gip_id == user.pk:
-        return True
-    return project.memberships.filter(user=user, role_in_project='gip').exists()
+    # all() при prefetch_related('memberships') читает кэш без запроса.
+    return any(m.user_id == user.pk and m.role_in_project == 'gip'
+               for m in project.memberships.all())
+
+
+def _project_gip_user_id(project: Project) -> int | None:
+    """user_id действующего ГИП проекта из состава (кэш prefetch, без запроса)."""
+    gips = [m for m in project.memberships.all() if m.role_in_project == 'gip']
+    if not gips:
+        return None
+    return max(gips, key=lambda m: m.pk).user_id
+
+
+def _project_gip_user(project: Project) -> User | None:
+    """Действующий ГИП проекта из состава (для уведомлений и маршрутизации)."""
+    return project.gip
 
 
 def _is_project_admin(user: User, project: Project) -> bool:
@@ -4939,7 +4961,7 @@ def _is_project_participant(user: User | None, project: Project) -> bool:
     """
     if user is None:
         return False
-    if user.is_superuser or project.gip_id == user.pk:
+    if user.is_superuser or _is_project_gip(user, project):
         return True
     profile = getattr(user, 'userprofile', None)
     return profile is not None and profile.company_id == project.company_id
@@ -5190,7 +5212,7 @@ def update_task_status(
         # актора), действия автора/ГИПа видит исполнитель. Длинная причина
         # обрезается до 200 знаков (полный текст — в DesignTaskStatusLog).
         if new_status == DesignTask.Status.COMPLETED:
-            for recipient in {task.author, task.project.gip} - {None, user}:
+            for recipient in {task.author, _project_gip_user(task.project)} - {None, user}:
                 _notify_task(
                     task,
                     recipient,
@@ -5206,10 +5228,10 @@ def update_task_status(
                 if old_status == DesignTask.Status.ISSUED
                 else f'Задание #{task.pk} возобновлено'
             )
-            for recipient in {task.author, task.project.gip} - {None, user}:
+            for recipient in {task.author, _project_gip_user(task.project)} - {None, user}:
                 _notify_task(task, recipient, user, message)
         elif new_status == DesignTask.Status.ON_HOLD:
-            for recipient in {task.author, task.project.gip} - {None, user}:
+            for recipient in {task.author, _project_gip_user(task.project)} - {None, user}:
                 _notify_task(
                     task,
                     recipient,
@@ -5602,15 +5624,14 @@ def _deadline_tasks(target_date, statuses, overdue: bool = False) -> QuerySet:
         else queryset.filter(due_date=target_date)
     )
     return queryset.select_related(
-        'project', 'project__gip', 'project__gip__userprofile',
+        'project',
         'assignee', 'assignee__userprofile',
         'author', 'author__userprofile',
+    ).prefetch_related(
+        'project__memberships',
     ).only(
         'id', 'title', 'due_date',
-        'project_id', 'project__id', 'project__company_id', 'project__gip_id',
-        'project__gip__id', 'project__gip__is_superuser',
-        'project__gip__userprofile__id',
-        'project__gip__userprofile__company_id',
+        'project_id', 'project__id', 'project__company_id',
         'assignee_id', 'assignee__id', 'assignee__is_superuser',
         'assignee__userprofile__id', 'assignee__userprofile__company_id',
         'author_id', 'author__id', 'author__is_superuser',
@@ -5618,21 +5639,32 @@ def _deadline_tasks(target_date, statuses, overdue: bool = False) -> QuerySet:
     )
 
 
-def _reminder_recipients(task: DesignTask, include_author: bool) -> set:
-    """Получатели напоминания: исполнитель (просрочка — ещё автор и ГИП).
+def _reminder_recipients(task: DesignTask, include_author: bool) -> set[int]:
+    """user_id получателей напоминания: исполнитель (просрочка — ещё автор и ГИП).
 
-    Каждый кандидат проверяется через _is_project_participant —
-    уведомления не уходят за пределы проекта (спека Этап 5).
+    Кандидаты-участники (исполнитель, автор) проверяются через
+    _is_project_participant — уведомления не уходят за пределы проекта
+    (спека Этап 5). ГИП берётся из состава и участник по определению,
+    поэтому обязательный получатель просрочки всегда попадает в набор.
     """
+    # Бюджет запросов — константа, от числа задач не зависит:
+    # 1 (задания) + 1 (состав проекта, prefetch) + 1 (идемпотентность) +
+    # 1 (bulk_create) = 4. Объекты пользователей состава не загружаются:
+    # получатели — user_id; исполнитель и автор уже приходят из
+    # select_related с профилями.
     candidates = {task.assignee_id: task.assignee}
     if include_author:
         candidates[task.author_id] = task.author
-        candidates[task.project.gip_id] = task.project.gip
-    return {
-        user
+    recipient_ids = {
+        user_id
         for user_id, user in candidates.items()
         if user_id is not None and _is_project_participant(user, task.project)
     }
+    if include_author:
+        gip_id = _project_gip_user_id(task.project)
+        if gip_id is not None:
+            recipient_ids.add(gip_id)
+    return recipient_ids
 
 
 def _send_task_deadline_notifications(tasks, today, recipients_of, message_of) -> int:
@@ -5660,11 +5692,11 @@ def _send_task_deadline_notifications(tasks, today, recipients_of, message_of) -
     for task in tasks:
         url = _design_task_url(task)
         message = message_of(task)[:300]
-        for recipient in recipients_of(task):
-            if (recipient.pk, url, message) in existing:
+        for recipient_id in recipients_of(task):
+            if (recipient_id, url, message) in existing:
                 continue
             rows.append(Notification(
-                recipient_id=recipient.pk,
+                recipient_id=recipient_id,
                 actor=None,
                 project_id=task.project_id,
                 verb='status_changed',

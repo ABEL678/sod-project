@@ -29,7 +29,39 @@ class Company(models.Model):
         return self.name
 
 
+class Customer(models.Model):
+    """Карточка заказчика (организации) в пределах компании-владельца СОД."""
+
+    company = models.ForeignKey(
+        Company,
+        on_delete=models.CASCADE,
+        related_name='customers',
+        verbose_name="Компания",
+    )
+    name = models.CharField(max_length=255, verbose_name="Наименование")
+
+    class Meta:
+        verbose_name = "Заказчик"
+        verbose_name_plural = "Заказчики"
+        constraints = [
+            models.UniqueConstraint(
+                fields=['company', 'name'],
+                name='uniq_customer_name_per_company',
+            ),
+        ]
+
+    def __str__(self):
+        return self.name
+
+
 class Project(models.Model):
+    STAGE_P = 'P'
+    STAGE_RD = 'RD'
+    STAGE_CHOICES = [
+        (STAGE_P, 'П'),
+        (STAGE_RD, 'РД'),
+    ]
+
     company = models.ForeignKey(Company, on_delete=models.CASCADE, related_name='projects', verbose_name="Компания")
     code = models.CharField(max_length=50, unique=True, verbose_name="Шифр")
     base_code = models.CharField(
@@ -39,8 +71,20 @@ class Project(models.Model):
         verbose_name="Базовое обозначение",
     )
     name = models.CharField(max_length=255, verbose_name="Название")
-    customer = models.CharField(max_length=255, blank=True, verbose_name="Заказчик")
-    gip = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='gip_projects', verbose_name="ГИП")
+    customer_org = models.ForeignKey(
+        Customer,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='projects',
+        verbose_name="Заказчик",
+    )
+    stage = models.CharField(
+        max_length=2,
+        choices=STAGE_CHOICES,
+        default=STAGE_RD,
+        verbose_name="Стадия",
+    )
     STATUS_CHOICES = [
         ('active', 'Активен'),
         ('archived', 'Архив'),
@@ -63,6 +107,27 @@ class Project(models.Model):
 
     def __str__(self):
         return f'{self.code} - {self.name}'
+
+    @property
+    def customer(self) -> str:
+        """Наименование заказчика для API и отображения (вычисляется из карточки)."""
+        return self.customer_org.name if self.customer_org_id else ''
+
+    @property
+    def gip(self):
+        """Действующий ГИП проекта из состава команды (или None)."""
+        membership = (
+            self.memberships.select_related('user')
+            .filter(role_in_project='gip')
+            .order_by('-id')
+            .first()
+        )
+        return membership.user if membership else None
+
+    @property
+    def gip_id(self):
+        user = self.gip
+        return user.pk if user else None
 
 
 class Section(models.Model):
@@ -590,6 +655,13 @@ class ProjectMembership(models.Model):
         unique_together = ('project', 'user')
         verbose_name = "Участник проекта"
         verbose_name_plural = "Участники проектов"
+        constraints = [
+            models.UniqueConstraint(
+                fields=['project'],
+                condition=models.Q(role_in_project='gip'),
+                name='uniq_active_gip_per_project',
+            ),
+        ]
 
     def __str__(self):
         return f'{self.user.username} - {self.project.code} ({self.role_in_project})'

@@ -8,6 +8,7 @@ from django.urls import reverse
 from openpyxl import load_workbook
 
 from storage.domain.models import (
+    ProjectMembership,
     Company,
     Document,
     MailRule,
@@ -45,25 +46,25 @@ class ViewTests(TestCase):
             code='P-1',
             name='Проект',
             status='active',
-            gip=self.user_gip,
             created_by=self.user_gip,
         )
+        ProjectMembership.objects.update_or_create(project=self.project, user=self.user_gip, defaults={'role_in_project': 'gip'})
         self.project_other = Project.objects.create(
             company=self.company,
             code='P-2',
             name='Другой проект',
             status='active',
-            gip=self.user_gip,
             created_by=self.user_gip,
         )
+        ProjectMembership.objects.update_or_create(project=self.project_other, user=self.user_gip, defaults={'role_in_project': 'gip'})
         self.foreign_project = Project.objects.create(
             company=self.other_company,
             code='P-FOREIGN',
             name='Чужой проект',
             status='active',
-            gip=self.user_foreign_gip,
             created_by=self.user_foreign_gip,
         )
+        ProjectMembership.objects.update_or_create(project=self.foreign_project, user=self.user_foreign_gip, defaults={'role_in_project': 'gip'})
         self.section = Section.objects.create(
             project=self.project,
             code='АР',

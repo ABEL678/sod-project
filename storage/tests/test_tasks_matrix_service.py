@@ -14,6 +14,7 @@ from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 
 from storage.domain.models import (
+    ProjectMembership,
     Company,
     DesignTask,
     Project,
@@ -51,8 +52,8 @@ class TasksMatrixForProjectTests(TestCase):
             name='Проект матрицы',
             status='active',
             created_by=self.gip,
-            gip=self.gip,
         )
+        ProjectMembership.objects.update_or_create(project=self.project, user=self.gip, defaults={'role_in_project': 'gip'})
         self.section_ar = Section.objects.create(
             project=self.project, code='AR', name='АР', order=1,
         )
@@ -298,8 +299,8 @@ class TasksMatrixForProjectTests(TestCase):
             name='Другой проект',
             status='active',
             created_by=self.gip,
-            gip=self.gip,
         )
+        ProjectMembership.objects.update_or_create(project=other, user=self.gip, defaults={'role_in_project': 'gip'})
         Section.objects.create(project=other, code='AR', name='АР', order=1)
         DesignTask.objects.create(
             project=other,
@@ -329,8 +330,8 @@ class TasksMatrixQueryCountTests(TestCase):
             name='Проект запросов',
             status='active',
             created_by=self.gip,
-            gip=self.gip,
         )
+        ProjectMembership.objects.update_or_create(project=self.project, user=self.gip, defaults={'role_in_project': 'gip'})
         self.ar = Section.objects.create(project=self.project, code='AR', name='АР', order=1)
         self.kr = Section.objects.create(project=self.project, code='KR', name='КР', order=2)
         for index in range(5):

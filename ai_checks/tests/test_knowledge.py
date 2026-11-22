@@ -13,6 +13,7 @@ from ai_checks.domain.services import (
     upload_knowledge_document,
 )
 from storage.domain.models import (
+    ProjectMembership,
     Company,
     Document,
     DocumentVersion,
@@ -41,8 +42,9 @@ class KnowledgeBaseServiceTests(MediaIsolationMixin, TestCase):
         self.company = Company.objects.create(name='КБ-Компания')
         self.project = Project.objects.create(
             company=self.company, code='KB-1', name='Проект КБ',
-            status='active', created_by=self.user, gip=self.user,
+            status='active', created_by=self.user,
         )
+        ProjectMembership.objects.update_or_create(project=self.project, user=self.user, defaults={'role_in_project': 'gip'})
         self.section = Section.objects.create(
             project=self.project, code='АР', name='Архитектура', order=1,
         )
@@ -142,8 +144,9 @@ class KnowledgeBaseViewTests(MediaIsolationMixin, TestCase):
         self.company = Company.objects.create(name='КБ-Вью')
         self.project = Project.objects.create(
             company=self.company, code='KBV-1', name='Проект КБ вью',
-            status='active', created_by=self.user, gip=self.user,
+            status='active', created_by=self.user,
         )
+        ProjectMembership.objects.update_or_create(project=self.project, user=self.user, defaults={'role_in_project': 'gip'})
         Section.objects.create(
             project=self.project, code='АР', name='АР', order=1,
         )

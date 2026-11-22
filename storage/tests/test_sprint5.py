@@ -64,9 +64,9 @@ class Sprint5TestBase(TestCase):
             code='S5',
             name='Проект Спринта 5',
             status='active',
-            gip=self.user_gip,
             created_by=self.user_gip,
         )
+        ProjectMembership.objects.update_or_create(project=self.project, user=self.user_gip, defaults={'role_in_project': 'gip'})
         self.section_ar = Section.objects.create(
             project=self.project, code='АР', name='АР', order=1,
         )

@@ -116,8 +116,8 @@ class BuildAiSummaryTests(TestCase):
             name='Проект сводки',
             status='active',
             created_by=self.gip,
-            gip=self.gip,
         )
+        ProjectMembership.objects.update_or_create(project=self.project, user=self.gip, defaults={'role_in_project': 'gip'})
         self.section_ar = Section.objects.create(
             project=self.project, code='AR', name='Архитектура', order=1,
         )
@@ -249,8 +249,8 @@ class BuildAiSummaryTests(TestCase):
             name='Пустой проект',
             status='active',
             created_by=gip,
-            gip=gip,
         )
+        ProjectMembership.objects.update_or_create(project=project, user=gip, defaults={'role_in_project': 'gip'})
         Section.objects.create(project=project, code='AR', name='АР', order=1)
         text = build_ai_summary(tasks_matrix_for_project(project))
         self.assertEqual(text, '')
@@ -278,8 +278,8 @@ class MatrixExportViewTests(TestCase):
             name='Проект экспорта',
             status='active',
             created_by=self.gip,
-            gip=self.gip,
         )
+        ProjectMembership.objects.update_or_create(project=self.project, user=self.gip, defaults={'role_in_project': 'gip'})
         self.section_ar = Section.objects.create(
             project=self.project, code='AR', name='Архитектура', order=1,
         )
@@ -289,9 +289,7 @@ class MatrixExportViewTests(TestCase):
         Section.objects.create(
             project=self.project, code='COMMON', name='Общие', order=99,
         )
-        ProjectMembership.objects.create(
-            project=self.project, user=self.gip, role_in_project='gip',
-        )
+        ProjectMembership.objects.update_or_create(project=self.project, user=self.gip, defaults={'role_in_project': 'gip'})
         DesignTask.objects.create(
             project=self.project,
             source_section=self.section_ar,
@@ -354,8 +352,8 @@ class MatrixExportViewTests(TestCase):
             name='Чужой проект экспорта',
             status='active',
             created_by=self.outsider,
-            gip=self.outsider,
         )
+        ProjectMembership.objects.update_or_create(project=other_project, user=self.outsider, defaults={'role_in_project': 'gip'})
         url = reverse('storage:task_matrix_export', args=[other_project.pk])
         self.client.force_login(self.gip)
         response = self.client.get(url, {'format': 'xlsx'})

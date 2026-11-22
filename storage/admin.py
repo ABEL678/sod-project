@@ -1,6 +1,6 @@
 from django.contrib import admin
 from .domain.models import (
-    Company, Project, Section, Document, DocumentVersion, UserProfile, ProjectMembership,
+    Company, Customer, Project, Section, Document, DocumentVersion, UserProfile, ProjectMembership,
     DocumentView, Specification, VorItem,
     DesignTask, DesignTaskStatusLog, DesignTaskAttachment, TaskTemplate,
     DesignTaskChecklistItem,
@@ -19,6 +19,13 @@ class ProjectAdmin(admin.ModelAdmin):
     list_display = ('code', 'name', 'company', 'customer', 'status', 'gip')
     list_filter = ('company', 'status')
     search_fields = ('code', 'name')
+
+
+@admin.register(Customer)
+class CustomerAdmin(admin.ModelAdmin):
+    list_display = ('name', 'company')
+    list_filter = ('company',)
+    search_fields = ('name',)
 
 
 @admin.register(Section)

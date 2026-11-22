@@ -63,9 +63,9 @@ class Sprint3SecurityTests(TestCase):
             code='S3-1',
             name='Проект зачистки',
             status='active',
-            gip=self.gip,
             created_by=self.gip,
         )
+        ProjectMembership.objects.update_or_create(project=self.project, user=self.gip, defaults={'role_in_project': 'gip'})
         self.section_ar = Section.objects.create(
             project=self.project, code='АР', name='Архитектура', order=1,
         )

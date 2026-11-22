@@ -64,8 +64,9 @@ class RfiApiTestBase(TestCase):
 
         self.project = Project.objects.create(
             company=self.company, code='API-TEST', name='API Project',
-            status='active', created_by=self.admin, gip=self.gip,
+            status='active', created_by=self.admin,
         )
+        ProjectMembership.objects.update_or_create(project=self.project, user=self.gip, defaults={'role_in_project': 'gip'})
         self.other_project = Project.objects.create(
             company=self.other_company, code='OTHER', name='Other',
             status='active', created_by=self.admin,

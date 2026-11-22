@@ -1462,11 +1462,7 @@ def _can_issue_task(user, project):
     profile = getattr(user, 'userprofile', None)
     if profile is not None and profile.role == 'admin':
         return True
-    if project.gip_id == user.id:
-        return True
-    if project.memberships.filter(user=user, role_in_project='gip').exists():
-        return True
-    return False
+    return project.memberships.filter(user=user, role_in_project='gip').exists()
 
 
 class TaskCreateView(LoginRequiredMixin, View):
@@ -1524,8 +1520,9 @@ class TaskCreateView(LoginRequiredMixin, View):
                 continue
             seen_ids.add(membership.user_id)
             assignee_choices.append(membership.user)
-        if project.gip is not None and project.gip_id not in seen_ids:
-            assignee_choices.append(project.gip)
+        gip = project.gip
+        if gip is not None and gip.pk not in seen_ids:
+            assignee_choices.append(gip)
 
         return {
             'project': project,
@@ -1605,10 +1602,7 @@ class TaskCreateView(LoginRequiredMixin, View):
             candidate = None
             if str(raw_assignee).isdigit():
                 candidate = get_user_model().objects.filter(pk=raw_assignee).first()
-            if candidate is None or not (
-                project.memberships.filter(user=candidate).exists()
-                or project.gip_id == candidate.pk
-            ):
+            if candidate is None or not project.memberships.filter(user=candidate).exists():
                 errors.append('Исполнитель должен быть участником проекта.')
             else:
                 assignee = candidate
@@ -4615,7 +4609,7 @@ def _document_code_edit_allowed(user, document: Document) -> bool:
     profile = getattr(user, 'userprofile', None)
     if profile is not None and profile.role in ('admin', 'gip'):
         return True
-    return document.project.gip_id == user.id
+    return document.project.memberships.filter(user=user, role_in_project='gip').exists()
 
 
 class DocumentCodeUpdateView(LoginRequiredMixin, View):

@@ -23,6 +23,7 @@ from storage.domain.services import (
     list_project_participants,
     normalize_document_view_config,
     save_document_view,
+    update_project,
     update_project_member_role,
 )
 
@@ -55,17 +56,17 @@ class GuiTestBase(TestCase):
             code='P-1',
             name='Проект',
             status='active',
-            gip=self.user_gip,
             created_by=self.user_gip,
         )
+        ProjectMembership.objects.update_or_create(project=self.project, user=self.user_gip, defaults={'role_in_project': 'gip'})
         self.foreign_project = Project.objects.create(
             company=self.other_company,
             code='P-FOREIGN',
             name='Чужой проект',
             status='active',
-            gip=self.user_foreign_gip,
             created_by=self.user_foreign_gip,
         )
+        ProjectMembership.objects.update_or_create(project=self.foreign_project, user=self.user_foreign_gip, defaults={'role_in_project': 'gip'})
 
         self.section_ar = Section.objects.create(
             project=self.project,
@@ -383,13 +384,8 @@ class DocumentViewServiceTests(GuiTestBase):
         self.assertIsNone(shared.user)
 
     def test_last_gip_cannot_be_demoted(self):
-        self.project.gip = None
-        self.project.save(update_fields=['gip'])
-        membership = ProjectMembership.objects.create(
-            project=self.project,
-            user=self.user_gip,
-            role_in_project='gip',
-        )
+        self.project.memberships.filter(role_in_project='gip').delete()
+        membership, _ = ProjectMembership.objects.update_or_create(project=self.project, user=self.user_gip, defaults={'role_in_project': 'gip'})
 
         with self.assertRaises(ValueError):
             update_project_member_role(self.user_admin, membership, 'viewer')
@@ -398,31 +394,52 @@ class DocumentViewServiceTests(GuiTestBase):
         self.assertEqual(membership.role_in_project, 'gip')
 
     def test_gip_can_be_demoted_when_another_gip_exists(self):
-        self.project.gip = None
-        self.project.save(update_fields=['gip'])
-        first = ProjectMembership.objects.create(
-            project=self.project,
-            user=self.user_gip,
-            role_in_project='gip',
-        )
-        ProjectMembership.objects.create(
+        self.project.memberships.filter(role_in_project='gip').delete()
+        first, _ = ProjectMembership.objects.update_or_create(project=self.project, user=self.user_gip, defaults={'role_in_project': 'gip'})
+        second = ProjectMembership.objects.create(
             project=self.project,
             user=self.user_admin,
-            role_in_project='gip',
+            role_in_project='developer',
+        )
+        # Назначение второго ГИП через сервис снимает роль с первого (один ГИП).
+        update_project_member_role(self.user_admin, second, 'gip')
+        first.refresh_from_db()
+        self.assertEqual(first.role_in_project, 'developer')
+        second.refresh_from_db()
+        self.assertEqual(second.role_in_project, 'gip')
+        self.assertEqual(self.project.gip, self.user_admin)
+
+    def test_gip_change_via_update_project_demotes_previous(self):
+        """Смена ГИП через update_project: прежний → developer, новый → gip."""
+        self.project.memberships.filter(role_in_project='gip').delete()
+        previous = ProjectMembership.objects.create(
+            project=self.project, user=self.user_gip, role_in_project='gip',
+        )
+        update_project(self.user_admin, self.project, gip=self.user_admin)
+        previous.refresh_from_db()
+        self.assertEqual(previous.role_in_project, 'developer')
+        self.assertEqual(self.project.gip, self.user_admin)
+        self.assertEqual(
+            self.project.memberships.filter(role_in_project='gip').count(), 1,
         )
 
-        update_project_member_role(self.user_admin, first, 'viewer')
-        first.refresh_from_db()
-        self.assertEqual(first.role_in_project, 'viewer')
+    def test_gip_change_paths_are_equivalent(self):
+        """update_project и update_project_member_role дают один результат."""
+        self.project.memberships.filter(role_in_project='gip').delete()
+        previous = ProjectMembership.objects.create(
+            project=self.project, user=self.user_gip, role_in_project='gip',
+        )
+        target = ProjectMembership.objects.create(
+            project=self.project, user=self.user_admin, role_in_project='developer',
+        )
+        update_project_member_role(self.user_admin, target, 'gip')
+        previous.refresh_from_db()
+        self.assertEqual(previous.role_in_project, 'developer')
+        self.assertEqual(self.project.gip, self.user_admin)
 
     def test_contractor_with_gip_rights_cannot_manage(self):
-        membership = ProjectMembership.objects.create(
-            project=self.project,
-            user=self.user_contractor,
-            role_in_project='gip',
-        )
-        self.project.gip = self.user_contractor
-        self.project.save(update_fields=['gip'])
+        self.project.memberships.filter(role_in_project='gip').update(role_in_project='developer')
+        membership, _ = ProjectMembership.objects.update_or_create(project=self.project, user=self.user_contractor, defaults={'role_in_project': 'gip'})
 
         self.assertFalse(can_manage_project_participants(self.user_contractor, self.project))
         with self.assertRaises(PermissionDenied):
@@ -440,7 +457,8 @@ class DocumentViewServiceTests(GuiTestBase):
 
     def test_participant_services_permissions(self):
         participants = list_project_participants(self.user_gip, self.project)
-        self.assertEqual(len(participants), 2)
+        # ГИП теперь участник состава (membership role=gip) — 3 участника.
+        self.assertEqual(len(participants), 3)
         self.assertEqual(
             get_project_membership(
                 self.user_gip,
@@ -474,7 +492,7 @@ class GuiViewTests(GuiTestBase):
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.context['can_manage_participants'])
         self.assertIn('participants', response.context)
-        self.assertEqual(len(response.context['participants']), 2)
+        self.assertEqual(len(response.context['participants']), 3)
         self.assertContains(response, 'Участники')
         self.assertContains(response, 'Изменить роль')
 
@@ -647,11 +665,9 @@ class GuiViewTests(GuiTestBase):
         self.assertEqual(DocumentView.objects.count(), 0)
 
     def test_shared_view_post_forbidden_for_contractor_with_gip_membership(self):
-        ProjectMembership.objects.create(
-            project=self.project,
-            user=self.user_contractor,
-            role_in_project='gip',
-        )
+        # Инвариант: один действующий ГИП в проекте — снимаем роль с основного ГИП.
+        self.project.memberships.filter(role_in_project='gip').update(role_in_project='developer')
+        ProjectMembership.objects.update_or_create(project=self.project, user=self.user_contractor, defaults={'role_in_project': 'gip'})
         self.client.force_login(self.user_contractor)
         response = self.client.post(
             reverse('storage:document_view_save', args=[self.project.pk]),
@@ -666,11 +682,9 @@ class GuiViewTests(GuiTestBase):
         self.assertEqual(DocumentView.objects.count(), 0)
 
     def test_contractor_with_gip_membership_has_no_participants_tab(self):
-        ProjectMembership.objects.create(
-            project=self.project,
-            user=self.user_contractor,
-            role_in_project='gip',
-        )
+        # Инвариант: один действующий ГИП в проекте — снимаем роль с основного ГИП.
+        self.project.memberships.filter(role_in_project='gip').update(role_in_project='developer')
+        ProjectMembership.objects.update_or_create(project=self.project, user=self.user_contractor, defaults={'role_in_project': 'gip'})
         self.client.force_login(self.user_contractor)
         response = self.client.get(
             reverse('storage:project_detail', args=[self.project.pk]),
@@ -807,11 +821,9 @@ class GuiViewTests(GuiTestBase):
         self.assertEqual(self.membership_viewer.role_in_project, 'viewer')
 
     def test_membership_role_update_forbidden_for_contractor_with_gip_membership(self):
-        ProjectMembership.objects.create(
-            project=self.project,
-            user=self.user_contractor,
-            role_in_project='gip',
-        )
+        # Инвариант: один действующий ГИП в проекте — снимаем роль с основного ГИП.
+        self.project.memberships.filter(role_in_project='gip').update(role_in_project='developer')
+        ProjectMembership.objects.update_or_create(project=self.project, user=self.user_contractor, defaults={'role_in_project': 'gip'})
         self.client.force_login(self.user_contractor)
         response = self.client.post(
             reverse(

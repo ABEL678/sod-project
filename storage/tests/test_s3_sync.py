@@ -14,6 +14,7 @@ from django.test import TestCase, override_settings
 from django.utils import timezone
 
 from storage.domain.models import (
+    ProjectMembership,
     Company,
     DesignTask,
     Project,
@@ -542,8 +543,9 @@ class InboxTests(TestCase):
         _profile(self.user, 'gip')
         self.project = Project.objects.create(
             company=self.company, code='INBOX', name='Inbox',
-            created_by=self.user, gip=self.user,
+            created_by=self.user,
         )
+        ProjectMembership.objects.update_or_create(project=self.project, user=self.user, defaults={'role_in_project': 'gip'})
         self.section = Section.objects.create(
             project=self.project, code='AR', name='AР', order=1,
         )

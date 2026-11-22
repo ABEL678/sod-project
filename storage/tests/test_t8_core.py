@@ -60,9 +60,9 @@ class T8CoreTestBase(TestCase):
             code='T8-1',
             name='T8 Project',
             status='active',
-            gip=self.user_gip,
             created_by=self.user_gip,
         )
+        ProjectMembership.objects.update_or_create(project=self.project, user=self.user_gip, defaults={'role_in_project': 'gip'})
         self.section = Section.objects.create(
             project=self.project,
             code='AR',
@@ -130,9 +130,9 @@ class FolderServiceTests(T8CoreTestBase):
             code='T8-OTHER',
             name='Other project',
             status='active',
-            gip=self.user_gip,
             created_by=self.user_gip,
         )
+        ProjectMembership.objects.update_or_create(project=other_project, user=self.user_gip, defaults={'role_in_project': 'gip'})
         foreign_section = Section.objects.create(
             project=other_project,
             code='X',
@@ -307,9 +307,9 @@ class T8CoreViewTests(T8CoreTestBase):
             code='T8-FOREIGN',
             name='Foreign',
             status='active',
-            gip=self.user_gip,
             created_by=self.user_gip,
         )
+        ProjectMembership.objects.update_or_create(project=other_project, user=self.user_gip, defaults={'role_in_project': 'gip'})
         foreign_folder = create_folder(
             self.user_gip,
             other_project,

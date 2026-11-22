@@ -50,9 +50,9 @@ class IssueSecurityTests(TestCase):
             code='SEC-1',
             name='Проект А',
             status='active',
-            gip=self.gip_a,
             created_by=self.gip_a,
         )
+        ProjectMembership.objects.update_or_create(project=self.project, user=self.gip_a, defaults={'role_in_project': 'gip'})
         ProjectMembership.objects.create(
             project=self.project,
             user=self.developer_a,

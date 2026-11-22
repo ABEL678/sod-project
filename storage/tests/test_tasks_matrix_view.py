@@ -49,8 +49,8 @@ class TasksMatrixViewTests(TestCase):
             name='Проект матрицы M3',
             status='active',
             created_by=self.gip,
-            gip=self.gip,
         )
+        ProjectMembership.objects.update_or_create(project=self.project, user=self.gip, defaults={'role_in_project': 'gip'})
         self.section_ar = Section.objects.create(
             project=self.project, code='AR', name='Архитектура', order=1,
         )
@@ -59,9 +59,6 @@ class TasksMatrixViewTests(TestCase):
         )
         Section.objects.create(
             project=self.project, code='COMMON', name='Общие', order=99,
-        )
-        ProjectMembership.objects.create(
-            project=self.project, user=self.gip, role_in_project='gip',
         )
         ProjectMembership.objects.create(
             project=self.project, user=self.developer, role_in_project='developer',
@@ -125,8 +122,8 @@ class TasksMatrixViewTests(TestCase):
             name='Чужой проект',
             status='active',
             created_by=self.outsider,
-            gip=self.outsider,
         )
+        ProjectMembership.objects.update_or_create(project=project_other, user=self.outsider, defaults={'role_in_project': 'gip'})
         self.client.force_login(self.gip)
         response = self.client.get(
             reverse('storage:project_detail', args=[project_other.pk]),
@@ -218,11 +215,8 @@ class TasksMatrixViewTests(TestCase):
             name='Пустой проект',
             status='active',
             created_by=self.gip,
-            gip=self.gip,
         )
-        ProjectMembership.objects.create(
-            project=empty, user=self.gip, role_in_project='gip',
-        )
+        ProjectMembership.objects.update_or_create(project=empty, user=self.gip, defaults={'role_in_project': 'gip'})
         self.client.force_login(self.gip)
         response = self.client.get(
             reverse('storage:project_detail', args=[empty.pk]),
@@ -417,12 +411,12 @@ class TasksMatrixDrillDownTests(TestCase):
         )
         self.project = Project.objects.create(
             company=self.company, code='DD-M4', name='Проект drill-down M4',
-            status='active', created_by=self.gip, gip=self.gip,
+            status='active', created_by=self.gip,
         )
+        ProjectMembership.objects.update_or_create(project=self.project, user=self.gip, defaults={'role_in_project': 'gip'})
         self.ar = Section.objects.create(project=self.project, code='AR', name='Архитектура', order=1)
         self.kr = Section.objects.create(project=self.project, code='KR', name='Конструкции', order=2)
         self.ov = Section.objects.create(project=self.project, code='OV', name='Вентиляция', order=3)
-        ProjectMembership.objects.create(project=self.project, user=self.gip, role_in_project='gip')
         ProjectMembership.objects.create(project=self.project, user=self.developer, role_in_project='developer')
         self.url = reverse('storage:project_detail', args=[self.project.pk])
 

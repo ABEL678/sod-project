@@ -15,6 +15,7 @@ from django.utils import timezone
 
 from issues.models import Notification
 from storage.domain.models import (
+    ProjectMembership,
     Company,
     DesignTask,
     DesignTaskAttachment,
@@ -64,8 +65,8 @@ class DesignTaskTestBase(TestCase):
             name='Проект заданий',
             status='active',
             created_by=self.gip,
-            gip=self.gip,
         )
+        ProjectMembership.objects.update_or_create(project=self.project, user=self.gip, defaults={'role_in_project': 'gip'})
         self.section_ar = Section.objects.create(
             project=self.project, code='AR', name='АР', order=1,
         )

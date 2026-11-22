@@ -189,8 +189,9 @@ def _project_members(project) -> list:
         for membership in project.memberships.select_related('user')
         if membership.user_id
     }
-    if project.gip_id:
-        members.add(project.gip)
+    gip = project.gip
+    if gip is not None:
+        members.add(gip)
     return sorted(members, key=lambda user: (user.last_name, user.username))
 
 

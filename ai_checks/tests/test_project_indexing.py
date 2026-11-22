@@ -26,6 +26,7 @@ from ai_checks.tests.base import MediaIsolationMixin
 from ai_checks.tests.mocks import MockEmbeddingService, mock_bge_adapter
 from ai_checks.tests.pdfgen import cyr_font
 from storage.domain.models import (
+    ProjectMembership,
     Company,
     Document,
     DocumentVersion,
@@ -70,8 +71,9 @@ class ProjectDocumentIndexingTests(MediaIsolationMixin, TestCase):
         self.company = Company.objects.create(name='ПИ-Компания')
         self.project = Project.objects.create(
             company=self.company, code='PI-1', name='Проект индексации',
-            status='active', created_by=self.user, gip=self.user,
+            status='active', created_by=self.user,
         )
+        ProjectMembership.objects.update_or_create(project=self.project, user=self.user, defaults={'role_in_project': 'gip'})
         self.section_ov = Section.objects.create(
             project=self.project, code='ОВ', name='Отопление и вентиляция',
             order=1,
@@ -212,8 +214,9 @@ class ReindexTests(MediaIsolationMixin, TestCase):
         self.company = Company.objects.create(name='Рекс-Компания')
         self.project = Project.objects.create(
             company=self.company, code='RX-1', name='Проект рекс',
-            status='active', created_by=self.user, gip=self.user,
+            status='active', created_by=self.user,
         )
+        ProjectMembership.objects.update_or_create(project=self.project, user=self.user, defaults={'role_in_project': 'gip'})
         self.section = Section.objects.create(
             project=self.project, code='ЭОМ', name='Электрика', order=1,
         )

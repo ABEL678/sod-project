@@ -47,8 +47,6 @@ class ServiceTests(TestCase):
             company=self.company,
             code='PROJ-01',
             name='Проект 01',
-            customer='Заказчик',
-            gip=self.user_gip,
             status='active',
             created_by=self.user_admin,
         )
@@ -56,7 +54,6 @@ class ServiceTests(TestCase):
             company=self.company,
             code='PROJ-02',
             name='Проект 02',
-            customer='Заказчик 2',
             status='active',
             created_by=self.user_admin,
         )
@@ -64,7 +61,6 @@ class ServiceTests(TestCase):
             company=self.other_company,
             code='PROJ-FOREIGN',
             name='Чужой проект',
-            customer='Чужой заказчик',
             status='active',
             created_by=self.user_admin,
         )
@@ -88,11 +84,7 @@ class ServiceTests(TestCase):
             order=1,
         )
 
-        ProjectMembership.objects.create(
-            project=self.project_own,
-            user=self.user_gip,
-            role_in_project='gip',
-        )
+        ProjectMembership.objects.update_or_create(project=self.project_own, user=self.user_gip, defaults={'role_in_project': 'gip'})
 
         self.user_developer.userprofile.allowed_sections.add(self.section_own)
 

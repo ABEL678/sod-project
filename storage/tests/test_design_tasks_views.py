@@ -78,8 +78,8 @@ class DesignTaskViewsTestBase(TestCase):
             name='Проект UI-заданий',
             status='active',
             created_by=self.gip,
-            gip=self.gip,
         )
+        ProjectMembership.objects.update_or_create(project=self.project, user=self.gip, defaults={'role_in_project': 'gip'})
         self.section_ar = Section.objects.create(
             project=self.project, code='AR', name='АР', order=1,
         )
@@ -114,9 +114,11 @@ class DesignTaskViewsTestBase(TestCase):
         )
 
     def _membership(self, user, role_in_project):
-        return ProjectMembership.objects.create(
-            project=self.project, user=user, role_in_project=role_in_project,
+        membership, _ = ProjectMembership.objects.update_or_create(
+            project=self.project, user=user,
+            defaults={'role_in_project': role_in_project},
         )
+        return membership
 
     def _make_task(self, **kwargs):
         source = kwargs.pop('source_section', self.section_ar)
@@ -425,8 +427,8 @@ class TaskCreateViewTests(DesignTaskViewsTestBase):
             name='Другой проект',
             status='active',
             created_by=self.gip,
-            gip=self.gip,
         )
+        ProjectMembership.objects.update_or_create(project=other_project, user=self.gip, defaults={'role_in_project': 'gip'})
         foreign_section = Section.objects.create(
             project=other_project, code='XX', name='Чужой раздел', order=1,
         )
@@ -608,8 +610,8 @@ class TaskDetailViewTests(TaskCardTestBase):
             name='Другой проект карточек',
             status='active',
             created_by=self.gip,
-            gip=self.gip,
         )
+        ProjectMembership.objects.update_or_create(project=other_project, user=self.gip, defaults={'role_in_project': 'gip'})
         other_section = Section.objects.create(
             project=other_project, code='OV', name='ОВ', order=1,
         )
@@ -1215,8 +1217,8 @@ class TaskAttachmentActionViewTests(TaskCardTestBase):
             name='Другой проект для документов',
             status='active',
             created_by=self.gip,
-            gip=self.gip,
         )
+        ProjectMembership.objects.update_or_create(project=other_project, user=self.gip, defaults={'role_in_project': 'gip'})
         foreign_document = Document.objects.create(
             project=other_project,
             section=Section.objects.create(
