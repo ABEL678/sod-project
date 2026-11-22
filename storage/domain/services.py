@@ -915,7 +915,12 @@ def _create_pd_structure(
     superfolders: dict[str, Folder],
     sections: dict[str, Section] | None = None,
 ) -> None:
-    """Создаёт разделы ПД и папки «Часть 1» по ПП №87."""
+    """Создаёт разделы ПД и папки «Часть 1» по ПП №87.
+
+    LEGACY: шаблонный путь. Не вызывать извне модуля — для существующих проектов
+    использовать deploy_preset_to_project(). Внутренние вызовы путей создания
+    проекта из шаблона и _populate_project_template сохранены без изменений.
+    """
     root = superfolders['PD']
     prefix = _code_prefix(project)
     common = _get_or_create_common_section(project)
@@ -978,7 +983,12 @@ def _create_rd_structure(
     superfolders: dict[str, Folder],
     sections: dict[str, Section] | None = None,
 ) -> None:
-    """Создаёт марки РД и папки «Комплект 1» по ГОСТ Р 21.101-2020."""
+    """Создаёт марки РД и папки «Комплект 1» по ГОСТ Р 21.101-2020.
+
+    LEGACY: шаблонный путь. Не вызывать извне модуля — для существующих проектов
+    использовать deploy_preset_to_project(). Внутренние вызовы путей создания
+    проекта из шаблона и _populate_project_template сохранены без изменений.
+    """
     root = superfolders['RD']
     prefix = _code_prefix(project)
     common = _get_or_create_common_section(project)
@@ -4323,7 +4333,8 @@ def _populate_presets(project: Project, actor: User, deploy_scope: str) -> None:
                 defaults={'name': item['name'], 'order': index},
             )
             sections[mark] = section_obj
-        for section in project.sections.all():
+        # Заполняем full_code только у разделов без шифра: существующие не трогаем.
+        for section in project.sections.filter(full_code=''):
             section.full_code = generate_gost_code(project.base_code, section.code)
             section.save(update_fields=['full_code'])
         prefix = _code_prefix(project)
@@ -4332,14 +4343,12 @@ def _populate_presets(project: Project, actor: User, deploy_scope: str) -> None:
             section_obj = sections.get(mark, common)
             if stage == Project.STAGE_P and item.get('subsections'):
                 # ИОС-ветка — копия из _create_pd_structure (сведение на волне 1).
-                section_folder = create_folder(
+                section_folder = _ensure_preset_folder(
                     actor,
                     project,
                     name=item['name'],
                     section=section_obj,
                     parent=root,
-                    code='',
-                    force=True,
                 )
                 # Схема (решение владельца): подраздел 5.N → {base}-ИОС{N},
                 # том → {base}-ИОС{N}.K. Схема ИОС1.{N} старого пути — дефект,
@@ -4348,29 +4357,26 @@ def _populate_presets(project: Project, actor: User, deploy_scope: str) -> None:
                 for subsection in item['subsections']:
                     sub_number = subsection['number'].split('.')[-1]
                     sub_code = f'{prefix}ИОС{sub_number}'
-                    sub_folder = create_folder(
+                    sub_folder = _ensure_preset_folder(
                         actor,
                         project,
                         name=subsection['name'],
                         section=section_obj,
                         parent=section_folder,
-                        code='',
-                        force=True,
                     )
                     sub_name = _strip_sub_prefix(subsection['name'])
-                    create_folder(
+                    _ensure_preset_folder(
                         actor,
                         project,
                         name=f'Часть 1. {sub_name}',
                         section=section_obj,
                         parent=sub_folder,
                         code=f'{sub_code}.1',
-                        force=True,
                     )
                 continue
             if stage == Project.STAGE_P:
                 # ПД-марка без подразделов: папка марки + том «Часть 1. {раздел}» (МИКРО-2, МИКРО-7).
-                _create_mark_folder(
+                _deploy_mark_folder(
                     project,
                     actor,
                     parent=root,
@@ -4381,7 +4387,7 @@ def _populate_presets(project: Project, actor: User, deploy_scope: str) -> None:
                 )
                 continue
             # РД-марка: комплект {prefix}{mark}1; имя комплекта — «Комплект {код}» (МИКРО-5).
-            _create_mark_folder(
+            _deploy_mark_folder(
                 project,
                 actor,
                 parent=root,
@@ -4390,6 +4396,138 @@ def _populate_presets(project: Project, actor: User, deploy_scope: str) -> None:
                 child_name=f'Комплект {mark}1',
                 child_mark_code=f'{prefix}{mark}1',
             )
+
+
+def _ensure_preset_folder(
+    actor: User,
+    project: Project,
+    *,
+    name: str,
+    section: Section | None,
+    parent: Folder,
+    code: str = '',
+) -> Folder:
+    """Возвращает живую папку с тем же именем или шифром под parent, иначе создаёт.
+
+    Идемпотентность пресетного пути: повторный вызов не дублирует папку и не
+    переименовывает существующую. Совпадение по шифру нужно, чтобы не упасть
+    на уникальности кода, если том переименован вручную.
+    """
+    lookup = Q(name=name)
+    if code:
+        lookup |= Q(code=code)
+    existing = (
+        Folder.objects.filter(project=project, parent=parent, is_deleted=False)
+        .filter(lookup)
+        .order_by('pk')
+        .first()
+    )
+    if existing is not None:
+        return existing
+    return create_folder(
+        actor,
+        project,
+        name=name,
+        section=section,
+        parent=parent,
+        code=code,
+        force=True,
+    )
+
+
+def _deploy_mark_folder(
+    project: Project,
+    actor: User,
+    parent: Folder,
+    section_obj: Section,
+    name: str,
+    child_name: str,
+    child_mark_code: str,
+) -> Folder:
+    """Идемпотентный аналог _create_mark_folder для пресетного пути."""
+    mark_folder = _ensure_preset_folder(
+        actor,
+        project,
+        name=name,
+        section=section_obj,
+        parent=parent,
+    )
+    _ensure_preset_folder(
+        actor,
+        project,
+        name=child_name,
+        section=section_obj,
+        parent=mark_folder,
+        code=child_mark_code,
+    )
+    return mark_folder
+
+
+def deploy_preset_to_project(
+    actor: User,
+    project: Project,
+    deploy_scope: str,
+) -> list[dict]:
+    """Разворачивает пресет (stage, object_type) в существующий проект.
+
+    deploy_scope: 'pd' — только ПД, 'rd' — только РД, 'full' — ПД и РД.
+    Только создаёт недостающее: существующие разделы и папки не переименовываются
+    и не дублируются, повторный вызов на том же проекте возвращает пустой список.
+    Возвращает список созданных сущностей (для лога): dict с ключами
+    type ('section' | 'folder'), id, code, name, full_code.
+    """
+    if deploy_scope not in PRESET_SCOPES:
+        raise ValueError(f"Неизвестный deploy_scope: {deploy_scope!r}")
+    if not can_edit_project(actor, project):
+        raise PermissionDenied("Нет прав на изменение структуры проекта")
+    if project.is_deleted:
+        raise ValueError("Проект находится в корзине")
+    if not project.object_type:
+        raise ValueError("У проекта не указан тип объекта (object_type)")
+    for stage in _PRESET_STAGES_BY_SCOPE[deploy_scope]:
+        if (stage, project.object_type) not in PRESETS:
+            raise ValueError(
+                f"Нет пресета для стадии {stage} и типа {project.object_type}"
+            )
+
+    with transaction.atomic():
+        folder_ids_before = set(
+            Folder.objects.filter(project=project).values_list('pk', flat=True)
+        )
+        section_ids_before = set(
+            Section.objects.filter(project=project).values_list('pk', flat=True)
+        )
+        _populate_presets(project, actor, deploy_scope)
+
+        created: list[dict] = []
+        new_sections = Section.objects.filter(project=project).exclude(
+            pk__in=section_ids_before,
+        ).order_by('pk')
+        for section in new_sections:
+            created.append({
+                'type': 'section',
+                'id': section.pk,
+                'code': section.code,
+                'name': section.name,
+                'full_code': section.full_code,
+            })
+        new_folders = Folder.objects.filter(project=project).exclude(
+            pk__in=folder_ids_before,
+        ).order_by('pk')
+        for folder in new_folders:
+            created.append({
+                'type': 'folder',
+                'id': folder.pk,
+                'code': folder.code,
+                'name': folder.name,
+                'full_code': folder.full_code,
+            })
+
+    logger.info(
+        "Preset deploy scope=%s project=%s created=%d",
+        deploy_scope, project.pk, len(created),
+    )
+    return created
 
 
 def get_company_members(company: Company):
