@@ -88,7 +88,9 @@ class Project(models.Model):
     stage = models.CharField(
         max_length=2,
         choices=STAGE_CHOICES,
-        default=STAGE_RD,
+        null=True,
+        blank=True,
+        default=None,
         verbose_name="Стадия",
     )
     STATUS_CHOICES = [

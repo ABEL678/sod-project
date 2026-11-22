@@ -1259,7 +1259,7 @@ def create_project(
             customer_org=_resolve_customer(company, customer),
             status='active',
             created_by=actor,
-            stage=stage or Project.STAGE_RD,
+            stage=stage or None,
             object_type=object_type or None,
         )
         if gip is not None:
@@ -1358,6 +1358,7 @@ def update_project(
     customer: str | None = None,
     base_code: str | None = None,
     status: str | None = None,
+    stage: str | None | object = _UNSET,
     gip: User | None | object = _UNSET,
 ) -> Project:
     """Обновляет карточку проекта с проверкой прав."""
@@ -1401,6 +1402,14 @@ def update_project(
             raise ValueError("Неверный статус проекта")
         project.status = status
         update_fields.append('status')
+
+    if stage is not _UNSET:
+        stage = stage or None
+        if stage is not None and stage not in dict(Project.STAGE_CHOICES):
+            raise ValueError("Неверная стадия проекта")
+        if stage != project.stage:
+            project.stage = stage
+            update_fields.append('stage')
 
     if gip is not _UNSET:
         current = project.gip

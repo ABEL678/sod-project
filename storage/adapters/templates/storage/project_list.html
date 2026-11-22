@@ -50,6 +50,7 @@
                         <th>Шифр</th>
                         <th>Название</th>
                         <th>Заказчик</th>
+                        <th>Стадия</th>
                         <th>Статус</th>
                         <th class="text-end">Действия</th>
                     </tr>
@@ -68,6 +69,7 @@
                             {% endif %}
                         </td>
                         <td>{{ project.customer|default:"—" }}</td>
+                        <td>{{ project.get_stage_display|default:"—" }}</td>
                         <td>
                             {% if active_tab == 'trash' %}
                                 <span class="cde-badge cde-badge--archived">В корзине</span>
@@ -186,6 +188,15 @@
                                 <div class="col-7">
                                     <label class="form-label small" for="projectCustomer{{ project.pk }}">Заказчик</label>
                                     <input class="form-control form-control-sm" id="projectCustomer{{ project.pk }}" name="customer" value="{{ project.customer }}" maxlength="255">
+                                </div>
+                                <div class="col-5">
+                                    <label class="form-label small" for="projectStage{{ project.pk }}">Стадия</label>
+                                    <select class="form-select form-select-sm" id="projectStage{{ project.pk }}" name="stage">
+                                        <option value="">Не указана</option>
+                                        {% for value, label in stage_choices %}
+                                            <option value="{{ value }}"{% if project.stage == value %} selected{% endif %}>{{ label }}</option>
+                                        {% endfor %}
+                                    </select>
                                 </div>
                                 <div class="col-12">
                                     <label class="form-label small" for="projectGip{{ project.pk }}">ГИП</label>

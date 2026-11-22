@@ -568,6 +568,7 @@ class ProjectListView(LoginRequiredMixin, ListView):
         context['active_tab'] = active_tab
         context['can_create_project'] = can_create_project(user)
         context['project_status_choices'] = Project.STATUS_CHOICES
+        context['stage_choices'] = Project.STAGE_CHOICES
         projects = list(context['projects'])
         for project in projects:
             project.can_edit = (
@@ -3253,6 +3254,7 @@ class ProjectEditView(LoginRequiredMixin, View):
                 customer=request.POST.get('customer', ''),
                 base_code=request.POST.get('base_code', ''),
                 status=request.POST.get('status') or project.status,
+                stage=request.POST.get('stage', ''),
                 gip=gip,
             )
         except (PermissionDenied, ValueError) as exc:
