@@ -29,6 +29,8 @@ urlpatterns = [
         views.DeleteMemberView.as_view(),
         name='delete_member',
     ),
+    path('customers/', views.CustomerListView.as_view(), name='customer_list'),
+    path('customers/create/', views.CustomerCreateView.as_view(), name='customer_create'),
     path('projects/create/', views.ProjectCreateView.as_view(), name='project_create'),
     path('projects/<int:project_id>/edit/', views.ProjectEditView.as_view(), name='project_edit'),
     path('projects/<int:project_id>/archive/', views.ProjectArchiveView.as_view(), name='project_archive'),

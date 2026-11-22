@@ -79,6 +79,8 @@ from storage.domain.services import (
     attach_user_to_company,
     can_archive_project,
     can_create_project,
+    create_customer,
+    list_customers,
     can_delete_project,
     can_edit_project,
     can_manage_project_participants,
@@ -584,6 +586,9 @@ class ProjectListView(LoginRequiredMixin, ListView):
                 active_tab == 'trash' and can_restore_project(user, project)
             )
         context['projects'] = projects
+        company_for_customers = get_user_company(user)
+        if company_for_customers is not None:
+            context['customer_choices'] = list_customers(company_for_customers)
         if context['can_create_project']:
             company = get_user_company(user)
             candidates = get_user_model().objects.filter(
@@ -3227,6 +3232,38 @@ class ProjectCreateView(LoginRequiredMixin, View):
         else:
             messages.success(request, f'Проект «{project.name}» создан.')
         return redirect('storage:project_detail', pk=project.pk)
+
+
+class CustomerListView(LoginRequiredMixin, TemplateView):
+    """Карточки организаций-заказчиков компании пользователя."""
+
+    template_name = 'storage/customer_list.html'
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        company = get_user_company(self.request.user)
+        context['customers'] = list_customers(company) if company else []
+        context['can_create_customer'] = company is not None
+        return context
+
+
+class CustomerCreateView(LoginRequiredMixin, View):
+    def post(self, request):
+        company = get_user_company(request.user)
+        if company is None:
+            messages.error(request, 'Не удалось определить компанию пользователя.')
+            return redirect('storage:customer_list')
+        try:
+            customer = create_customer(
+                request.user,
+                company,
+                request.POST.get('name', ''),
+            )
+        except (PermissionDenied, ValueError) as exc:
+            messages.error(request, str(exc))
+        else:
+            messages.success(request, f'Организация «{customer.name}» добавлена.')
+        return redirect('storage:customer_list')
 
 
 class ProjectEditView(LoginRequiredMixin, View):

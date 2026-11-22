@@ -1167,6 +1167,23 @@ def _resolve_customer(company: Company, name: str | None) -> Customer | None:
     return customer
 
 
+def create_customer(user: User, company: Company, name: str) -> Customer:
+    """Создаёт карточку организации-заказчика. Точный дубль имени в компании — отказ."""
+    if not _check_company_access(user, company.pk):
+        raise PermissionDenied("Нет прав на создание заказчика в этой компании")
+    name = (name or '').strip()
+    if not name:
+        raise ValueError("Наименование организации обязательно")
+    if Customer.objects.filter(company=company, name=name).exists():
+        raise ValueError("Организация с таким наименованием уже есть")
+    return Customer.objects.create(company=company, name=name)
+
+
+def list_customers(company: Company):
+    """Карточки организаций-заказчиков компании."""
+    return Customer.objects.filter(company=company).order_by('name')
+
+
 def create_project(
     company: Company,
     code: str,

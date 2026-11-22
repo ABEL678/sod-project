@@ -15,6 +15,7 @@
                 Создавать и управлять проектами могут только Администраторы и ГИП
             </div>
         </div>
+        <a class="btn btn-outline-secondary btn-sm me-2" href="{% url 'storage:customer_list' %}">Заказчики</a>
         {% if can_create_project and active_tab != 'trash' %}
             <button type="button"
                     class="btn btn-primary btn-sm"
@@ -187,7 +188,12 @@
                                 </div>
                                 <div class="col-7">
                                     <label class="form-label small" for="projectCustomer{{ project.pk }}">Заказчик</label>
-                                    <input class="form-control form-control-sm" id="projectCustomer{{ project.pk }}" name="customer" value="{{ project.customer }}" maxlength="255">
+                                    <select class="form-select form-select-sm" id="projectCustomer{{ project.pk }}" name="customer">
+                                        <option value="">Не указан</option>
+                                        {% for customer in customer_choices %}
+                                            <option value="{{ customer.name }}"{% if project.customer_org_id == customer.pk %} selected{% endif %}>{{ customer.name }}</option>
+                                        {% endfor %}
+                                    </select>
                                 </div>
                                 <div class="col-5">
                                     <label class="form-label small" for="projectStage{{ project.pk }}">Стадия</label>
@@ -276,7 +282,12 @@
                             </div>
                             <div class="col-12">
                                 <label class="form-label small" for="projectCustomer">Заказчик</label>
-                                <input class="form-control form-control-sm" id="projectCustomer" name="customer" maxlength="255">
+                                <select class="form-select form-select-sm" id="projectCustomer" name="customer">
+                                    <option value="">Не указан</option>
+                                    {% for customer in customer_choices %}
+                                        <option value="{{ customer.name }}">{{ customer.name }}</option>
+                                    {% endfor %}
+                                </select>
                             </div>
                             <div class="col-12">
                                 <label class="form-label small" for="projectGip">ГИП</label>

@@ -1,0 +1,56 @@
+{% extends 'storage/base.html' %}
+
+{% block title %}Заказчики — Stream-CAD{% endblock %}
+
+{% block topbar %}
+    {% include 'storage/_topbar.html' with topbar_title="Заказчики" %}
+{% endblock %}
+
+{% block content %}
+<main id="main-content" class="container py-3 pb-5">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h1 class="h3 mb-0">Заказчики</h1>
+    </div>
+    {% if messages %}
+        {% for message in messages %}
+            <div class="alert {% if message.tags == 'error' %}alert-danger{% else %}alert-{{ message.tags }}{% endif %}">{{ message }}</div>
+        {% endfor %}
+    {% endif %}
+    <div class="card mb-3">
+        <div class="card-body">
+            <form method="post" action="{% url 'storage:customer_create' %}" class="row g-2 align-items-end">
+                {% csrf_token %}
+                <div class="col-md-8">
+                    <label class="form-label small" for="customerName">Наименование организации</label>
+                    <input class="form-control form-control-sm" id="customerName" name="name" required maxlength="255">
+                </div>
+                <div class="col-md-4">
+                    <button type="submit" class="btn btn-primary btn-sm">Добавить</button>
+                </div>
+            </form>
+        </div>
+    </div>
+    <div class="card">
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th>Наименование</th>
+                    </tr>
+                </thead>
+                <tbody>
+                {% for customer in customers %}
+                    <tr>
+                        <td>{{ customer.name }}</td>
+                    </tr>
+                {% empty %}
+                    <tr>
+                        <td class="text-center text-muted py-4">Организаций пока нет</td>
+                    </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</main>
+{% endblock %}

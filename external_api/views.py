@@ -92,7 +92,17 @@ class ProjectCreateView(APIView):
             )
 
         return Response(
-            {"id": project.id, "code": project.code, "name": project.name},
+            {
+                "id": project.id,
+                "code": project.code,
+                "name": project.name,
+                "customer": project.customer,
+                "customer_org": (
+                    {"id": project.customer_org.pk, "name": project.customer_org.name}
+                    if project.customer_org_id
+                    else None
+                ),
+            },
             status=201,
         )
 
