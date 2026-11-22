@@ -3524,7 +3524,7 @@ def _folder_suggestion(project: Project, parent, section) -> dict:
         mark = parent.section.code
         make = lambda k: f'{prefix}{mark}{k}'  # noqa: E731
         k = _first_free_number(used_codes, make, start=1)
-        return {'suggested_code': make(k), 'suggested_name': name}
+        return {'suggested_code': make(k), 'suggested_name': f'Комплект {mark}{k}'}
 
     return empty
 

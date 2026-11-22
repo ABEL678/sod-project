@@ -4363,14 +4363,14 @@ def _populate_presets(project: Project, actor: User, deploy_scope: str) -> None:
                     child_mark_code=f'{prefix}{mark}1',
                 )
                 continue
-            # РД-марка: комплект {prefix}{mark}1 — как в _create_rd_structure.
+            # РД-марка: комплект {prefix}{mark}1; имя комплекта — «Комплект {код}» (МИКРО-5).
             _create_mark_folder(
                 project,
                 actor,
                 parent=root,
                 section_obj=section_obj,
                 name=item['name'],
-                child_name=item['name'],
+                child_name=f'Комплект {mark}1',
                 child_mark_code=f'{prefix}{mark}1',
             )
 
