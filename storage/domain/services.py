@@ -3374,9 +3374,16 @@ def _generate_document_code(
     base = (project.base_code or project.code or '').strip()
     kit_code = (folder.code or '').strip() if folder is not None else ''
     if kit_code:
-        # Шифр комплекта уже полный ({base}-{mark}1 / {base}-ИОС1.N):
-        # префикс = шифр комплекта, без повторного вхождения base.
-        prefix = f'{kit_code}-'
+        # Шифр комплекта уже полный ({base}-{mark}1 / {base}-ИОС1.N) — основа префикса.
+        # Базовое обозначение встречается в шифре ровно один раз (SPEC 2.0 w0 п.9):
+        # если код папки начинается с base, префикс берём от него как есть; иначе
+        # дописываем base один раз, а не повторяем его поверх готового шифра.
+        if base and kit_code.startswith(f'{base}-'):
+            prefix = f'{kit_code}-'
+        elif base and kit_code.count(base) == 0:
+            prefix = f'{base}-{kit_code}-'
+        else:
+            prefix = f'{kit_code}-'
     else:
         parts = [part for part in (base, (section.code or '').strip()) if part]
         prefix = '-'.join(parts) + '-' if parts else 'DOC-'
