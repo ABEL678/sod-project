@@ -131,6 +131,7 @@ urlpatterns = [
     path('sections/<int:section_id>/rename/', views.SectionRenameView.as_view(), name='section_rename'),
     path('projects/<int:project_id>/folders/create/', views.FolderCreateView.as_view(), name='folder_create'),
     path('projects/<int:project_id>/folders/create-form/', views.FolderCreateFormView.as_view(), name='folder_create_form'),
+    path('projects/<int:project_id>/folders/suggest/', views.FolderSuggestView.as_view(), name='folder_suggest'),
     path('documents/<int:document_id>/move/', views.DocumentMoveView.as_view(), name='document_move'),
     path('documents/<int:document_id>/workflow/', views.DocumentWorkflowView.as_view(), name='document_workflow'),
     path('documents/<int:document_id>/internal-status/', views.DocumentInternalStatusView.as_view(), name='document_internal_status_update'),

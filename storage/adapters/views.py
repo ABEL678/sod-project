@@ -3209,7 +3209,6 @@ class ProjectCreateView(LoginRequiredMixin, View):
                 customer=request.POST.get('customer', '').strip(),
                 gip=gip,
                 created_by=request.user,
-                template_key=request.POST.get('template_key') or None,
                 base_code=request.POST.get('base_code', '').strip(),
                 object_type=request.POST.get('object_type') or None,
                 deploy_scope=request.POST.get('deploy_scope') or 'rd',
@@ -3453,12 +3452,100 @@ class FolderCreateFormView(LoginRequiredMixin, TemplateView):
                 pk=int(section_id),
             ).first()
 
+        suggestion = _folder_suggestion(project, parent, section)
         context.update({
             'project': project,
             'parent': parent,
             'section': section,
+            'suggested_code': suggestion['suggested_code'],
+            'suggested_name': suggestion['suggested_name'],
         })
         return context
+
+
+_RE_PART_PREFIX = re.compile(r'^Раздел\s+\d+\.\s*')
+_RE_SUB_PREFIX = re.compile(r'^Подраздел\s+\d+\.\d+\.\s*')
+
+
+def _first_free_number(used_codes: set[str], make_code, start: int = 1) -> int:
+    """Первый свободный номер K, для которого make_code(K) не занят."""
+    k = start
+    while make_code(k) in used_codes:
+        k += 1
+    return k
+
+
+def _folder_suggestion(project: Project, parent, section) -> dict:
+    """Предзаполнение «Новая папка» по родителю (МИКРО-4).
+
+    a) родитель — ИОС-подраздел (код пуст, имя «Подраздел N.M. …»):
+       код {base}-ИОС1.{K}, имя «Часть {K}. {имя без префикса}».
+       Номер тома ИОС1 — по схеме _create_pd_structure (part_code).
+    б) родитель — раздел ПД (код пуст, имя «Раздел N. …»):
+       код {base}-{шифр раздела}{K}, имя «Часть {K}. {имя без префикса}».
+    в) родитель — дисциплина РД (код пуст, section совпадает с родителем):
+       код {base}-{mark}{K}, имя = имя дисциплины.
+    г) иные родители / без родителя — пустые значения.
+    """
+    empty = {'suggested_code': '', 'suggested_name': ''}
+    if parent is None or parent.is_deleted:
+        return empty
+    base = (project.base_code or '').strip()
+    prefix = f'{base}-' if base else ''
+    name = (parent.name or '').strip()
+    siblings = Folder.objects.filter(
+        project=project, parent=parent, is_deleted=False,
+    ).values_list('code', 'name')
+    used_codes = {code for code, _ in siblings if code}
+
+    # а) ИОС-подраздел
+    if parent.section and parent.section.code == 'ИОС' and _RE_SUB_PREFIX.match(name):
+        sub_match = re.match(r'^Подраздел\s+\d+\.(\d+)\.\s*(.*)$', name)
+        if sub_match is None:
+            return empty
+        sub_name = sub_match.group(2).strip()
+        sub_number = sub_match.group(1)
+        # Схема (решение владельца): подраздел 5.N → {base}-ИОС{N}, том → {base}-ИОС{N}.K.
+        sub_code = f'{prefix}ИОС{sub_number}'
+        make = lambda k: f'{sub_code}.{k}'  # noqa: E731
+        k = _first_free_number(used_codes, make, start=1)
+        return {'suggested_code': make(k), 'suggested_name': f'Часть {k}. {sub_name}'}
+
+    # б) раздел ПД
+    if parent.section and not parent.code and _RE_PART_PREFIX.match(name) and parent.parent is not None and parent.parent.name.startswith('ПД'):
+        part_name = _RE_PART_PREFIX.sub('', name).strip()
+        mark = parent.section.code
+        make = lambda k: f'{prefix}{mark}{k}'  # noqa: E731
+        k = _first_free_number(used_codes, make, start=1)
+        return {'suggested_code': make(k), 'suggested_name': f'Часть {k}. {part_name}'}
+
+    # в) дисциплина РД
+    if parent.section and not parent.code and parent.parent is not None and parent.parent.name.startswith('РД'):
+        mark = parent.section.code
+        make = lambda k: f'{prefix}{mark}{k}'  # noqa: E731
+        k = _first_free_number(used_codes, make, start=1)
+        return {'suggested_code': make(k), 'suggested_name': name}
+
+    return empty
+
+
+class FolderSuggestView(LoginRequiredMixin, View):
+    """JSON: предзаполнение «Новая папка» по родителю (МИКРО-4)."""
+
+    def get(self, request, project_id):
+        project = get_object_or_404(
+            get_accessible_projects(request.user),
+            pk=project_id,
+        )
+        if not can_manage_project_participants(request.user, project):
+            raise PermissionDenied("Недостаточно прав для создания папки")
+        parent = None
+        parent_id = (request.GET.get('parent') or '').strip()
+        if parent_id.isdigit():
+            parent = Folder.objects.filter(
+                project=project, pk=int(parent_id), is_deleted=False,
+            ).select_related('section', 'parent').first()
+        return JsonResponse(_folder_suggestion(project, parent, None))
 
 
 class FolderRenameFormView(LoginRequiredMixin, TemplateView):

@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
 import io
 import logging
+import re
 
 from django.conf import settings
 import uuid
@@ -4276,6 +4277,11 @@ _PRESET_STAGES_BY_SCOPE = {
 }
 
 
+def _strip_sub_prefix(name: str) -> str:
+    """«Подраздел 5.3. Система водоотведения» → «Система водоотведения»."""
+    return re.sub(r'^Подраздел\s+\d+\.\d+\.\s*', '', (name or '').strip())
+
+
 def _populate_presets(project: Project, actor: User, deploy_scope: str) -> None:
     """Разворачивает пресеты PRESETS[(stage, object_type)] по deploy_scope.
 
@@ -4319,39 +4325,41 @@ def _populate_presets(project: Project, actor: User, deploy_scope: str) -> None:
                     code='',
                     force=True,
                 )
+                # Схема (решение владельца): подраздел 5.N → {base}-ИОС{N},
+                # том → {base}-ИОС{N}.K. Схема ИОС1.{N} старого пути — дефект,
+                # в пресетный путь не переносится.
                 for subsection in item['subsections']:
+                    sub_number = subsection['number'].split('.')[-1]
+                    sub_code = f'{prefix}ИОС{sub_number}'
                     sub_folder = create_folder(
                         actor,
                         project,
                         name=subsection['name'],
                         section=section_obj,
                         parent=section_folder,
-                        code='',
+                        code=sub_code,
                         force=True,
                     )
-                    part_code = (
-                        f'{prefix}ИОС1.'
-                        f"{subsection['number'].split('.')[-1]}"
-                    )
+                    sub_name = _strip_sub_prefix(subsection['name'])
                     create_folder(
                         actor,
                         project,
-                        name=subsection['part'],
+                        name=f'Часть 1. {sub_name}',
                         section=section_obj,
                         parent=sub_folder,
-                        code=part_code,
+                        code=f'{sub_code}.1',
                         force=True,
                     )
                 continue
             if stage == Project.STAGE_P:
-                # ПД-марка без подразделов: папка марки + «Часть 1» с {prefix}{mark}1.
+                # ПД-марка без подразделов: папка марки + том «Часть 1» (МИКРО-2).
                 _create_mark_folder(
                     project,
                     actor,
                     parent=root,
                     section_obj=section_obj,
                     name=item['name'],
-                    child_name=item['name'],
+                    child_name='Часть 1',
                     child_mark_code=f'{prefix}{mark}1',
                 )
                 continue
