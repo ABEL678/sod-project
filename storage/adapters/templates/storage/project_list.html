@@ -245,6 +245,24 @@
                                 <label class="form-label small" for="projectBaseCode">Базовый шифр</label>
                                 <input class="form-control form-control-sm" id="projectBaseCode" name="base_code" maxlength="50" placeholder="2345-12">
                             </div>
+                            <div class="col-6">
+                                <label class="form-label small" for="projectDeployScope">Состав разделов</label>
+                                <select class="form-select form-select-sm" id="projectDeployScope" name="deploy_scope">
+                                    <option value="pd">П</option>
+                                    <option value="rd" selected>РД</option>
+                                    <option value="full">П+РД</option>
+                                </select>
+                            </div>
+                            <div class="col-6">
+                                <label class="form-label small" for="projectObjectType">Тип объекта</label>
+                                <select class="form-select form-select-sm" id="projectObjectType" name="object_type">
+                                    <option value="">Не указан</option>
+                                    <option value="residential">Жилое</option>
+                                    <option value="public">Общественное</option>
+                                    <option value="industrial">Производственное</option>
+                                    <option value="linear">Линейное</option>
+                                </select>
+                            </div>
                             <div class="col-7">
                                 <label class="form-label small" for="projectTemplate">Шаблон структуры</label>
                                 <select class="form-select form-select-sm" id="projectTemplate" name="template_key">

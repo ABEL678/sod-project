@@ -67,6 +67,8 @@ DEMO_TEMPLATE = 'FULL'
 # create_project_from_template не разворачивает RD_SECTIONS.
 DEMO_CANON_TEMPLATE = 'canon'
 DEMO_SECTION_MODES = ('full', 'canon')
+DEMO_OBJECT_TYPE = 'residential'
+DEMO_STAGE = Project.STAGE_RD
 DEMO_PASSWORD = 'demo12345'
 
 SECTION_SPECS = (
@@ -113,6 +115,15 @@ class Command(BaseCommand):
             ),
         )
         parser.add_argument(
+            '--object-type',
+            choices=[code for code, _label in Project.OBJECT_TYPE_CHOICES],
+            default=DEMO_OBJECT_TYPE,
+            help=(
+                'Тип объекта для canon-режима: РД-пресет по типу '
+                f'(по умолчанию {DEMO_OBJECT_TYPE}).'
+            ),
+        )
+        parser.add_argument(
             '--force',
             action='store_true',
             help=(
@@ -145,6 +156,7 @@ class Command(BaseCommand):
                     username=options['user_username'],
                     reset=options['reset'],
                     section_mode=options['sections'],
+                    object_type=options['object_type'],
                 )
         except Exception:
             storage = LocalFileStorage()
@@ -165,6 +177,7 @@ class Command(BaseCommand):
         username: str | None,
         reset: bool,
         section_mode: str = 'full',
+        object_type: str = DEMO_OBJECT_TYPE,
     ) -> dict:
         company, company_created = self._resolve_company(company_id)
         maintainer = self._resolve_maintainer(company)
@@ -191,37 +204,60 @@ class Command(BaseCommand):
             created_by=actor,
             template_key=template_key,
             base_code=DEMO_BASE_CODE,
+            # canon: РД-пресет по типу объекта; full — прежний шаблон FULL.
+            stage=DEMO_STAGE if section_mode == 'canon' else None,
+            object_type=object_type if section_mode == 'canon' else None,
+            deploy_scope='rd',
         )
 
         if section_mode == 'canon':
-            # canon: служебный COMMON (order 0) + канонические разделы, создаются
-            # без подхвата существующих; шаблон не разворачивается.
-            create_section(
-                project, 'COMMON', 'Общие документы', 0, user=actor,
-            )
-
-        sections = {}
-        for index, (code, name, _folder_name) in enumerate(SECTION_SPECS, start=1):
-            if section_mode == 'canon':
-                sections[code] = create_section(
-                    project, code, name, index, user=actor,
+            # canon: разделы и папки разворачивает РД-пресет по типу объекта.
+            # Демо-документы используют коды пресета: КЖ вместо КР (КР в РД-пресетах нет).
+            preset_sections = {
+                s.code: s for s in Section.objects.filter(project=project)
+            }
+            # Демо-код → код раздела пресета.
+            demo_to_preset = {'АР': 'АР', 'КР': 'КЖ', 'ОВ': 'ОВ'}
+            sections = {
+                demo: preset_sections[preset]
+                for demo, preset in demo_to_preset.items()
+                if preset in preset_sections
+            }
+            missing = [
+                demo for demo, preset in demo_to_preset.items()
+                if preset not in preset_sections
+            ]
+            if missing:
+                raise CommandError(
+                    'canon-режим: пресет РД для выбранного --object-type не '
+                    f'содержит разделы демо-документов: {", ".join(missing)}.'
                 )
-                continue
-            try:
-                sections[code] = create_section(
-                    project, code, name, index, user=actor,
-                )
-            except ValueError:
-                sections[code] = Section.objects.get(project=project, code=code)
+            folders = {}
+            for demo, section in sections.items():
+                folder = section.folders.filter(parent=None).first()
+                if folder is None:
+                    raise CommandError(
+                        f'В пресете нет папки для раздела {section.code}.'
+                    )
+                folders[demo] = folder
+        else:
+            sections = {}
+            for index, (code, name, _folder_name) in enumerate(SECTION_SPECS, start=1):
+                try:
+                    sections[code] = create_section(
+                        project, code, name, index, user=actor,
+                    )
+                except ValueError:
+                    sections[code] = Section.objects.get(project=project, code=code)
 
-        folders = {}
-        for code, _name, folder_name in SECTION_SPECS:
-            folders[code] = create_folder(
-                actor,
-                project,
-                name=folder_name,
-                section=sections[code],
-            )
+            folders = {}
+            for code, _name, folder_name in SECTION_SPECS:
+                folders[code] = create_folder(
+                    actor,
+                    project,
+                    name=folder_name,
+                    section=sections[code],
+                )
 
         checker, checker_created = self._select_or_create_user(
             company, 'checker', 'demo_checker', maintainer

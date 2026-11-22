@@ -61,6 +61,12 @@ class Project(models.Model):
         (STAGE_P, 'П'),
         (STAGE_RD, 'РД'),
     ]
+    OBJECT_TYPE_CHOICES = [
+        ('residential', 'Жилое'),
+        ('public', 'Общественное'),
+        ('industrial', 'Производственное'),
+        ('linear', 'Линейное'),
+    ]
 
     company = models.ForeignKey(Company, on_delete=models.CASCADE, related_name='projects', verbose_name="Компания")
     code = models.CharField(max_length=50, unique=True, verbose_name="Шифр")
@@ -95,6 +101,14 @@ class Project(models.Model):
         blank=True,
         default='',
         verbose_name="Ключ шаблона структуры",
+    )
+    object_type = models.CharField(
+        max_length=20,
+        choices=OBJECT_TYPE_CHOICES,
+        null=True,
+        blank=True,
+        default=None,
+        verbose_name="Тип объекта",
     )
     is_deleted = models.BooleanField(default=False, verbose_name="Удален")
     deleted_at = models.DateTimeField(null=True, blank=True, verbose_name="Дата удаления")

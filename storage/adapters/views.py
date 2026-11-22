@@ -3211,6 +3211,8 @@ class ProjectCreateView(LoginRequiredMixin, View):
                 created_by=request.user,
                 template_key=request.POST.get('template_key') or None,
                 base_code=request.POST.get('base_code', '').strip(),
+                object_type=request.POST.get('object_type') or None,
+                deploy_scope=request.POST.get('deploy_scope') or 'rd',
             )
         except (PermissionDenied, ValueError) as exc:
             messages.error(request, str(exc))

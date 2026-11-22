@@ -53,6 +53,7 @@ from issues.notify import (
 )
 from storage.domain.design_colors import ISSUE_STATUS_RGB as PDF_ISSUE_COLORS
 from storage.domain.project_templates import (
+    PRESETS,
     IRD_FOLDERS,
     PD_SECTIONS,
     PROJECT_TEMPLATES,
@@ -868,6 +869,41 @@ def _create_ird_structure(
             )
 
 
+def _create_mark_folder(
+    project: Project,
+    actor: User,
+    parent: Folder,
+    section_obj: Section,
+    name: str,
+    child_name: str,
+    child_mark_code: str,
+) -> Folder:
+    """Общая сборка марочной папки: папка марки + вложенная папка с шифром.
+
+    Единая реализация для шаблонного и пресетного путей. Формула шифра
+    вложенной папки — ``{prefix}{mark}1`` (передаётся готовым child_mark_code).
+    """
+    mark_folder = create_folder(
+        actor,
+        project,
+        name=name,
+        section=section_obj,
+        parent=parent,
+        code='',
+        force=True,
+    )
+    create_folder(
+        actor,
+        project,
+        name=child_name,
+        section=section_obj,
+        parent=mark_folder,
+        code=child_mark_code,
+        force=True,
+    )
+    return mark_folder
+
+
 def _create_pd_structure(
     project: Project,
     actor: User,
@@ -946,23 +982,14 @@ def _create_rd_structure(
     for section_data in RD_SECTIONS:
         mark = section_data['mark']
         section_obj = sections.get(mark, common)
-        mark_folder = create_folder(
-            actor,
+        _create_mark_folder(
             project,
-            name=section_data['name'],
-            section=section_obj,
+            actor,
             parent=root,
-            code='',
-            force=True,
-        )
-        create_folder(
-            actor,
-            project,
+            section_obj=section_obj,
             name=section_data['name'],
-            section=section_obj,
-            parent=mark_folder,
-            code=f'{prefix}{mark}1',
-            force=True,
+            child_name=section_data['name'],
+            child_mark_code=f'{prefix}{mark}1',
         )
 
 
@@ -1131,6 +1158,8 @@ def create_project(
     gip: User | None = None,
     created_by: User | None = None,
     base_code: str = '',
+    stage: str | None = None,
+    object_type: str | None = None,
 ) -> Project:
     """Создает проект в указанной компании.
 
@@ -1175,6 +1204,10 @@ def create_project(
         project.status = 'active'
         project.is_deleted = False
         project.deleted_at = None
+        if stage:
+            project.stage = stage
+        if object_type:
+            project.object_type = object_type
         project.save(
             update_fields=[
                 'company',
@@ -1185,6 +1218,8 @@ def create_project(
                 'status',
                 'is_deleted',
                 'deleted_at',
+                'stage',
+                'object_type',
             ]
         )
         # Состав команды: старый ГИП снимается, новый (если задан) назначается.
@@ -1209,6 +1244,8 @@ def create_project(
             customer_org=_resolve_customer(company, customer),
             status='active',
             created_by=actor,
+            stage=stage or Project.STAGE_RD,
+            object_type=object_type or None,
         )
         if gip is not None:
             ProjectMembership.objects.create(
@@ -3320,12 +3357,14 @@ def _generate_document_code(
     коллизии разрешаем перебором (уникальность в рамках project+section).
     """
     base = (project.base_code or project.code or '').strip()
-    parts = [part for part in (
-        base,
-        (section.code or '').strip(),
-        ((folder.code or '').strip() if folder is not None else ''),
-    ) if part]
-    prefix = '-'.join(parts) + '-' if parts else 'DOC-'
+    kit_code = (folder.code or '').strip() if folder is not None else ''
+    if kit_code:
+        # Шифр комплекта уже полный ({base}-{mark}1 / {base}-ИОС1.N):
+        # префикс = шифр комплекта, без повторного вхождения base.
+        prefix = f'{kit_code}-'
+    else:
+        parts = [part for part in (base, (section.code or '').strip()) if part]
+        prefix = '-'.join(parts) + '-' if parts else 'DOC-'
     existing_codes = set(
         Document.objects
         .filter(project=project, section=section, code__startswith=prefix)
@@ -4139,13 +4178,27 @@ def create_project_from_template(
     created_by: User | None,
     template_key: str | None = None,
     base_code: str = '',
+    stage: str | None = None,
+    object_type: str | None = None,
+    deploy_scope: str = 'rd',
 ) -> Project:
-    """Создаёт проект и, при необходимости, разделы/папки из шаблона."""
+    """Создаёт проект и, при необходимости, разделы/папки из шаблона.
+
+    Если template_key пуст и object_type указан — разворачиваются пресеты
+    PRESETS по deploy_scope: 'pd' — П-пресет, 'rd' — РД-пресет,
+    'full' — оба (П под ПД, РД под РД). stage проекта: 'pd' → П, иначе РД.
+    Если object_type не указан — прежний путь только по template_key.
+    """
+    if deploy_scope not in PRESET_SCOPES:
+        raise ValueError(f"Неизвестный deploy_scope: {deploy_scope!r}")
     actor = created_by or gip
     if actor is None:
         raise ValueError("Не указан создатель проекта")
     if not can_create_project(actor):
         raise PermissionDenied("Нет прав на создание проекта")
+
+    if stage is None:
+        stage = Project.STAGE_P if deploy_scope == 'pd' else Project.STAGE_RD
 
     project = create_project(
         company=company,
@@ -4155,6 +4208,8 @@ def create_project_from_template(
         gip=gip,
         created_by=created_by,
         base_code=base_code,
+        stage=stage,
+        object_type=object_type,
     )
     stored_template_key = template_key or ''
     if project.template_key != stored_template_key:
@@ -4203,11 +4258,113 @@ def create_project_from_template(
 
     # Любой новый проект получает 4 корневые суперпапки.
     if template is None:
-        _ensure_root_superfolders(project, actor)
+        if object_type:
+            _populate_presets(project, actor, deploy_scope)
+        else:
+            _ensure_root_superfolders(project, actor)
         return project
 
     _populate_project_template(project, template, actor)
     return project
+
+
+PRESET_SCOPES = ('pd', 'rd', 'full')
+_PRESET_STAGES_BY_SCOPE = {
+    'pd': (Project.STAGE_P,),
+    'rd': (Project.STAGE_RD,),
+    'full': (Project.STAGE_P, Project.STAGE_RD),
+}
+
+
+def _populate_presets(project: Project, actor: User, deploy_scope: str) -> None:
+    """Разворачивает пресеты PRESETS[(stage, object_type)] по deploy_scope.
+
+    Для каждой стадии из области — свой пресет в своей корневой папке
+    (ПД для П, РД для РД). Разделы создаются только при отсутствии
+    (get_or_create), переименования существующих разделов не выполняются.
+    Пресет РД с кодом, уже созданным пресетом П (например, ЭОМ), не дублирует
+    раздел: коды уникальны в проекте.
+    """
+    superfolders = _ensure_root_superfolders(project, actor)
+    _create_ird_structure(project, actor, superfolders)
+    common = _get_or_create_common_section(project)
+
+    for stage in _PRESET_STAGES_BY_SCOPE[deploy_scope]:
+        preset = PRESETS[(stage, project.object_type)]
+        root = superfolders['PD' if stage == Project.STAGE_P else 'RD']
+        sections: dict[str, Section] = {}
+        for index, item in enumerate(preset, start=1):
+            mark = item['mark']
+            section_obj, _ = Section.objects.get_or_create(
+                project=project,
+                code=mark,
+                defaults={'name': item['name'], 'order': index},
+            )
+            sections[mark] = section_obj
+        for section in project.sections.all():
+            section.full_code = generate_gost_code(project.base_code, section.code)
+            section.save(update_fields=['full_code'])
+        prefix = _code_prefix(project)
+        for item in preset:
+            mark = item['mark']
+            section_obj = sections.get(mark, common)
+            if stage == Project.STAGE_P and item.get('subsections'):
+                # ИОС-ветка — копия из _create_pd_structure (сведение на волне 1).
+                section_folder = create_folder(
+                    actor,
+                    project,
+                    name=item['name'],
+                    section=section_obj,
+                    parent=root,
+                    code='',
+                    force=True,
+                )
+                for subsection in item['subsections']:
+                    sub_folder = create_folder(
+                        actor,
+                        project,
+                        name=subsection['name'],
+                        section=section_obj,
+                        parent=section_folder,
+                        code='',
+                        force=True,
+                    )
+                    part_code = (
+                        f'{prefix}ИОС1.'
+                        f"{subsection['number'].split('.')[-1]}"
+                    )
+                    create_folder(
+                        actor,
+                        project,
+                        name=subsection['part'],
+                        section=section_obj,
+                        parent=sub_folder,
+                        code=part_code,
+                        force=True,
+                    )
+                continue
+            if stage == Project.STAGE_P:
+                # ПД-марка без подразделов: папка марки + «Часть 1» с {prefix}{mark}1.
+                _create_mark_folder(
+                    project,
+                    actor,
+                    parent=root,
+                    section_obj=section_obj,
+                    name=item['name'],
+                    child_name=item['name'],
+                    child_mark_code=f'{prefix}{mark}1',
+                )
+                continue
+            # РД-марка: комплект {prefix}{mark}1 — как в _create_rd_structure.
+            _create_mark_folder(
+                project,
+                actor,
+                parent=root,
+                section_obj=section_obj,
+                name=item['name'],
+                child_name=item['name'],
+                child_mark_code=f'{prefix}{mark}1',
+            )
 
 
 def get_company_members(company: Company):
