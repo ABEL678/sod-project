@@ -154,7 +154,7 @@ class CreateDemoProjectTests(TestCase):
         eom = Section.objects.get(project=project, code='ЭОМ')
         self.assertEqual(
             eom.name,
-            'Силовое электрооборудование и электрическое освещение',
+            'Силовое электрооборудование и электрическое освещение (внутреннее)',
         )
         # Никаких PD/RD-разделов из RD_SECTIONS (например, КЖ, КМ, СС, ТХ).
         for pd_code in ('КЖ', 'КМ', 'СС', 'ТХ', 'ПЗ', 'ПЗУ'):
