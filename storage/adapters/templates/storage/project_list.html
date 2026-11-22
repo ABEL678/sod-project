@@ -188,10 +188,10 @@
                                 </div>
                                 <div class="col-7">
                                     <label class="form-label small" for="projectCustomer{{ project.pk }}">Заказчик</label>
-                                    <select class="form-select form-select-sm" id="projectCustomer{{ project.pk }}" name="customer">
+                                    <select class="form-select form-select-sm" id="projectCustomer{{ project.pk }}" name="customer_id">
                                         <option value="">Не указан</option>
                                         {% for customer in customer_choices %}
-                                            <option value="{{ customer.name }}"{% if project.customer_org_id == customer.pk %} selected{% endif %}>{{ customer.name }}</option>
+                                            <option value="{{ customer.pk }}"{% if project.customer_org_id == customer.pk %} selected{% endif %}>{{ customer.name }}</option>
                                         {% endfor %}
                                     </select>
                                 </div>
@@ -282,10 +282,10 @@
                             </div>
                             <div class="col-12">
                                 <label class="form-label small" for="projectCustomer">Заказчик</label>
-                                <select class="form-select form-select-sm" id="projectCustomer" name="customer">
+                                <select class="form-select form-select-sm" id="projectCustomer" name="customer_id">
                                     <option value="">Не указан</option>
                                     {% for customer in customer_choices %}
-                                        <option value="{{ customer.name }}">{{ customer.name }}</option>
+                                        <option value="{{ customer.pk }}">{{ customer.name }}</option>
                                     {% endfor %}
                                 </select>
                             </div>

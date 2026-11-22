@@ -20,7 +20,7 @@ class ProjectStageTests(TestCase):
             company=self.company,
             code=code,
             name=f'Проект {code}',
-            customer='',
+            customer_id=None,
             created_by=self.user,
             stage=stage,
         )

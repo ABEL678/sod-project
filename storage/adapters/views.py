@@ -3191,6 +3191,15 @@ def _zip_documents(documents, filename='documents.zip', base_folder=None):
     return response
 
 
+def _customer_id_from_post(request):
+    """id карточки заказчика из формы; _UNSET, если поле не передано."""
+    from storage.domain.services import _UNSET
+
+    if 'customer_id' not in request.POST:
+        return _UNSET
+    return request.POST.get('customer_id') or None
+
+
 class ProjectCreateView(LoginRequiredMixin, View):
     def post(self, request):
         if not can_create_project(request.user):
@@ -3213,7 +3222,7 @@ class ProjectCreateView(LoginRequiredMixin, View):
                 company=company,
                 code=request.POST.get('code', '').strip(),
                 name=request.POST.get('name', '').strip(),
-                customer=request.POST.get('customer', '').strip(),
+                customer_id=request.POST.get('customer_id') or None,
                 gip=gip,
                 created_by=request.user,
                 base_code=request.POST.get('base_code', '').strip(),
@@ -3288,7 +3297,7 @@ class ProjectEditView(LoginRequiredMixin, View):
                 project,
                 code=request.POST.get('code', ''),
                 name=request.POST.get('name', ''),
-                customer=request.POST.get('customer', ''),
+                customer_id=_customer_id_from_post(request),
                 base_code=request.POST.get('base_code', ''),
                 status=request.POST.get('status') or project.status,
                 stage=request.POST.get('stage', ''),

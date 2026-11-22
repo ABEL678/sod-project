@@ -24,7 +24,7 @@ class DeployPresetToProjectTests(TestCase):
             company=self.company,
             code=code,
             name='Deploy project',
-            customer='',
+            customer_id=None,
             created_by=self.user,
             base_code='2345-12',
             stage=Project.STAGE_P,
@@ -139,7 +139,7 @@ class DeployPresetToProjectTests(TestCase):
             company=self.company,
             code='DEP-NOTYPE',
             name='No type',
-            customer='',
+            customer_id=None,
             created_by=self.user,
             base_code='2345-12',
         )

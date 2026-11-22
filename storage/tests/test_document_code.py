@@ -19,7 +19,7 @@ class DocumentCodeGeneratorTests(TestCase):
             company=self.company,
             code='CODE-1',
             name='Code project',
-            customer='',
+            customer_id=None,
             created_by=self.user,
             base_code='TEST-2',
             stage=Project.STAGE_P,

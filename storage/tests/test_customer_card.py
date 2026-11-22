@@ -1,11 +1,20 @@
+import hashlib
+import json
+import secrets
+
 from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied
 from django.test import TestCase
 from django.urls import reverse
 
-from external_api.serializers import ProjectCreateSerializer
-from storage.domain.models import Company, Customer, Project, UserProfile
-from storage.domain.services import create_customer, create_project, update_project
+from external_api.models import ApiToken
+from storage.domain.models import Company, Customer, UserProfile
+from storage.domain.services import (
+    create_customer,
+    create_project,
+    resolve_customer_name,
+    update_project,
+)
 
 
 User = get_user_model()
@@ -21,14 +30,28 @@ class CustomerCardTests(TestCase):
         )
         self.client.force_login(self.user)
 
-    def _project(self, code, customer=''):
+    def _project(self, code, customer=None):
         return create_project(
             company=self.company,
             code=code,
             name=f'Проект {code}',
-            customer=customer,
+            customer_id=customer.pk if customer else None,
             created_by=self.user,
         )
+
+    def _token(self, scopes):
+        raw = secrets.token_urlsafe(48)
+        ApiToken.objects.create(
+            company=self.company,
+            name='Token customer',
+            token_prefix=raw[:8],
+            token_hash=hashlib.sha256(raw.encode()).hexdigest(),
+            scopes=scopes,
+            created_by=self.user,
+        )
+        return raw
+
+    # --- карточка и дедупликация (сервис) ---
 
     def test_create_customer_card(self):
         customer = create_customer(self.user, self.company, '  ООО Ромашка  ')
@@ -61,27 +84,49 @@ class CustomerCardTests(TestCase):
         with self.assertRaises(PermissionDenied):
             create_customer(outsider, self.company, 'Чужая организация')
 
-    def test_project_linked_to_customer_card(self):
-        customer = create_customer(self.user, self.company, 'АО Заказчик')
-        project = self._project('CST-LINK', customer='АО Заказчик')
+    # --- привязка по id ---
+
+    def test_create_project_by_customer_id(self):
+        card = create_customer(self.user, self.company, 'АО Заказчик')
+        project = self._project('CST-ID', customer=card)
         project.refresh_from_db()
-        self.assertEqual(project.customer_org, customer)
+        self.assertEqual(project.customer_org, card)
         self.assertEqual(project.customer, 'АО Заказчик')
 
-    def test_update_project_relinks_customer(self):
+    def test_create_project_rejects_customer_from_other_company(self):
+        foreign = create_customer(self.user, self.other, 'Чужой заказчик')
+        with self.assertRaises(ValueError):
+            self._project('CST-FOREIGN', customer=foreign)
+
+    def test_update_project_relinks_by_id(self):
         first = create_customer(self.user, self.company, 'Первый')
         second = create_customer(self.user, self.company, 'Второй')
-        project = self._project('CST-RELINK', customer='Первый')
-        update_project(self.user, project, customer='Второй')
+        project = self._project('CST-RELINK', customer=first)
+        update_project(self.user, project, customer_id=second.pk)
         project.refresh_from_db()
         self.assertEqual(project.customer_org, second)
-        self.assertNotEqual(project.customer_org, first)
+
+    def test_update_project_clears_customer_with_none(self):
+        card = create_customer(self.user, self.company, 'Снять')
+        project = self._project('CST-CLEAR', customer=card)
+        update_project(self.user, project, customer_id=None)
+        project.refresh_from_db()
+        self.assertIsNone(project.customer_org)
+
+    def test_update_project_without_customer_keeps_card(self):
+        card = create_customer(self.user, self.company, 'Оставить')
+        project = self._project('CST-KEEP', customer=card)
+        update_project(self.user, project, name='Новое имя')
+        project.refresh_from_db()
+        self.assertEqual(project.customer_org, card)
 
     def test_empty_customer_leaves_no_card(self):
-        project = self._project('CST-EMPTY', customer='')
+        project = self._project('CST-EMPTY')
         project.refresh_from_db()
         self.assertIsNone(project.customer_org)
         self.assertEqual(project.customer, '')
+
+    # --- UI ---
 
     def test_customer_list_page_shows_card(self):
         create_customer(self.user, self.company, 'Карточка Тест')
@@ -89,36 +134,18 @@ class CustomerCardTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, 'Карточка Тест')
 
-    def test_project_list_offers_customer_select(self):
-        create_customer(self.user, self.company, 'Выбор Заказчик')
+    def test_project_list_offers_customer_select_by_id(self):
+        card = create_customer(self.user, self.company, 'Выбор Заказчик')
         self._project('CST-SEL')
         response = self.client.get(reverse('storage:project_list'))
-        self.assertContains(response, 'name="customer"')
-        self.assertContains(response, 'Выбор Заказчик')
+        self.assertContains(response, 'name="customer_id"')
+        self.assertContains(response, f'value="{card.pk}"')
+        self.assertNotContains(response, 'name="customer" ')
 
-    def test_api_serializer_accepts_customer_string(self):
-        serializer = ProjectCreateSerializer(
-            data={'code': 'API-CST', 'name': 'API проект', 'customer': 'Через API'}
-        )
-        self.assertTrue(serializer.is_valid(), serializer.errors)
-        self.assertEqual(serializer.validated_data['customer'], 'Через API')
+    # --- API ---
 
-    def test_api_response_returns_customer_card(self):
-        import hashlib
-        import json
-        import secrets
-
-        from external_api.models import ApiToken
-
-        raw = secrets.token_urlsafe(48)
-        ApiToken.objects.create(
-            company=self.company,
-            name='Token customer',
-            token_prefix=raw[:8],
-            token_hash=hashlib.sha256(raw.encode()).hexdigest(),
-            scopes=[ApiToken.Scope.PROJECTS_CREATE],
-            created_by=self.user,
-        )
+    def test_api_name_resolves_to_card(self):
+        raw = self._token([ApiToken.Scope.PROJECTS_CREATE])
         self.client.logout()
         response = self.client.post(
             '/api/v1/projects/',
@@ -128,6 +155,37 @@ class CustomerCardTests(TestCase):
         )
         self.assertEqual(response.status_code, 201, response.content)
         body = response.json()
-        self.assertEqual(body['customer'], 'Карточка API')
+        self.assertNotIn('customer', body)
         self.assertEqual(body['customer_org']['name'], 'Карточка API')
         self.assertTrue(Customer.objects.filter(company=self.company, name='Карточка API').exists())
+
+    def test_api_same_name_reuses_card(self):
+        card = create_customer(self.user, self.company, 'Повтор API')
+        raw = self._token([ApiToken.Scope.PROJECTS_CREATE])
+        self.client.logout()
+        response = self.client.post(
+            '/api/v1/projects/',
+            data=json.dumps({'code': 'API-REUSE', 'name': 'Повтор', 'customer': 'Повтор API'}),
+            content_type='application/json',
+            HTTP_AUTHORIZATION=f'Bearer {raw}',
+        )
+        self.assertEqual(response.status_code, 201, response.content)
+        self.assertEqual(response.json()['customer_org']['id'], card.pk)
+        self.assertEqual(Customer.objects.filter(company=self.company, name='Повтор API').count(), 1)
+
+    def test_api_response_has_no_customer_string(self):
+        raw = self._token([ApiToken.Scope.PROJECTS_CREATE])
+        self.client.logout()
+        response = self.client.post(
+            '/api/v1/projects/',
+            data=json.dumps({'code': 'API-NOSTR', 'name': 'Без строки'}),
+            content_type='application/json',
+            HTTP_AUTHORIZATION=f'Bearer {raw}',
+        )
+        self.assertEqual(response.status_code, 201, response.content)
+        self.assertNotIn('customer', response.json())
+
+    def test_resolve_customer_name_helper(self):
+        card = resolve_customer_name(self.company, '  Маршрут  ')
+        self.assertEqual(card.name, 'Маршрут')
+        self.assertIsNone(resolve_customer_name(self.company, '   '))

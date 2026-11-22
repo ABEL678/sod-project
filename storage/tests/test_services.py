@@ -147,7 +147,7 @@ class ServiceTests(TestCase):
             company=self.company,
             code='NEW-01',
             name='Новый проект',
-            customer='Заказчик',
+            customer_id=None,
             gip=self.user_gip,
             created_by=self.user_gip,
         )
@@ -162,7 +162,7 @@ class ServiceTests(TestCase):
                 company=self.other_company,
                 code='NEW-02',
                 name='Чужой проект',
-                customer='Заказчик',
+                customer_id=None,
                 gip=self.user_gip,
                 created_by=self.user_gip,
             )
@@ -176,7 +176,7 @@ class ServiceTests(TestCase):
                 company=self.company,
                 code='NEW-03',
                 name='Проект',
-                customer='Заказчик',
+                customer_id=None,
                 gip=foreign_gip,
                 created_by=self.user_admin,
             )

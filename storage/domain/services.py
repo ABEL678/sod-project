@@ -1158,8 +1158,12 @@ def generate_gost_code(
     return '-'.join(parts)
 
 
-def _resolve_customer(company: Company, name: str | None) -> Customer | None:
-    """Карточка заказчика компании по наименованию (создаётся при первом упоминании)."""
+def resolve_customer_name(company: Company, name: str | None) -> Customer | None:
+    """Маршрутизация внешнего API: имя заказчика -> карточка компании.
+
+    Используется только входом API (строка не хранится в проекте). Карточка
+    создаётся при первом упоминании; пустое имя -> None.
+    """
     name = (name or '').strip()
     if not name:
         return None
@@ -1184,11 +1188,21 @@ def list_customers(company: Company):
     return Customer.objects.filter(company=company).order_by('name')
 
 
+def _customer_in_company(company: Company, customer_id: int | None) -> Customer | None:
+    """Карточка заказчика по id; она обязана принадлежать компании проекта."""
+    if customer_id in (None, ''):
+        return None
+    customer = Customer.objects.filter(pk=customer_id, company=company).first()
+    if customer is None:
+        raise ValueError("Заказчик не найден в компании проекта")
+    return customer
+
+
 def create_project(
     company: Company,
     code: str,
     name: str,
-    customer: str,
+    customer_id: int | None = None,
     gip: User | None = None,
     created_by: User | None = None,
     base_code: str = '',
@@ -1233,7 +1247,7 @@ def create_project(
         project.company = company
         project.base_code = (base_code or '').strip()
         project.name = name
-        project.customer_org = _resolve_customer(company, customer)
+        project.customer_org = _customer_in_company(company, customer_id)
         project.created_by = actor
         project.status = 'active'
         project.is_deleted = False
@@ -1275,7 +1289,7 @@ def create_project(
             code=code,
             base_code=(base_code or '').strip(),
             name=name,
-            customer_org=_resolve_customer(company, customer),
+            customer_org=_customer_in_company(company, customer_id),
             status='active',
             created_by=actor,
             stage=stage or None,
@@ -1374,13 +1388,16 @@ def update_project(
     *,
     code: str | None = None,
     name: str | None = None,
-    customer: str | None = None,
+    customer_id: int | None | object = _UNSET,
     base_code: str | None = None,
     status: str | None = None,
     stage: str | None | object = _UNSET,
     gip: User | None | object = _UNSET,
 ) -> Project:
-    """Обновляет карточку проекта с проверкой прав."""
+    """Обновляет карточку проекта с проверкой прав.
+
+    customer_id: id карточки заказчика; None — снять заказчика; _UNSET — не менять.
+    """
     if not can_edit_project(user, project):
         raise PermissionDenied("Нет прав на редактирование проекта")
 
@@ -1402,8 +1419,8 @@ def update_project(
         project.name = name
         update_fields.append('name')
 
-    if customer is not None:
-        project.customer_org = _resolve_customer(project.company, customer)
+    if customer_id is not _UNSET:
+        project.customer_org = _customer_in_company(project.company, customer_id)
         update_fields.append('customer_org')
 
     base_changed = False
@@ -4234,7 +4251,7 @@ def create_project_from_template(
     company: Company,
     code: str,
     name: str,
-    customer: str,
+    customer_id: int | None,
     gip: User | None,
     created_by: User | None,
     template_key: str | None = None,
@@ -4265,7 +4282,7 @@ def create_project_from_template(
         company=company,
         code=code,
         name=name,
-        customer=customer,
+        customer_id=customer_id,
         gip=gip,
         created_by=created_by,
         base_code=base_code,

@@ -42,6 +42,7 @@ from storage.domain.services import (
     list_rfis,
     list_tasks,
     revoke_api_token,
+    resolve_customer_name,
     rfi_summary_for_gip,
     sync_issues,
     task_summary_for_gip,
@@ -63,11 +64,12 @@ class ProjectCreateView(APIView):
         token = request.auth
 
         try:
+            customer = resolve_customer_name(token.company, data.get("customer", ""))
             project = create_project_from_template(
                 company=token.company,
                 code=data["code"],
                 name=data["name"],
-                customer=data.get("customer", ""),
+                customer_id=customer.pk if customer else None,
                 gip=request.user,
                 created_by=request.user,
                 template_key=data.get("template_key", "FULL"),
@@ -96,7 +98,6 @@ class ProjectCreateView(APIView):
                 "id": project.id,
                 "code": project.code,
                 "name": project.name,
-                "customer": project.customer,
                 "customer_org": (
                     {"id": project.customer_org.pk, "name": project.customer_org.name}
                     if project.customer_org_id

@@ -47,6 +47,7 @@ from storage.domain.services import (
     create_issue,
     create_project_from_template,
     create_section,
+    resolve_customer_name,
     delete_documents,
     delete_project,
     empty_trash,
@@ -195,11 +196,12 @@ class Command(BaseCommand):
         # canon: служебный ключ вне PROJECT_TEMPLATES — шаблон не разворачивается,
         # разделы создаются только из SECTION_SPECS.
         template_key = DEMO_CANON_TEMPLATE if section_mode == 'canon' else DEMO_TEMPLATE
+        demo_customer = resolve_customer_name(company, DEMO_CUSTOMER)
         project = create_project_from_template(
             company=company,
             code=DEMO_CODE,
             name=DEMO_NAME,
-            customer=DEMO_CUSTOMER,
+            customer_id=demo_customer.pk if demo_customer else None,
             gip=gip,
             created_by=actor,
             template_key=template_key,

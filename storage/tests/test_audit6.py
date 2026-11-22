@@ -117,7 +117,7 @@ class ShareVersionScopeTests(TestCase):
             company=self.company,
             code='SHR-1',
             name='Share',
-            customer='',
+            customer_id=None,
             gip=self.gip,
             created_by=self.admin,
         )

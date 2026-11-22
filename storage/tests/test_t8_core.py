@@ -247,7 +247,7 @@ class FolderServiceTests(T8CoreTestBase):
                 company=self.company,
                 code='BAD-GIP',
                 name='Bad GIP',
-                customer='',
+                customer_id=None,
                 gip=self.user_viewer,
                 created_by=self.user_gip,
             )

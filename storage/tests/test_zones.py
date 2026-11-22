@@ -49,7 +49,7 @@ def _create_test_data():
         company=company,
         code='TEST-001',
         name='Test Project',
-        customer='',
+        customer_id=None,
         gip=gip,
         created_by=admin,
     )
