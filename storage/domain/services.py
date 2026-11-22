@@ -844,30 +844,34 @@ def _create_ird_structure(
     actor: User,
     superfolders: dict[str, Folder],
 ) -> None:
-    """Создаёт группу изысканий и прочие исходные данные."""
+    """Создаёт группу изысканий и прочие исходные данные (идемпотентно).
+
+    Каждая папка ищется по (project, parent, name) и создаётся только если
+    отсутствует — повторный вызов (из шаблона и из пресета) не дублирует ИРД.
+    """
     root = superfolders['IRD']
     common = _get_or_create_common_section(project)
 
-    for item in IRD_FOLDERS:
-        group = create_folder(
+    def _ensure(name: str, parent: Folder) -> Folder:
+        existing = Folder.objects.filter(
+            project=project, parent=parent, name=name, is_deleted=False,
+        ).first()
+        if existing is not None:
+            return existing
+        return create_folder(
             actor,
             project,
-            name=item['name'],
+            name=name,
             section=common,
-            parent=root,
+            parent=parent,
             code='',
             force=True,
         )
+
+    for item in IRD_FOLDERS:
+        group = _ensure(item['name'], root)
         for child in item.get('children', ()):
-            create_folder(
-                actor,
-                project,
-                name=child['name'],
-                section=common,
-                parent=group,
-                code='',
-                force=True,
-            )
+            _ensure(child['name'], group)
 
 
 def _create_mark_folder(
@@ -4340,6 +4344,7 @@ def _populate_presets(project: Project, actor: User, deploy_scope: str) -> None:
                 # Схема (решение владельца): подраздел 5.N → {base}-ИОС{N},
                 # том → {base}-ИОС{N}.K. Схема ИОС1.{N} старого пути — дефект,
                 # в пресетный путь не переносится.
+                # Подраздел без шифра (code=''); шифр несёт только том {base}-ИОС{N}.K.
                 for subsection in item['subsections']:
                     sub_number = subsection['number'].split('.')[-1]
                     sub_code = f'{prefix}ИОС{sub_number}'
@@ -4349,7 +4354,7 @@ def _populate_presets(project: Project, actor: User, deploy_scope: str) -> None:
                         name=subsection['name'],
                         section=section_obj,
                         parent=section_folder,
-                        code=sub_code,
+                        code='',
                         force=True,
                     )
                     sub_name = _strip_sub_prefix(subsection['name'])
