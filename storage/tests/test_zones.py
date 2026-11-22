@@ -1008,8 +1008,8 @@ class VirtualZoneTest(TestCase):
     def test_transition_preserves_folder_and_uses_virtual_zone(self):
         document = self._upload(self.admin, 'VZ-TRANSITION', folder=self.folder)
         original_folder_id = document.folder_id
-        document.internal_status = 'ready_to_share'
-        document.save(update_fields=['internal_status'])
+        document.state = Document.STATE_WIP_READY
+        document.save(update_fields=['state'])
 
         transition_document_zone(self.admin, document, 'submit_review')
         document.refresh_from_db()
@@ -1026,8 +1026,8 @@ class VirtualZoneTest(TestCase):
 
     def test_submit_review_blocked_by_open_issues(self):
         document = self._upload(self.admin, 'VZ-OPEN-ISSUE')
-        document.internal_status = 'ready_to_share'
-        document.save(update_fields=['internal_status'])
+        document.state = Document.STATE_WIP_READY
+        document.save(update_fields=['state'])
         Issue.objects.create(
             document=document,
             author=self.admin,
@@ -1039,8 +1039,8 @@ class VirtualZoneTest(TestCase):
 
     def test_publish_and_return_wip_sync_codes(self):
         document = self._upload(self.admin, 'VZ-CODES')
-        document.internal_status = 'ready_to_share'
-        document.save(update_fields=['internal_status'])
+        document.state = Document.STATE_WIP_READY
+        document.save(update_fields=['state'])
 
         transition_document_zone(self.admin, document, 'submit_review')
         document.refresh_from_db()
@@ -1053,8 +1053,8 @@ class VirtualZoneTest(TestCase):
         self.assertEqual(document.internal_status, 'rework')
 
         published = self._upload(self.admin, 'VZ-PUBLISH')
-        published.internal_status = 'ready_to_share'
-        published.save(update_fields=['internal_status'])
+        published.state = Document.STATE_WIP_READY
+        published.save(update_fields=['state'])
         transition_document_zone(self.admin, published, 'submit_review')
         transition_document_zone(self.admin, published, 'publish')
         published.refresh_from_db()
@@ -1066,31 +1066,31 @@ class VirtualZoneTest(TestCase):
         self.assertIsNone(document.folder)
 
         expected = {
-            'draft': 'WIP',
-            'in_review': 'SHARED',
-            'approved': 'PUBLISHED',
-            'archived': 'ARCHIVE',
+            Document.STATE_WIP_DRAFT: 'WIP',
+            Document.STATE_SHARED: 'SHARED',
+            Document.STATE_APPROVED: 'PUBLISHED',
+            Document.STATE_ARCHIVED: 'ARCHIVE',
         }
-        for status, zone in expected.items():
-            document.status = status
+        for state, zone in expected.items():
+            document.state = state
             document._from_service = True
-            document.save(update_fields=['status'])
+            document.save(update_fields=['state'])
             self.assertEqual(_effective_zone(document), zone)
 
     def test_developer_cannot_upload_to_folderless_published_document(self):
         document = self._upload(self.admin, 'VZ-PUBLISHED')
-        document.status = 'approved'
+        document.state = Document.STATE_APPROVED
         document._from_service = True
-        document.save(update_fields=['status'])
+        document.save(update_fields=['state'])
 
         with self.assertRaises(PermissionDenied):
             self._upload(self.developer, 'VZ-PUBLISHED')
 
     def test_folderless_archive_rejects_developer_and_admin(self):
         document = self._upload(self.admin, 'VZ-ARCHIVE')
-        document.status = 'archived'
+        document.state = Document.STATE_ARCHIVED
         document._from_service = True
-        document.save(update_fields=['status'])
+        document.save(update_fields=['state'])
 
         for user in (self.developer, self.admin):
             with self.assertRaises(PermissionDenied):

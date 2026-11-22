@@ -7,7 +7,14 @@ from django.test import TestCase, override_settings
 from django.urls import reverse
 from openpyxl import load_workbook
 
-from storage.domain.models import Company, MailRule, Project, Section, UserProfile
+from storage.domain.models import (
+    Company,
+    Document,
+    MailRule,
+    Project,
+    Section,
+    UserProfile,
+)
 from storage.domain.services import upload_document
 
 
@@ -202,9 +209,9 @@ class ViewTests(TestCase):
 
     def test_search_page_filters_by_status(self):
         approved = self._upload(code='АР-01')
-        approved.document.status = 'approved'
+        approved.document.state = Document.STATE_APPROVED
         approved.document._from_service = True
-        approved.document.save(update_fields=['status'])
+        approved.document.save(update_fields=['state'])
         self._upload(code='АР-02')
         self.client.force_login(self.user_gip)
 

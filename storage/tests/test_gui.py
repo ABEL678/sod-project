@@ -86,7 +86,7 @@ class GuiTestBase(TestCase):
             code='АР-01',
             name='План 1 этажа',
             doc_type='drawing',
-            status='draft',
+            state=Document.STATE_WIP_DRAFT,
             created_by=self.user_gip,
         )
         self.doc_ar_2 = Document.objects.create(
@@ -95,7 +95,7 @@ class GuiTestBase(TestCase):
             code='АР-02',
             name='План 2 этажа',
             doc_type='drawing',
-            status='approved',
+            state=Document.STATE_APPROVED,
             created_by=self.user_gip,
         )
         self.doc_kr_1 = Document.objects.create(
@@ -104,7 +104,7 @@ class GuiTestBase(TestCase):
             code='КР-01',
             name='Разрез',
             doc_type='drawing',
-            status='in_review',
+            state=Document.STATE_SHARED,
             created_by=self.user_gip,
         )
 
@@ -577,7 +577,7 @@ class GuiViewTests(GuiTestBase):
                 code=f'P-{index:03}',
                 name=f'Документ {index}',
                 doc_type='drawing',
-                status='draft',
+                state=Document.STATE_WIP_DRAFT,
                 created_by=self.user_gip,
             )
             for index in range(51)

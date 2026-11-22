@@ -85,12 +85,12 @@ class DocumentTable(tables.Table):
     suitability_code = tables.Column(
         verbose_name='Статус документа',
         attrs=_column_attrs('suitability'),
-        order_by=('suitability_code',),
+        order_by=('state',),
     )
     internal_status = tables.Column(
         verbose_name='Внутренний статус',
         attrs=_column_attrs('internal-status'),
-        order_by=('internal_status',),
+        order_by=('state',),
         empty_values=(),
     )
     issues = tables.Column(

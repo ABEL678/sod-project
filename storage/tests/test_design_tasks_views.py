@@ -797,7 +797,7 @@ class TaskDetailViewTests(TaskCardTestBase):
             code='AR-01',
             name='Задание на проектирование',
             doc_type='source_data',
-            status='active',
+            state=Document.STATE_WIP_DRAFT,
             created_by=self.author,
         )
         add_task_attachment(
@@ -882,7 +882,7 @@ class TaskDetailViewTests(TaskCardTestBase):
             code='AR-03',
             name='Пояснительная записка',
             doc_type='source_data',
-            status='active',
+            state=Document.STATE_WIP_DRAFT,
             created_by=self.author,
         )
         add_task_attachment(
@@ -907,7 +907,7 @@ class TaskDetailViewTests(TaskCardTestBase):
             code='AR-04',
             name='Документ без заданий',
             doc_type='other',
-            status='active',
+            state=Document.STATE_WIP_DRAFT,
             created_by=self.author,
         )
         self.client.force_login(self.gip)
@@ -1193,7 +1193,7 @@ class TaskAttachmentActionViewTests(TaskCardTestBase):
             code='AR-02',
             name='Техническое задание',
             doc_type='source_data',
-            status='active',
+            state=Document.STATE_WIP_DRAFT,
             created_by=self.author,
         )
         self.client.force_login(self.author)
@@ -1225,7 +1225,7 @@ class TaskAttachmentActionViewTests(TaskCardTestBase):
             code='XX-01',
             name='Чужой документ',
             doc_type='other',
-            status='active',
+            state=Document.STATE_WIP_DRAFT,
             created_by=self.gip,
         )
         task = self._task_in_progress()

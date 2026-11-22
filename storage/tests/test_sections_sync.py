@@ -188,7 +188,7 @@ class TestDocumentSection(TestCase):
             code='2345-12-АР1-001',
             name='Чертеж',
             doc_type='Ч',
-            status='new',
+            state=Document.STATE_WIP_DRAFT,
             created_by=self.user,
         )
         self.assertEqual(doc.section.code, 'АР')

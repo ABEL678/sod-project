@@ -30,10 +30,10 @@ class SectionAdmin(admin.ModelAdmin):
 
 @admin.register(Document)
 class DocumentAdmin(admin.ModelAdmin):
-    list_display = ('code', 'name', 'project', 'section', 'doc_type', 'status')
-    list_filter = ('project', 'section', 'doc_type', 'status')
+    list_display = ('code', 'name', 'project', 'section', 'doc_type', 'state')
+    list_filter = ('project', 'section', 'doc_type', 'state')
     search_fields = ('code', 'name')
-    readonly_fields = ('status', 'suitability_code')
+    readonly_fields = ('state', 'review_result')
 
 
 @admin.register(DocumentVersion)

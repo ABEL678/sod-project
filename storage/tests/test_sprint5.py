@@ -88,7 +88,7 @@ class Sprint5TestBase(TestCase):
             created_by=self.user_gip,
         )
 
-    def make_document(self, code='S5-1', folder=None, status='draft'):
+    def make_document(self, code='S5-1', folder=None, state=Document.STATE_WIP_DRAFT):
         version = upload_document(
             user=self.user_gip,
             project=self.project,
@@ -99,17 +99,17 @@ class Sprint5TestBase(TestCase):
             file=SimpleUploadedFile(f'{code}.pdf', b'pdf-data'),
         )
         document = version.document
-        document.status = status
+        document.state = state
         if folder is not None:
             document.folder = folder
         document._from_service = True
-        document.save(update_fields=['status', 'folder'])
+        document.save(update_fields=['state', 'folder'])
         return document
 
 
 class ZoneGuardOnSectionMoveTests(Sprint5TestBase):
     def test_cannot_move_published_document_to_another_section(self):
-        document = self.make_document(code='PUB-1', folder=self.published_folder, status='approved')
+        document = self.make_document(code='PUB-1', folder=self.published_folder, state=Document.STATE_APPROVED)
 
         with self.assertRaises(PermissionDenied):
             move_document_to_section(
@@ -227,11 +227,8 @@ class UploadValidationTests(Sprint5TestBase):
 class CopyDocumentSyncTests(Sprint5TestBase):
     def test_copy_into_wip_folder_resets_status_triplet(self):
         document = self.make_document(
-            code='CPY-1', folder=self.published_folder, status='approved',
+            code='CPY-1', folder=self.published_folder, state=Document.STATE_APPROVED,
         )
-        document.suitability_code = 'A'
-        document._from_service = True
-        document.save(update_fields=['suitability_code'])
 
         copied = copy_document(
             self.user_gip,
@@ -247,11 +244,8 @@ class CopyDocumentSyncTests(Sprint5TestBase):
 
     def test_copy_keeps_zone_when_target_is_published(self):
         document = self.make_document(
-            code='CPY-2', folder=self.published_folder, status='approved',
+            code='CPY-2', folder=self.published_folder, state=Document.STATE_APPROVED,
         )
-        document.suitability_code = 'A'
-        document._from_service = True
-        document.save(update_fields=['suitability_code'])
 
         # Зона PUBLISHED доступна на запись только администратору — копию
         # в каноническую папку публикует админ (см. check_zone_permission).
@@ -271,8 +265,8 @@ class SavedViewColumnFilterTests(Sprint5TestBase):
     def test_internal_status_filter_applies_to_saved_view(self):
         self.make_document(code='F1', folder=self.wip_folder)
         second = self.make_document(code='F2', folder=self.wip_folder)
-        second.internal_status = 'review'
-        second.save(update_fields=['internal_status'])
+        second.state = Document.STATE_WIP_INTERNAL_REVIEW
+        second.save(update_fields=['state'])
 
         view = save_document_view(
             self.user_gip,
@@ -280,7 +274,7 @@ class SavedViewColumnFilterTests(Sprint5TestBase):
             'На проверке',
             {
                 'columns': ['code', 'internal_status'],
-                'filters': {'internal_status': 'review'},
+                'filters': {'internal_status': 'internal_review'},
             },
         )
         rows = get_project_documents_for_view(
@@ -292,11 +286,8 @@ class SavedViewColumnFilterTests(Sprint5TestBase):
     def test_suitability_filter_applies_to_saved_view(self):
         self.make_document(code='S0-1', folder=self.wip_folder)
         approved = self.make_document(
-            code='A-1', folder=self.published_folder, status='approved',
+            code='A-1', folder=self.published_folder, state=Document.STATE_APPROVED,
         )
-        approved.suitability_code = 'A'
-        approved._from_service = True
-        approved.save(update_fields=['suitability_code'])
 
         rows = get_project_documents_for_view(
             self.user_gip,

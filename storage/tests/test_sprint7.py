@@ -21,7 +21,7 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase, override_settings
 from django.urls import reverse
 
-from storage.domain.models import Company
+from storage.domain.models import Company, Document
 from storage.domain.services import submit_feedback
 from storage.tests.test_sprint5 import Sprint5TestBase
 from storage.tests.test_feedback import TINY_PNG
@@ -57,7 +57,7 @@ class DocumentSectionMoveViewTests(Sprint5TestBase):
 
     def test_published_document_rejected_even_with_flag(self):
         document = self.make_document(
-            code='PUB-7', folder=self.published_folder, status='approved',
+            code='PUB-7', folder=self.published_folder, state=Document.STATE_APPROVED,
         )
         self.client.force_login(self.user_gip)
 

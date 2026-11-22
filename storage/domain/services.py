@@ -120,23 +120,45 @@ def _suitability_for_zone(folder: Folder | None) -> str | None:
     return ZONE_SUITABILITY_MAP.get(folder.zone)
 
 
-def _approval_target_changes(
-    document: Document,
-    target_status: str | None,
-    target_suitability: str | None,
-    target_zone: str | None,
-) -> bool:
-    """True, если операция фактически переводит документ в approved/A."""
-    status_changed = (
-        target_status in ('approved', 'S4')
-        and target_status != document.status
+def _states_matching(
+    status: str | None = None,
+    suitability: str | None = None,
+    internal_status: str | None = None,
+) -> list[str]:
+    """Состояния, у которых совпадают заданные прежние признаки."""
+    result = []
+    for state, (st, suit, internal, _zone) in Document.STATE_PROJECTION.items():
+        if status is not None and st != status:
+            continue
+        if suitability is not None and suit != suitability:
+            continue
+        if internal_status is not None and (
+            state.startswith('wip_') and internal != internal_status
+        ):
+            continue
+        if internal_status is not None and not state.startswith('wip_'):
+            continue
+        result.append(state)
+    return result
+
+
+def _initial_state_for_folder(folder: Folder | None) -> str:
+    """Состояние нового документа по зоне его папки (канонической)."""
+    zone = folder.zone if folder is not None else 'WIP'
+    return {
+        'WIP': Document.STATE_WIP_DRAFT,
+        'SHARED': Document.STATE_SHARED,
+        'PUBLISHED': Document.STATE_APPROVED,
+        'ARCHIVE': Document.STATE_ARCHIVED,
+    }.get(zone, Document.STATE_WIP_DRAFT)
+
+
+def _approval_target_changes(document: Document, target_state: str) -> bool:
+    """True, если операция переводит документ в утверждённое состояние."""
+    return (
+        target_state in (Document.STATE_APPROVED, Document.STATE_AS_BUILT)
+        and target_state != document.state
     )
-    suitability_changed = (
-        target_suitability in ('A', 'S4')
-        and target_suitability != document.suitability_code
-        and target_zone == 'PUBLISHED'
-    )
-    return status_changed or suitability_changed
 
 
 def _is_canonical_zone_folder(folder: Folder | None) -> bool:
@@ -603,11 +625,15 @@ def get_project_documents_queryset(
     if 'doc_type' in filters:
         queryset = queryset.filter(doc_type=filters['doc_type'])
     if 'status' in filters:
-        queryset = queryset.filter(status=filters['status'])
+        queryset = queryset.filter(state__in=_states_matching(status=filters['status']))
     if 'suitability_code' in filters:
-        queryset = queryset.filter(suitability_code=filters['suitability_code'])
+        queryset = queryset.filter(
+            state__in=_states_matching(suitability=filters['suitability_code'])
+        )
     if 'internal_status' in filters:
-        queryset = queryset.filter(internal_status=filters['internal_status'])
+        queryset = queryset.filter(
+            state__in=_states_matching(internal_status=filters['internal_status'])
+        )
     if 'code' in filters:
         queryset = queryset.filter(code__icontains=filters['code'])
     if 'name' in filters:
@@ -1783,7 +1809,7 @@ def move_document(
     target_zone = (
         folder.zone
         if folder is not None
-        else _ZONE_BY_STATUS.get(document.status, 'WIP')
+        else document.zone
     )
     if (
         current_zone in ('ARCHIVE', 'PUBLISHED', 'SHARED')
@@ -1865,46 +1891,26 @@ def move_document(
         document.section = folder.section
         update_fields.append('section')
 
-    # Автоматическое изменение статуса и кода пригодности
-    # только для канонических зон.
-    target_status = _status_for_zone(folder)
-    target_suitability = _suitability_for_zone(folder)
-    if target_status is not None and (
-        target_status != document.status
-        or target_suitability != document.suitability_code
-    ):
-        validate_transition(
-            document,
-            target_status,
-            user,
-            target_suitability,
-        )
+    # Состояние меняется только для канонических зон папки.
+    target_state = (
+        _initial_state_for_folder(folder)
+        if _status_for_zone(folder) is not None
+        else document.state
+    )
     if (
-        _approval_target_changes(
-            document,
-            target_status,
-            target_suitability,
-            target_zone,
-        )
+        _approval_target_changes(document, target_state)
         and _has_open_issues(document)
     ):
         raise ValueError(
             "Нельзя переместить документ с открытыми замечаниями "
             "в опубликованную зону"
         )
-    if target_status is not None and target_status != document.status:
-        document.status = target_status
-        update_fields.append('status')
-
-    if (
-        target_suitability is not None
-        and target_suitability != document.suitability_code
-    ):
-        document.suitability_code = target_suitability
-        update_fields.append('suitability_code')
-
-    document._from_service = True
-    document.save(update_fields=update_fields)
+    if target_state != document.state:
+        _apply_state(user, document, target_state, folder=folder)
+    else:
+        document.folder = folder
+        document._from_service = True
+        document.save(update_fields=update_fields)
     return document
 
 
@@ -2004,17 +2010,8 @@ def copy_document(
             code=_unique_copy_code(document, target_section),
             name=f'{document.name} (копия)'[:255],
             doc_type=document.doc_type,
-            # Спринт 5: статус-триплет синхронизируем с целевой папкой,
-            # иначе копия утверждённого документа попадает в WIP со статусом
-            # approved и ломает маппинг статус-зона и сегмент-контрол.
-            status=(
-                ZONE_STATUS_MAP.get(folder.zone, 'draft')
-                if folder is not None else 'draft'
-            ),
-            suitability_code=(
-                ZONE_SUITABILITY_MAP.get(folder.zone, 'S0')
-                if folder is not None else 'S0'
-            ),
+            # Состояние копии — по зоне целевой папки (единое состояние).
+            state=_initial_state_for_folder(folder),
             created_by=user,
         )
         current_copy = None
@@ -2716,9 +2713,8 @@ SUITABILITY_TRANSITIONS = {
     'S2': frozenset({'S0', 'S1', 'S2', 'S3', 'S4'}),
     'S3': frozenset({'S0', 'S1', 'S2', 'S3', 'S4', 'A', 'B'}),
     'S4': frozenset({'S3', 'S4', 'A', 'B'}),
-    'A': frozenset({'A', 'B', 'CR'}),
-    'B': frozenset({'A', 'B', 'CR'}),
-    'CR': frozenset({'A', 'B', 'CR'}),
+    'A': frozenset({'A', 'B'}),
+    'B': frozenset({'A', 'B'}),
 }
 
 _STATUS_SUITABILITY = {
@@ -2849,33 +2845,65 @@ def validate_transition(
     )
 
 
+def _apply_state(
+    user: User,
+    document: Document,
+    new_state: str,
+    folder: Folder | None = None,
+) -> Document:
+    """Единственная точка записи ``Document.state`` в сервисах.
+
+    Проверяет переход FSM по признакам целевого состояния, затем
+    сохраняет состояние (и папку, если передана) с пометкой сервиса.
+    Прямые присваивания признаков вне этой функции не используются.
+    """
+    if new_state not in dict(Document.STATE_CHOICES):
+        raise ValueError("Неизвестное состояние документа")
+    status, suitability, _, _ = Document.STATE_PROJECTION[new_state]
+    if new_state != document.state:
+        validate_transition(document, status, user, suitability)
+    update_fields = ['state', 'updated_at']
+    document.state = new_state
+    if folder is not None:
+        document.folder = folder
+        update_fields.append('folder')
+    document._from_service = True
+    document.save(update_fields=update_fields)
+    return document
+
+
 def update_document_status(
     user: User,
     document: Document,
     new_status: str,
     new_suitability: str | None = None,
 ) -> Document:
-    """Единая точка смены статуса с FSM-валидацией."""
-    validate_transition(document, new_status, user, new_suitability)
-    update_fields = ['status', 'updated_at']
-    document.status = new_status
-    if (
-        new_suitability is not None
-        and new_suitability != document.suitability_code
-    ):
-        document.suitability_code = new_suitability
-        update_fields.append('suitability_code')
-    document._from_service = True
-    document.save(update_fields=update_fields)
-    return document
+    """Смена статуса/пригодности с FSM-валидацией.
+
+    Пара признаков переводится в состояние через таблицу
+    ``Document.state_from_projection``; несопоставимая пара отклоняется.
+    """
+    suitability = (
+        new_suitability
+        if new_suitability is not None
+        else document.suitability_code
+    )
+    target = Document.state_from_projection(
+        new_status, suitability, document.internal_status
+    )
+    if target is None:
+        raise ValidationError(
+            "Недопустимая комбинация статуса и пригодности"
+        )
+    return _apply_state(user, document, target)
 
 
 def _effective_zone(document: Document) -> str:
-    """Зона документа; документы вне зон-папок считаются в WIP (черновик)."""
+    """Зона документа: каноническая папка зоны, иначе зона его состояния."""
     folder = document.folder
     if folder is not None and _is_canonical_zone_folder(folder):
         return folder.zone
-    return _ZONE_BY_STATUS.get(document.status, 'WIP')
+    return document.zone
 
 
 def _zone_filter_q(zone: str) -> Q:
@@ -2885,10 +2913,14 @@ def _zone_filter_q(zone: str) -> Q:
         section__isnull=True,
         is_system_zone=True,
     )
+    zone_states = [
+        state for state, proj in Document.STATE_PROJECTION.items()
+        if proj[3] == zone
+    ]
     return (
         Q(folder_id__in=canonical.filter(zone=zone).values('pk'))
         | (
-            Q(status=ZONE_STATUS_MAP[zone])
+            Q(state__in=zone_states)
             & (
                 Q(folder__isnull=True)
                 | ~Q(folder_id__in=canonical.values('pk'))
@@ -3016,15 +3048,12 @@ def update_internal_status(
             "Нельзя утвердить документ с открытыми замечаниями"
         )
 
-    document.internal_status = new_status
-    update_fields = ['internal_status', 'updated_at']
-    # Синхронизация старого поля status с внутренним WIP-статусом
-    if document.status != 'draft':
-        validate_transition(document, 'draft', user)
-        document.status = 'draft'
-        update_fields.append('status')
-    document._from_service = True
-    document.save(update_fields=update_fields)
+    # Единый переход состояния (без прямой записи признаков): внутренний
+    # статус работы — часть главного состояния.
+    target_state = Document.state_from_projection(
+        'draft', 'S0', new_status,
+    )
+    _apply_state(user, document, target_state)
     return document
 
 
@@ -3189,19 +3218,18 @@ def transition_document_zone(
         target_folder = _get_or_create_zone_folder(
             document.project, action['to'], user
         )
-    document.folder = target_folder
-    if target_status is not None and target_status != document.status:
-        document.status = target_status
-
-    if target_suitability is not None:
-        document.suitability_code = target_suitability
     if action_code == 'return_wip':
-        document.internal_status = 'rework'
-
-    document._from_service = True
-    document.save(update_fields=[
-        'folder', 'status', 'suitability_code', 'internal_status', 'updated_at',
-    ])
+        target_state = Document.STATE_WIP_REWORK
+    else:
+        # Состояние задаёт зона действия (action['to']), а не папка: папка
+        # может остаться прежней (виртуальные зоны — без канонической папки).
+        target_state = {
+            'WIP': Document.STATE_WIP_DRAFT,
+            'SHARED': Document.STATE_SHARED,
+            'PUBLISHED': Document.STATE_APPROVED,
+            'ARCHIVE': Document.STATE_ARCHIVED,
+        }[action['to']]
+    _apply_state(user, document, target_state, folder=target_folder)
 
     _notify_zone_transition(user, document, action_code)
     return document
@@ -3418,14 +3446,7 @@ def upload_document(
             defaults={
                 'name': name,
                 'doc_type': doc_type,
-                'status': (
-                    ZONE_STATUS_MAP.get(folder.zone, 'draft')
-                    if folder is not None else 'draft'
-                ),
-                'suitability_code': (
-                    ZONE_SUITABILITY_MAP.get(folder.zone, 'S0')
-                    if folder is not None else 'S0'
-                ),
+                'state': _initial_state_for_folder(folder),
                 'folder': folder,
                 'created_by': user,
             },
@@ -3434,30 +3455,12 @@ def upload_document(
             # Обновляем поля, если документ уже существует
             doc.name = name
             doc.doc_type = doc_type
-            update_fields = ['name', 'doc_type', 'updated_at']
+            doc.save(update_fields=['name', 'doc_type', 'updated_at'])
             if folder is not None:
-                doc.folder = folder
-                update_fields.append('folder')
-                target_status = _status_for_zone(folder)
-                target_suitability = _suitability_for_zone(folder)
-                if target_status is not None and (
-                    target_status != doc.status
-                    or target_suitability != doc.suitability_code
-                ):
-                    validate_transition(
-                        doc,
-                        target_status,
-                        user,
-                        target_suitability,
-                    )
+                target_state = _initial_state_for_folder(folder)
                 if (
                     (
-                        _approval_target_changes(
-                            doc,
-                            target_status,
-                            target_suitability,
-                            folder.zone,
-                        )
+                        _approval_target_changes(doc, target_state)
                         or folder.zone == 'PUBLISHED'
                     )
                     and _has_open_issues(doc)
@@ -3466,17 +3469,7 @@ def upload_document(
                         "Нельзя обновить документ с открытыми замечаниями "
                         "в опубликованной зоне"
                     )
-                if target_status is not None and target_status != doc.status:
-                    doc.status = target_status
-                    update_fields.append('status')
-                if (
-                    target_suitability is not None
-                    and target_suitability != doc.suitability_code
-                ):
-                    doc.suitability_code = target_suitability
-                    update_fields.append('suitability_code')
-            doc._from_service = True
-            doc.save(update_fields=update_fields)
+                _apply_state(user, doc, target_state, folder=folder)
 
         # Вычисляем следующую версию
         max_number = DocumentVersion.objects.filter(document=doc).aggregate(Max('version_number'))['version_number__max']
@@ -3623,7 +3616,7 @@ def search_documents(
     if doc_type:
         queryset = queryset.filter(doc_type=doc_type)
     if status:
-        queryset = queryset.filter(status=status)
+        queryset = queryset.filter(state__in=_states_matching(status=status))
 
     return list(
         queryset.select_related(

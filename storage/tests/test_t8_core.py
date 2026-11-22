@@ -550,9 +550,9 @@ class T67AuditTest(T8CoreTestBase):
 
     def test_internal_status_only_in_wip_and_permissions(self):
         document = self.make_document(code='T67-ZONE')
-        document.status = 'in_review'
+        document.state = Document.STATE_SHARED
         document._from_service = True
-        document.save(update_fields=['status'])
+        document.save(update_fields=['state'])
         with self.assertRaises(ValueError):
             update_internal_status(self.user_gip, document, 'send_to_review')
 

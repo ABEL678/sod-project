@@ -102,7 +102,7 @@ class ServiceTests(TestCase):
             code='ДО-001',
             name='Чертеж А',
             doc_type='drawing',
-            status='draft',
+            state=Document.STATE_WIP_DRAFT,
             created_by=self.user_admin,
         )
 
@@ -130,7 +130,7 @@ class ServiceTests(TestCase):
             code='ЧУЖ-001',
             name='Чужой чертеж',
             doc_type='drawing',
-            status='draft',
+            state=Document.STATE_WIP_DRAFT,
             created_by=self.user_admin,
         )
         self.assertFalse(check_read_permission(self.user_viewer, foreign_document))
@@ -144,7 +144,7 @@ class ServiceTests(TestCase):
             code='ЧУЖ-003',
             name='Чужой чертеж',
             doc_type='drawing',
-            status='draft',
+            state=Document.STATE_WIP_DRAFT,
             created_by=self.user_admin,
         )
         self.assertTrue(check_write_permission(superuser, self.foreign_section))
@@ -273,7 +273,7 @@ class ServiceTests(TestCase):
             code='ДО-002',
             name='Чертеж Б',
             doc_type='drawing',
-            status='draft',
+            state=Document.STATE_WIP_DRAFT,
             created_by=self.user_admin,
         )
         vedomost = generate_vedomost(self.project_own, company=self.company)
@@ -306,7 +306,7 @@ class ServiceTests(TestCase):
             code='ДО-002',
             name='Чертеж Б',
             doc_type='drawing',
-            status='draft',
+            state=Document.STATE_WIP_DRAFT,
             created_by=self.user_admin,
         )
 
@@ -374,7 +374,7 @@ class ServiceTests(TestCase):
             code='ОТ-001',
             name='Отчет',
             doc_type='report',
-            status='approved',
+            state=Document.STATE_APPROVED,
             created_by=self.user_admin,
         )
 
