@@ -161,6 +161,7 @@ from storage.domain.services import (
     move_documents,
     move_folder,
     normalize_document_view_config,
+    pd_volume_name,
     restore_project,
     rename_folder,
     reset_project_structure,
@@ -3513,11 +3514,10 @@ def _folder_suggestion(project: Project, parent, section) -> dict:
 
     # б) раздел ПД
     if parent.section and not parent.code and _RE_PART_PREFIX.match(name) and parent.parent is not None and parent.parent.name.startswith('ПД'):
-        part_name = _RE_PART_PREFIX.sub('', name).strip()
         mark = parent.section.code
         make = lambda k: f'{prefix}{mark}{k}'  # noqa: E731
         k = _first_free_number(used_codes, make, start=1)
-        return {'suggested_code': make(k), 'suggested_name': f'Часть {k}. {part_name}'}
+        return {'suggested_code': make(k), 'suggested_name': pd_volume_name(k, name)}
 
     # в) дисциплина РД
     if parent.section and not parent.code and parent.parent is not None and parent.parent.name.startswith('РД'):

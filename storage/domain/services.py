@@ -4282,6 +4282,18 @@ def _strip_sub_prefix(name: str) -> str:
     return re.sub(r'^Подраздел\s+\d+\.\d+\.\s*', '', (name or '').strip())
 
 
+_RE_SECTION_PREFIX = re.compile(r'^Раздел\s+\d+\.\s*')
+
+
+def pd_volume_name(k: int, section_name: str) -> str:
+    """Имя ПД-тома: «Часть {K}. {имя раздела без префикса «Раздел N. »}».
+
+    Единая формула для пресетного пути и подсказки в форме создания папки.
+    """
+    title = _RE_SECTION_PREFIX.sub('', (section_name or '').strip()).strip()
+    return f'Часть {k}. {title}'
+
+
 def _populate_presets(project: Project, actor: User, deploy_scope: str) -> None:
     """Разворачивает пресеты PRESETS[(stage, object_type)] по deploy_scope.
 
@@ -4352,14 +4364,14 @@ def _populate_presets(project: Project, actor: User, deploy_scope: str) -> None:
                     )
                 continue
             if stage == Project.STAGE_P:
-                # ПД-марка без подразделов: папка марки + том «Часть 1» (МИКРО-2).
+                # ПД-марка без подразделов: папка марки + том «Часть 1. {раздел}» (МИКРО-2, МИКРО-7).
                 _create_mark_folder(
                     project,
                     actor,
                     parent=root,
                     section_obj=section_obj,
                     name=item['name'],
-                    child_name='Часть 1',
+                    child_name=pd_volume_name(1, item['name']),
                     child_mark_code=f'{prefix}{mark}1',
                 )
                 continue
