@@ -723,10 +723,12 @@ def update_project_member_role(
                 raise ValueError("Нельзя снять роль последнего ГИП проекта")
 
         if role == 'gip' and membership.role_in_project != 'gip':
-            # Назначение нового ГИП снимает роль с прежнего: один действующий ГИП.
-            membership.project.memberships.filter(
-                role_in_project='gip',
-            ).exclude(pk=membership.pk).update(role_in_project='developer')
+            # Один ГИП на проект: прямое назначение поверх действующего — отказ.
+            # Замена ГИП — отдельная операция update_project(gip=...).
+            if membership.project.memberships.filter(role_in_project='gip').exclude(pk=membership.pk).exists():
+                raise ValueError(
+                    "На проекте уже назначен ГИП. Для смены используйте замену ГИП в карточке проекта"
+                )
 
         membership.role_in_project = role
         membership.save(update_fields=['role_in_project'])
@@ -1421,8 +1423,12 @@ def update_project(
                 raise PermissionDenied("ГИП должен принадлежать компании проекта")
             _validate_gip_role(gip)
         if gip_changed:
+            # Явная замена ГИП: в одной транзакции прежний понижается, новый назначается.
+            # Инвариант «у проекта один ГИП» сохраняется; протокол — в логе.
             with transaction.atomic():
-                # Смена ГИП: прежний снимается, новый назначается (один действующий).
+                previous = list(
+                    project.memberships.filter(role_in_project='gip').select_related('user')
+                )
                 project.memberships.filter(role_in_project='gip').update(
                     role_in_project='developer'
                 )
@@ -1432,6 +1438,13 @@ def update_project(
                         user=gip,
                         defaults={'role_in_project': 'gip'},
                     )
+            logger.info(
+                "Смена ГИП проекта %s: %s -> %s, кто=%s",
+                project.code,
+                ', '.join(m.user.username for m in previous) or '—',
+                gip.username if gip is not None else '—',
+                user.username,
+            )
 
     if update_fields:
         project.save(update_fields=update_fields)

@@ -24,6 +24,7 @@
             <span>/</span>
             <span class="doc" title="{{ crumb_title }}">{{ crumb_title }}</span>
             {% if topbar_project %}<span class="small text-muted ms-2" data-role="project-stage">Стадия: {{ topbar_project.get_stage_display|default:"—" }}</span>{% endif %}
+            {% if topbar_project %}<span class="small text-muted ms-2" data-role="project-gip">ГИП: {% if topbar_project.gip %}{{ topbar_project.gip.get_full_name|default:topbar_project.gip.username }}{% else %}—{% endif %}</span>{% endif %}
         </nav>
     </div>
     <div class="spacer"></div>

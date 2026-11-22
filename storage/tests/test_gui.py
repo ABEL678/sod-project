@@ -393,7 +393,8 @@ class DocumentViewServiceTests(GuiTestBase):
         membership.refresh_from_db()
         self.assertEqual(membership.role_in_project, 'gip')
 
-    def test_gip_can_be_demoted_when_another_gip_exists(self):
+    def test_second_gip_rejected_via_member_role(self):
+        """Прямое назначение второго ГИП поверх действующего — отказ, состав не меняется."""
         self.project.memberships.filter(role_in_project='gip').delete()
         first, _ = ProjectMembership.objects.update_or_create(project=self.project, user=self.user_gip, defaults={'role_in_project': 'gip'})
         second = ProjectMembership.objects.create(
@@ -401,41 +402,32 @@ class DocumentViewServiceTests(GuiTestBase):
             user=self.user_admin,
             role_in_project='developer',
         )
-        # Назначение второго ГИП через сервис снимает роль с первого (один ГИП).
-        update_project_member_role(self.user_admin, second, 'gip')
+        with self.assertRaisesMessage(ValueError, 'уже назначен ГИП'):
+            update_project_member_role(self.user_admin, second, 'gip')
         first.refresh_from_db()
-        self.assertEqual(first.role_in_project, 'developer')
         second.refresh_from_db()
-        self.assertEqual(second.role_in_project, 'gip')
-        self.assertEqual(self.project.gip, self.user_admin)
+        self.assertEqual(first.role_in_project, 'gip')
+        self.assertEqual(second.role_in_project, 'developer')
+        self.assertEqual(self.project.gip, self.user_gip)
 
-    def test_gip_change_via_update_project_demotes_previous(self):
-        """Смена ГИП через update_project: прежний → developer, новый → gip."""
+    def test_gip_replacement_via_update_project_keeps_one_gip(self):
+        """Замена ГИП через update_project: прежний понижен, новый назначен, ровно один ГИП."""
         self.project.memberships.filter(role_in_project='gip').delete()
         previous = ProjectMembership.objects.create(
             project=self.project, user=self.user_gip, role_in_project='gip',
         )
-        update_project(self.user_admin, self.project, gip=self.user_admin)
+        with self.assertLogs('storage.domain.services', level='INFO') as logs:
+            update_project(self.user_admin, self.project, gip=self.user_admin)
         previous.refresh_from_db()
         self.assertEqual(previous.role_in_project, 'developer')
         self.assertEqual(self.project.gip, self.user_admin)
         self.assertEqual(
             self.project.memberships.filter(role_in_project='gip').count(), 1,
         )
-
-    def test_gip_change_paths_are_equivalent(self):
-        """update_project и update_project_member_role дают один результат."""
-        self.project.memberships.filter(role_in_project='gip').delete()
-        previous = ProjectMembership.objects.create(
-            project=self.project, user=self.user_gip, role_in_project='gip',
-        )
-        target = ProjectMembership.objects.create(
-            project=self.project, user=self.user_admin, role_in_project='developer',
-        )
-        update_project_member_role(self.user_admin, target, 'gip')
-        previous.refresh_from_db()
-        self.assertEqual(previous.role_in_project, 'developer')
-        self.assertEqual(self.project.gip, self.user_admin)
+        self.assertTrue(any(
+            self.user_gip.username in line and self.user_admin.username in line
+            for line in logs.output
+        ))
 
     def test_contractor_with_gip_rights_cannot_manage(self):
         self.project.memberships.filter(role_in_project='gip').update(role_in_project='developer')
