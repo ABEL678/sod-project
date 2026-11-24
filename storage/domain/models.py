@@ -719,6 +719,7 @@ class DocumentVersion(models.Model):
 CHANGESET_ENTRY_TYPES = [
     ('version_release', 'Выпуск версии'),
     ('result_override', 'Переопределение итога согласования'),
+    ('approval', 'Одобрение документа'),
 ]
 
 

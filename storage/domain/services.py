@@ -2174,6 +2174,66 @@ def _create_changeset_release(version, user, affected_sheets=''):
     )
 
 
+def _create_changeset_approval(document: Document, user: User):
+    """Создаёт запись об одобрении (SPEC 2.0, волна 0, п. 7).
+
+    «Замечаний нет, принято» — полноправная запись журнала: кто одобрил,
+    итог A/B, review_result на момент одобрения, при B — перечень открытых
+    неблокирующих замечаний. Вызывается только в фактической точке
+    перехода в approved (``_apply_state``), после успешной проверки замка.
+    """
+    version = document.current_version
+    if version is None:
+        logger.warning(
+            'Одобрение документа %s без текущей версии: запись журнала '
+            'не создана', document.pk,
+        )
+        return None
+
+    outcome = approval_outcome(document)
+    lines = [
+        'Одобрил: {}'.format(
+            (user.get_full_name() or user.username) if user else '—'
+        ),
+        f'Итог: {outcome}',
+        'review_result: {}'.format(document.review_result or '—'),
+    ]
+    if document.outcome_override:
+        lines.append(
+            'Переопределение ГИПа: {}'.format(document.outcome_override_text)
+        )
+    if outcome == 'B':
+        open_issues = list(
+            document.issues.filter(status__in=ACTIVE_ISSUE_STATUSES)
+            .order_by('pk')
+        )
+        if open_issues:
+            lines.append('Открытые неблокирующие замечания:')
+            for issue in open_issues:
+                marker = ''
+                if (
+                    issue.is_blocking
+                    and issue.status in OPEN_ISSUE_STATUSES
+                ):
+                    marker = ' [блокирующее, переопределено]'
+                lines.append(
+                    '- #{} {}: {} ({}){}'.format(
+                        issue.pk,
+                        issue.document.code,
+                        (issue.description or '').strip()[:160],
+                        issue.status,
+                        marker,
+                    )
+                )
+
+    return ChangeSetEntry.objects.create(
+        version=version,
+        entry_type='approval',
+        text='\n'.join(lines),
+        created_by=user,
+    )
+
+
 def copy_document(
     user: User,
     document: Document,
@@ -3051,7 +3111,8 @@ def _apply_state(
     if new_state not in dict(Document.STATE_CHOICES):
         raise ValueError("Неизвестное состояние документа")
     status, suitability, _, _ = Document.STATE_PROJECTION[new_state]
-    if new_state != document.state:
+    state_changed = new_state != document.state
+    if state_changed:
         validate_transition(document, status, user, suitability)
     update_fields = ['state', 'updated_at']
     document.state = new_state
@@ -3060,6 +3121,11 @@ def _apply_state(
         update_fields.append('folder')
     document._from_service = True
     document.save(update_fields=update_fields)
+    # SPEC 2.0 w0 п. 7: фактический переход в approved — запись одобрения.
+    if state_changed and new_state in (
+        Document.STATE_APPROVED, Document.STATE_AS_BUILT,
+    ):
+        _create_changeset_approval(document, user)
     return document
 
 
