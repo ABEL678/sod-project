@@ -685,6 +685,82 @@ class DocumentVersion(models.Model):
             return None
 
 
+# Журнал изменений версии (SPEC 2.0, волна 0, п. 8).
+# Сейчас единственный тип — выпуск версии; записи о переходах статуса
+# (п. 6) и одобрениях (п. 7) добавятся в choices в следующих задачах.
+CHANGESET_ENTRY_TYPES = [
+    ('version_release', 'Выпуск версии'),
+]
+
+
+class ChangeSetEntry(models.Model):
+    """Запись журнала изменений версии документа.
+
+    Назначение — аудиторский след выпуска версии и опора для разрешения
+    на внесение изменений (форма 9 приложения Л ГОСТ Р 21.101-2026,
+    волна 2, п. 5.4): состав изменений, затронутые листы, автор и дата.
+
+    Правило источников: причина версии в запись НЕ дублируется — запись
+    читает ``version.reason_type`` / ``version.reason`` /
+    ``version.reason_text``, а состав изменений — ``version.comment``.
+    Одно поле — один источник.
+
+    Поле ``affected_sheets`` — свободный текст («листы 3, 7–9»), только
+    для записей типа ``version_release``; строгая валидация номеров
+    появится в волне 2 (п. 4.2), когда листы станут сущностью.
+
+    План расширения: записи п. 6 (переходы и итог согласования) и п. 7
+    (одобрения) лягут в этот же журнал через ``entry_type``; текст
+    решения/одобрения — в ``text``.
+    """
+
+    version = models.ForeignKey(
+        DocumentVersion,
+        on_delete=models.CASCADE,
+        related_name='changeset_entries',
+        verbose_name="Версия документа",
+    )
+    entry_type = models.CharField(
+        max_length=20,
+        choices=CHANGESET_ENTRY_TYPES,
+        default='version_release',
+        verbose_name="Тип записи",
+    )
+    text = models.TextField(
+        blank=True,
+        default='',
+        verbose_name="Текст записи",
+    )
+    affected_sheets = models.TextField(
+        blank=True,
+        default='',
+        verbose_name="Затронутые листы",
+    )
+    created_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='changeset_entries',
+        verbose_name="Автор записи",
+    )
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+        verbose_name="Дата записи",
+    )
+
+    class Meta:
+        ordering = ['-created_at', '-pk']
+        verbose_name = "Запись изменений версии"
+        verbose_name_plural = "Записи изменений версий"
+
+    def __str__(self):
+        return (
+            f'{self.get_entry_type_display()} — '
+            f'v{self.version.version_number} {self.version.document.code}'
+        )
+
+
 class UserProfile(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE, verbose_name="Пользователь")
     company = models.ForeignKey(

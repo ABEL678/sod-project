@@ -489,6 +489,9 @@
                 if (extra.comment) {
                     formData.append('comment', extra.comment);
                 }
+                if (extra.affected_sheets) {
+                    formData.append('affected_sheets', extra.affected_sheets);
+                }
             }
 
             try {
@@ -602,6 +605,7 @@
                 var reasonObjectField = document.getElementById('uploadModalReasonObject');
                 var reasonTextField = document.getElementById('uploadModalReasonText');
                 var commentField = document.getElementById('uploadModalComment');
+                var affectedSheetsField = document.getElementById('uploadModalAffectedSheets');
                 if (reasonTypeField) {
                     extra.reason_type = reasonTypeField.value;
                 }
@@ -613,6 +617,9 @@
                 }
                 if (commentField && commentField.value.trim()) {
                     extra.comment = commentField.value.trim();
+                }
+                if (affectedSheetsField && affectedSheetsField.value.trim()) {
+                    extra.affected_sheets = affectedSheetsField.value.trim();
                 }
                 var modalRoot = document.getElementById('uploadModal');
                 if (modalRoot && window.bootstrap && bootstrap.Modal) {

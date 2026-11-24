@@ -23,6 +23,7 @@ from django.utils import timezone
 logger = logging.getLogger(__name__)
 
 from storage.domain.models import (
+    ChangeSetEntry,
     Company,
     DesignTask,
     DesignTaskAttachment,
@@ -2144,6 +2145,21 @@ def _unique_copy_code(document: Document, section: Section) -> str:
     return candidate
 
 
+def _create_changeset_release(version, user, affected_sheets=''):
+    """Создаёт запись журнала «выпуск версии» (SPEC 2.0, волна 0, п. 8).
+
+    Единая точка контракта: состав изменений и причина читаются с самой
+    версии, в запись не дублируются. ``affected_sheets`` — свободный
+    текст, необязателен.
+    """
+    return ChangeSetEntry.objects.create(
+        version=version,
+        entry_type='version_release',
+        affected_sheets=(affected_sheets or '').strip(),
+        created_by=user,
+    )
+
+
 def copy_document(
     user: User,
     document: Document,
@@ -2215,6 +2231,7 @@ def copy_document(
                 reason_type='other',
                 reason_text=copy_reason_text,
             )
+            _create_changeset_release(copied_version, user)
             if document.current_version_id == version.pk:
                 current_copy = copied_version
 
@@ -3528,6 +3545,7 @@ def upload_document(
     reason_type: str = 'other',
     reason_object=None,
     reason_text: str = '',
+    affected_sheets: str = '',
 ) -> DocumentVersion:
     """Единственная точка создания версий документа.
 
@@ -3548,6 +3566,9 @@ def upload_document(
     - SPEC 2.0, волна 0, п. 5: причина версии обязательна. Для
       issue/task/rfi — объект-источник того же проекта, для other —
       непустой reason_text; иначе ValueError.
+    - SPEC 2.0, волна 0, п. 8: при выпуске версии создаётся запись
+      журнала ChangeSetEntry ('version_release'); affected_sheets —
+      необязательный свободный текст «затронутые листы».
     """
     if not skip_section_write_check and not check_write_permission(user, section):
         raise PermissionDenied("Нет прав на запись в этот раздел")
@@ -3689,6 +3710,7 @@ def upload_document(
             object_id=reason_object.pk if reason_object is not None else None,
             reason_text=reason_text,
         )
+        _create_changeset_release(version, user, affected_sheets)
 
         # Обновляем документ: текущая версия и отметка времени
         doc.current_version = version

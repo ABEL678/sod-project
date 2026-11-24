@@ -44,6 +44,7 @@ from storage.adapters.filters import DocumentFilter
 from storage.adapters.local_storage import LocalFileStorage
 from storage.adapters.tables import DocumentTable
 from storage.domain.models import (
+    ChangeSetEntry,
     Company,
     DesignTask,
     DesignTaskAttachment,
@@ -4641,6 +4642,16 @@ class DocumentDetailView(LoginRequiredMixin, DetailView):
         context['breadcrumbs'] = _document_breadcrumbs(self.object)
         context['versions'] = versions
         context['selected_version'] = selected_version
+        # SPEC 2.0, волна 0, п. 8: журнал изменений по всем версиям документа.
+        if getattr(self, 'public_view', False):
+            context['changeset_entries'] = []
+        else:
+            context['changeset_entries'] = (
+                ChangeSetEntry.objects
+                .filter(version__document=self.object)
+                .select_related('version', 'created_by', 'version__content_type')
+                .order_by('-version__version_number', 'created_at')
+            )
         context['is_current_version'] = is_current_version
         context['pdf_url'] = pdf_url
         context['pdf_url_current'] = pdf_url_current
@@ -4868,6 +4879,7 @@ class DocumentUploadAjaxView(LoginRequiredMixin, View):
         # на чужой объект.
         reason_type = (request.POST.get('reason_type') or 'other').strip()
         reason_text = (request.POST.get('reason_text') or '').strip()
+        affected_sheets = (request.POST.get('affected_sheets') or '').strip()
         reason_object = None
         raw_reason_object = (request.POST.get('reason_object') or '').strip()
         if raw_reason_object:
@@ -4908,6 +4920,7 @@ class DocumentUploadAjaxView(LoginRequiredMixin, View):
                 reason_type=reason_type,
                 reason_object=reason_object,
                 reason_text=reason_text,
+                affected_sheets=affected_sheets,
             )
         except ValidationError as exc:
             return JsonResponse(

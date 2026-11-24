@@ -89,6 +89,13 @@ UI-аудит (треб. 2.2/3.2): модалка загрузки докуме�
                       placeholder="Например: устранение замечания по разделу АР"></textarea>
             <div class="form-text">Для причины «Другое» текст обязателен.</div>
           </div>
+          <div class="mb-3">
+            <label class="form-label small" for="uploadModalAffectedSheets">Затронутые листы (необязательно)</label>
+            <textarea class="form-control form-control-sm" id="uploadModalAffectedSheets"
+                      name="affected_sheets" rows="1"
+                      placeholder="Например: листы 3, 7–9"></textarea>
+            <div class="form-text">Свободный текст. Строгий учёт листов появится позже.</div>
+          </div>
           <div class="mb-0">
             <label class="form-label small" for="uploadModalComment">Состав изменений (что именно поменялось)</label>
             <textarea class="form-control form-control-sm" id="uploadModalComment"

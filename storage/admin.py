@@ -1,5 +1,6 @@
 from django.contrib import admin
 from .domain.models import (
+    ChangeSetEntry,
     Company, Customer, Project, Section, Document, DocumentVersion, UserProfile, ProjectMembership,
     DocumentView, Specification, VorItem,
     DesignTask, DesignTaskStatusLog, DesignTaskAttachment, TaskTemplate,
@@ -47,6 +48,32 @@ class DocumentAdmin(admin.ModelAdmin):
 class DocumentVersionAdmin(admin.ModelAdmin):
     list_display = ('document', 'version_number', 'uploaded_at', 'uploaded_by')
     list_filter = ('document__project',)
+
+
+@admin.register(ChangeSetEntry)
+class ChangeSetEntryAdmin(admin.ModelAdmin):
+    """Журнал изменений — только чтение (аудиторский след, SPEC 2.0 w0 п.8)."""
+
+    list_display = (
+        'version', 'entry_type', 'created_by', 'created_at',
+    )
+    list_filter = ('entry_type', 'version__document__project')
+    search_fields = (
+        'version__document__code', 'affected_sheets', 'text',
+    )
+    readonly_fields = (
+        'version', 'entry_type', 'text', 'affected_sheets',
+        'created_by', 'created_at',
+    )
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
 
 
 @admin.register(UserProfile)

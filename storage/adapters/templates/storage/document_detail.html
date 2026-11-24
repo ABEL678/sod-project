@@ -188,6 +188,42 @@
   {% endwith %}
 {% endif %}
 
+{# SPEC 2.0, волна 0, п. 8: журнал изменений по текущей и предыдущим версиям. #}
+{% if not public_view and changeset_entries %}
+<div class="doc-info-bar px-3 py-2 border-bottom bg-white small" id="changesetJournal">
+  <details>
+    <summary class="fw-semibold">Запись изменений</summary>
+    <div class="d-flex flex-column gap-2 mt-2">
+      {% for entry in changeset_entries %}
+        <div class="d-flex flex-wrap align-items-baseline gap-2 border-top pt-2">
+          <span class="badge text-bg-light border">{{ entry.get_entry_type_display }}</span>
+          <span class="text-muted">v{{ entry.version.version_number }}</span>
+          <span class="text-muted">{{ entry.created_at|date:"d.m.Y H:i" }}</span>
+          <span>{{ entry.created_by.get_full_name|default:entry.created_by.username|default:"—" }}</span>
+          {% if entry.affected_sheets %}
+            <span class="text-muted">Затронутые листы:</span>
+            <span>{{ entry.affected_sheets }}</span>
+          {% endif %}
+          {% if entry.version.comment %}
+            <span class="text-muted">Состав изменений:</span>
+            <span>{{ entry.version.comment }}</span>
+          {% endif %}
+          {% with reason=entry.version.get_reason_object %}
+            <span class="badge text-bg-light border">{{ entry.version.get_reason_type_display }}</span>
+            {% if reason %}
+              <span>{{ reason }}</span>
+            {% elif entry.version.reason_text %}
+              <span>{{ entry.version.reason_text }}</span>
+            {% endif %}
+          {% endwith %}
+          {% if entry.text %}<span>{{ entry.text }}</span>{% endif %}
+        </div>
+      {% endfor %}
+    </div>
+  </details>
+</div>
+{% endif %}
+
 <div class="toolbar viewer-toolbar">
   <div class="group">
     <button class="tbtn" onclick="prevPage()" title="Предыдущая страница (клавиша P)" aria-label="Предыдущая страница" type="button">‹</button>
