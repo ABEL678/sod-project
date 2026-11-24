@@ -1,7 +1,9 @@
 from copy import copy
 
 from django.conf import settings
-from django.core.exceptions import ValidationError
+from django.contrib.contenttypes.fields import GenericForeignKey
+from django.contrib.contenttypes.models import ContentType
+from django.core.exceptions import ObjectDoesNotExist, ValidationError
 from django.db import models
 from django.contrib.auth.models import User
 from django.utils import timezone
@@ -602,15 +604,54 @@ class Folder(models.Model):
         return f'{self.project.code} / {self.name}'
 
 
+# Причина новой версии документа (SPEC 2.0, волна 0, п. 5).
+# issue/task/rfi требуют полиморфной ссылки на источник; other — текста.
+# Тип «исходные данные» появится в волне 1 вместе с реестром ИД.
+VERSION_REASON_CHOICES = [
+    ('issue', 'Замечание'),
+    ('task', 'Задание'),
+    ('rfi', 'Запрос на информацию'),
+    ('other', 'Другое'),
+]
+
+
 class DocumentVersion(models.Model):
     document = models.ForeignKey(Document, on_delete=models.CASCADE, related_name='versions', verbose_name="Документ")
     version_number = models.IntegerField(verbose_name="Номер версии")
     file = models.FileField(upload_to='documents/%Y/%m/', verbose_name="Файл")
     file_size = models.BigIntegerField(verbose_name="Размер файла")
     file_hash = models.CharField(max_length=64, blank=True, verbose_name="Хеш файла")
-    comment = models.TextField(blank=True, verbose_name="Комментарий")
+    # «Состав изменений» — что именно поменялось в этой версии.
+    comment = models.TextField(blank=True, verbose_name="Состав изменений")
     uploaded_at = models.DateTimeField(auto_now_add=True, verbose_name="Дата загрузки")
     uploaded_by = models.ForeignKey(User, on_delete=models.PROTECT, verbose_name="Загрузил")
+    # Причина версии (SPEC 2.0, волна 0, п. 5). Для issue/task/rfi
+    # обязательна ссылка на источник (content_type + object_id), для
+    # other — непустой reason_text. «Исходные данные» — волна 1.
+    reason_type = models.CharField(
+        max_length=10,
+        choices=VERSION_REASON_CHOICES,
+        default='other',
+        verbose_name="Тип причины версии",
+    )
+    content_type = models.ForeignKey(
+        ContentType,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        verbose_name="Тип источника причины",
+    )
+    object_id = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        verbose_name="ID источника причины",
+    )
+    reason = GenericForeignKey('content_type', 'object_id')
+    reason_text = models.TextField(
+        blank=True,
+        default='',
+        verbose_name="Причина версии (текст)",
+    )
     # Этап 20 (треб. 3): статус ИИ-индексации версии (RAG-поиск по PDF).
     # Значения согласованы с ai_checks.domain.models.IndexingStatus:
     # pending → processing → done | error. Choices дублируются без
@@ -635,6 +676,13 @@ class DocumentVersion(models.Model):
 
     def __str__(self):
         return f'v{self.version_number} - {self.document.code}'
+
+    def get_reason_object(self):
+        """Источник причины или None (объект мог быть удалён)."""
+        try:
+            return self.reason
+        except ObjectDoesNotExist:
+            return None
 
 
 class UserProfile(models.Model):

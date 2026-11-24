@@ -1749,6 +1749,7 @@ def upload_knowledge_document(
         # индекс ProjectDocumentChunk (треб. 6: тип источника
         # «проект» = PDF-документы проекта, «стандарт» = база знаний).
         skip_ai_index=True,
+        reason_text='Загружено в базу знаний ИИ-контура',
     )
     document = version.document if hasattr(version, 'document') else version
 

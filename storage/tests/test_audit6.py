@@ -133,6 +133,7 @@ class ShareVersionScopeTests(TestCase):
             name='Документ',
             doc_type='drawing',
             file=buffer,
+            reason_text='Тестовая причина',
         )
         self.version1 = version1
         self.document = version1.document
@@ -145,6 +146,7 @@ class ShareVersionScopeTests(TestCase):
             name='Документ',
             doc_type='drawing',
             file=buffer2,
+            reason_text='Тестовая причина',
         )
         # version1.document — снимок до второй загрузки: актуализируем.
         self.document.refresh_from_db()

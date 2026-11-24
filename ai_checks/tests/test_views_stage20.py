@@ -32,6 +32,7 @@ def _upload_pdf(user, project, section, code='ОВ-01'):
             'doc.pdf', make_pdf([f'Нагрузка вентиляции {code}. ' * 40]),
             'application/pdf',
         ),
+        reason_text='Тестовая причина',
     )
 
 

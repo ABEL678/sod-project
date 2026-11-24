@@ -191,6 +191,7 @@ class ServiceTests(TestCase):
             name='Чертеж А',
             doc_type='drawing',
             file=file,
+            reason_text='Тестовая причина',
         )
         self.assertEqual(version.version_number, 1)
         self.document.refresh_from_db()
@@ -206,6 +207,7 @@ class ServiceTests(TestCase):
             name='Чертеж А',
             doc_type='drawing',
             file=file1,
+            reason_text='Тестовая причина',
         )
         file2 = SimpleUploadedFile('test2.pdf', b'content 2', content_type='application/pdf')
         version = upload_document(
@@ -216,6 +218,7 @@ class ServiceTests(TestCase):
             name='Чертеж А',
             doc_type='drawing',
             file=file2,
+            reason_text='Тестовая причина',
         )
         self.assertEqual(version.version_number, 2)
         self.document.refresh_from_db()
@@ -231,6 +234,7 @@ class ServiceTests(TestCase):
                 name='Чертеж Б',
                 doc_type='drawing',
                 file=SimpleUploadedFile('test.pdf', b'content', content_type='application/pdf'),
+                reason_text='Тестовая причина',
             )
 
     def test_upload_document_denied_across_companies(self):
@@ -243,6 +247,7 @@ class ServiceTests(TestCase):
                 name='Чужой чертеж',
                 doc_type='drawing',
                 file=SimpleUploadedFile('test.pdf', b'content', content_type='application/pdf'),
+                reason_text='Тестовая причина',
             )
 
     def test_upload_document_wrong_project(self):
@@ -255,6 +260,7 @@ class ServiceTests(TestCase):
                 name='Чертеж В',
                 doc_type='drawing',
                 file=SimpleUploadedFile('test.pdf', b'content', content_type='application/pdf'),
+                reason_text='Тестовая причина',
             )
         self.assertIn('Раздел не относится к указанному проекту', str(ctx.exception))
 
@@ -349,6 +355,7 @@ class ServiceTests(TestCase):
             doc_type='drawing',
             file=SimpleUploadedFile('v1.pdf', b'v1', content_type='application/pdf'),
             comment='УникальныйКомментарийВерсии',
+            reason_text='Тестовая причина',
         )
 
         results = search_documents(
@@ -415,6 +422,7 @@ class ServiceTests(TestCase):
                     content_type='application/pdf',
                 ),
                 comment='ПовторяющеесяСловоВКомментарии',
+                reason_text='Тестовая причина',
             )
 
         results = search_documents(

@@ -61,6 +61,7 @@ from storage.domain.models import (
     Section,
     TaskTemplate,
     UserProfile,
+    VERSION_REASON_CHOICES,
 )
 from storage.domain.design_colors import (
     EXCEL_LINK,
@@ -1114,6 +1115,19 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
             'can_view_tasks': True,
             'can_purge_trash': can_purge_trash(user, project),
             'doc_type_choices': Document.DOC_TYPE_CHOICES,
+            # SPEC 2.0, волна 0, п. 5: источники причины версии — только
+            # объекты того же проекта (issue/task/rfi).
+            'reason_issues': Issue.objects.filter(
+                document__project=project,
+                document__is_deleted=False,
+            ).select_related('document').order_by('-created_at'),
+            'reason_tasks': DesignTask.objects.filter(
+                project=project,
+            ).order_by('-pk'),
+            'reason_rfis': RfiTask.objects.filter(
+                project=project,
+            ).order_by('-number'),
+            'version_reason_choices': VERSION_REASON_CHOICES,
             'status_choices': Document.STATUS_CHOICES,
             'active_zone': active_zone,
             'zone_segments': [
@@ -4848,6 +4862,38 @@ class DocumentUploadAjaxView(LoginRequiredMixin, View):
         # тип по расширению файла.
         doc_type = (request.POST.get('doc_type') or '').strip()
 
+        # SPEC 2.0, волна 0, п. 5: причина версии из формы. Источник
+        # передаётся строкой «<тип>:<id>» и проверяется на принадлежность
+        # проекту (issue — через документ), чтобы нельзя было сослаться
+        # на чужой объект.
+        reason_type = (request.POST.get('reason_type') or 'other').strip()
+        reason_text = (request.POST.get('reason_text') or '').strip()
+        reason_object = None
+        raw_reason_object = (request.POST.get('reason_object') or '').strip()
+        if raw_reason_object:
+            source_type, _, source_id = raw_reason_object.partition(':')
+            if not source_id.isdigit():
+                return JsonResponse({'error': 'Неверный источник причины'}, status=400)
+            source_querysets = {
+                'issue': Issue.objects.filter(
+                    document__project=project,
+                    document__is_deleted=False,
+                ),
+                'task': DesignTask.objects.filter(project=project),
+                'rfi': RfiTask.objects.filter(project=project),
+            }
+            source_queryset = source_querysets.get(source_type)
+            if source_queryset is None:
+                return JsonResponse({'error': 'Неверный источник причины'}, status=400)
+            reason_object = source_queryset.filter(pk=int(source_id)).first()
+            if reason_object is None:
+                return JsonResponse({'error': 'Источник причины не найден'}, status=400)
+            if source_type != reason_type:
+                return JsonResponse(
+                    {'error': 'Источник причины не соответствует типу'},
+                    status=400,
+                )
+
         try:
             version = upload_document(
                 user=request.user,
@@ -4859,6 +4905,9 @@ class DocumentUploadAjaxView(LoginRequiredMixin, View):
                 file=file,
                 comment=request.POST.get('comment', ''),
                 folder=folder,
+                reason_type=reason_type,
+                reason_object=reason_object,
+                reason_text=reason_text,
             )
         except ValidationError as exc:
             return JsonResponse(
@@ -5059,6 +5108,7 @@ class SimulateMailImportView(LoginRequiredMixin, View):
                 doc_type=rule.doc_type,
                 file=fake_file,
                 comment='Импортировано из почты (симуляция)',
+                reason_text='Загружено из почты (симуляция импорта)',
             )
         except ValidationError as exc:
             messages.error(request, ' '.join(exc.messages))

@@ -249,6 +249,8 @@ class ViewTests(TestCase):
                 'section_id': self.section.pk,
                 'code': 'АР-01',
                 'name': 'План 1 этажа',
+                'reason_type': 'other',
+                'reason_text': 'Тестовая причина',
                 'file': SimpleUploadedFile('plan.pdf', b'data', content_type='application/pdf'),
             },
         )
@@ -264,6 +266,8 @@ class ViewTests(TestCase):
             'section_id': self.section.pk,
             'code': 'АР-01',
             'name': 'План 1 этажа',
+            'reason_type': 'other',
+            'reason_text': 'Тестовая причина',
         }
         self.client.post(
             url,
@@ -342,6 +346,7 @@ class ViewTests(TestCase):
             doc_type=doc_type,
             file=SimpleUploadedFile(f'{code}.pdf', content, content_type='application/pdf'),
             comment=comment,
+            reason_text='Тестовая причина',
         )
 
     def _upload_foreign(self):
@@ -353,6 +358,7 @@ class ViewTests(TestCase):
             name='Схема вентиляции',
             doc_type='drawing',
             file=SimpleUploadedFile('foreign.pdf', b'foreign', content_type='application/pdf'),
+            reason_text='Тестовая причина',
         )
 
     def _make_contractor_docs(self):

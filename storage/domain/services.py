@@ -9,6 +9,7 @@ import re
 from django.conf import settings
 import uuid
 
+from django.contrib.contenttypes.models import ContentType
 from PIL import Image, UnidentifiedImageError
 
 from django.core.exceptions import PermissionDenied, ValidationError
@@ -43,6 +44,7 @@ from storage.domain.models import (
     TaskTemplate,
     User,
     UserProfile,
+    VERSION_REASON_CHOICES,
     VorItem,
 )
 from issues.models import Issue, IssueComment, Notification
@@ -2177,6 +2179,10 @@ def copy_document(
             raise PermissionDenied(f"Нет прав на запись в зону «{zone_name}»")
 
     versions = list(document.versions.order_by('version_number'))
+    # SPEC 2.0, волна 0, п. 5: у копии своя причина, причина оригинала
+    # не наследуется. Первая версия (и все скопированные) получают текст
+    # с шифром оригинала.
+    copy_reason_text = f'Копия документа {document.code}'
     with transaction.atomic():
         copied = Document.objects.create(
             project=document.project,
@@ -2206,6 +2212,8 @@ def copy_document(
                 file_hash=version.file_hash,
                 comment=version.comment,
                 uploaded_by=user,
+                reason_type='other',
+                reason_text=copy_reason_text,
             )
             if document.current_version_id == version.pk:
                 current_copy = copied_version
@@ -3454,6 +3462,56 @@ def _generate_document_code(
     return f'{prefix}{number:02d}'
 
 
+def _validate_version_reason(
+    project: Project,
+    reason_type: str,
+    reason_object,
+    reason_text: str,
+) -> str:
+    """Проверяет причину версии (SPEC 2.0, волна 0, п. 5).
+
+    issue/task/rfi требуют объект-источник того же проекта; other —
+    непустой текст. Возвращает нормализованный текст причины.
+    """
+    if reason_type not in dict(VERSION_REASON_CHOICES):
+        raise ValueError("Неверный тип причины версии")
+
+    reason_text = (reason_text or '').strip()
+    if reason_type == 'other':
+        if reason_object is not None:
+            raise ValueError(
+                "Для причины «Другое» ссылка на источник не заполняется"
+            )
+        if not reason_text:
+            raise ValueError(
+                "Для причины «Другое» заполните текст причины версии"
+            )
+        return reason_text
+
+    expected_models = {
+        'issue': Issue,
+        'task': DesignTask,
+        'rfi': RfiTask,
+    }
+    expected = expected_models[reason_type]
+    if reason_object is None:
+        raise ValueError(
+            "Для причины версии укажите источник "
+            f"«{dict(VERSION_REASON_CHOICES)[reason_type]}»"
+        )
+    if not isinstance(reason_object, expected):
+        raise ValueError("Источник причины не соответствует выбранному типу")
+
+    if reason_type == 'issue':
+        source_project_id = reason_object.document.project_id
+    else:
+        source_project_id = reason_object.project_id
+    if source_project_id != project.pk:
+        raise ValueError("Источник причины относится к другому проекту")
+
+    return reason_text
+
+
 def upload_document(
     user: User,
     project: Project,
@@ -3467,6 +3525,9 @@ def upload_document(
     skip_ai_index: bool = False,
     skip_section_write_check: bool = False,
     skip_zone_check: bool = False,
+    reason_type: str = 'other',
+    reason_object=None,
+    reason_text: str = '',
 ) -> DocumentVersion:
     """Единственная точка создания версий документа.
 
@@ -3484,6 +3545,9 @@ def upload_document(
       в InternalChunk через ai_checks).
     - UI-аудит (треб. 2.1/3.1): пустой code → генерация шифра по
       ГОСТ Р 21.101; пустой doc_type → определение по расширению файла.
+    - SPEC 2.0, волна 0, п. 5: причина версии обязательна. Для
+      issue/task/rfi — объект-источник того же проекта, для other —
+      непустой reason_text; иначе ValueError.
     """
     if not skip_section_write_check and not check_write_permission(user, section):
         raise PermissionDenied("Нет прав на запись в этот раздел")
@@ -3507,6 +3571,13 @@ def upload_document(
 
     if section.project != project:
         raise ValueError("Раздел не относится к указанному проекту")
+
+    reason_text = _validate_version_reason(
+        project,
+        reason_type,
+        reason_object,
+        reason_text,
+    )
 
     # Треб. 2.1: явный шифр от пользователя имеет приоритет; пустой —
     # генерируем по ГОСТ Р 21.101.
@@ -3609,6 +3680,14 @@ def upload_document(
             file_size=file.size,
             uploaded_by=user,
             comment=comment,
+            reason_type=reason_type,
+            content_type=(
+                ContentType.objects.get_for_model(reason_object)
+                if reason_object is not None
+                else None
+            ),
+            object_id=reason_object.pk if reason_object is not None else None,
+            reason_text=reason_text,
         )
 
         # Обновляем документ: текущая версия и отметка времени
@@ -6405,6 +6484,9 @@ def upload_rfi_document(
         doc_type='source_data', file=file, folder=folder,
         skip_section_write_check=True,
         skip_zone_check=True,
+        reason_type='rfi',
+        reason_object=rfi,
+        reason_text=f'RFI №{rfi.number}: {suffix.lower()}',
     )
     doc = version.document
     if kind == 'request':

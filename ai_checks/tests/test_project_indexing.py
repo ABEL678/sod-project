@@ -93,6 +93,7 @@ class ProjectDocumentIndexingTests(MediaIsolationMixin, TestCase):
             file=SimpleUploadedFile(
                 'doc.pdf', make_pdf(pages_text), 'application/pdf',
             ),
+            reason_text='Тестовая причина',
         )
 
     def test_upload_document_enqueues_indexing(self):
@@ -123,6 +124,7 @@ class ProjectDocumentIndexingTests(MediaIsolationMixin, TestCase):
             name='Не PDF',
             doc_type='report',
             file=SimpleUploadedFile('data.txt', b'plain text', 'text/plain'),
+            reason_text='Тестовая причина',
         )
         version.refresh_from_db()
         self.assertEqual(version.indexing_status, 'pending')
@@ -156,6 +158,7 @@ class ProjectDocumentIndexingTests(MediaIsolationMixin, TestCase):
                 'doc2.pdf', make_pdf(['Второй текст. ' * 40]),
                 'application/pdf',
             ),
+            reason_text='Тестовая причина',
         )
         new_version.refresh_from_db()  # eager-задача уже отработала
         old_chunks = ProjectDocumentChunk.objects.filter(
@@ -186,6 +189,7 @@ class ProjectDocumentIndexingTests(MediaIsolationMixin, TestCase):
             file=ContentFile(b'%PDF-1.4 broken', name='broken.pdf'),
             file_size=len(b'%PDF-1.4 broken'),
             uploaded_by=self.user,
+            reason_text='Тестовая причина (фикстура)',
         )
         self.document = version.document
         count = index_project_document(version.pk, self.embedding)
@@ -236,6 +240,7 @@ class ReindexTests(MediaIsolationMixin, TestCase):
                 'doc.pdf', make_pdf([f'Текст {code}. ' * 40]),
                 'application/pdf',
             ),
+            reason_text='Тестовая причина',
         )
         return version.document
 
@@ -266,6 +271,7 @@ class ReindexTests(MediaIsolationMixin, TestCase):
                 'kb.pdf', make_pdf(['Стандарт. ' * 40]), 'application/pdf',
             ),
             skip_ai_index=True,
+            reason_text='Тестовая причина',
         )
         with mock.patch(
             'ai_checks.tasks.index_project_document_task',

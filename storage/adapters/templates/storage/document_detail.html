@@ -156,6 +156,38 @@
 </script>
 {% endif %}
 
+{# SPEC 2.0, волна 0, п. 5: причина выбранной версии и состав изменений. #}
+{% if selected_version and not public_view %}
+  {% with reason=selected_version.get_reason_object %}
+  <div class="doc-info-bar d-flex flex-wrap align-items-center gap-3 px-3 py-2 border-bottom bg-white small" id="versionReasonBar">
+    <span class="text-muted">Версия v{{ selected_version.version_number }}:</span>
+    <span class="badge text-bg-light border">{{ selected_version.get_reason_type_display }}</span>
+    {% if reason %}
+      {% if selected_version.reason_type == 'issue' %}
+        <a href="{% url 'storage:document_detail' reason.document_id %}#issue-{{ reason.pk }}">
+          Замечание №{{ reason.pk }} · {{ reason.document.code }}
+        </a>
+      {% elif selected_version.reason_type == 'task' %}
+        <a href="{% url 'storage:task_detail' reason.project_id reason.pk %}">
+          Задание #{{ reason.pk }} — {{ reason.title|truncatechars:60 }}
+        </a>
+      {% elif selected_version.reason_type == 'rfi' %}
+        <a href="{% url 'storage:rfi_detail' reason.project_id reason.pk %}">
+          RFI-{{ reason.number|stringformat:"02d" }} — {{ reason.subject|truncatechars:60 }}
+        </a>
+      {% endif %}
+    {% endif %}
+    {% if selected_version.reason_text %}
+      <span>{{ selected_version.reason_text }}</span>
+    {% endif %}
+    {% if selected_version.comment %}
+      <span class="text-muted">Состав изменений:</span>
+      <span>{{ selected_version.comment }}</span>
+    {% endif %}
+  </div>
+  {% endwith %}
+{% endif %}
+
 <div class="toolbar viewer-toolbar">
   <div class="group">
     <button class="tbtn" onclick="prevPage()" title="Предыдущая страница (клавиша P)" aria-label="Предыдущая страница" type="button">‹</button>

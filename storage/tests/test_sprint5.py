@@ -97,6 +97,7 @@ class Sprint5TestBase(TestCase):
             name=f'Документ {code}',
             doc_type='drawing',
             file=SimpleUploadedFile(f'{code}.pdf', b'pdf-data'),
+            reason_text='Тестовая причина',
         )
         document = version.document
         document.state = state
@@ -180,6 +181,7 @@ class UploadValidationTests(Sprint5TestBase):
                 name='Вирус',
                 doc_type='drawing',
                 file=SimpleUploadedFile('setup.exe', b'MZ...'),
+                reason_text='Тестовая причина',
             )
         self.assertIn('не поддерживается', str(ctx.exception))
 
@@ -193,6 +195,7 @@ class UploadValidationTests(Sprint5TestBase):
                 name='Пустой',
                 doc_type='drawing',
                 file=SimpleUploadedFile('empty.pdf', b''),
+                reason_text='Тестовая причина',
             )
         self.assertIn('пустой', str(ctx.exception))
 
@@ -208,6 +211,7 @@ class UploadValidationTests(Sprint5TestBase):
                     name='Большой',
                     doc_type='drawing',
                     file=big,
+                    reason_text='Тестовая причина',
                 )
         self.assertIn('больше', str(ctx.exception))
 
@@ -220,6 +224,7 @@ class UploadValidationTests(Sprint5TestBase):
             name='Чертёж',
             doc_type='drawing',
             file=SimpleUploadedFile('ok.pdf', b'%PDF-1.4 data'),
+            reason_text='Тестовая причина',
         )
         self.assertEqual(version.document.code, 'OK-1')
 

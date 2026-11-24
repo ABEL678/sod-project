@@ -168,6 +168,8 @@ class TableHeaderUiTests(T8UltimateTestBase):
                 'section_id': self.section.pk,
                 'code': 'HIGHLIGHT-1',
                 'name': 'Highlighted',
+                'reason_type': 'other',
+                'reason_text': 'Тестовая причина',
                 'file': SimpleUploadedFile('highlight.txt', b'data'),
             },
         )

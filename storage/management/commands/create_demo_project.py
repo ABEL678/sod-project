@@ -751,6 +751,7 @@ class Command(BaseCommand):
             self._pdf(filename, text),
             comment=comment,
             folder=folder,
+            reason_text='Демонстрационный документ',
         )
         self._created_files.append(version.file.name)
         return version

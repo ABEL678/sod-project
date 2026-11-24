@@ -145,6 +145,7 @@ class ZoneStatusLinkTest(TestCase):
             doc_type='drawing',
             file=file,
             folder=folder,
+            reason_text='Тестовая причина',
         )
         return Document.objects.get(
             project=self.project, section=self.section, code='TEST-001'
@@ -335,6 +336,7 @@ class ZoneUploadPermissionTest(TestCase):
                 doc_type='drawing',
                 file=self._make_file(),
                 folder=self.published_folder,
+                reason_text='Тестовая причина',
             )
 
     def test_developer_cannot_upload_to_archive(self):
@@ -349,6 +351,7 @@ class ZoneUploadPermissionTest(TestCase):
                 doc_type='drawing',
                 file=self._make_file(),
                 folder=self.archive_folder,
+                reason_text='Тестовая причина',
             )
 
     def test_admin_can_upload_to_any_zone(self):
@@ -363,6 +366,7 @@ class ZoneUploadPermissionTest(TestCase):
             doc_type='drawing',
             file=self._make_file(),
             folder=self.wip_folder,
+            reason_text='Тестовая причина',
         )
         # Админ может загружать в SHARED
         shared_folder = Folder.objects.get(project=self.project, zone='SHARED')
@@ -375,6 +379,7 @@ class ZoneUploadPermissionTest(TestCase):
             doc_type='drawing',
             file=self._make_file(),
             folder=shared_folder,
+            reason_text='Тестовая причина',
         )
         # Админ может загружать в PUBLISHED
         upload_document(
@@ -386,6 +391,7 @@ class ZoneUploadPermissionTest(TestCase):
             doc_type='drawing',
             file=self._make_file(),
             folder=self.published_folder,
+            reason_text='Тестовая причина',
         )
         # Админ может загружать в ARCHIVE
         upload_document(
@@ -397,6 +403,7 @@ class ZoneUploadPermissionTest(TestCase):
             doc_type='drawing',
             file=self._make_file(),
             folder=self.archive_folder,
+            reason_text='Тестовая причина',
         )
 
 
@@ -513,6 +520,7 @@ class MoveDocumentZoneCheckTest(TestCase):
             doc_type='drawing',
             file=file,
             folder=folder,
+            reason_text='Тестовая причина',
         )
         return Document.objects.get(
             project=self.project, section=self.section, code='TEST-MOVE'
@@ -581,6 +589,7 @@ class UploadDocumentZoneCheckTest(TestCase):
             doc_type='drawing',
             file=file,
             folder=self.archive_folder,
+            reason_text='Тестовая причина',
         )
         return Document.objects.get(
             project=self.project, section=self.section, code='TEST-UPLOAD'
@@ -599,6 +608,7 @@ class UploadDocumentZoneCheckTest(TestCase):
                 doc_type='drawing',
                 file=self._make_file(),
                 folder=None,  # folder=None, но документ уже в ARCHIVE
+                reason_text='Тестовая причина',
             )
 
 
@@ -638,6 +648,7 @@ class CopyDocumentZoneCheckTest(TestCase):
             doc_type='drawing',
             file=file,
             folder=self.wip_folder,
+            reason_text='Тестовая причина',
         )
         return Document.objects.get(
             project=self.project, section=self.section, code='TEST-COPY'
@@ -708,6 +719,7 @@ class MoveToRegularFolderStatusTest(TestCase):
             doc_type='drawing',
             file=file,
             folder=self.wip_folder,
+            reason_text='Тестовая причина',
         )
         return Document.objects.get(
             project=self.project, section=self.section, code='TEST-STATUS'
@@ -778,6 +790,7 @@ class ArchiveEscapePreventionTest(TestCase):
             doc_type='drawing',
             file=file,
             folder=self.wip_folder,
+            reason_text='Тестовая причина',
         )
         doc = Document.objects.get(
             project=self.project, section=self.section, code='TEST-ESCAPE'
@@ -808,6 +821,7 @@ class ArchiveEscapePreventionTest(TestCase):
                 doc_type='drawing',
                 file=self._make_file(),
                 folder=self.wip_folder,  # пытается «убежать» в WIP
+                reason_text='Тестовая причина',
             )
 
         # Документ остался в архиве
@@ -831,6 +845,7 @@ class ArchiveEscapePreventionTest(TestCase):
                     doc_type='drawing',
                     file=self._make_file(),
                     folder=target,
+                    reason_text='Тестовая причина',
                 )
 
         doc.refresh_from_db()
@@ -1000,6 +1015,7 @@ class VirtualZoneTest(TestCase):
             doc_type='drawing',
             file=self._make_file(),
             folder=folder,
+            reason_text='Тестовая причина',
         )
         return Document.objects.get(
             project=self.project, section=self.section, code=code

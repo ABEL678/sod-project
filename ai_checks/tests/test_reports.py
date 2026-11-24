@@ -55,6 +55,7 @@ class GipReportTests(TestCase):
             document=self.document, version_number=1,
             file='documents/test/gip.pdf', file_size=100,
             uploaded_by=self.user,
+            reason_text='Тестовая причина (фикстура)',
         )
 
     def _issue(self, status='NEW', due_date=None, assignee='auto',

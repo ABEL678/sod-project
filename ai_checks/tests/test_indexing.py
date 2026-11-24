@@ -91,6 +91,7 @@ class InternalDocumentIndexingTests(MediaIsolationMixin, TestCase):
             file=ContentFile(pdf_bytes, name='source.pdf'),
             file_size=len(pdf_bytes),
             uploaded_by=self.user,
+            reason_text='Тестовая причина (фикстура)',
         )
         self.document.current_version = version
         self.document.save(update_fields=['current_version'])
@@ -167,6 +168,7 @@ class InternalDocumentIndexingTests(MediaIsolationMixin, TestCase):
             file=ContentFile(empty_pdf, name='empty.pdf'),
             file_size=len(empty_pdf),
             uploaded_by=self.user,
+            reason_text='Тестовая причина (фикстура)',
         )
         count = index_document(
             self.internal_doc,

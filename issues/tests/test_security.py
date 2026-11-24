@@ -74,6 +74,7 @@ class IssueSecurityTests(TestCase):
             file=SimpleUploadedFile(
                 'doc.pdf', b'data', content_type='application/pdf'
             ),
+            reason_text='Тестовая причина',
         )
         self.document = self.version.document
         self.issue = create_issue(

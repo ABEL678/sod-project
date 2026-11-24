@@ -64,6 +64,7 @@ class ModelSelectionServiceTests(TestCase):
             document=self.document, version_number=1,
             file='documents/test/model.pdf', file_size=10,
             uploaded_by=self.user,
+            reason_text='Тестовая причина (фикстура)',
         )
 
     def test_gip_report_passes_model_to_llm(self):

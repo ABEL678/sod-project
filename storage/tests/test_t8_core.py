@@ -85,6 +85,7 @@ class T8CoreTestBase(TestCase):
             name=f'Document {code}',
             doc_type='drawing',
             file=SimpleUploadedFile(f'{code}.txt', f'data {code}'.encode()),
+            reason_text='Тестовая причина',
         )
         document = version.document
         if folder is not None:
@@ -280,6 +281,7 @@ class T8CoreViewTests(T8CoreTestBase):
             doc_type='drawing',
             file=SimpleUploadedFile('upload.txt', b'upload'),
             folder=folder,
+            reason_text='Тестовая причина',
         )
         version.document.refresh_from_db()
         self.assertEqual(version.document.folder_id, folder.pk)
@@ -294,6 +296,8 @@ class T8CoreViewTests(T8CoreTestBase):
                 'section_id': self.section.pk,
                 'code': 'DROP-1',
                 'name': 'Dropped file',
+                'reason_type': 'other',
+                'reason_text': 'Тестовая причина',
                 'file': SimpleUploadedFile('drop.txt', b'drop'),
             },
         )

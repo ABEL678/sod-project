@@ -100,6 +100,7 @@ class ViewerCompareTests(Sprint5TestBase):
             name=document.name,
             doc_type='drawing',
             file=SimpleUploadedFile('CMP-3.pdf', b'pdf-v2'),
+            reason_text='Тестовая причина',
         )
         response = self._detail(document)
         viewer = next(

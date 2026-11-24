@@ -66,6 +66,7 @@ class IssueTests(TestCase):
             name='План 1 этажа',
             doc_type='drawing',
             file=SimpleUploadedFile('plan.pdf', b'data', content_type='application/pdf'),
+            reason_text='Тестовая причина',
         )
         self.document = self.version.document
 
@@ -319,6 +320,7 @@ class IssueTests(TestCase):
             name='Чужой документ',
             doc_type='drawing',
             file=SimpleUploadedFile('other.pdf', b'data', content_type='application/pdf'),
+            reason_text='Тестовая причина',
         )
         with self.assertRaises(ValueError):
             create_issue(
@@ -373,6 +375,7 @@ class IssueStatusMatrixTests(TestCase):
             name='План',
             doc_type='drawing',
             file=SimpleUploadedFile('plan.pdf', b'data', content_type='application/pdf'),
+            reason_text='Тестовая причина',
         ).document
 
     def _user(self, username, role):
@@ -446,6 +449,7 @@ class IssueStatusMatrixTests(TestCase):
                 name='План 2',
                 doc_type='drawing',
                 file=SimpleUploadedFile('plan2.pdf', b'data', content_type='application/pdf'),
+                reason_text='Тестовая причина',
             )
 
     def test_contractor_can_create_issue_in_allowed_section(self):

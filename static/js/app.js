@@ -430,6 +430,7 @@
 
     var uploadInProgress = false;
     var pendingUploadTarget = null;
+    var pendingUploadFiles = null;
 
     async function handleFiles(files, extra) {
         if (uploadInProgress) {
@@ -473,6 +474,21 @@
             }
             if (extra && extra.doc_type) {
                 formData.append('doc_type', extra.doc_type);
+            }
+            // SPEC 2.0, волна 0, п. 5: причина версии обязательна.
+            if (extra) {
+                if (extra.reason_type) {
+                    formData.append('reason_type', extra.reason_type);
+                }
+                if (extra.reason_object) {
+                    formData.append('reason_object', extra.reason_object);
+                }
+                if (extra.reason_text) {
+                    formData.append('reason_text', extra.reason_text);
+                }
+                if (extra.comment) {
+                    formData.append('comment', extra.comment);
+                }
             }
 
             try {
@@ -564,10 +580,12 @@
                     return;
                 }
                 var fileField = document.getElementById('uploadModalFile');
-                if (!fileField || !fileField.files || !fileField.files.length) {
+                var files = (fileField && fileField.files && fileField.files.length)
+                    ? fileField.files
+                    : pendingUploadFiles;
+                if (!files || !files.length) {
                     return;
                 }
-                var files = fileField.files;
                 var extra = {};
                 if (files.length === 1) {
                     var codeField = document.getElementById('uploadModalCode');
@@ -579,13 +597,32 @@
                         extra.doc_type = typeField.value;
                     }
                 }
+                // SPEC 2.0, волна 0, п. 5: причина и состав изменений.
+                var reasonTypeField = document.getElementById('uploadModalReasonType');
+                var reasonObjectField = document.getElementById('uploadModalReasonObject');
+                var reasonTextField = document.getElementById('uploadModalReasonText');
+                var commentField = document.getElementById('uploadModalComment');
+                if (reasonTypeField) {
+                    extra.reason_type = reasonTypeField.value;
+                }
+                if (reasonObjectField && reasonObjectField.value) {
+                    extra.reason_object = reasonObjectField.value;
+                }
+                if (reasonTextField && reasonTextField.value.trim()) {
+                    extra.reason_text = reasonTextField.value.trim();
+                }
+                if (commentField && commentField.value.trim()) {
+                    extra.comment = commentField.value.trim();
+                }
                 var modalRoot = document.getElementById('uploadModal');
                 if (modalRoot && window.bootstrap && bootstrap.Modal) {
                     var modal = bootstrap.Modal.getInstance(modalRoot);
                     if (modal) { modal.hide(); }
                 }
+                pendingUploadFiles = null;
                 handleFiles(files, extra);
                 modalForm.reset();
+                syncReasonFields();
             });
             var modalFileField = document.getElementById('uploadModalFile');
             if (modalFileField) {
@@ -602,6 +639,54 @@
                     }
                     if (codeField) { codeField.disabled = many; }
                     if (typeField) { typeField.disabled = many; }
+                });
+            }
+            // Показываем в списке источников только объекты выбранного типа
+            // и требуем текст причины для «Другое».
+            var reasonTypeField = document.getElementById('uploadModalReasonType');
+            var reasonObjectField = document.getElementById('uploadModalReasonObject');
+            var reasonSourceBlock = document.getElementById('uploadModalReasonSourceBlock');
+            var reasonTextField = document.getElementById('uploadModalReasonText');
+            function syncReasonFields() {
+                if (!reasonTypeField) {
+                    return;
+                }
+                var type = reasonTypeField.value;
+                var isOther = type === 'other';
+                if (reasonSourceBlock) {
+                    reasonSourceBlock.classList.toggle('d-none', isOther);
+                }
+                if (reasonObjectField) {
+                    Array.prototype.forEach.call(reasonObjectField.options, function (option) {
+                        if (!option.value) {
+                            return;
+                        }
+                        var matches = option.dataset.reasonType === type;
+                        option.hidden = !matches;
+                        option.disabled = !matches;
+                        if (!matches && option.selected) {
+                            reasonObjectField.value = '';
+                        }
+                    });
+                    reasonObjectField.required = !isOther;
+                    if (isOther) {
+                        reasonObjectField.value = '';
+                    }
+                }
+                if (reasonTextField) {
+                    reasonTextField.required = isOther;
+                }
+            }
+            if (reasonTypeField) {
+                reasonTypeField.addEventListener('change', syncReasonFields);
+                syncReasonFields();
+            }
+            var modalElement = document.getElementById('uploadModal');
+            if (modalElement) {
+                modalElement.addEventListener('hidden.bs.modal', function () {
+                    if (!uploadInProgress) {
+                        pendingUploadFiles = null;
+                    }
                 });
             }
         }
@@ -639,7 +724,20 @@
             event.preventDefault();
             showDropOverlay(false);
             if (event.dataTransfer.files.length) {
-                handleFiles(event.dataTransfer.files);
+                // SPEC 2.0, волна 0, п. 5: версия без причины не создаётся,
+                // поэтому DnD открывает модалку — причину вводит пользователь.
+                var modalRoot = document.getElementById('uploadModal');
+                if (modalRoot && window.bootstrap && bootstrap.Modal) {
+                    pendingUploadFiles = Array.prototype.slice.call(event.dataTransfer.files);
+                    var targetLabel = document.getElementById('uploadModalTarget');
+                    var target = currentUploadTarget();
+                    if (targetLabel && target) {
+                        targetLabel.value = target.name;
+                    }
+                    bootstrap.Modal.getOrCreateInstance(modalRoot).show();
+                } else {
+                    handleFiles(event.dataTransfer.files);
+                }
             }
         });
     }
