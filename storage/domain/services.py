@@ -55,6 +55,13 @@ from issues.notify import (
     notify_issue_commented,
     notify_issue_status_changed,
 )
+from issues.services import (
+    ACTIVE_ISSUE_STATUSES,
+    APPROVAL_BLOCKED_MESSAGE,
+    OPEN_ISSUE_STATUSES,
+    approval_outcome,
+    blocking_issues_for_document,
+)
 from storage.domain.design_colors import ISSUE_STATUS_RGB as PDF_ISSUE_COLORS
 from storage.domain.project_templates import (
     PRESETS,
@@ -682,9 +689,19 @@ def get_project_documents_queryset(
         ordering = ['section__order', 'code']
 
     queryset = queryset.annotate(
+        # «Открытые» для реестра/бейджа включают DISCUSSION; блокирующими
+        # для итога C считаются только NEW/IN_PROGRESS/REJECTED с флагом.
         open_issues_count=Count(
             'issues',
-            filter=Q(issues__status__in=OPEN_ISSUE_STATUSES),
+            filter=Q(issues__status__in=ACTIVE_ISSUE_STATUSES),
+            distinct=True,
+        ),
+        blocking_issues_count=Count(
+            'issues',
+            filter=Q(
+                issues__status__in=OPEN_ISSUE_STATUSES,
+                issues__is_blocking=True,
+            ),
             distinct=True,
         ),
         issues_total=Count('issues', distinct=True),
@@ -2077,12 +2094,9 @@ def move_document(
     )
     if (
         _approval_target_changes(document, target_state)
-        and _has_open_issues(document)
+        and approval_outcome(document) == 'C'
     ):
-        raise ValueError(
-            "Нельзя переместить документ с открытыми замечаниями "
-            "в опубликованную зону"
-        )
+        raise ValueError(APPROVAL_BLOCKED_MESSAGE)
     if target_state != document.state:
         _apply_state(user, document, target_state, folder=folder)
     else:
@@ -2938,14 +2952,16 @@ def can_transition(
         if new_suitability is not None
         else _STATUS_SUITABILITY.get(new_status)
     )
-    # T70: открытые замечания блокируют утверждение (кроме архивации).
+    # T70 (SPEC 2.0 w0 п. 6): утверждение блокирует только итог C —
+    # есть открытое замечание с блокирующим флагом. Открытые
+    # неблокирующие замечания (итог B) переход не блокируют.
     if (
         new_status == 'approved'
         or (
             target_suitability in ('S4', 'A')
             and new_status != 'archived'
         )
-    ) and _has_open_issues(document):
+    ) and approval_outcome(document) == 'C':
         return False
 
     if new_status == document.status:
@@ -3009,10 +3025,8 @@ def validate_transition(
         raise ValidationError(
             "Нельзя выйти из архива без прав администратора"
         )
-    if new_status == 'approved' and _has_open_issues(document):
-        raise ValidationError(
-            "Нельзя утвердить документ с открытыми замечаниями"
-        )
+    if new_status == 'approved' and approval_outcome(document) == 'C':
+        raise ValidationError(APPROVAL_BLOCKED_MESSAGE)
     current_label = dict(Document.STATUS_CHOICES).get(
         document.status, document.status
     )
@@ -3109,7 +3123,87 @@ def _workflow_role_allowed(user: User, document: Document, action_code: str) -> 
     return True
 
 
-OPEN_ISSUE_STATUSES = ('NEW', 'IN_PROGRESS', 'REJECTED')
+def apply_outcome_override(user: User, document: Document, justification: str) -> Document:
+    """Переопределяет итог C на B (SPEC 2.0, волна 0, п. 6).
+
+    Только ГИП проекта, только при итоге C, с непустым обоснованием.
+    Каждое переопределение — запись ChangeSetEntry('result_override')
+    в журнал текущей версии документа.
+    """
+    justification = (justification or '').strip()
+    if not justification:
+        raise ValueError("Обоснование переопределения обязательно")
+    if not _is_project_gip(user, document.project):
+        raise PermissionDenied(
+            "Переопределить итог согласования может только ГИП проекта"
+        )
+    if approval_outcome(document) != 'C':
+        raise ValueError(
+            "Переопределение доступно только при итоге C "
+            "(есть блокирующие замечания)"
+        )
+    version = document.current_version
+    if version is None:
+        raise ValueError(
+            "Нельзя переопределить итог: у документа нет текущей версии"
+        )
+
+    with transaction.atomic():
+        document.outcome_override = True
+        document.outcome_override_by = user
+        document.outcome_override_at = timezone.now()
+        document.outcome_override_text = justification
+        document.save(update_fields=[
+            'outcome_override',
+            'outcome_override_by',
+            'outcome_override_at',
+            'outcome_override_text',
+        ])
+        ChangeSetEntry.objects.create(
+            version=version,
+            entry_type='result_override',
+            text=justification,
+            created_by=user,
+        )
+    return document
+
+
+def _clear_outcome_override(document: Document) -> None:
+    """Сбрасывает переопределение итога (новое блокирующее замечание)."""
+    if not getattr(document, 'outcome_override', False):
+        return
+    document.outcome_override = False
+    document.outcome_override_by = None
+    document.outcome_override_at = None
+    document.outcome_override_text = ''
+    document.save(update_fields=[
+        'outcome_override',
+        'outcome_override_by',
+        'outcome_override_at',
+        'outcome_override_text',
+    ])
+
+
+def can_override_outcome(user: User, document: Document) -> bool:
+    """Показывать ли ГИПу форму «B вопреки блокирующим»."""
+    return (
+        approval_outcome(document) == 'C'
+        and _is_project_gip(user, document.project)
+        and bool(approval_override_action(document))
+    )
+
+
+def approval_override_action(document: Document) -> str:
+    """Действие, которое блокирует итог C и может быть переопределено."""
+    zone = _effective_zone(document)
+    if zone == 'WIP':
+        if document.internal_status == 'internal_review':
+            return 'approve_internal'
+        if document.internal_status == 'ready_to_share':
+            return 'submit_review'
+    if zone == 'SHARED':
+        return 'publish'
+    return ''
 
 
 def _open_issues_count(document: Document) -> int:
@@ -3120,14 +3214,6 @@ def _open_issues_count(document: Document) -> int:
         document=document,
         status__in=OPEN_ISSUE_STATUSES,
     ).count()
-
-
-def _has_open_issues(document: Document) -> bool:
-    """Открытые замечания (NEW/IN_PROGRESS/REJECTED) блокируют публикацию."""
-    annotated = getattr(document, 'open_issues_count', None)
-    if annotated is not None:
-        return annotated > 0
-    return _open_issues_count(document) > 0
 
 
 INTERNAL_ACTION_SPECS = {
@@ -3155,6 +3241,7 @@ def update_internal_status(
     user: User,
     document: Document,
     action: str,
+    override_justification: str | None = None,
 ) -> Document:
     """Выполняет внутреннее действие WIP-документа.
 
@@ -3169,7 +3256,10 @@ def update_internal_status(
 
     action = (action or '').strip()
     if action == 'submit_review':
-        return transition_document_zone(user, document, 'submit_review')
+        return transition_document_zone(
+            user, document, 'submit_review',
+            override_justification=override_justification,
+        )
 
     is_admin, is_author, is_gip = _internal_permissions(user, document)
     spec = INTERNAL_ACTION_SPECS.get(action)
@@ -3185,10 +3275,10 @@ def update_internal_status(
     elif not (is_admin or is_gip):
         raise PermissionDenied("Нет прав на проверку документа")
 
-    if new_status == 'ready_to_share' and _has_open_issues(document):
-        raise ValueError(
-            "Нельзя утвердить документ с открытыми замечаниями"
-        )
+    if new_status == 'ready_to_share' and override_justification is not None:
+        apply_outcome_override(user, document, override_justification)
+    if new_status == 'ready_to_share' and approval_outcome(document) == 'C':
+        raise ValueError(APPROVAL_BLOCKED_MESSAGE)
 
     # Единый переход состояния (без прямой записи признаков): внутренний
     # статус работы — часть главного состояния.
@@ -3227,7 +3317,7 @@ def document_internal_actions(user: User, document: Document) -> list[dict]:
             'icon': 'bi-arrow-counterclockwise',
             'kind': 'internal',
         })
-        if not _has_open_issues(document):
+        if approval_outcome(document) != 'C':
             actions.append({
                 'code': 'approve_internal',
                 'label': 'Согласовать',
@@ -3256,10 +3346,10 @@ def document_workflow_actions(user: User, document: Document) -> list[dict]:
             continue
         if code == 'submit_review' and (
             document.internal_status != 'ready_to_share'
-            or _has_open_issues(document)
+            or approval_outcome(document) == 'C'
         ):
             continue
-        if code in ('publish', 'approve') and _has_open_issues(document):
+        if code in ('publish', 'approve') and approval_outcome(document) == 'C':
             continue
         target_status = ZONE_STATUS_MAP.get(spec['to'])
         target_suitability = ZONE_SUITABILITY_MAP.get(spec['to'])
@@ -3308,6 +3398,7 @@ def transition_document_zone(
     user: User,
     document: Document,
     action_code: str,
+    override_justification: str | None = None,
 ) -> Document:
     """Контролируемый переход документа между зонами ISO 19650.
 
@@ -3335,6 +3426,19 @@ def transition_document_zone(
             )
         )
 
+    if action_code == 'submit_review' and document.internal_status != 'ready_to_share':
+        raise ValueError(
+            "Подать на согласование можно только после статуса "
+            "«Готов к передаче»"
+        )
+
+    if override_justification is not None:
+        if action_code not in ('submit_review', 'publish', 'approve'):
+            raise ValueError(
+                "Переопределение итога применимо только к переходу согласования"
+            )
+        apply_outcome_override(user, document, override_justification)
+
     target_status = ZONE_STATUS_MAP.get(action['to'])
     target_suitability = ZONE_SUITABILITY_MAP.get(action['to'])
     validate_transition(
@@ -3344,16 +3448,8 @@ def transition_document_zone(
         target_suitability,
     )
 
-    if action_code == 'submit_review':
-        if document.internal_status != 'ready_to_share':
-            raise ValueError(
-                "Подать на согласование можно только после статуса "
-                "«Готов к передаче»"
-            )
-        if _has_open_issues(document):
-            raise ValueError(
-                "Нельзя подать на согласование документ с открытыми замечаниями"
-            )
+    if action_code == 'submit_review' and approval_outcome(document) == 'C':
+        raise ValueError(APPROVAL_BLOCKED_MESSAGE)
 
     target_folder = document.folder
     if target_folder is None or _is_canonical_zone_folder(target_folder):
@@ -3681,12 +3777,9 @@ def upload_document(
                         _approval_target_changes(doc, target_state)
                         or folder.zone == 'PUBLISHED'
                     )
-                    and _has_open_issues(doc)
+                    and approval_outcome(doc) == 'C'
                 ):
-                    raise ValueError(
-                        "Нельзя обновить документ с открытыми замечаниями "
-                        "в опубликованной зоне"
-                    )
+                    raise ValueError(APPROVAL_BLOCKED_MESSAGE)
                 _apply_state(user, doc, target_state, folder=folder)
 
         # Вычисляем следующую версию
@@ -4044,8 +4137,13 @@ def create_issue(
     answer_text: str = '',
     due_date=None,
     revision: str = '',
+    is_blocking: bool = False,
 ) -> Issue:
-    """Создаёт замечание к документу с проверкой прав и валидацией координат."""
+    """Создаёт замечание к документу с проверкой прав и валидацией координат.
+
+    ``is_blocking`` — блокирующий флаг (SPEC 2.0 w0 п. 6). Новое
+    блокирующее замечание сбрасывает активное переопределение итога.
+    """
     if not check_issue_permission(user, document):
         raise PermissionDenied("Нет прав на добавление замечания к документу")
 
@@ -4092,27 +4190,31 @@ def create_issue(
 
     crop_image = _decode_crop_image(crop_image_base64)
 
-    issue = Issue.objects.create(
-        document=document,
-        version=version,
-        author=user,
-        assignee=assignee,
-        description=description,
-        status='NEW',
-        page_number=page_number,
-        x_ratio=x_ratio,
-        y_ratio=y_ratio,
-        x1_ratio=x1_ratio,
-        y1_ratio=y1_ratio,
-        x2_ratio=x2_ratio,
-        y2_ratio=y2_ratio,
-        crop_image=crop_image,
-        department=department,
-        project_organization=project_organization,
-        answer_text=answer_text,
-        due_date=due_date,
-        revision=revision,
-    )
+    with transaction.atomic():
+        issue = Issue.objects.create(
+            document=document,
+            version=version,
+            author=user,
+            assignee=assignee,
+            description=description,
+            status='NEW',
+            is_blocking=bool(is_blocking),
+            page_number=page_number,
+            x_ratio=x_ratio,
+            y_ratio=y_ratio,
+            x1_ratio=x1_ratio,
+            y1_ratio=y1_ratio,
+            x2_ratio=x2_ratio,
+            y2_ratio=y2_ratio,
+            crop_image=crop_image,
+            department=department,
+            project_organization=project_organization,
+            answer_text=answer_text,
+            due_date=due_date,
+            revision=revision,
+        )
+        if issue.is_blocking:
+            _clear_outcome_override(document)
     notify_issue_assigned(issue, user)
     return issue
 
@@ -5896,7 +5998,7 @@ def tasks_requiring_attention(project: Project) -> list[DesignTask]:
     from issues.models import Issue
 
     today = timezone.localdate()
-    active_issue_statuses = ('NEW', 'IN_PROGRESS', 'REJECTED', 'DISCUSSION')
+    active_issue_statuses = ACTIVE_ISSUE_STATUSES
     rows = (
         DesignTask.objects.filter(project=project)
         .filter(

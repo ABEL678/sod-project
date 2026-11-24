@@ -1041,14 +1041,31 @@ class VirtualZoneTest(TestCase):
             transition_document_zone(self.admin, document, 'submit_review')
 
     def test_submit_review_blocked_by_open_issues(self):
+        # SPEC 2.0 w0 п. 6: открытое неблокирующее замечание (итог B)
+        # подачу не блокирует; блокирует только блокирующий флаг (C).
+        allowed = self._upload(self.admin, 'VZ-NONBLOCKING-ISSUE')
+        allowed.state = Document.STATE_WIP_READY
+        allowed.save(update_fields=['state'])
+        Issue.objects.create(
+            document=allowed,
+            author=self.admin,
+            description='Открытое неблокирующее замечание',
+            status='NEW',
+            is_blocking=False,
+        )
+        transition_document_zone(self.admin, allowed, 'submit_review')
+        allowed.refresh_from_db()
+        self.assertEqual(allowed.status, 'in_review')
+
         document = self._upload(self.admin, 'VZ-OPEN-ISSUE')
         document.state = Document.STATE_WIP_READY
         document.save(update_fields=['state'])
         Issue.objects.create(
             document=document,
             author=self.admin,
-            description='Открытое замечание',
+            description='Открытое блокирующее замечание',
             status='NEW',
+            is_blocking=True,
         )
         with self.assertRaises(ValueError):
             transition_document_zone(self.admin, document, 'submit_review')

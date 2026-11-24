@@ -71,9 +71,14 @@ from storage.domain.design_colors import (
 )
 from storage.domain.services import (
     _NOT_TERMINAL_TASK_STATUSES,
+    ACTIVE_ISSUE_STATUSES,
     ALLOWED_UPLOAD_EXTENSIONS,
     DOCUMENT_VIEW_COLUMNS,
     MAX_UPLOAD_SIZE,
+    approval_outcome,
+    approval_override_action,
+    blocking_issues_for_document,
+    can_override_outcome,
     add_company_member,
     add_task_attachment,
     allowed_issue_statuses,
@@ -1145,7 +1150,6 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
         # Счётчики замечаний проекта — «нервная система» для ГИПа:
         # видно из тулбара таблицы, сколько требует внимания прямо сейчас.
         # (Тот же смысл, что и в реестре: issues:issue_registry.)
-        active_issue_statuses = ('NEW', 'IN_PROGRESS', 'DISCUSSION', 'REJECTED')
         context['issue_counts'] = Issue.objects.filter(
             document__project=project,
             document__in=get_accessible_documents(user),
@@ -1156,7 +1160,7 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
                 'pk',
                 filter=Q(due_date__isnull=False)
                 & Q(due_date__lt=timezone.localdate())
-                & Q(status__in=active_issue_statuses),
+                & Q(status__in=ACTIVE_ISSUE_STATUSES),
             ),
         )
 
@@ -3833,8 +3837,16 @@ class DocumentWorkflowView(LoginRequiredMixin, View):
             is_deleted=False,
         )
         action = (request.POST.get('action') or '').strip()
+        # Обоснование передаётся только если поле есть в форме: пустая
+        # строка — явная попытка переопределения без обоснования (ValueError).
+        override_justification = request.POST.get('override_justification')
         try:
-            transition_document_zone(request.user, document, action)
+            transition_document_zone(
+                request.user,
+                document,
+                action,
+                override_justification=override_justification,
+            )
         except PermissionDenied as exc:
             return JsonResponse(
                 {'status': 'error', 'error': str(exc)},
@@ -3880,8 +3892,14 @@ class DocumentInternalStatusView(LoginRequiredMixin, View):
             is_deleted=False,
         )
         action = (request.POST.get('action') or '').strip()
+        override_justification = request.POST.get('override_justification')
         try:
-            update_internal_status(request.user, document, action)
+            update_internal_status(
+                request.user,
+                document,
+                action,
+                override_justification=override_justification,
+            )
         except PermissionDenied as exc:
             return JsonResponse(
                 {'status': 'error', 'error': str(exc)},
@@ -4495,6 +4513,7 @@ def _issue_payload(issue):
         'y2_ratio': issue.y2_ratio,
         'status': issue.status,
         'status_label': issue.get_status_display(),
+        'is_blocking': bool(issue.is_blocking),
         'description': issue.description,
         'author': issue.author.get_full_name() or issue.author.username,
         'assignee': (
@@ -4749,6 +4768,29 @@ class DocumentDetailView(LoginRequiredMixin, DetailView):
         context['can_create_issue'] = check_issue_permission(
             self.request.user, self.object
         )
+        # SPEC 2.0 w0 п. 6: итог согласования A/B/C — вычисляемый.
+        outcome = approval_outcome(self.object)
+        override_action = approval_override_action(self.object)
+        context['approval_outcome'] = outcome
+        context['blocking_issues'] = (
+            list(blocking_issues_for_document(self.object))
+            if outcome == 'C' else []
+        )
+        context['can_override_outcome'] = can_override_outcome(
+            self.request.user, self.object,
+        )
+        context['override_action'] = override_action
+        if override_action == 'approve_internal':
+            context['override_action_url'] = reverse(
+                'storage:document_internal_status_update',
+                args=[self.object.pk],
+            )
+        elif override_action:
+            context['override_action_url'] = reverse(
+                'storage:document_workflow', args=[self.object.pk],
+            )
+        else:
+            context['override_action_url'] = ''
         context['workflow_actions'] = _workflow_actions_payload(
             self.request.user, self.object
         )

@@ -4,25 +4,46 @@
 Все функции — project-scoped (принимают user + project), не per-document.
 """
 
+from django.core.exceptions import PermissionDenied
+from django.db import transaction
 from django.db.models import Count, Q
 from django.utils import timezone
 
-from storage.domain.services import get_readable_documents
+from .models import Issue, IssueFlagLog
 
-from .models import Issue
+# Единственное каноническое множество «открытых» замечаний для итога A/B/C
+# (SPEC 2.0, волна 0, п. 6; решение владельца). Все потребители импортируют
+# эту константу, локальные дубли запрещены.
+OPEN_ISSUE_STATUSES = ('NEW', 'IN_PROGRESS', 'REJECTED')
+# Спор (DISCUSSION) считается открытым, но НЕ блокирующим: в реестре — среди
+# открытых, в итоге A/B/C — не даёт C.
+DISCUSSION_ISSUE_STATUSES = ('DISCUSSION',)
+ACTIVE_ISSUE_STATUSES = OPEN_ISSUE_STATUSES + DISCUSSION_ISSUE_STATUSES
+
+APPROVAL_OUTCOME_A = 'A'
+APPROVAL_OUTCOME_B = 'B'
+APPROVAL_OUTCOME_C = 'C'
+
+APPROVAL_BLOCKED_MESSAGE = (
+    'Документ не согласован: есть блокирующие замечания (C)'
+)
 
 # Группы статусов — те же, что в табах панели замечаний вьювера,
 # чтобы «Открытые» означало одно и то же на обоих экранах.
 ISSUE_STATUS_GROUPS = {
-    'open': ('NEW', 'REJECTED', 'DISCUSSION'),
+    'open': ('NEW', 'REJECTED') + DISCUSSION_ISSUE_STATUSES,
     'progress': ('IN_PROGRESS',),
     'review': ('DONE',),
     'closed': ('CLOSED', 'CANCELLED'),
 }
-ACTIVE_ISSUE_STATUSES = ISSUE_STATUS_GROUPS['open'] + ISSUE_STATUS_GROUPS['progress']
 
 
 def _readable_document_pks(user, project):
+    # Ленивый импорт: storage.domain.services сам импортирует константы
+    # этого модуля (единое множество открытых), поэтому встречный импорт
+    # на уровне модуля создал бы цикл.
+    from storage.domain.services import get_readable_documents
+
     return list(
         get_readable_documents(user, project).values_list('pk', flat=True)
     )
@@ -73,7 +94,10 @@ def apply_issue_filters(queryset, params):
     if flag == 'active':
         queryset = queryset.filter(status__in=ACTIVE_ISSUE_STATUSES)
     elif flag == 'open':
-        queryset = queryset.exclude(status__in=ISSUE_STATUS_GROUPS['closed'])
+        # Каноническое «открытые»: NEW/IN_PROGRESS/REJECTED + DISCUSSION.
+        # DONE к открытым не относится (раньше ошибочно попадал через
+        # exclude(closed)).
+        queryset = queryset.filter(status__in=ACTIVE_ISSUE_STATUSES)
     elif flag == 'closed':
         queryset = queryset.filter(status__in=ISSUE_STATUS_GROUPS['closed'])
     elif flag == 'overdue':
@@ -88,7 +112,8 @@ def apply_issue_filters(queryset, params):
         queryset = queryset.filter(status__in=ISSUE_STATUS_GROUPS['review'])
     elif flag == 'blocking':
         queryset = queryset.filter(
-            Q(blocked_design_tasks__isnull=False)
+            Q(is_blocking=True)
+            | Q(blocked_design_tasks__isnull=False)
             | Q(blocked_rfi_tasks__isnull=False)
         ).distinct()
 
@@ -146,14 +171,17 @@ def issue_summary(user, project):
     return {
         'total': sum(counts.values()),
         'groups': groups,
-        'active': groups['open'] + groups['progress'],
+        # Активные/открытые — строго каноническое множество, не сумма
+        # групп: IN_PROGRESS входит и в группу «open», и в «progress».
+        'active': sum(counts.get(status, 0) for status in ACTIVE_ISSUE_STATUSES),
         'open': groups['open'],
         'in_progress': groups['progress'],
         'review': groups['review'],
         'closed': groups['closed'],
         'overdue': overdue,
         'blocking': qs.filter(
-            Q(blocked_design_tasks__isnull=False)
+            Q(is_blocking=True)
+            | Q(blocked_design_tasks__isnull=False)
             | Q(blocked_rfi_tasks__isnull=False)
         ).distinct().count(),
     }
@@ -202,6 +230,107 @@ def issues_requiring_attention(user, project):
                 'overdue_days': 0,
             }
     return list(combined.values())
+
+
+def outcome_override_active(document) -> bool:
+    """Активно ли ручное переопределение итога (B вопреки блокирующим)."""
+    return bool(getattr(document, 'outcome_override', False))
+
+
+def approval_outcome(document) -> str:
+    """Итог согласования документа: 'A' / 'B' / 'C' (SPEC 2.0 w0 п. 6).
+
+    A — нет открытых замечаний;
+    B — открыты только неблокирующие (включая DISCUSSION);
+    C — есть открытое замечание с блокирующим флагом.
+
+    Активное переопределение ГИПа превращает C в B. Annotations
+    ``open_issues_count`` / ``blocking_issues_count`` используются, если
+    queryset уже их посчитал (таблица документов), иначе — два запроса.
+    """
+    open_count = getattr(document, 'open_issues_count', None)
+    blocking_count = getattr(document, 'blocking_issues_count', None)
+    if open_count is not None:
+        if not open_count:
+            return APPROVAL_OUTCOME_A
+        if blocking_count is None:
+            blocking_count = document.issues.filter(
+                status__in=OPEN_ISSUE_STATUSES,
+                is_blocking=True,
+            ).count()
+    else:
+        open_qs = document.issues.filter(status__in=ACTIVE_ISSUE_STATUSES)
+        if not open_qs.exists():
+            return APPROVAL_OUTCOME_A
+        blocking_count = open_qs.filter(
+            status__in=OPEN_ISSUE_STATUSES,
+            is_blocking=True,
+        ).count()
+
+    if blocking_count > 0 and not outcome_override_active(document):
+        return APPROVAL_OUTCOME_C
+    return APPROVAL_OUTCOME_B
+
+
+def blocking_issues_for_document(document):
+    """Открытые замечания с блокирующим флагом (для карточки и итога C)."""
+    return (
+        document.issues.filter(
+            status__in=OPEN_ISSUE_STATUSES,
+            is_blocking=True,
+        )
+        .select_related('author')
+        .order_by('pk')
+    )
+
+
+def can_change_issue_blocking(user, issue) -> bool:
+    """Право смены блокирующего флага: автор замечания или ГИП проекта."""
+    if user is None or not getattr(user, 'is_authenticated', False):
+        return False
+    if issue.author_id == user.pk:
+        return True
+    from storage.domain.services import _is_project_gip
+
+    return _is_project_gip(user, issue.document.project)
+
+
+def set_issue_blocking(user, issue, is_blocking: bool, justification: str):
+    """Меняет блокирующий флаг замечания (SPEC 2.0 w0 п. 6).
+
+    Право: автор замечания или ГИП проекта. Обоснование обязательно.
+    Переключение и запись в IssueFlagLog атомарны. Установка флага
+    блокирующим сбрасывает активное переопределение итога документа —
+    новое блокирующее замечание отменяет прежнее «B вопреки блокирующим».
+    """
+    if not can_change_issue_blocking(user, issue):
+        raise PermissionDenied(
+            "Менять блокирующий флаг может автор замечания или ГИП проекта"
+        )
+    justification = (justification or '').strip()
+    if not justification:
+        raise ValueError("Обоснование изменения флага обязательно")
+
+    new_value = bool(is_blocking)
+    old_value = bool(issue.is_blocking)
+    if old_value == new_value:
+        return issue
+
+    from storage.domain.services import _clear_outcome_override
+
+    with transaction.atomic():
+        issue.is_blocking = new_value
+        issue.save(update_fields=['is_blocking', 'updated_at'])
+        IssueFlagLog.objects.create(
+            issue=issue,
+            old_value=old_value,
+            new_value=new_value,
+            justification=justification,
+            changed_by=user,
+        )
+        if new_value:
+            _clear_outcome_override(issue.document)
+    return issue
 
 
 def blocking_links_map(user, project):

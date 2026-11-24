@@ -121,6 +121,19 @@
     <span class="badge text-bg-secondary">{{ document.get_suitability_code_display }}</span>
     <span class="small text-muted d-none d-xl-inline">{{ suitability_hint }}</span>
   </div>
+  <div class="d-flex align-items-center gap-1" title="Итог согласования по открытым замечаниям">
+    <span class="text-muted small">Итог согласования:</span>
+    {% if approval_outcome == 'A' %}
+      <span class="badge text-bg-success">A — согласовано</span>
+    {% elif approval_outcome == 'B' %}
+      <span class="badge text-bg-warning text-dark">B — согласовано с замечаниями</span>
+    {% else %}
+      <span class="badge text-bg-danger">C — не согласовано</span>
+    {% endif %}
+    {% if document.outcome_override %}
+      <span class="badge text-bg-info text-dark" title="{{ document.outcome_override_text }}">переопределено ГИПом</span>
+    {% endif %}
+  </div>
   <div class="d-flex align-items-center gap-1">
     <span class="text-muted small">Результат проверки:</span>
     <span class="badge text-bg-light border">{{ review_result_display }}</span>
@@ -353,18 +366,42 @@
   {# Этап 19: workflow из хедера — сюда; плашка «Публикация заблокирована» встроена в кнопку #}
   <div class="group viewer-workflow-actions" data-viewer-actions
        style="margin-left: auto;">
-    {% if open_issues_count %}
-      <button type="button"
-              class="btn btn-sm btn-danger me-1"
-              data-blocked="1"
-              aria-disabled="true"
-              onclick="runWorkflowAction(this)"
-              title="Публикация заблокирована: {{ open_issues_phrase }} — закройте замечания, чтобы отправить документ на проверку"
-              aria-label="Отправить на проверку (заблокировано: {{ open_issues_phrase }})">
-        Отправить на проверку
-        <span class="badge text-bg-light border ms-1" data-open-issues-count>{{ open_issues_count }}</span>
-      </button>
+    {% if approval_outcome == 'C' %}
+      <span class="badge text-bg-danger me-1"
+            title="Есть открытые замечания с блокирующим флагом">
+        C — не согласовано
+      </span>
+      {% if blocking_issues %}
+        <span class="small text-danger me-2" data-blocking-issues>
+          {% for issue in blocking_issues %}
+            <a href="#issue-{{ issue.pk }}" class="text-danger">#{{ issue.pk }}</a>{% if not forloop.last %}, {% endif %}
+          {% endfor %}
+        </span>
+      {% endif %}
+      {% if can_override_outcome and override_action_url %}
+        <form method="post" action="{{ override_action_url }}"
+              class="d-flex align-items-center gap-1 mb-0"
+              data-outcome-override-form>
+          {% csrf_token %}
+          <input type="hidden" name="action" value="{{ override_action }}">
+          <input type="text" name="override_justification"
+                 class="form-control form-control-sm"
+                 style="min-width: 16rem;"
+                 placeholder="Обоснование (B вопреки блокирующим)" required>
+          <button type="submit" class="btn btn-sm btn-warning">
+            B вопреки блокирующим
+          </button>
+        </form>
+      {% else %}
+        <span class="small text-muted">Действия скрыты до снятия блокирующих замечаний.</span>
+      {% endif %}
     {% else %}
+      {% if approval_outcome == 'B' %}
+        <span class="badge text-bg-warning text-dark me-1"
+              title="Открыты только неблокирующие замечания">
+          B — согласовано с замечаниями
+        </span>
+      {% endif %}
       {% for action in workflow_actions %}
         <button type="button"
                 class="wf-btn wf-btn-text btn btn-sm btn-outline-secondary me-1"
@@ -591,6 +628,15 @@
           <div class="mb-3">
             <label for="issueDescription" class="form-label">Текст замечания</label>
             <textarea id="issueDescription" name="description" class="form-control" rows="4" required></textarea>
+          </div>
+          <div class="form-check mb-3">
+            <input class="form-check-input" type="checkbox" name="is_blocking" id="issueIsBlocking" value="1">
+            <label class="form-check-label" for="issueIsBlocking">
+              Блокирующее замечание
+            </label>
+            <div class="form-text">
+              Блокирует переход документа, пока замечание открыто (итог C).
+            </div>
           </div>
           <div class="mb-0">
             <label for="issueAssignee" class="form-label">Ответственный</label>

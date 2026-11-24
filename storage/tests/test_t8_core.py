@@ -536,13 +536,29 @@ class T67AuditTest(T8CoreTestBase):
         document.refresh_from_db()
         self.assertEqual(document.internal_status, 'ready_to_share')
 
+        # SPEC 2.0 w0 п. 6: неблокирующее открытое замечание (B) переход
+        # не блокирует; блокирует только C — открытое с флагом is_blocking.
+        non_blocking = self.make_document(code='T67-NONBLOCKING')
+        update_internal_status(self.user_gip, non_blocking, 'send_to_review')
+        Issue.objects.create(
+            document=non_blocking,
+            author=self.user_gip,
+            description='Non-blocking issue',
+            status='NEW',
+            is_blocking=False,
+        )
+        update_internal_status(self.user_gip, non_blocking, 'approve_internal')
+        non_blocking.refresh_from_db()
+        self.assertEqual(non_blocking.internal_status, 'ready_to_share')
+
         blocked = self.make_document(code='T67-BLOCKED')
         update_internal_status(self.user_gip, blocked, 'send_to_review')
         issue = Issue.objects.create(
             document=blocked,
             author=self.user_gip,
-            description='Open issue',
+            description='Open blocking issue',
             status='NEW',
+            is_blocking=True,
         )
         with self.assertRaises(ValueError):
             update_internal_status(self.user_gip, blocked, 'approve_internal')

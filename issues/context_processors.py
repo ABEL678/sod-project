@@ -8,8 +8,7 @@
 from django.db.models import Q
 
 from .models import Notification
-
-ACTIVE_STATUSES = ('NEW', 'IN_PROGRESS', 'REJECTED', 'DISCUSSION')
+from .services import ACTIVE_ISSUE_STATUSES
 
 
 def notifications_badges(request):
@@ -22,10 +21,10 @@ def notifications_badges(request):
         recipient=request.user, is_read=False,
     ).count()
     my_open = request.user.assigned_issues.filter(
-        status__in=ACTIVE_STATUSES,
+        status__in=ACTIVE_ISSUE_STATUSES,
         document__is_deleted=False,
     ).count() + request.user.created_issues.filter(
-        status__in=ACTIVE_STATUSES,
+        status__in=ACTIVE_ISSUE_STATUSES,
         document__is_deleted=False,
     ).exclude(author_id=request.user.pk).count()
     return {

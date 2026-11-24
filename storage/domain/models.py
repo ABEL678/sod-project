@@ -247,6 +247,33 @@ class Document(models.Model):
         verbose_name="Результат последней проверки",
     )
 
+    # Переопределение итога согласования (SPEC 2.0, волна 0, п. 6):
+    # «B вопреки блокирующим» — только ГИП проекта, с обоснованием.
+    # Действует до появления нового блокирующего замечания; каждая
+    # установка пишется в ChangeSetEntry ('result_override').
+    outcome_override = models.BooleanField(
+        default=False,
+        verbose_name="Итог переопределён ГИПом",
+    )
+    outcome_override_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='+',
+        verbose_name="Кто переопределил итог",
+    )
+    outcome_override_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        verbose_name="Когда переопределён итог",
+    )
+    outcome_override_text = models.TextField(
+        blank=True,
+        default='',
+        verbose_name="Обоснование переопределения итога",
+    )
+
     # Проекция состояния на прежние признаки (только чтение / вычисление).
     # Соответствие — таблица STATE_PROJECTION ниже; при записи сеттеры
     # переводят состояние, а не хранят признак отдельно.
@@ -686,10 +713,12 @@ class DocumentVersion(models.Model):
 
 
 # Журнал изменений версии (SPEC 2.0, волна 0, п. 8).
-# Сейчас единственный тип — выпуск версии; записи о переходах статуса
-# (п. 6) и одобрениях (п. 7) добавятся в choices в следующих задачах.
+# version_release — выпуск версии; result_override — переопределение
+# итога согласования ГИПом (п. 6); approval — запись об одобрении (п. 7,
+# добавляется отдельным шагом).
 CHANGESET_ENTRY_TYPES = [
     ('version_release', 'Выпуск версии'),
+    ('result_override', 'Переопределение итога согласования'),
 ]
 
 

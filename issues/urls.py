@@ -19,4 +19,5 @@ urlpatterns = [
     path('issues/<int:issue_id>/detail/', views.issue_detail_htmx, name='issue_detail_htmx'),
     path('issues/<int:issue_id>/comment/', views.add_comment, name='add_comment'),
     path('issues/<int:issue_id>/blocking/', views.IssueBlockingUpdateView.as_view(), name='issue_blocking'),
+    path('issues/<int:issue_id>/flag/', views.IssueFlagUpdateView.as_view(), name='issue_flag'),
 ]
