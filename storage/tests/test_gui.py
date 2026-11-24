@@ -326,7 +326,7 @@ class DocumentViewServiceTests(GuiTestBase):
         )
 
         self.assertEqual([row['code'] for row in rows], ['АР-02'])
-        self.assertEqual(rows[0]['status'], 'Утвержден')
+        self.assertEqual(rows[0]['status'], 'Утверждён')
 
     def test_can_manage_participants(self):
         self.assertTrue(can_manage_project_participants(self.user_admin, self.project))
@@ -703,7 +703,7 @@ class GuiViewTests(GuiTestBase):
 
         self.assertEqual(response.status_code, 200)
         self.assertIsNone(response.context['selected_view'])
-        self.assertEqual(len(response.context['visible_columns']), 12)
+        self.assertEqual(len(response.context['visible_columns']), 13)
 
     def test_saved_view_applied_columns(self):
         view = save_document_view(
@@ -767,7 +767,7 @@ class GuiViewTests(GuiTestBase):
         )
 
         self.assertIsNone(response.context['selected_view'])
-        self.assertEqual(len(response.context['visible_columns']), 12)
+        self.assertEqual(len(response.context['visible_columns']), 13)
 
     def test_membership_role_update_view(self):
         self.client.force_login(self.user_gip)

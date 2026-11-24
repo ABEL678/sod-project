@@ -13,6 +13,7 @@ from storage.domain.services import (
     _effective_zone,
     document_actions,
     get_folder_mark_id,
+    review_result_display,
 )
 
 
@@ -87,6 +88,13 @@ class DocumentTable(tables.Table):
         attrs=_column_attrs('suitability'),
         order_by=('state',),
     )
+    # Ручной вердикт проверки: хранится в review_result, читается только в WIP.
+    review_result = tables.Column(
+        verbose_name='Результат проверки',
+        attrs=_column_attrs('review_result'),
+        order_by=('state',),
+        empty_values=(),
+    )
     internal_status = tables.Column(
         verbose_name='Внутренний статус',
         attrs=_column_attrs('internal-status'),
@@ -140,6 +148,7 @@ class DocumentTable(tables.Table):
             'doc_type',
             'zone',
             'suitability_code',
+            'review_result',
             'internal_status',
             'issues',
             'current_version',
@@ -249,6 +258,10 @@ class DocumentTable(tables.Table):
             hint,
             record.get_suitability_code_display(),
         )
+
+    def render_review_result(self, record):
+        """Результат проверки: подпись S1/S2/S4 в WIP, иначе прочерк."""
+        return review_result_display(record)
 
     def render_internal_status(self, record):
         if _effective_zone(record) != 'WIP':

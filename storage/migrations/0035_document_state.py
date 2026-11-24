@@ -92,6 +92,8 @@ def _state_to_legacy(state):
 
 class Migration(migrations.Migration):
 
+    atomic = False
+
     dependencies = [
         ('storage', '0034_s3_sync_models'),
     ]

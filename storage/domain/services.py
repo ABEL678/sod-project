@@ -77,7 +77,7 @@ from storage.domain.tasks_matrix import (
 
 DOCUMENT_VIEW_COLUMNS = (
     'code', 'section', 'folder', 'name', 'doc_type', 'zone', 'suitability',
-    'internal_status', 'issues', 'version', 'date', 'author',
+    'review_result', 'internal_status', 'issues', 'version', 'date', 'author',
 )
 DOCUMENT_VIEW_FILTERS = (
     'section', 'doc_type', 'status', 'suitability_code', 'internal_status',
@@ -128,7 +128,11 @@ def _states_matching(
     suitability: str | None = None,
     internal_status: str | None = None,
 ) -> list[str]:
-    """Состояния, у которых совпадают заданные прежние признаки."""
+    """Состояния, у которых совпадают заданные прежние признаки.
+
+    ``review_result`` — не проекция состояния: ручные коды S1/S2/S4 здесь
+    не обрабатываются (для них фильтры используют ``review_result`` напрямую).
+    """
     result = []
     for state, (st, suit, internal, _zone) in Document.STATE_PROJECTION.items():
         if status is not None and st != status:
@@ -176,6 +180,21 @@ def _is_canonical_zone_folder(folder: Folder | None) -> bool:
     )
 
 
+def review_result_code(document: Document) -> str:
+    """Код ручного вердикта проверки; вне зоны WIP нерелевантен."""
+    if document.state.startswith('wip_') and document.review_result:
+        return document.review_result
+    return ''
+
+
+def review_result_display(document: Document) -> str:
+    """Подпись ручного вердикта проверки для интерфейса и экспорта."""
+    code = review_result_code(document)
+    if not code:
+        return '—'
+    return dict(Document.REVIEW_RESULT_CHOICES).get(code, code)
+
+
 def _document_row(document: Document) -> dict:
     """Единый формат строки документа для ведомости и видов таблицы."""
     version = document.current_version
@@ -204,6 +223,8 @@ def _document_row(document: Document) -> dict:
         'date': version.uploaded_at if version else '',
         'author': author,
         'section_id': document.section_id,
+        'review_result': review_result_code(document),
+        'review_result_display': review_result_display(document),
     }
 
 
@@ -627,9 +648,14 @@ def get_project_documents_queryset(
     if 'status' in filters:
         queryset = queryset.filter(state__in=_states_matching(status=filters['status']))
     if 'suitability_code' in filters:
-        queryset = queryset.filter(
-            state__in=_states_matching(suitability=filters['suitability_code'])
-        )
+        suitability_value = filters['suitability_code']
+        if suitability_value in Document.MANUAL_REVIEW_CODES:
+            # Ручной вердикт хранится в review_result (не проекция состояния).
+            queryset = queryset.filter(review_result=suitability_value)
+        else:
+            queryset = queryset.filter(
+                state__in=_states_matching(suitability=suitability_value)
+            )
     if 'internal_status' in filters:
         queryset = queryset.filter(
             state__in=_states_matching(internal_status=filters['internal_status'])
@@ -2996,32 +3022,6 @@ def _apply_state(
     document._from_service = True
     document.save(update_fields=update_fields)
     return document
-
-
-def update_document_status(
-    user: User,
-    document: Document,
-    new_status: str,
-    new_suitability: str | None = None,
-) -> Document:
-    """Смена статуса/пригодности с FSM-валидацией.
-
-    Пара признаков переводится в состояние через таблицу
-    ``Document.state_from_projection``; несопоставимая пара отклоняется.
-    """
-    suitability = (
-        new_suitability
-        if new_suitability is not None
-        else document.suitability_code
-    )
-    target = Document.state_from_projection(
-        new_status, suitability, document.internal_status
-    )
-    if target is None:
-        raise ValidationError(
-            "Недопустимая комбинация статуса и пригодности"
-        )
-    return _apply_state(user, document, target)
 
 
 def _effective_zone(document: Document) -> str:

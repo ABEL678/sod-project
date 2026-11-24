@@ -234,6 +234,9 @@ class Document(models.Model):
         ('S2', 'Для ознакомления'),
         ('S4', 'На утверждении'),
     ]
+    # Коды ручного вердикта проверки: хранятся в review_result, а не в
+    # проекции состояния (исключение из правила «всё вычисляется»).
+    MANUAL_REVIEW_CODES = ('S1', 'S2', 'S4')
     review_result = models.CharField(
         max_length=2,
         choices=REVIEW_RESULT_CHOICES,
@@ -248,7 +251,7 @@ class Document(models.Model):
     STATUS_CHOICES = [
         ('draft', 'Черновик'),
         ('in_review', 'На проверке'),
-        ('approved', 'Утвержден'),
+        ('approved', 'Утверждён'),
         ('archived', 'Архив'),
     ]
     SUITABILITY_CHOICES = [
@@ -322,13 +325,27 @@ class Document(models.Model):
 
     @property
     def suitability_code(self) -> str:
+        """Код пригодности: ручной вердикт в зоне WIP, иначе проекция.
+
+        Исключение из правила «всё вычисляется» (решение владельца):
+        ручной вердикт ``review_result`` читается, пока документ находится
+        в зоне проверки WIP. Вердикт не переживает выход из проверки —
+        вне WIP возвращается проекция состояния.
+        """
+        if self.state.startswith('wip_') and self.review_result:
+            return self.review_result
         return self._projection()[1]
 
     @suitability_code.setter
     def suitability_code(self, value):
-        # Коды S1/S2/S4 — ручные результаты проверки: пишутся в review_result
-        # и состояние не меняют. Остальные коды задают группу состояния.
-        if value in ('S1', 'S2', 'S4'):
+        """Единственный санкционированный канал записи review_result.
+
+        Ручной вердикт проверки (S1/S2/S4) пишется только здесь и состояние
+        не меняет: смена ``review_result`` — не переход состояния, страж
+        ``Document.save()`` для неё не применяется. Остальные коды задают
+        группу состояния.
+        """
+        if value in self.MANUAL_REVIEW_CODES:
             self.review_result = value
             return
         if value in ('S0', 'S3', 'A', 'B'):
@@ -449,6 +466,10 @@ class Document(models.Model):
         статуса и зоны — все вычисляются из него) без ``_from_service = True``
         проверяется машиной переходов ``validate_transition``. Страж
         покрывает и поле ``folder`` — смена папки без перехода запрещена.
+
+        Смена ``review_result`` легитимна в обход стража: это не переход
+        состояния, а ручной вердикт проверки (санкционированный канал —
+        сеттер ``suitability_code``).
         """
         update_fields = kwargs.get('update_fields')
         touches_state = update_fields is None or bool(

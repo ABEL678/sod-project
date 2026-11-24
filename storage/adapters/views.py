@@ -168,6 +168,7 @@ from storage.domain.services import (
     rename_folder,
     reset_project_structure,
     restore_document,
+    review_result_display,
     restore_folder,
     ru_plural,
     save_document_view,
@@ -203,6 +204,7 @@ DOCUMENT_VIEW_COLUMN_LABELS = {
     'doc_type': 'Тип',
     'zone': 'Состояние',
     'suitability': 'Статус документа',
+    'review_result': 'Результат проверки',
     'internal_status': 'Внутренний статус',
     'issues': 'Замечания',
     'version': 'Версия',
@@ -219,6 +221,7 @@ DEFAULT_COLUMN_WIDTHS = {
     'doc_type': 100,
     'zone': 150,
     'suitability': 180,
+    'review_result': 170,
     'internal_status': 170,
     'issues': 90,
     'version': 70,
@@ -235,6 +238,7 @@ DOCUMENT_TABLE_COLUMN_MAP = {
     'doc_type': 'doc_type',
     'zone': 'zone',
     'suitability_code': 'suitability',
+    'review_result': 'review_result',
     'internal_status': 'internal_status',
     'issues': 'issues',
     'current_version': 'version',
@@ -4728,6 +4732,9 @@ class DocumentDetailView(LoginRequiredMixin, DetailView):
         context['suitability_hint'] = Document.SUITABILITY_DESCRIPTIONS.get(
             self.object.suitability_code, '',
         )
+        # Ручной вердикт проверки (review_result): читается только в WIP,
+        # вне зоны — прочерк (код нерелевантен).
+        context['review_result_display'] = review_result_display(self.object)
         context['zone_label'] = dict(Folder.ZONE_CHOICES).get(
             _effective_zone(self.object), '',
         )

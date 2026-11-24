@@ -121,6 +121,10 @@
     <span class="badge text-bg-secondary">{{ document.get_suitability_code_display }}</span>
     <span class="small text-muted d-none d-xl-inline">{{ suitability_hint }}</span>
   </div>
+  <div class="d-flex align-items-center gap-1">
+    <span class="text-muted small">Результат проверки:</span>
+    <span class="badge text-bg-light border">{{ review_result_display }}</span>
+  </div>
   {% if zone_label %}
   <div class="d-flex align-items-center gap-1">
     <span class="text-muted small">Состояние:</span>

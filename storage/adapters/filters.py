@@ -126,6 +126,9 @@ class DocumentFilter(django_filters.FilterSet):
     def filter_suitability_code(self, queryset, name, value):
         if not value:
             return queryset
+        if value in Document.MANUAL_REVIEW_CODES:
+            # Ручные коды S1/S2/S4 хранятся в review_result, а не в проекции.
+            return queryset.filter(review_result=value)
         return self._by_states(queryset, suitability=value)
 
     def filter_internal_status(self, queryset, name, value):
