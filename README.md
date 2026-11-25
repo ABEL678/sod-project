@@ -44,3 +44,6 @@ cd sod_project
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
+```
+
+- **Тест Z.ai** (25.11.2026): строка добавлена автоматически из ветки `docs/test-zai` для проверки workflow (создание ветки → коммит в README → PR в `main`).
