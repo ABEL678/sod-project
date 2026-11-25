@@ -130,7 +130,9 @@
     {% else %}
       <span class="badge text-bg-danger">C — не согласовано</span>
     {% endif %}
-    {% if document.outcome_override %}
+    {# Факт переопределения сохраняется в записи одобрения; бейдж — только
+       для документов, где итог ещё влияет на действия (аудит C4-2). #}
+    {% if document.outcome_override and document.state != 'approved' and document.state != 'as_built' %}
       <span class="badge text-bg-info text-dark" title="{{ document.outcome_override_text }}">переопределено ГИПом</span>
     {% endif %}
   </div>
