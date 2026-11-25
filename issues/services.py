@@ -11,12 +11,15 @@ from django.utils import timezone
 
 from .models import Issue, IssueFlagLog
 
-# Единственное каноническое множество «открытых» замечаний для итога A/B/C
-# (SPEC 2.0, волна 0, п. 6; решение владельца). Все потребители импортируют
-# эту константу, локальные дубли запрещены.
+# Статусы, которые традиционно считались «открытыми» (без спора).
+# Каноническое множество «открытых» для реестра/бейджа/рассылок/отчётов —
+# ACTIVE_ISSUE_STATUSES ниже: DISCUSSION открыт, но не блокировал итог.
+# С 25.11.2026 (SPEC 2.0 ред. 3) блокирующее множество итога C — тоже
+# ACTIVE_ISSUE_STATUSES: блокирующее замечание в DISCUSSION даёт C наравне
+# с NEW/IN_PROGRESS/REJECTED.
 OPEN_ISSUE_STATUSES = ('NEW', 'IN_PROGRESS', 'REJECTED')
-# Спор (DISCUSSION) считается открытым, но НЕ блокирующим: в реестре — среди
-# открытых, в итоге A/B/C — не даёт C.
+# Спор (DISCUSSION) — открытое состояние: реестр, бейдж, рассылки и отчёты
+# видят его как открытое. Блокирующий флаг в DISCUSSION участвует в итоге C.
 DISCUSSION_ISSUE_STATUSES = ('DISCUSSION',)
 ACTIVE_ISSUE_STATUSES = OPEN_ISSUE_STATUSES + DISCUSSION_ISSUE_STATUSES
 
@@ -157,7 +160,8 @@ def issue_summary(user, project):
       blocking — замечания, блокирующие работу: флаг is_blocking или
                 непустые M2M-связи (задания/RFI). Учитываются независимо
                 от статуса, в том числе закрытые — в отличие от итога
-                A/B/C, который смотрит только на открытые.
+                A/B/C, который смотрит только на активные замечания
+                (NEW/IN_PROGRESS/REJECTED + DISCUSSION).
     """
     qs = project_issues(user, project)
     counts = dict(qs.values_list('status').annotate(total=Count('pk')))
@@ -241,11 +245,12 @@ def outcome_override_active(document) -> bool:
 
 
 def approval_outcome(document) -> str:
-    """Итог согласования документа: 'A' / 'B' / 'C' (SPEC 2.0 w0 п. 6).
+    """Итог согласования документа: 'A' / 'B' / 'C' (SPEC 2.0 ред. 3).
 
     A — нет открытых замечаний;
-    B — открыты только неблокирующие (включая DISCUSSION);
-    C — есть открытое замечание с блокирующим флагом.
+    B — открыты только неблокирующие;
+    C — есть открытое (ACTIVE_ISSUE_STATUSES) замечание с блокирующим
+        флагом, в том числе в DISCUSSION (уточнение владельца 25.11.2026).
 
     Активное переопределение ГИПа превращает C в B. Annotations
     ``open_issues_count`` / ``blocking_issues_count`` используются, если
@@ -258,7 +263,7 @@ def approval_outcome(document) -> str:
             return APPROVAL_OUTCOME_A
         if blocking_count is None:
             blocking_count = document.issues.filter(
-                status__in=OPEN_ISSUE_STATUSES,
+                status__in=ACTIVE_ISSUE_STATUSES,
                 is_blocking=True,
             ).count()
     else:
@@ -266,7 +271,7 @@ def approval_outcome(document) -> str:
         if not open_qs.exists():
             return APPROVAL_OUTCOME_A
         blocking_count = open_qs.filter(
-            status__in=OPEN_ISSUE_STATUSES,
+            status__in=ACTIVE_ISSUE_STATUSES,
             is_blocking=True,
         ).count()
 
@@ -276,10 +281,13 @@ def approval_outcome(document) -> str:
 
 
 def blocking_issues_for_document(document):
-    """Открытые замечания с блокирующим флагом (для карточки и итога C)."""
+    """Открытые замечания с блокирующим флагом (для карточки и итога C).
+
+    Включает DISCUSSION: любое блокирующее активное замечание даёт C.
+    """
     return (
         document.issues.filter(
-            status__in=OPEN_ISSUE_STATUSES,
+            status__in=ACTIVE_ISSUE_STATUSES,
             is_blocking=True,
         )
         .select_related('author')

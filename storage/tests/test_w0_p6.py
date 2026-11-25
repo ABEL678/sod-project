@@ -138,20 +138,22 @@ class ApprovalOutcomeABCTests(TestCase):
         self.assertEqual(approval_outcome(document), 'A')
 
     def test_discussion_is_open_but_non_blocking(self):
+        # SPEC 2.0 ред. 3: неблокирующее DISCUSSION — открытое, даёт B и не
+        # мешает подаче. Блокирующее DISCUSSION даёт C (test_w1_open_set).
         document = self._ready_document()
         discussion = Issue.objects.create(
             document=document,
             author=self.gip,
             description='Спорный вопрос',
             status='DISCUSSION',
-            is_blocking=True,
+            is_blocking=False,
         )
         self.assertEqual(approval_outcome(document), 'B')
 
         transition_document_zone(self.gip, document, 'submit_review')
         document.refresh_from_db()
         self.assertEqual(document.status, 'in_review')
-        self.assertTrue(discussion.is_blocking)
+        self.assertFalse(discussion.is_blocking)
 
     # --- переходы: только C блокирует ----------------------------------
 

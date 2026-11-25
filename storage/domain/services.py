@@ -690,7 +690,8 @@ def get_project_documents_queryset(
 
     queryset = queryset.annotate(
         # «Открытые» для реестра/бейджа включают DISCUSSION; блокирующими
-        # для итога C считаются только NEW/IN_PROGRESS/REJECTED с флагом.
+        # для итога C считаются активные замечания с флагом — DISCUSSION
+        # наравне с NEW/IN_PROGRESS/REJECTED (SPEC 2.0 ред. 3).
         open_issues_count=Count(
             'issues',
             filter=Q(issues__status__in=ACTIVE_ISSUE_STATUSES),
@@ -699,7 +700,7 @@ def get_project_documents_queryset(
         blocking_issues_count=Count(
             'issues',
             filter=Q(
-                issues__status__in=OPEN_ISSUE_STATUSES,
+                issues__status__in=ACTIVE_ISSUE_STATUSES,
                 issues__is_blocking=True,
             ),
             distinct=True,
@@ -2214,7 +2215,7 @@ def _create_changeset_approval(document: Document, user: User):
                 marker = ''
                 if (
                     issue.is_blocking
-                    and issue.status in OPEN_ISSUE_STATUSES
+                    and issue.status in ACTIVE_ISSUE_STATUSES
                 ):
                     marker = ' [блокирующее, переопределено]'
                 lines.append(
