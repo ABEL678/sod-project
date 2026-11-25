@@ -154,7 +154,10 @@ def issue_summary(user, project):
       review   — DONE
       closed   — CLOSED + CANCELLED
       overdue  — просроченные активные
-      blocking — замечания с непустыми M2M-связями (заглушка, всегда 0 пока нет миграции)
+      blocking — замечания, блокирующие работу: флаг is_blocking или
+                непустые M2M-связи (задания/RFI). Учитываются независимо
+                от статуса, в том числе закрытые — в отличие от итога
+                A/B/C, который смотрит только на открытые.
     """
     qs = project_issues(user, project)
     counts = dict(qs.values_list('status').annotate(total=Count('pk')))
