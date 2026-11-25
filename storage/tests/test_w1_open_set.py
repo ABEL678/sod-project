@@ -28,6 +28,7 @@ from storage.domain.services import (
     create_project,
     document_internal_actions,
     document_workflow_actions,
+    get_pending_issues,
     transition_document_zone,
     update_internal_status,
     update_issue_status,
@@ -116,6 +117,19 @@ class OpenSetBlockingTests(TestCase):
 
         self.assertEqual(approval_outcome(document), 'C')
         self.assertTrue(blocking.is_blocking)
+
+    def test_blocking_discussion_is_pending_for_external_api(self):
+        """get_pending_issues (внешний API) видит блокирующий DISCUSSION."""
+        document = self._ready_document()
+        blocking = self._discussion(
+            document, description='Спор блокирует выдачу', is_blocking=True,
+        )
+
+        pending_pks = set(
+            get_pending_issues(self.project).values_list('pk', flat=True)
+        )
+        self.assertIn(blocking.pk, pending_pks)
+        self.assertEqual(blocking.status, 'DISCUSSION')
 
     def test_blocking_discussion_hides_submit_approve_and_agree(self):
         # «Согласовать» (approve_internal) — документ на внутренней проверке.

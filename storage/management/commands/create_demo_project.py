@@ -236,7 +236,13 @@ class Command(BaseCommand):
                 )
             folders = {}
             for demo, section in sections.items():
-                folder = section.folders.filter(parent=None).first()
+                # Папки пресета лежат под суперпапкой РД, поэтому ищем любую
+                # живую папку раздела (марку), а не только корневую.
+                folder = (
+                    section.folders.filter(is_deleted=False)
+                    .order_by('pk')
+                    .first()
+                )
                 if folder is None:
                     raise CommandError(
                         f'В пресете нет папки для раздела {section.code}.'
