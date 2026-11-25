@@ -14,7 +14,7 @@ from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.paginator import Paginator
-from django.db.models import Count, Max, Q
+from django.db.models import Count, Max, Prefetch, Q
 from django.http import (
     FileResponse,
     Http404,
@@ -784,10 +784,8 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
                 changed = True
         if changed:
             kwargs['data'] = data
-        # Спринт 8: таблица должна строиться на аннотированном queryset
-        # (select_related проекта/версий + счётчики открытых замечаний),
-        # иначе каждая строка реестра порождает N+1 запросов через
-        # document_actions → can_transition/_has_open_issues.
+        # Спринт 8: таблица строится на аннотированном queryset
+        # (select_related проекта/версий + счётчики открытых замечаний).
         kwargs['queryset'] = self.get_queryset()
         return kwargs
 
@@ -2019,7 +2017,12 @@ class TaskDashboardView(LoginRequiredMixin, View):
 
     def get(self, request, project_id):
         project = get_object_or_404(
-            get_accessible_projects(request.user),
+            get_accessible_projects(request.user).prefetch_related(
+                Prefetch(
+                    'memberships',
+                    queryset=ProjectMembership.objects.select_related('user'),
+                ),
+            ),
             pk=project_id,
         )
         if not can_view_all_tasks(request.user, project):

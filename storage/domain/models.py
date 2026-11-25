@@ -133,13 +133,31 @@ class Project(models.Model):
 
     @property
     def gip(self):
-        """Действующий ГИП проекта из состава команды (или None)."""
-        membership = (
-            self.memberships.select_related('user')
-            .filter(role_in_project='gip')
-            .order_by('-id')
-            .first()
-        )
+        """Действующий ГИП проекта из состава команды (или None).
+
+        Если состав предзагружен (prefetch_related('memberships')),
+        читаем кэш без запроса — так топбар не дёргает БД на каждое
+        обращение к свойству.
+        """
+        prefetched = getattr(
+            self, '_prefetched_objects_cache', {},
+        ).get('memberships')
+        if prefetched is None:
+            membership = (
+                self.memberships.select_related('user')
+                .filter(role_in_project='gip')
+                .order_by('-id')
+                .first()
+            )
+        else:
+            membership = max(
+                (
+                    item for item in prefetched
+                    if item.role_in_project == 'gip'
+                ),
+                key=lambda item: item.pk,
+                default=None,
+            )
         return membership.user if membership else None
 
     @property

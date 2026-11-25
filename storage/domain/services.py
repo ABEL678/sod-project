@@ -58,7 +58,6 @@ from issues.notify import (
 from issues.services import (
     ACTIVE_ISSUE_STATUSES,
     APPROVAL_BLOCKED_MESSAGE,
-    OPEN_ISSUE_STATUSES,
     approval_outcome,
     blocking_issues_for_document,
 )
@@ -5567,12 +5566,16 @@ def sync_issues(user: User, project: Project, issues_data: list[dict]) -> list[I
 
 
 def get_pending_issues(project: Project):
-    """Замечания проекта в статусах NEW, IN_PROGRESS, REJECTED."""
+    """Замечания проекта в открытых статусах (ACTIVE_ISSUE_STATUSES).
+
+    Включает DISCUSSION: спор — открытое состояние, и внешний API
+    (Витро-трекер) должен видеть его наравне с NEW/IN_PROGRESS/REJECTED.
+    """
     return (
         Issue.objects.filter(
             document__project=project,
             document__is_deleted=False,
-            status__in=OPEN_ISSUE_STATUSES,
+            status__in=ACTIVE_ISSUE_STATUSES,
         )
         .select_related("document", "assignee")
         .order_by("-created_at")
