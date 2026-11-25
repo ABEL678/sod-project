@@ -1,6 +1,7 @@
 from django.contrib import admin
 from .domain.models import (
-    Company, Project, Section, Document, DocumentVersion, UserProfile, ProjectMembership,
+    ChangeSetEntry,
+    Company, Customer, Project, Section, Document, DocumentVersion, UserProfile, ProjectMembership,
     DocumentView, Specification, VorItem,
     DesignTask, DesignTaskStatusLog, DesignTaskAttachment, TaskTemplate,
     DesignTaskChecklistItem,
@@ -21,6 +22,13 @@ class ProjectAdmin(admin.ModelAdmin):
     search_fields = ('code', 'name')
 
 
+@admin.register(Customer)
+class CustomerAdmin(admin.ModelAdmin):
+    list_display = ('name', 'company')
+    list_filter = ('company',)
+    search_fields = ('name',)
+
+
 @admin.register(Section)
 class SectionAdmin(admin.ModelAdmin):
     list_display = ('code', 'name', 'project', 'order')
@@ -30,16 +38,42 @@ class SectionAdmin(admin.ModelAdmin):
 
 @admin.register(Document)
 class DocumentAdmin(admin.ModelAdmin):
-    list_display = ('code', 'name', 'project', 'section', 'doc_type', 'status')
-    list_filter = ('project', 'section', 'doc_type', 'status')
+    list_display = ('code', 'name', 'project', 'section', 'doc_type', 'state')
+    list_filter = ('project', 'section', 'doc_type', 'state')
     search_fields = ('code', 'name')
-    readonly_fields = ('status', 'suitability_code')
+    readonly_fields = ('state', 'review_result')
 
 
 @admin.register(DocumentVersion)
 class DocumentVersionAdmin(admin.ModelAdmin):
     list_display = ('document', 'version_number', 'uploaded_at', 'uploaded_by')
     list_filter = ('document__project',)
+
+
+@admin.register(ChangeSetEntry)
+class ChangeSetEntryAdmin(admin.ModelAdmin):
+    """Журнал изменений — только чтение (аудиторский след, SPEC 2.0 w0 п.8)."""
+
+    list_display = (
+        'version', 'entry_type', 'created_by', 'created_at',
+    )
+    list_filter = ('entry_type', 'version__document__project')
+    search_fields = (
+        'version__document__code', 'affected_sheets', 'text',
+    )
+    readonly_fields = (
+        'version', 'entry_type', 'text', 'affected_sheets',
+        'created_by', 'created_at',
+    )
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
 
 
 @admin.register(UserProfile)

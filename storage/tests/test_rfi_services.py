@@ -69,7 +69,7 @@ class RfiTestBase(TestCase):
 
         self.project = Project.objects.create(
             company=self.company, code='RFI-TEST', name='Проект RFI',
-            status='active', created_by=self.gip, gip=self.gip,
+            status='active', created_by=self.gip,
         )
         self.section = Section.objects.create(
             project=self.project, code='COMMON', name='COMMON', order=0,
@@ -78,8 +78,8 @@ class RfiTestBase(TestCase):
             (self.gip, 'gip'), (self.admin, 'developer'),
             (self.developer, 'developer'), (self.contractor, 'contractor'),
         ):
-            ProjectMembership.objects.create(
-                project=self.project, user=u, role_in_project=role,
+            ProjectMembership.objects.update_or_create(
+                project=self.project, user=u, defaults={'role_in_project': role},
             )
 
     def _create_rfi(self, **kw):

@@ -49,7 +49,7 @@ def _create_test_data():
         company=company,
         code='TEST-001',
         name='Test Project',
-        customer='',
+        customer_id=None,
         gip=gip,
         created_by=admin,
     )
@@ -145,6 +145,7 @@ class ZoneStatusLinkTest(TestCase):
             doc_type='drawing',
             file=file,
             folder=folder,
+            reason_text='Тестовая причина',
         )
         return Document.objects.get(
             project=self.project, section=self.section, code='TEST-001'
@@ -335,6 +336,7 @@ class ZoneUploadPermissionTest(TestCase):
                 doc_type='drawing',
                 file=self._make_file(),
                 folder=self.published_folder,
+                reason_text='Тестовая причина',
             )
 
     def test_developer_cannot_upload_to_archive(self):
@@ -349,6 +351,7 @@ class ZoneUploadPermissionTest(TestCase):
                 doc_type='drawing',
                 file=self._make_file(),
                 folder=self.archive_folder,
+                reason_text='Тестовая причина',
             )
 
     def test_admin_can_upload_to_any_zone(self):
@@ -363,6 +366,7 @@ class ZoneUploadPermissionTest(TestCase):
             doc_type='drawing',
             file=self._make_file(),
             folder=self.wip_folder,
+            reason_text='Тестовая причина',
         )
         # Админ может загружать в SHARED
         shared_folder = Folder.objects.get(project=self.project, zone='SHARED')
@@ -375,6 +379,7 @@ class ZoneUploadPermissionTest(TestCase):
             doc_type='drawing',
             file=self._make_file(),
             folder=shared_folder,
+            reason_text='Тестовая причина',
         )
         # Админ может загружать в PUBLISHED
         upload_document(
@@ -386,6 +391,7 @@ class ZoneUploadPermissionTest(TestCase):
             doc_type='drawing',
             file=self._make_file(),
             folder=self.published_folder,
+            reason_text='Тестовая причина',
         )
         # Админ может загружать в ARCHIVE
         upload_document(
@@ -397,6 +403,7 @@ class ZoneUploadPermissionTest(TestCase):
             doc_type='drawing',
             file=self._make_file(),
             folder=self.archive_folder,
+            reason_text='Тестовая причина',
         )
 
 
@@ -513,6 +520,7 @@ class MoveDocumentZoneCheckTest(TestCase):
             doc_type='drawing',
             file=file,
             folder=folder,
+            reason_text='Тестовая причина',
         )
         return Document.objects.get(
             project=self.project, section=self.section, code='TEST-MOVE'
@@ -581,6 +589,7 @@ class UploadDocumentZoneCheckTest(TestCase):
             doc_type='drawing',
             file=file,
             folder=self.archive_folder,
+            reason_text='Тестовая причина',
         )
         return Document.objects.get(
             project=self.project, section=self.section, code='TEST-UPLOAD'
@@ -599,6 +608,7 @@ class UploadDocumentZoneCheckTest(TestCase):
                 doc_type='drawing',
                 file=self._make_file(),
                 folder=None,  # folder=None, но документ уже в ARCHIVE
+                reason_text='Тестовая причина',
             )
 
 
@@ -638,6 +648,7 @@ class CopyDocumentZoneCheckTest(TestCase):
             doc_type='drawing',
             file=file,
             folder=self.wip_folder,
+            reason_text='Тестовая причина',
         )
         return Document.objects.get(
             project=self.project, section=self.section, code='TEST-COPY'
@@ -708,6 +719,7 @@ class MoveToRegularFolderStatusTest(TestCase):
             doc_type='drawing',
             file=file,
             folder=self.wip_folder,
+            reason_text='Тестовая причина',
         )
         return Document.objects.get(
             project=self.project, section=self.section, code='TEST-STATUS'
@@ -778,6 +790,7 @@ class ArchiveEscapePreventionTest(TestCase):
             doc_type='drawing',
             file=file,
             folder=self.wip_folder,
+            reason_text='Тестовая причина',
         )
         doc = Document.objects.get(
             project=self.project, section=self.section, code='TEST-ESCAPE'
@@ -808,6 +821,7 @@ class ArchiveEscapePreventionTest(TestCase):
                 doc_type='drawing',
                 file=self._make_file(),
                 folder=self.wip_folder,  # пытается «убежать» в WIP
+                reason_text='Тестовая причина',
             )
 
         # Документ остался в архиве
@@ -831,6 +845,7 @@ class ArchiveEscapePreventionTest(TestCase):
                     doc_type='drawing',
                     file=self._make_file(),
                     folder=target,
+                    reason_text='Тестовая причина',
                 )
 
         doc.refresh_from_db()
@@ -1000,6 +1015,7 @@ class VirtualZoneTest(TestCase):
             doc_type='drawing',
             file=self._make_file(),
             folder=folder,
+            reason_text='Тестовая причина',
         )
         return Document.objects.get(
             project=self.project, section=self.section, code=code
@@ -1008,8 +1024,8 @@ class VirtualZoneTest(TestCase):
     def test_transition_preserves_folder_and_uses_virtual_zone(self):
         document = self._upload(self.admin, 'VZ-TRANSITION', folder=self.folder)
         original_folder_id = document.folder_id
-        document.internal_status = 'ready_to_share'
-        document.save(update_fields=['internal_status'])
+        document.state = Document.STATE_WIP_READY
+        document.save(update_fields=['state'])
 
         transition_document_zone(self.admin, document, 'submit_review')
         document.refresh_from_db()
@@ -1025,22 +1041,39 @@ class VirtualZoneTest(TestCase):
             transition_document_zone(self.admin, document, 'submit_review')
 
     def test_submit_review_blocked_by_open_issues(self):
+        # SPEC 2.0 w0 п. 6: открытое неблокирующее замечание (итог B)
+        # подачу не блокирует; блокирует только блокирующий флаг (C).
+        allowed = self._upload(self.admin, 'VZ-NONBLOCKING-ISSUE')
+        allowed.state = Document.STATE_WIP_READY
+        allowed.save(update_fields=['state'])
+        Issue.objects.create(
+            document=allowed,
+            author=self.admin,
+            description='Открытое неблокирующее замечание',
+            status='NEW',
+            is_blocking=False,
+        )
+        transition_document_zone(self.admin, allowed, 'submit_review')
+        allowed.refresh_from_db()
+        self.assertEqual(allowed.status, 'in_review')
+
         document = self._upload(self.admin, 'VZ-OPEN-ISSUE')
-        document.internal_status = 'ready_to_share'
-        document.save(update_fields=['internal_status'])
+        document.state = Document.STATE_WIP_READY
+        document.save(update_fields=['state'])
         Issue.objects.create(
             document=document,
             author=self.admin,
-            description='Открытое замечание',
+            description='Открытое блокирующее замечание',
             status='NEW',
+            is_blocking=True,
         )
         with self.assertRaises(ValueError):
             transition_document_zone(self.admin, document, 'submit_review')
 
     def test_publish_and_return_wip_sync_codes(self):
         document = self._upload(self.admin, 'VZ-CODES')
-        document.internal_status = 'ready_to_share'
-        document.save(update_fields=['internal_status'])
+        document.state = Document.STATE_WIP_READY
+        document.save(update_fields=['state'])
 
         transition_document_zone(self.admin, document, 'submit_review')
         document.refresh_from_db()
@@ -1053,8 +1086,8 @@ class VirtualZoneTest(TestCase):
         self.assertEqual(document.internal_status, 'rework')
 
         published = self._upload(self.admin, 'VZ-PUBLISH')
-        published.internal_status = 'ready_to_share'
-        published.save(update_fields=['internal_status'])
+        published.state = Document.STATE_WIP_READY
+        published.save(update_fields=['state'])
         transition_document_zone(self.admin, published, 'submit_review')
         transition_document_zone(self.admin, published, 'publish')
         published.refresh_from_db()
@@ -1066,31 +1099,31 @@ class VirtualZoneTest(TestCase):
         self.assertIsNone(document.folder)
 
         expected = {
-            'draft': 'WIP',
-            'in_review': 'SHARED',
-            'approved': 'PUBLISHED',
-            'archived': 'ARCHIVE',
+            Document.STATE_WIP_DRAFT: 'WIP',
+            Document.STATE_SHARED: 'SHARED',
+            Document.STATE_APPROVED: 'PUBLISHED',
+            Document.STATE_ARCHIVED: 'ARCHIVE',
         }
-        for status, zone in expected.items():
-            document.status = status
+        for state, zone in expected.items():
+            document.state = state
             document._from_service = True
-            document.save(update_fields=['status'])
+            document.save(update_fields=['state'])
             self.assertEqual(_effective_zone(document), zone)
 
     def test_developer_cannot_upload_to_folderless_published_document(self):
         document = self._upload(self.admin, 'VZ-PUBLISHED')
-        document.status = 'approved'
+        document.state = Document.STATE_APPROVED
         document._from_service = True
-        document.save(update_fields=['status'])
+        document.save(update_fields=['state'])
 
         with self.assertRaises(PermissionDenied):
             self._upload(self.developer, 'VZ-PUBLISHED')
 
     def test_folderless_archive_rejects_developer_and_admin(self):
         document = self._upload(self.admin, 'VZ-ARCHIVE')
-        document.status = 'archived'
+        document.state = Document.STATE_ARCHIVED
         document._from_service = True
-        document.save(update_fields=['status'])
+        document.save(update_fields=['state'])
 
         for user in (self.developer, self.admin):
             with self.assertRaises(PermissionDenied):

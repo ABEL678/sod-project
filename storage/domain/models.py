@@ -1,7 +1,9 @@
 from copy import copy
 
 from django.conf import settings
-from django.core.exceptions import ValidationError
+from django.contrib.contenttypes.fields import GenericForeignKey
+from django.contrib.contenttypes.models import ContentType
+from django.core.exceptions import ObjectDoesNotExist, ValidationError
 from django.db import models
 from django.contrib.auth.models import User
 from django.utils import timezone
@@ -29,7 +31,45 @@ class Company(models.Model):
         return self.name
 
 
+class Customer(models.Model):
+    """Карточка заказчика (организации) в пределах компании-владельца СОД."""
+
+    company = models.ForeignKey(
+        Company,
+        on_delete=models.CASCADE,
+        related_name='customers',
+        verbose_name="Компания",
+    )
+    name = models.CharField(max_length=255, verbose_name="Наименование")
+
+    class Meta:
+        verbose_name = "Заказчик"
+        verbose_name_plural = "Заказчики"
+        constraints = [
+            models.UniqueConstraint(
+                fields=['company', 'name'],
+                name='uniq_customer_name_per_company',
+            ),
+        ]
+
+    def __str__(self):
+        return self.name
+
+
 class Project(models.Model):
+    STAGE_P = 'P'
+    STAGE_RD = 'RD'
+    STAGE_CHOICES = [
+        (STAGE_P, 'П'),
+        (STAGE_RD, 'РД'),
+    ]
+    OBJECT_TYPE_CHOICES = [
+        ('residential', 'Жилое'),
+        ('public', 'Общественное'),
+        ('industrial', 'Производственное'),
+        ('linear', 'Линейное'),
+    ]
+
     company = models.ForeignKey(Company, on_delete=models.CASCADE, related_name='projects', verbose_name="Компания")
     code = models.CharField(max_length=50, unique=True, verbose_name="Шифр")
     base_code = models.CharField(
@@ -39,8 +79,22 @@ class Project(models.Model):
         verbose_name="Базовое обозначение",
     )
     name = models.CharField(max_length=255, verbose_name="Название")
-    customer = models.CharField(max_length=255, blank=True, verbose_name="Заказчик")
-    gip = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='gip_projects', verbose_name="ГИП")
+    customer_org = models.ForeignKey(
+        Customer,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='projects',
+        verbose_name="Заказчик",
+    )
+    stage = models.CharField(
+        max_length=2,
+        choices=STAGE_CHOICES,
+        null=True,
+        blank=True,
+        default=None,
+        verbose_name="Стадия",
+    )
     STATUS_CHOICES = [
         ('active', 'Активен'),
         ('archived', 'Архив'),
@@ -51,6 +105,14 @@ class Project(models.Model):
         blank=True,
         default='',
         verbose_name="Ключ шаблона структуры",
+    )
+    object_type = models.CharField(
+        max_length=20,
+        choices=OBJECT_TYPE_CHOICES,
+        null=True,
+        blank=True,
+        default=None,
+        verbose_name="Тип объекта",
     )
     is_deleted = models.BooleanField(default=False, verbose_name="Удален")
     deleted_at = models.DateTimeField(null=True, blank=True, verbose_name="Дата удаления")
@@ -63,6 +125,27 @@ class Project(models.Model):
 
     def __str__(self):
         return f'{self.code} - {self.name}'
+
+    @property
+    def customer(self) -> str:
+        """Наименование заказчика для API и отображения (вычисляется из карточки)."""
+        return self.customer_org.name if self.customer_org_id else ''
+
+    @property
+    def gip(self):
+        """Действующий ГИП проекта из состава команды (или None)."""
+        membership = (
+            self.memberships.select_related('user')
+            .filter(role_in_project='gip')
+            .order_by('-id')
+            .first()
+        )
+        return membership.user if membership else None
+
+    @property
+    def gip_id(self):
+        user = self.gip
+        return user.pk if user else None
 
 
 class Section(models.Model):
@@ -115,16 +198,95 @@ class Document(models.Model):
         related_name='+',
         verbose_name="Текущая версия"
     )
+    # Единое главное состояние документа (MASTER_SPEC_2_0, волна 0 п. 1).
+    # Статус, код пригодности и зона — вычисляются из состояния и не
+    # хранятся. Шесть значений: четыре внутренних статуса работы,
+    # «на согласовании», «утверждён», «исполнительная документация»,
+    # «архив» (последние три — зоны PUBLISHED/ARCHIVE и исполнительная).
+    STATE_WIP_DRAFT = 'wip_draft'
+    STATE_WIP_INTERNAL_REVIEW = 'wip_internal_review'
+    STATE_WIP_REWORK = 'wip_rework'
+    STATE_WIP_READY = 'wip_ready'
+    STATE_SHARED = 'shared'
+    STATE_APPROVED = 'approved'
+    # Путь перехода в исполнительную документацию отложен во 2-ю волну;
+    # тестом не закрыт (SPEC 2.0, волна 0: состояние объявлено заранее).
+    STATE_AS_BUILT = 'as_built'
+    STATE_ARCHIVED = 'archived'
+    STATE_CHOICES = [
+        (STATE_WIP_DRAFT, 'В работе'),
+        (STATE_WIP_INTERNAL_REVIEW, 'На внутренней проверке'),
+        (STATE_WIP_REWORK, 'На доработке'),
+        (STATE_WIP_READY, 'Готов к передаче'),
+        (STATE_SHARED, 'На согласовании'),
+        (STATE_APPROVED, 'Утверждён'),
+        (STATE_AS_BUILT, 'Исполнительная документация'),
+        (STATE_ARCHIVED, 'Архив'),
+    ]
+    state = models.CharField(
+        max_length=24,
+        choices=STATE_CHOICES,
+        default=STATE_WIP_DRAFT,
+        verbose_name="Состояние",
+    )
+    # Ручной результат последней проверки (S1/S2/S4/B-подобные отметки).
+    # Не вычисляется из состояния: вводится вручную. Ручной вердикт действует
+    # до утверждения: сопровождает документ через SHARED, фиксируется в
+    # записи одобрения, очищается при входе в approved/as_built
+    # (решение владельца 25.11.2026; порядок — в services._apply_state).
+    REVIEW_RESULT_CHOICES = [
+        ('', 'Не задан'),
+        ('S1', 'Для совместной работы'),
+        ('S2', 'Для ознакомления'),
+        ('S4', 'На утверждении'),
+    ]
+    # Коды ручного вердикта проверки: хранятся в review_result, а не в
+    # проекции состояния (исключение из правила «всё вычисляется»).
+    MANUAL_REVIEW_CODES = ('S1', 'S2', 'S4')
+    review_result = models.CharField(
+        max_length=2,
+        choices=REVIEW_RESULT_CHOICES,
+        blank=True,
+        default='',
+        verbose_name="Результат последней проверки",
+    )
+
+    # Переопределение итога согласования (SPEC 2.0, волна 0, п. 6):
+    # «B вопреки блокирующим» — только ГИП проекта, с обоснованием.
+    # Действует до появления нового блокирующего замечания; каждая
+    # установка пишется в ChangeSetEntry ('result_override').
+    outcome_override = models.BooleanField(
+        default=False,
+        verbose_name="Итог переопределён ГИПом",
+    )
+    outcome_override_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='+',
+        verbose_name="Кто переопределил итог",
+    )
+    outcome_override_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        verbose_name="Когда переопределён итог",
+    )
+    outcome_override_text = models.TextField(
+        blank=True,
+        default='',
+        verbose_name="Обоснование переопределения итога",
+    )
+
+    # Проекция состояния на прежние признаки (только чтение / вычисление).
+    # Соответствие — таблица STATE_PROJECTION ниже; при записи сеттеры
+    # переводят состояние, а не хранят признак отдельно.
     STATUS_CHOICES = [
         ('draft', 'Черновик'),
         ('in_review', 'На проверке'),
-        ('approved', 'Утвержден'),
+        ('approved', 'Утверждён'),
         ('archived', 'Архив'),
     ]
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, verbose_name="Статус")
-    # Требование владельца (UI-аудит): в интерфейсе коды S0–S4, A, B, CR
-    # не выводятся — только официальные русские названия ниже. Значения
-    # для БД не меняются, поэтому миграция не требуется.
     SUITABILITY_CHOICES = [
         ('S0', 'Черновик'),
         ('S1', 'Для совместной работы'),
@@ -133,9 +295,7 @@ class Document(models.Model):
         ('S4', 'На утверждении'),
         ('A', 'Утверждён'),
         ('B', 'Утверждено с замечаниями'),
-        ('CR', 'Утверждён'),
     ]
-    # Пояснения к статусам документа для карточки (тултип/подпись).
     SUITABILITY_DESCRIPTIONS = {
         'S0': 'Документ в разработке, не передаётся другим подразделениям.',
         'S1': 'Документ передан смежным отделам для учёта в их работе.',
@@ -144,26 +304,156 @@ class Document(models.Model):
         'S4': 'Документ передан Заказчику для утверждения.',
         'A': 'Документ утверждён Заказчиком, допущен к использованию.',
         'B': 'Документ утверждён Заказчиком с замечаниями.',
-        'CR': 'Исполнительная документация утверждена Заказчиком.',
     }
-    suitability_code = models.CharField(
-        max_length=2,
-        choices=SUITABILITY_CHOICES,
-        default='S0',
-        verbose_name="Код пригодности",
-    )
     INTERNAL_STATUS_CHOICES = [
         ('draft', 'В работе'),
         ('internal_review', 'На внутренней проверке'),
         ('rework', 'На доработке'),
         ('ready_to_share', 'Готов к передаче'),
     ]
-    internal_status = models.CharField(
-        max_length=20,
-        choices=INTERNAL_STATUS_CHOICES,
-        default='draft',
-        verbose_name="Внутренний статус",
-    )
+
+    # Соответствие состояния прежним признакам: (status, suitability,
+    # internal_status, зона). Зона — каноническая зона папки.
+    STATE_PROJECTION = {
+        STATE_WIP_DRAFT: ('draft', 'S0', 'draft', 'WIP'),
+        STATE_WIP_INTERNAL_REVIEW: ('draft', 'S0', 'internal_review', 'WIP'),
+        STATE_WIP_REWORK: ('draft', 'S0', 'rework', 'WIP'),
+        STATE_WIP_READY: ('draft', 'S0', 'ready_to_share', 'WIP'),
+        STATE_SHARED: ('in_review', 'S3', 'draft', 'SHARED'),
+        STATE_APPROVED: ('approved', 'A', 'draft', 'PUBLISHED'),
+        STATE_AS_BUILT: ('approved', 'A', 'draft', 'PUBLISHED'),
+        STATE_ARCHIVED: ('archived', 'A', 'draft', 'ARCHIVE'),
+    }
+
+    @classmethod
+    def state_from_projection(cls, status, suitability, internal_status):
+        """Состояние по прежним признакам; None, если пара не сопоставима."""
+        if status == 'draft' and suitability == 'S0' and internal_status in (
+            'draft', 'internal_review', 'rework', 'ready_to_share',
+        ):
+            return {
+                'draft': cls.STATE_WIP_DRAFT,
+                'internal_review': cls.STATE_WIP_INTERNAL_REVIEW,
+                'rework': cls.STATE_WIP_REWORK,
+                'ready_to_share': cls.STATE_WIP_READY,
+            }[internal_status]
+        if status == 'in_review' and suitability == 'S3':
+            return cls.STATE_SHARED
+        if status == 'approved' and suitability == 'A':
+            return cls.STATE_APPROVED
+        if status == 'archived' and suitability == 'A':
+            return cls.STATE_ARCHIVED
+        return None
+
+    def _projection(self):
+        return self.STATE_PROJECTION[self.state]
+
+    @property
+    def status(self) -> str:
+        return self._projection()[0]
+
+    @status.setter
+    def status(self, value):
+        self._set_projection(status=value)
+
+    @property
+    def suitability_code(self) -> str:
+        """Код пригодности: ручной вердикт в зоне WIP, иначе проекция.
+
+        Исключение из правила «всё вычисляется» (решение владельца):
+        ручной вердикт ``review_result`` читается, пока документ находится
+        в зоне проверки WIP. Вердикт не переживает выход из проверки —
+        вне WIP возвращается проекция состояния.
+        """
+        if self.state.startswith('wip_') and self.review_result:
+            return self.review_result
+        return self._projection()[1]
+
+    @suitability_code.setter
+    def suitability_code(self, value):
+        """Единственный санкционированный канал записи review_result.
+
+        Ручной вердикт проверки (S1/S2/S4) пишется только здесь и состояние
+        не меняет: смена ``review_result`` — не переход состояния, страж
+        ``Document.save()`` для неё не применяется. Остальные коды задают
+        группу состояния.
+        """
+        if value in self.MANUAL_REVIEW_CODES:
+            self.review_result = value
+            return
+        if value in ('S0', 'S3', 'A', 'B'):
+            self.review_result = ''
+        if value == 'S0':
+            self.state = (
+                self.state if self.state.startswith('wip_')
+                else self.STATE_WIP_DRAFT
+            )
+        elif value == 'S3':
+            self.state = self.STATE_SHARED
+        elif value in ('A', 'B'):
+            self.state = self.STATE_APPROVED
+        # Неизвестный код не меняет состояние (совместимость с прежним CharField).
+
+    @property
+    def internal_status(self) -> str:
+        return self._projection()[2]
+
+    @internal_status.setter
+    def internal_status(self, value):
+        self._set_projection(internal_status=value)
+
+    def _set_projection(self, status=None, suitability=None, internal_status=None):
+        """Задаёт состояние по признаку (совместимость с прежним API).
+
+        Признак задаёт состояние по умолчанию для своей группы: статус
+        ``draft`` — рабочее состояние (с внутренним статусом текущего),
+        ``in_review`` — на согласовании, ``approved`` — утверждён,
+        ``archived`` — архив. Пригодность и внутренний статус — только
+        вычисляются, поэтому несовпадающая пара не отвергается, а
+        нормализуется к состоянию группы.
+        """
+        cur_status, _, cur_internal, _ = self._projection()
+        if internal_status is not None and status is None:
+            status = 'draft'
+        new_status = status if status is not None else cur_status
+        if new_status == 'draft':
+            internal = internal_status if internal_status is not None else cur_internal
+            new = self.state_from_projection('draft', 'S0', internal)
+            if new is None:
+                new = self.STATE_WIP_DRAFT
+        elif new_status == 'in_review':
+            new = self.STATE_SHARED
+        elif new_status == 'approved':
+            new = self.STATE_APPROVED
+        elif new_status == 'archived':
+            new = self.STATE_ARCHIVED
+        else:
+            # Прежнее поле статуса принимало любую строку (CharField без
+            # проверки при создании). Для совместимости неизвестный статус
+            # не меняет состояние; строгая проверка — в сервисах переходов.
+            return
+        self.state = new
+
+    def get_status_display(self) -> str:
+        return dict(self.STATUS_CHOICES).get(self.status, self.status)
+
+    def get_suitability_code_display(self) -> str:
+        return dict(self.SUITABILITY_CHOICES).get(
+            self.suitability_code, self.suitability_code
+        )
+
+    def get_internal_status_display(self) -> str:
+        return dict(self.INTERNAL_STATUS_CHOICES).get(
+            self.internal_status, self.internal_status
+        )
+
+    def get_state_display(self) -> str:
+        return dict(self.STATE_CHOICES).get(self.state, self.state)
+
+    @property
+    def zone(self) -> str:
+        """Зона по состоянию (папка зоны учитывается в services._effective_zone)."""
+        return self._projection()[3]
     public_link_token = models.UUIDField(
         null=True,
         blank=True,
@@ -203,40 +493,43 @@ class Document(models.Model):
         )
 
     def save(self, *args, **kwargs):
-        """Не даёт менять статус/пригодность в обход FSM.
+        """Страж: состояние меняется только через переход (сервис).
 
-        Штатные сервисы выставляют ``_from_service = True`` после своей
-        проверки. Для прямых сохранений используется создатель документа
-        как пользователь перехода.
+        Изменение ``state`` (а значит, статуса, пригодности, внутреннего
+        статуса и зоны — все вычисляются из него) без ``_from_service = True``
+        проверяется машиной переходов ``validate_transition``. Страж
+        блокирует смену ``state`` без ``_from_service``; смена только
+        ``folder`` — легальна (перемещение внутри зоны, решение владельца
+        25.11.2026).
+
+        Смена ``review_result`` легитимна в обход стража: это не переход
+        состояния, а ручной вердикт проверки (санкционированный канал —
+        сеттер ``suitability_code``).
         """
         update_fields = kwargs.get('update_fields')
-        touches_status = update_fields is None or bool(
-            {'status', 'suitability_code'} & set(update_fields or ())
+        touches_state = update_fields is None or bool(
+            {'state', 'folder'} & set(update_fields or ())
         )
-        if not self._state.adding and touches_status:
+        if not self._state.adding and touches_state:
             old = Document.objects.filter(pk=self.pk).values(
-                'status', 'suitability_code'
+                'state', 'folder_id'
             ).first()
-            if old and (
-                old['status'] != self.status
-                or old['suitability_code'] != self.suitability_code
-            ) and not getattr(self, '_from_service', False):
+            changed_state = bool(old) and old['state'] != self.state
+            changed_folder = bool(old) and old['folder_id'] != self.folder_id
+            if (changed_state or changed_folder) and not getattr(
+                self, '_from_service', False
+            ):
                 from storage.domain.services import validate_transition
 
                 user = getattr(self, '_transition_user', None) or self.created_by
                 if user is None:
                     raise ValidationError(
-                        "Нельзя изменить статус документа без пользователя"
+                        "Нельзя изменить состояние документа без пользователя"
                     )
                 previous = copy(self)
-                previous.status = old['status']
-                previous.suitability_code = old['suitability_code']
-                validate_transition(
-                    previous,
-                    self.status,
-                    user,
-                    self.suitability_code,
-                )
+                previous.state = old['state']
+                status, suitability, _, _ = Document.STATE_PROJECTION[self.state]
+                validate_transition(previous, status, user, suitability)
         result = super().save(*args, **kwargs)
         if getattr(self, '_from_service', False):
             self._from_service = False
@@ -344,15 +637,54 @@ class Folder(models.Model):
         return f'{self.project.code} / {self.name}'
 
 
+# Причина новой версии документа (SPEC 2.0, волна 0, п. 5).
+# issue/task/rfi требуют полиморфной ссылки на источник; other — текста.
+# Тип «исходные данные» появится в волне 1 вместе с реестром ИД.
+VERSION_REASON_CHOICES = [
+    ('issue', 'Замечание'),
+    ('task', 'Задание'),
+    ('rfi', 'Запрос на информацию'),
+    ('other', 'Другое'),
+]
+
+
 class DocumentVersion(models.Model):
     document = models.ForeignKey(Document, on_delete=models.CASCADE, related_name='versions', verbose_name="Документ")
     version_number = models.IntegerField(verbose_name="Номер версии")
     file = models.FileField(upload_to='documents/%Y/%m/', verbose_name="Файл")
     file_size = models.BigIntegerField(verbose_name="Размер файла")
     file_hash = models.CharField(max_length=64, blank=True, verbose_name="Хеш файла")
-    comment = models.TextField(blank=True, verbose_name="Комментарий")
+    # «Состав изменений» — что именно поменялось в этой версии.
+    comment = models.TextField(blank=True, verbose_name="Состав изменений")
     uploaded_at = models.DateTimeField(auto_now_add=True, verbose_name="Дата загрузки")
     uploaded_by = models.ForeignKey(User, on_delete=models.PROTECT, verbose_name="Загрузил")
+    # Причина версии (SPEC 2.0, волна 0, п. 5). Для issue/task/rfi
+    # обязательна ссылка на источник (content_type + object_id), для
+    # other — непустой reason_text. «Исходные данные» — волна 1.
+    reason_type = models.CharField(
+        max_length=10,
+        choices=VERSION_REASON_CHOICES,
+        default='other',
+        verbose_name="Тип причины версии",
+    )
+    content_type = models.ForeignKey(
+        ContentType,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        verbose_name="Тип источника причины",
+    )
+    object_id = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        verbose_name="ID источника причины",
+    )
+    reason = GenericForeignKey('content_type', 'object_id')
+    reason_text = models.TextField(
+        blank=True,
+        default='',
+        verbose_name="Причина версии (текст)",
+    )
     # Этап 20 (треб. 3): статус ИИ-индексации версии (RAG-поиск по PDF).
     # Значения согласованы с ai_checks.domain.models.IndexingStatus:
     # pending → processing → done | error. Choices дублируются без
@@ -377,6 +709,92 @@ class DocumentVersion(models.Model):
 
     def __str__(self):
         return f'v{self.version_number} - {self.document.code}'
+
+    def get_reason_object(self):
+        """Источник причины или None (объект мог быть удалён)."""
+        try:
+            return self.reason
+        except ObjectDoesNotExist:
+            return None
+
+
+# Журнал изменений версии (SPEC 2.0, волна 0, п. 8).
+# version_release — выпуск версии; result_override — переопределение
+# итога согласования ГИПом (п. 6); approval — запись об одобрении (п. 7,
+# добавляется отдельным шагом).
+CHANGESET_ENTRY_TYPES = [
+    ('version_release', 'Выпуск версии'),
+    ('result_override', 'Переопределение итога согласования'),
+    ('approval', 'Одобрение документа'),
+]
+
+
+class ChangeSetEntry(models.Model):
+    """Запись журнала изменений версии документа.
+
+    Назначение — аудиторский след выпуска версии и опора для разрешения
+    на внесение изменений (форма 9 приложения Л ГОСТ Р 21.101-2026,
+    волна 2, п. 5.4): состав изменений, затронутые листы, автор и дата.
+
+    Правило источников: причина версии в запись НЕ дублируется — запись
+    читает ``version.reason_type`` / ``version.reason`` /
+    ``version.reason_text``, а состав изменений — ``version.comment``.
+    Одно поле — один источник.
+
+    Поле ``affected_sheets`` — свободный текст («листы 3, 7–9»), только
+    для записей типа ``version_release``; строгая валидация номеров
+    появится в волне 2 (п. 4.2), когда листы станут сущностью.
+
+    План расширения: записи п. 6 (переходы и итог согласования) и п. 7
+    (одобрения) лягут в этот же журнал через ``entry_type``; текст
+    решения/одобрения — в ``text``.
+    """
+
+    version = models.ForeignKey(
+        DocumentVersion,
+        on_delete=models.CASCADE,
+        related_name='changeset_entries',
+        verbose_name="Версия документа",
+    )
+    entry_type = models.CharField(
+        max_length=20,
+        choices=CHANGESET_ENTRY_TYPES,
+        default='version_release',
+        verbose_name="Тип записи",
+    )
+    text = models.TextField(
+        blank=True,
+        default='',
+        verbose_name="Текст записи",
+    )
+    affected_sheets = models.TextField(
+        blank=True,
+        default='',
+        verbose_name="Затронутые листы",
+    )
+    created_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='changeset_entries',
+        verbose_name="Автор записи",
+    )
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+        verbose_name="Дата записи",
+    )
+
+    class Meta:
+        ordering = ['-created_at', '-pk']
+        verbose_name = "Запись изменений версии"
+        verbose_name_plural = "Записи изменений версий"
+
+    def __str__(self):
+        return (
+            f'{self.get_entry_type_display()} — '
+            f'v{self.version.version_number} {self.version.document.code}'
+        )
 
 
 class UserProfile(models.Model):
@@ -434,6 +852,13 @@ class ProjectMembership(models.Model):
         unique_together = ('project', 'user')
         verbose_name = "Участник проекта"
         verbose_name_plural = "Участники проектов"
+        constraints = [
+            models.UniqueConstraint(
+                fields=['project'],
+                condition=models.Q(role_in_project='gip'),
+                name='uniq_active_gip_per_project',
+            ),
+        ]
 
     def __str__(self):
         return f'{self.user.username} - {self.project.code} ({self.role_in_project})'

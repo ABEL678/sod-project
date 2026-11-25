@@ -48,9 +48,9 @@ class IssueTests(TestCase):
             code='P-1',
             name='Проект',
             status='active',
-            gip=self.user_gip,
             created_by=self.user_gip,
         )
+        ProjectMembership.objects.update_or_create(project=self.project, user=self.user_gip, defaults={'role_in_project': 'gip'})
         self.section = Section.objects.create(
             project=self.project,
             code='АР',
@@ -66,6 +66,7 @@ class IssueTests(TestCase):
             name='План 1 этажа',
             doc_type='drawing',
             file=SimpleUploadedFile('plan.pdf', b'data', content_type='application/pdf'),
+            reason_text='Тестовая причина',
         )
         self.document = self.version.document
 
@@ -319,6 +320,7 @@ class IssueTests(TestCase):
             name='Чужой документ',
             doc_type='drawing',
             file=SimpleUploadedFile('other.pdf', b'data', content_type='application/pdf'),
+            reason_text='Тестовая причина',
         )
         with self.assertRaises(ValueError):
             create_issue(
@@ -334,7 +336,7 @@ class IssueStatusMatrixTests(TestCase):
 
     def setUp(self):
         self.company = Company.objects.create(name='Матрица')
-        self.gip = self._user('gip', 'gip')
+        self.gip = self._user('gip', 'admin')
         self.membership_gip = self._user('membership_gip', 'gip')
         self.developer = self._user('developer', 'developer')
         self.checker = self._user('checker', 'checker')
@@ -348,7 +350,6 @@ class IssueStatusMatrixTests(TestCase):
             code='MATRIX-1',
             name='Матрица',
             status='active',
-            gip=self.gip,
             created_by=self.gip,
         )
         self.section = Section.objects.create(
@@ -362,11 +363,7 @@ class IssueStatusMatrixTests(TestCase):
             user=self.developer,
             role_in_project='developer',
         )
-        ProjectMembership.objects.create(
-            project=self.project,
-            user=self.membership_gip,
-            role_in_project='gip',
-        )
+        ProjectMembership.objects.update_or_create(project=self.project, user=self.membership_gip, defaults={'role_in_project': 'gip'})
         self.developer.userprofile.allowed_sections.add(self.section)
         self.contractor.userprofile.allowed_sections.add(self.section)
 
@@ -378,6 +375,7 @@ class IssueStatusMatrixTests(TestCase):
             name='План',
             doc_type='drawing',
             file=SimpleUploadedFile('plan.pdf', b'data', content_type='application/pdf'),
+            reason_text='Тестовая причина',
         ).document
 
     def _user(self, username, role):
@@ -451,6 +449,7 @@ class IssueStatusMatrixTests(TestCase):
                 name='План 2',
                 doc_type='drawing',
                 file=SimpleUploadedFile('plan2.pdf', b'data', content_type='application/pdf'),
+                reason_text='Тестовая причина',
             )
 
     def test_contractor_can_create_issue_in_allowed_section(self):
@@ -464,7 +463,7 @@ class IssueStatusMatrixTests(TestCase):
     def test_gip_can_set_any_status(self):
         for status, _ in Issue.STATUS_CHOICES:
             issue = self._issue()
-            update_issue_status(self.gip, issue, status)
+            update_issue_status(self.membership_gip, issue, status)
             issue.refresh_from_db()
             self.assertEqual(issue.status, status)
 

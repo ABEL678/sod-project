@@ -87,6 +87,7 @@ def main():
                     name=f'Нагрузочный документ {index}',
                     doc_type='drawing',
                     file=SimpleUploadedFile(f'{code}.pdf', PDF_BYTES),
+                    reason_text='Нагрузочная проба производительности',
                 )
                 created += 1
             except Exception:

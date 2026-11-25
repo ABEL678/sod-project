@@ -121,6 +121,23 @@
     <span class="badge text-bg-secondary">{{ document.get_suitability_code_display }}</span>
     <span class="small text-muted d-none d-xl-inline">{{ suitability_hint }}</span>
   </div>
+  <div class="d-flex align-items-center gap-1" title="Итог согласования по открытым замечаниям">
+    <span class="text-muted small">Итог согласования:</span>
+    {% if approval_outcome == 'A' %}
+      <span class="badge text-bg-success">A — согласовано</span>
+    {% elif approval_outcome == 'B' %}
+      <span class="badge text-bg-warning text-dark">B — согласовано с замечаниями</span>
+    {% else %}
+      <span class="badge text-bg-danger">C — не согласовано</span>
+    {% endif %}
+    {% if document.outcome_override %}
+      <span class="badge text-bg-info text-dark" title="{{ document.outcome_override_text }}">переопределено ГИПом</span>
+    {% endif %}
+  </div>
+  <div class="d-flex align-items-center gap-1">
+    <span class="text-muted small">Результат проверки:</span>
+    <span class="badge text-bg-light border">{{ review_result_display }}</span>
+  </div>
   {% if zone_label %}
   <div class="d-flex align-items-center gap-1">
     <span class="text-muted small">Состояние:</span>
@@ -150,6 +167,74 @@
     }
   }
 </script>
+{% endif %}
+
+{# SPEC 2.0, волна 0, п. 5: причина выбранной версии и состав изменений. #}
+{% if selected_version and not public_view %}
+  {% with reason=selected_version.get_reason_object %}
+  <div class="doc-info-bar d-flex flex-wrap align-items-center gap-3 px-3 py-2 border-bottom bg-white small" id="versionReasonBar">
+    <span class="text-muted">Версия v{{ selected_version.version_number }}:</span>
+    <span class="badge text-bg-light border">{{ selected_version.get_reason_type_display }}</span>
+    {% if reason %}
+      {% if selected_version.reason_type == 'issue' %}
+        <a href="{% url 'storage:document_detail' reason.document_id %}#issue-{{ reason.pk }}">
+          Замечание №{{ reason.pk }} · {{ reason.document.code }}
+        </a>
+      {% elif selected_version.reason_type == 'task' %}
+        <a href="{% url 'storage:task_detail' reason.project_id reason.pk %}">
+          Задание #{{ reason.pk }} — {{ reason.title|truncatechars:60 }}
+        </a>
+      {% elif selected_version.reason_type == 'rfi' %}
+        <a href="{% url 'storage:rfi_detail' reason.project_id reason.pk %}">
+          RFI-{{ reason.number|stringformat:"02d" }} — {{ reason.subject|truncatechars:60 }}
+        </a>
+      {% endif %}
+    {% endif %}
+    {% if selected_version.reason_text %}
+      <span>{{ selected_version.reason_text }}</span>
+    {% endif %}
+    {% if selected_version.comment %}
+      <span class="text-muted">Состав изменений:</span>
+      <span>{{ selected_version.comment }}</span>
+    {% endif %}
+  </div>
+  {% endwith %}
+{% endif %}
+
+{# SPEC 2.0, волна 0, п. 8: журнал изменений по текущей и предыдущим версиям. #}
+{% if not public_view and changeset_entries %}
+<div class="doc-info-bar px-3 py-2 border-bottom bg-white small" id="changesetJournal">
+  <details>
+    <summary class="fw-semibold">Запись изменений</summary>
+    <div class="d-flex flex-column gap-2 mt-2">
+      {% for entry in changeset_entries %}
+        <div class="d-flex flex-wrap align-items-baseline gap-2 border-top pt-2">
+          <span class="badge text-bg-light border">{{ entry.get_entry_type_display }}</span>
+          <span class="text-muted">v{{ entry.version.version_number }}</span>
+          <span class="text-muted">{{ entry.created_at|date:"d.m.Y H:i" }}</span>
+          <span>{{ entry.created_by.get_full_name|default:entry.created_by.username|default:"—" }}</span>
+          {% if entry.affected_sheets %}
+            <span class="text-muted">Затронутые листы:</span>
+            <span>{{ entry.affected_sheets }}</span>
+          {% endif %}
+          {% if entry.version.comment %}
+            <span class="text-muted">Состав изменений:</span>
+            <span>{{ entry.version.comment }}</span>
+          {% endif %}
+          {% with reason=entry.version.get_reason_object %}
+            <span class="badge text-bg-light border">{{ entry.version.get_reason_type_display }}</span>
+            {% if reason %}
+              <span>{{ reason }}</span>
+            {% elif entry.version.reason_text %}
+              <span>{{ entry.version.reason_text }}</span>
+            {% endif %}
+          {% endwith %}
+          {% if entry.text %}<span>{{ entry.text }}</span>{% endif %}
+        </div>
+      {% endfor %}
+    </div>
+  </details>
+</div>
 {% endif %}
 
 <div class="toolbar viewer-toolbar">
@@ -281,18 +366,42 @@
   {# Этап 19: workflow из хедера — сюда; плашка «Публикация заблокирована» встроена в кнопку #}
   <div class="group viewer-workflow-actions" data-viewer-actions
        style="margin-left: auto;">
-    {% if open_issues_count %}
-      <button type="button"
-              class="btn btn-sm btn-danger me-1"
-              data-blocked="1"
-              aria-disabled="true"
-              onclick="runWorkflowAction(this)"
-              title="Публикация заблокирована: {{ open_issues_phrase }} — закройте замечания, чтобы отправить документ на проверку"
-              aria-label="Отправить на проверку (заблокировано: {{ open_issues_phrase }})">
-        Отправить на проверку
-        <span class="badge text-bg-light border ms-1" data-open-issues-count>{{ open_issues_count }}</span>
-      </button>
+    {% if approval_outcome == 'C' %}
+      <span class="badge text-bg-danger me-1"
+            title="Есть открытые замечания с блокирующим флагом">
+        C — не согласовано
+      </span>
+      {% if blocking_issues %}
+        <span class="small text-danger me-2" data-blocking-issues>
+          {% for issue in blocking_issues %}
+            <a href="#issue-{{ issue.pk }}" class="text-danger">#{{ issue.pk }}</a>{% if not forloop.last %}, {% endif %}
+          {% endfor %}
+        </span>
+      {% endif %}
+      {% if can_override_outcome and override_action_url %}
+        <form method="post" action="{{ override_action_url }}"
+              class="d-flex align-items-center gap-1 mb-0"
+              data-outcome-override-form>
+          {% csrf_token %}
+          <input type="hidden" name="action" value="{{ override_action }}">
+          <input type="text" name="override_justification"
+                 class="form-control form-control-sm"
+                 style="min-width: 16rem;"
+                 placeholder="Обоснование (B вопреки блокирующим)" required>
+          <button type="submit" class="btn btn-sm btn-warning">
+            B вопреки блокирующим
+          </button>
+        </form>
+      {% else %}
+        <span class="small text-muted">Действия скрыты до снятия блокирующих замечаний.</span>
+      {% endif %}
     {% else %}
+      {% if approval_outcome == 'B' %}
+        <span class="badge text-bg-warning text-dark me-1"
+              title="Открыты только неблокирующие замечания">
+          B — согласовано с замечаниями
+        </span>
+      {% endif %}
       {% for action in workflow_actions %}
         <button type="button"
                 class="wf-btn wf-btn-text btn btn-sm btn-outline-secondary me-1"
@@ -519,6 +628,15 @@
           <div class="mb-3">
             <label for="issueDescription" class="form-label">Текст замечания</label>
             <textarea id="issueDescription" name="description" class="form-control" rows="4" required></textarea>
+          </div>
+          <div class="form-check mb-3">
+            <input class="form-check-input" type="checkbox" name="is_blocking" id="issueIsBlocking" value="1">
+            <label class="form-check-label" for="issueIsBlocking">
+              Блокирующее замечание
+            </label>
+            <div class="form-text">
+              Блокирует переход документа, пока замечание открыто (итог C).
+            </div>
           </div>
           <div class="mb-0">
             <label for="issueAssignee" class="form-label">Ответственный</label>

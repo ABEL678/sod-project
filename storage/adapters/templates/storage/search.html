@@ -131,7 +131,7 @@
                                     <option value="">Все версии</option>
                                     {% for version in document.versions.all %}
                                         <option value="{% url 'storage:document_download' version.pk %}">
-                                            v{{ version.version_number }} — {{ version.uploaded_at|date:"d.m.Y H:i" }}{% if version.comment %} — {{ version.comment|truncatechars:40 }}{% endif %}
+                                            v{{ version.version_number }} — {{ version.uploaded_at|date:"d.m.Y H:i" }}{% if version.comment %} — {{ version.comment|truncatechars:40 }}{% endif %}{% if version.reason_text %} · {{ version.get_reason_type_display }}: {{ version.reason_text|truncatechars:30 }}{% endif %}
                                         </option>
                                     {% endfor %}
                                 </select>

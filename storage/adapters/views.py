@@ -44,6 +44,7 @@ from storage.adapters.filters import DocumentFilter
 from storage.adapters.local_storage import LocalFileStorage
 from storage.adapters.tables import DocumentTable
 from storage.domain.models import (
+    ChangeSetEntry,
     Company,
     DesignTask,
     DesignTaskAttachment,
@@ -61,6 +62,7 @@ from storage.domain.models import (
     Section,
     TaskTemplate,
     UserProfile,
+    VERSION_REASON_CHOICES,
 )
 from storage.domain.design_colors import (
     EXCEL_LINK,
@@ -69,9 +71,14 @@ from storage.domain.design_colors import (
 )
 from storage.domain.services import (
     _NOT_TERMINAL_TASK_STATUSES,
+    ACTIVE_ISSUE_STATUSES,
     ALLOWED_UPLOAD_EXTENSIONS,
     DOCUMENT_VIEW_COLUMNS,
     MAX_UPLOAD_SIZE,
+    approval_outcome,
+    approval_override_action,
+    blocking_issues_for_document,
+    can_override_outcome,
     add_company_member,
     add_task_attachment,
     allowed_issue_statuses,
@@ -79,6 +86,8 @@ from storage.domain.services import (
     attach_user_to_company,
     can_archive_project,
     can_create_project,
+    create_customer,
+    list_customers,
     can_delete_project,
     can_edit_project,
     can_manage_project_participants,
@@ -161,10 +170,12 @@ from storage.domain.services import (
     move_documents,
     move_folder,
     normalize_document_view_config,
+    pd_volume_name,
     restore_project,
     rename_folder,
     reset_project_structure,
     restore_document,
+    review_result_display,
     restore_folder,
     ru_plural,
     save_document_view,
@@ -200,6 +211,7 @@ DOCUMENT_VIEW_COLUMN_LABELS = {
     'doc_type': 'Тип',
     'zone': 'Состояние',
     'suitability': 'Статус документа',
+    'review_result': 'Результат проверки',
     'internal_status': 'Внутренний статус',
     'issues': 'Замечания',
     'version': 'Версия',
@@ -216,6 +228,7 @@ DEFAULT_COLUMN_WIDTHS = {
     'doc_type': 100,
     'zone': 150,
     'suitability': 180,
+    'review_result': 170,
     'internal_status': 170,
     'issues': 90,
     'version': 70,
@@ -232,6 +245,7 @@ DOCUMENT_TABLE_COLUMN_MAP = {
     'doc_type': 'doc_type',
     'zone': 'zone',
     'suitability_code': 'suitability',
+    'review_result': 'review_result',
     'internal_status': 'internal_status',
     'issues': 'issues',
     'current_version': 'version',
@@ -567,6 +581,7 @@ class ProjectListView(LoginRequiredMixin, ListView):
         context['active_tab'] = active_tab
         context['can_create_project'] = can_create_project(user)
         context['project_status_choices'] = Project.STATUS_CHOICES
+        context['stage_choices'] = Project.STAGE_CHOICES
         projects = list(context['projects'])
         for project in projects:
             project.can_edit = (
@@ -582,6 +597,9 @@ class ProjectListView(LoginRequiredMixin, ListView):
                 active_tab == 'trash' and can_restore_project(user, project)
             )
         context['projects'] = projects
+        company_for_customers = get_user_company(user)
+        if company_for_customers is not None:
+            context['customer_choices'] = list_customers(company_for_customers)
         if context['can_create_project']:
             company = get_user_company(user)
             candidates = get_user_model().objects.filter(
@@ -1103,6 +1121,19 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
             'can_view_tasks': True,
             'can_purge_trash': can_purge_trash(user, project),
             'doc_type_choices': Document.DOC_TYPE_CHOICES,
+            # SPEC 2.0, волна 0, п. 5: источники причины версии — только
+            # объекты того же проекта (issue/task/rfi).
+            'reason_issues': Issue.objects.filter(
+                document__project=project,
+                document__is_deleted=False,
+            ).select_related('document').order_by('-created_at'),
+            'reason_tasks': DesignTask.objects.filter(
+                project=project,
+            ).order_by('-pk'),
+            'reason_rfis': RfiTask.objects.filter(
+                project=project,
+            ).order_by('-number'),
+            'version_reason_choices': VERSION_REASON_CHOICES,
             'status_choices': Document.STATUS_CHOICES,
             'active_zone': active_zone,
             'zone_segments': [
@@ -1119,7 +1150,6 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
         # Счётчики замечаний проекта — «нервная система» для ГИПа:
         # видно из тулбара таблицы, сколько требует внимания прямо сейчас.
         # (Тот же смысл, что и в реестре: issues:issue_registry.)
-        active_issue_statuses = ('NEW', 'IN_PROGRESS', 'DISCUSSION', 'REJECTED')
         context['issue_counts'] = Issue.objects.filter(
             document__project=project,
             document__in=get_accessible_documents(user),
@@ -1130,7 +1160,7 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
                 'pk',
                 filter=Q(due_date__isnull=False)
                 & Q(due_date__lt=timezone.localdate())
-                & Q(status__in=active_issue_statuses),
+                & Q(status__in=ACTIVE_ISSUE_STATUSES),
             ),
         )
 
@@ -1462,11 +1492,7 @@ def _can_issue_task(user, project):
     profile = getattr(user, 'userprofile', None)
     if profile is not None and profile.role == 'admin':
         return True
-    if project.gip_id == user.id:
-        return True
-    if project.memberships.filter(user=user, role_in_project='gip').exists():
-        return True
-    return False
+    return project.memberships.filter(user=user, role_in_project='gip').exists()
 
 
 class TaskCreateView(LoginRequiredMixin, View):
@@ -1524,8 +1550,9 @@ class TaskCreateView(LoginRequiredMixin, View):
                 continue
             seen_ids.add(membership.user_id)
             assignee_choices.append(membership.user)
-        if project.gip is not None and project.gip_id not in seen_ids:
-            assignee_choices.append(project.gip)
+        gip = project.gip
+        if gip is not None and gip.pk not in seen_ids:
+            assignee_choices.append(gip)
 
         return {
             'project': project,
@@ -1605,10 +1632,7 @@ class TaskCreateView(LoginRequiredMixin, View):
             candidate = None
             if str(raw_assignee).isdigit():
                 candidate = get_user_model().objects.filter(pk=raw_assignee).first()
-            if candidate is None or not (
-                project.memberships.filter(user=candidate).exists()
-                or project.gip_id == candidate.pk
-            ):
+            if candidate is None or not project.memberships.filter(user=candidate).exists():
                 errors.append('Исполнитель должен быть участником проекта.')
             else:
                 assignee = candidate
@@ -3190,6 +3214,15 @@ def _zip_documents(documents, filename='documents.zip', base_folder=None):
     return response
 
 
+def _customer_id_from_post(request):
+    """id карточки заказчика из формы; _UNSET, если поле не передано."""
+    from storage.domain.services import _UNSET
+
+    if 'customer_id' not in request.POST:
+        return _UNSET
+    return request.POST.get('customer_id') or None
+
+
 class ProjectCreateView(LoginRequiredMixin, View):
     def post(self, request):
         if not can_create_project(request.user):
@@ -3212,11 +3245,12 @@ class ProjectCreateView(LoginRequiredMixin, View):
                 company=company,
                 code=request.POST.get('code', '').strip(),
                 name=request.POST.get('name', '').strip(),
-                customer=request.POST.get('customer', '').strip(),
+                customer_id=request.POST.get('customer_id') or None,
                 gip=gip,
                 created_by=request.user,
-                template_key=request.POST.get('template_key') or None,
                 base_code=request.POST.get('base_code', '').strip(),
+                object_type=request.POST.get('object_type') or None,
+                deploy_scope=request.POST.get('deploy_scope') or 'rd',
             )
         except (PermissionDenied, ValueError) as exc:
             messages.error(request, str(exc))
@@ -3230,6 +3264,38 @@ class ProjectCreateView(LoginRequiredMixin, View):
         else:
             messages.success(request, f'Проект «{project.name}» создан.')
         return redirect('storage:project_detail', pk=project.pk)
+
+
+class CustomerListView(LoginRequiredMixin, TemplateView):
+    """Карточки организаций-заказчиков компании пользователя."""
+
+    template_name = 'storage/customer_list.html'
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        company = get_user_company(self.request.user)
+        context['customers'] = list_customers(company) if company else []
+        context['can_create_customer'] = company is not None
+        return context
+
+
+class CustomerCreateView(LoginRequiredMixin, View):
+    def post(self, request):
+        company = get_user_company(request.user)
+        if company is None:
+            messages.error(request, 'Не удалось определить компанию пользователя.')
+            return redirect('storage:customer_list')
+        try:
+            customer = create_customer(
+                request.user,
+                company,
+                request.POST.get('name', ''),
+            )
+        except (PermissionDenied, ValueError) as exc:
+            messages.error(request, str(exc))
+        else:
+            messages.success(request, f'Организация «{customer.name}» добавлена.')
+        return redirect('storage:customer_list')
 
 
 class ProjectEditView(LoginRequiredMixin, View):
@@ -3254,9 +3320,10 @@ class ProjectEditView(LoginRequiredMixin, View):
                 project,
                 code=request.POST.get('code', ''),
                 name=request.POST.get('name', ''),
-                customer=request.POST.get('customer', ''),
+                customer_id=_customer_id_from_post(request),
                 base_code=request.POST.get('base_code', ''),
                 status=request.POST.get('status') or project.status,
+                stage=request.POST.get('stage', ''),
                 gip=gip,
             )
         except (PermissionDenied, ValueError) as exc:
@@ -3457,12 +3524,100 @@ class FolderCreateFormView(LoginRequiredMixin, TemplateView):
                 pk=int(section_id),
             ).first()
 
+        suggestion = _folder_suggestion(project, parent, section)
         context.update({
             'project': project,
             'parent': parent,
             'section': section,
+            'suggested_code': suggestion['suggested_code'],
+            'suggested_name': suggestion['suggested_name'],
         })
         return context
+
+
+_RE_PART_PREFIX = re.compile(r'^Раздел\s+\d+\.\s*')
+_RE_SUB_PREFIX = re.compile(r'^Подраздел\s+\d+\.\d+\.\s*')
+
+
+def _first_free_number(used_codes: set[str], make_code, start: int = 1) -> int:
+    """Первый свободный номер K, для которого make_code(K) не занят."""
+    k = start
+    while make_code(k) in used_codes:
+        k += 1
+    return k
+
+
+def _folder_suggestion(project: Project, parent, section) -> dict:
+    """Предзаполнение «Новая папка» по родителю (МИКРО-4).
+
+    a) родитель — ИОС-подраздел (код пуст, имя «Подраздел N.M. …»):
+       код {base}-ИОС{M}.{K}, имя «Часть {K}. {имя без префикса}».
+       База {base}-ИОС{M} берётся из номера в имени подраздела (5.M),
+       а не из его кода: подраздел имеет code=''. Занятость — по кодам томов.
+    б) родитель — раздел ПД (код пуст, имя «Раздел N. …»):
+       код {base}-{шифр раздела}{K}, имя «Часть {K}. {имя без префикса}».
+    в) родитель — дисциплина РД (код пуст, section совпадает с родителем):
+       код {base}-{mark}{K}, имя = имя дисциплины.
+    г) иные родители / без родителя — пустые значения.
+    """
+    empty = {'suggested_code': '', 'suggested_name': ''}
+    if parent is None or parent.is_deleted:
+        return empty
+    base = (project.base_code or '').strip()
+    prefix = f'{base}-' if base else ''
+    name = (parent.name or '').strip()
+    siblings = Folder.objects.filter(
+        project=project, parent=parent, is_deleted=False,
+    ).values_list('code', 'name')
+    used_codes = {code for code, _ in siblings if code}
+
+    # а) ИОС-подраздел
+    if parent.section and parent.section.code == 'ИОС' and _RE_SUB_PREFIX.match(name):
+        sub_match = re.match(r'^Подраздел\s+\d+\.(\d+)\.\s*(.*)$', name)
+        if sub_match is None:
+            return empty
+        sub_name = sub_match.group(2).strip()
+        sub_number = sub_match.group(1)
+        # Схема (решение владельца): подраздел 5.N → {base}-ИОС{N}, том → {base}-ИОС{N}.K.
+        sub_code = f'{prefix}ИОС{sub_number}'
+        make = lambda k: f'{sub_code}.{k}'  # noqa: E731
+        k = _first_free_number(used_codes, make, start=1)
+        return {'suggested_code': make(k), 'suggested_name': f'Часть {k}. {sub_name}'}
+
+    # б) раздел ПД
+    if parent.section and not parent.code and _RE_PART_PREFIX.match(name) and parent.parent is not None and parent.parent.name.startswith('ПД'):
+        mark = parent.section.code
+        make = lambda k: f'{prefix}{mark}{k}'  # noqa: E731
+        k = _first_free_number(used_codes, make, start=1)
+        return {'suggested_code': make(k), 'suggested_name': pd_volume_name(k, name)}
+
+    # в) дисциплина РД
+    if parent.section and not parent.code and parent.parent is not None and parent.parent.name.startswith('РД'):
+        mark = parent.section.code
+        make = lambda k: f'{prefix}{mark}{k}'  # noqa: E731
+        k = _first_free_number(used_codes, make, start=1)
+        return {'suggested_code': make(k), 'suggested_name': f'Комплект {mark}{k}'}
+
+    return empty
+
+
+class FolderSuggestView(LoginRequiredMixin, View):
+    """JSON: предзаполнение «Новая папка» по родителю (МИКРО-4)."""
+
+    def get(self, request, project_id):
+        project = get_object_or_404(
+            get_accessible_projects(request.user),
+            pk=project_id,
+        )
+        if not can_manage_project_participants(request.user, project):
+            raise PermissionDenied("Недостаточно прав для создания папки")
+        parent = None
+        parent_id = (request.GET.get('parent') or '').strip()
+        if parent_id.isdigit():
+            parent = Folder.objects.filter(
+                project=project, pk=int(parent_id), is_deleted=False,
+            ).select_related('section', 'parent').first()
+        return JsonResponse(_folder_suggestion(project, parent, None))
 
 
 class FolderRenameFormView(LoginRequiredMixin, TemplateView):
@@ -3682,8 +3837,16 @@ class DocumentWorkflowView(LoginRequiredMixin, View):
             is_deleted=False,
         )
         action = (request.POST.get('action') or '').strip()
+        # Обоснование передаётся только если поле есть в форме: пустая
+        # строка — явная попытка переопределения без обоснования (ValueError).
+        override_justification = request.POST.get('override_justification')
         try:
-            transition_document_zone(request.user, document, action)
+            transition_document_zone(
+                request.user,
+                document,
+                action,
+                override_justification=override_justification,
+            )
         except PermissionDenied as exc:
             return JsonResponse(
                 {'status': 'error', 'error': str(exc)},
@@ -3729,8 +3892,14 @@ class DocumentInternalStatusView(LoginRequiredMixin, View):
             is_deleted=False,
         )
         action = (request.POST.get('action') or '').strip()
+        override_justification = request.POST.get('override_justification')
         try:
-            update_internal_status(request.user, document, action)
+            update_internal_status(
+                request.user,
+                document,
+                action,
+                override_justification=override_justification,
+            )
         except PermissionDenied as exc:
             return JsonResponse(
                 {'status': 'error', 'error': str(exc)},
@@ -4344,6 +4513,7 @@ def _issue_payload(issue):
         'y2_ratio': issue.y2_ratio,
         'status': issue.status,
         'status_label': issue.get_status_display(),
+        'is_blocking': bool(issue.is_blocking),
         'description': issue.description,
         'author': issue.author.get_full_name() or issue.author.username,
         'assignee': (
@@ -4491,6 +4661,16 @@ class DocumentDetailView(LoginRequiredMixin, DetailView):
         context['breadcrumbs'] = _document_breadcrumbs(self.object)
         context['versions'] = versions
         context['selected_version'] = selected_version
+        # SPEC 2.0, волна 0, п. 8: журнал изменений по всем версиям документа.
+        if getattr(self, 'public_view', False):
+            context['changeset_entries'] = []
+        else:
+            context['changeset_entries'] = (
+                ChangeSetEntry.objects
+                .filter(version__document=self.object)
+                .select_related('version', 'created_by', 'version__content_type')
+                .order_by('-version__version_number', 'created_at')
+            )
         context['is_current_version'] = is_current_version
         context['pdf_url'] = pdf_url
         context['pdf_url_current'] = pdf_url_current
@@ -4588,6 +4768,29 @@ class DocumentDetailView(LoginRequiredMixin, DetailView):
         context['can_create_issue'] = check_issue_permission(
             self.request.user, self.object
         )
+        # SPEC 2.0 w0 п. 6: итог согласования A/B/C — вычисляемый.
+        outcome = approval_outcome(self.object)
+        override_action = approval_override_action(self.object)
+        context['approval_outcome'] = outcome
+        context['blocking_issues'] = (
+            list(blocking_issues_for_document(self.object))
+            if outcome == 'C' else []
+        )
+        context['can_override_outcome'] = can_override_outcome(
+            self.request.user, self.object,
+        )
+        context['override_action'] = override_action
+        if override_action == 'approve_internal':
+            context['override_action_url'] = reverse(
+                'storage:document_internal_status_update',
+                args=[self.object.pk],
+            )
+        elif override_action:
+            context['override_action_url'] = reverse(
+                'storage:document_workflow', args=[self.object.pk],
+            )
+        else:
+            context['override_action_url'] = ''
         context['workflow_actions'] = _workflow_actions_payload(
             self.request.user, self.object
         )
@@ -4596,6 +4799,9 @@ class DocumentDetailView(LoginRequiredMixin, DetailView):
         context['suitability_hint'] = Document.SUITABILITY_DESCRIPTIONS.get(
             self.object.suitability_code, '',
         )
+        # Ручной вердикт проверки (review_result): читается только в WIP,
+        # вне зоны — прочерк (код нерелевантен).
+        context['review_result_display'] = review_result_display(self.object)
         context['zone_label'] = dict(Folder.ZONE_CHOICES).get(
             _effective_zone(self.object), '',
         )
@@ -4615,7 +4821,7 @@ def _document_code_edit_allowed(user, document: Document) -> bool:
     profile = getattr(user, 'userprofile', None)
     if profile is not None and profile.role in ('admin', 'gip'):
         return True
-    return document.project.gip_id == user.id
+    return document.project.memberships.filter(user=user, role_in_project='gip').exists()
 
 
 class DocumentCodeUpdateView(LoginRequiredMixin, View):
@@ -4709,6 +4915,39 @@ class DocumentUploadAjaxView(LoginRequiredMixin, View):
         # тип по расширению файла.
         doc_type = (request.POST.get('doc_type') or '').strip()
 
+        # SPEC 2.0, волна 0, п. 5: причина версии из формы. Источник
+        # передаётся строкой «<тип>:<id>» и проверяется на принадлежность
+        # проекту (issue — через документ), чтобы нельзя было сослаться
+        # на чужой объект.
+        reason_type = (request.POST.get('reason_type') or 'other').strip()
+        reason_text = (request.POST.get('reason_text') or '').strip()
+        affected_sheets = (request.POST.get('affected_sheets') or '').strip()
+        reason_object = None
+        raw_reason_object = (request.POST.get('reason_object') or '').strip()
+        if raw_reason_object:
+            source_type, _, source_id = raw_reason_object.partition(':')
+            if not source_id.isdigit():
+                return JsonResponse({'error': 'Неверный источник причины'}, status=400)
+            source_querysets = {
+                'issue': Issue.objects.filter(
+                    document__project=project,
+                    document__is_deleted=False,
+                ),
+                'task': DesignTask.objects.filter(project=project),
+                'rfi': RfiTask.objects.filter(project=project),
+            }
+            source_queryset = source_querysets.get(source_type)
+            if source_queryset is None:
+                return JsonResponse({'error': 'Неверный источник причины'}, status=400)
+            reason_object = source_queryset.filter(pk=int(source_id)).first()
+            if reason_object is None:
+                return JsonResponse({'error': 'Источник причины не найден'}, status=400)
+            if source_type != reason_type:
+                return JsonResponse(
+                    {'error': 'Источник причины не соответствует типу'},
+                    status=400,
+                )
+
         try:
             version = upload_document(
                 user=request.user,
@@ -4720,6 +4959,10 @@ class DocumentUploadAjaxView(LoginRequiredMixin, View):
                 file=file,
                 comment=request.POST.get('comment', ''),
                 folder=folder,
+                reason_type=reason_type,
+                reason_object=reason_object,
+                reason_text=reason_text,
+                affected_sheets=affected_sheets,
             )
         except ValidationError as exc:
             return JsonResponse(
@@ -4920,6 +5163,7 @@ class SimulateMailImportView(LoginRequiredMixin, View):
                 doc_type=rule.doc_type,
                 file=fake_file,
                 comment='Импортировано из почты (симуляция)',
+                reason_text='Загружено из почты (симуляция импорта)',
             )
         except ValidationError as exc:
             messages.error(request, ' '.join(exc.messages))

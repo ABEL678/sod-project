@@ -47,7 +47,10 @@ User = get_user_model()
 # 1 выборка проекта, 3 — сводка (count + группировка + просрочка),
 # 1 — «Требуют внимания» (единственный запрос с select_related),
 # 3 — контекст-процессоры (уведомления и счётчики замечаний).
-DASHBOARD_PAGE_QUERIES = 22
+# +1 — состав проекта (ProjectMembership) для проверки прав ГИП
+# (_is_project_gip, перевод ГИП на состав). Константа, от числа задач
+# не зависит.
+DASHBOARD_PAGE_QUERIES = 23
 
 
 class DashboardTestBase(TestCase):
@@ -88,8 +91,8 @@ class DashboardTestBase(TestCase):
             name='Проект дашборда',
             status='active',
             created_by=self.gip,
-            gip=self.gip,
         )
+        ProjectMembership.objects.update_or_create(project=self.project, user=self.gip, defaults={'role_in_project': 'gip'})
         self.section_ar = Section.objects.create(
             project=self.project, code='AR', name='АР', order=1,
         )
@@ -99,7 +102,6 @@ class DashboardTestBase(TestCase):
         self.author.userprofile.allowed_sections.add(self.section_ar)
         self.assignee.userprofile.allowed_sections.add(self.section_kr)
 
-        self._membership(self.gip, 'gip')
         self._membership(self.author, 'developer')
         self._membership(self.assignee, 'developer')
         self._membership(self.viewer, 'viewer')
@@ -531,8 +533,8 @@ class TaskDashboardExportTests(DashboardTestBase):
             name='Пустой проект',
             status='active',
             created_by=self.gip,
-            gip=self.gip,
         )
+        ProjectMembership.objects.update_or_create(project=empty_project, user=self.gip, defaults={'role_in_project': 'gip'})
         url = reverse('storage:task_dashboard_export', args=[empty_project.pk])
         self.client.force_login(self.gip)
         sheet = self._export_workbook(self.client.get(url)).active

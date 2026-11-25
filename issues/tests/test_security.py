@@ -50,9 +50,9 @@ class IssueSecurityTests(TestCase):
             code='SEC-1',
             name='Проект А',
             status='active',
-            gip=self.gip_a,
             created_by=self.gip_a,
         )
+        ProjectMembership.objects.update_or_create(project=self.project, user=self.gip_a, defaults={'role_in_project': 'gip'})
         ProjectMembership.objects.create(
             project=self.project,
             user=self.developer_a,
@@ -74,6 +74,7 @@ class IssueSecurityTests(TestCase):
             file=SimpleUploadedFile(
                 'doc.pdf', b'data', content_type='application/pdf'
             ),
+            reason_text='Тестовая причина',
         )
         self.document = self.version.document
         self.issue = create_issue(

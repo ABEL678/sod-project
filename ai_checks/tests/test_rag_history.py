@@ -22,7 +22,7 @@ from ai_checks.tests.mocks import (
     MockVectorBackend,
 )
 from ai_checks.domain.models import InternalChunk, InternalDocument
-from storage.domain.models import Company, Document, Project, Section
+from storage.domain.models import Company, Document, Project, ProjectMembership, Section
 
 
 @override_settings(
@@ -39,8 +39,9 @@ class CrossSourceRagTests(TestCase):
         self.company = Company.objects.create(name='Кросс-Компания')
         self.project = Project.objects.create(
             company=self.company, code='CR-1', name='Проект кросс',
-            status='active', created_by=self.user, gip=self.user,
+            status='active', created_by=self.user,
         )
+        ProjectMembership.objects.update_or_create(project=self.project, user=self.user, defaults={'role_in_project': 'gip'})
         self.section_ov = Section.objects.create(
             project=self.project, code='ОВ', name='ОВ', order=1,
         )
@@ -265,8 +266,9 @@ class RagHistoryViewTests(TestCase):
         self.company = Company.objects.create(name='Ист-Компания')
         self.project = Project.objects.create(
             company=self.company, code='HS-1', name='Проект истории',
-            status='active', created_by=self.user, gip=self.user,
+            status='active', created_by=self.user,
         )
+        ProjectMembership.objects.update_or_create(project=self.project, user=self.user, defaults={'role_in_project': 'gip'})
         self.project.memberships.create(user=self.member, role_in_project='developer')
         # Доступ к проектам определяется компанией профиля
         # (get_accessible_projects), поэтому участнику нужна компания.

@@ -60,9 +60,9 @@ class T8CoreTestBase(TestCase):
             code='T8-1',
             name='T8 Project',
             status='active',
-            gip=self.user_gip,
             created_by=self.user_gip,
         )
+        ProjectMembership.objects.update_or_create(project=self.project, user=self.user_gip, defaults={'role_in_project': 'gip'})
         self.section = Section.objects.create(
             project=self.project,
             code='AR',
@@ -85,6 +85,7 @@ class T8CoreTestBase(TestCase):
             name=f'Document {code}',
             doc_type='drawing',
             file=SimpleUploadedFile(f'{code}.txt', f'data {code}'.encode()),
+            reason_text='Тестовая причина',
         )
         document = version.document
         if folder is not None:
@@ -130,9 +131,9 @@ class FolderServiceTests(T8CoreTestBase):
             code='T8-OTHER',
             name='Other project',
             status='active',
-            gip=self.user_gip,
             created_by=self.user_gip,
         )
+        ProjectMembership.objects.update_or_create(project=other_project, user=self.user_gip, defaults={'role_in_project': 'gip'})
         foreign_section = Section.objects.create(
             project=other_project,
             code='X',
@@ -247,7 +248,7 @@ class FolderServiceTests(T8CoreTestBase):
                 company=self.company,
                 code='BAD-GIP',
                 name='Bad GIP',
-                customer='',
+                customer_id=None,
                 gip=self.user_viewer,
                 created_by=self.user_gip,
             )
@@ -280,6 +281,7 @@ class T8CoreViewTests(T8CoreTestBase):
             doc_type='drawing',
             file=SimpleUploadedFile('upload.txt', b'upload'),
             folder=folder,
+            reason_text='Тестовая причина',
         )
         version.document.refresh_from_db()
         self.assertEqual(version.document.folder_id, folder.pk)
@@ -294,6 +296,8 @@ class T8CoreViewTests(T8CoreTestBase):
                 'section_id': self.section.pk,
                 'code': 'DROP-1',
                 'name': 'Dropped file',
+                'reason_type': 'other',
+                'reason_text': 'Тестовая причина',
                 'file': SimpleUploadedFile('drop.txt', b'drop'),
             },
         )
@@ -307,9 +311,9 @@ class T8CoreViewTests(T8CoreTestBase):
             code='T8-FOREIGN',
             name='Foreign',
             status='active',
-            gip=self.user_gip,
             created_by=self.user_gip,
         )
+        ProjectMembership.objects.update_or_create(project=other_project, user=self.user_gip, defaults={'role_in_project': 'gip'})
         foreign_folder = create_folder(
             self.user_gip,
             other_project,
@@ -532,13 +536,29 @@ class T67AuditTest(T8CoreTestBase):
         document.refresh_from_db()
         self.assertEqual(document.internal_status, 'ready_to_share')
 
+        # SPEC 2.0 w0 п. 6: неблокирующее открытое замечание (B) переход
+        # не блокирует; блокирует только C — открытое с флагом is_blocking.
+        non_blocking = self.make_document(code='T67-NONBLOCKING')
+        update_internal_status(self.user_gip, non_blocking, 'send_to_review')
+        Issue.objects.create(
+            document=non_blocking,
+            author=self.user_gip,
+            description='Non-blocking issue',
+            status='NEW',
+            is_blocking=False,
+        )
+        update_internal_status(self.user_gip, non_blocking, 'approve_internal')
+        non_blocking.refresh_from_db()
+        self.assertEqual(non_blocking.internal_status, 'ready_to_share')
+
         blocked = self.make_document(code='T67-BLOCKED')
         update_internal_status(self.user_gip, blocked, 'send_to_review')
         issue = Issue.objects.create(
             document=blocked,
             author=self.user_gip,
-            description='Open issue',
+            description='Open blocking issue',
             status='NEW',
+            is_blocking=True,
         )
         with self.assertRaises(ValueError):
             update_internal_status(self.user_gip, blocked, 'approve_internal')
@@ -550,9 +570,9 @@ class T67AuditTest(T8CoreTestBase):
 
     def test_internal_status_only_in_wip_and_permissions(self):
         document = self.make_document(code='T67-ZONE')
-        document.status = 'in_review'
+        document.state = Document.STATE_SHARED
         document._from_service = True
-        document.save(update_fields=['status'])
+        document.save(update_fields=['state'])
         with self.assertRaises(ValueError):
             update_internal_status(self.user_gip, document, 'send_to_review')
 

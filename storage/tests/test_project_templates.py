@@ -1,8 +1,38 @@
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 
-from storage.domain.models import Company
+from storage.domain.models import Company, Project
+from storage.domain.project_templates import PRESETS
 from storage.domain.services import create_project_from_template
+
+
+PRESET_EXPECTED_MARKS = {
+    ('P', 'residential'): 13,
+    ('P', 'public'): 13,
+    ('P', 'industrial'): 13,
+    ('P', 'linear'): 10,
+    ('RD', 'residential'): 24,
+    ('RD', 'public'): 25,
+    ('RD', 'industrial'): 28,
+    ('RD', 'linear'): 14,
+}
+
+# deploy_scope: 'pd' — П, 'rd' — РД, 'full' — П+РД (объединение кодов без дублей).
+# Пересечения П и РД: АР (все типы), ТХ (общественное, производственное).
+DEPLOY_SCOPE_EXPECTED_MARKS = {
+    ('pd', 'residential'): 13,
+    ('pd', 'public'): 13,
+    ('pd', 'industrial'): 13,
+    ('pd', 'linear'): 10,
+    ('rd', 'residential'): 24,
+    ('rd', 'public'): 25,
+    ('rd', 'industrial'): 28,
+    ('rd', 'linear'): 14,
+    ('full', 'residential'): 36,
+    ('full', 'public'): 36,
+    ('full', 'industrial'): 39,
+    ('full', 'linear'): 24,
+}
 
 
 User = get_user_model()
@@ -22,7 +52,7 @@ class ProjectTemplateTests(TestCase):
             company=self.company,
             code='T-1',
             name='Жилой дом',
-            customer='Заказчик',
+            customer_id=None,
             gip=None,
             created_by=self.user,
             template_key='residential',
@@ -54,7 +84,7 @@ class ProjectTemplateTests(TestCase):
             company=self.company,
             code='T-PD',
             name='Проект ПД',
-            customer='Заказчик',
+            customer_id=None,
             gip=None,
             created_by=self.user,
             template_key='PD_87',
@@ -91,7 +121,7 @@ class ProjectTemplateTests(TestCase):
             company=self.company,
             code='T-RD',
             name='Проект РД',
-            customer='Заказчик',
+            customer_id=None,
             gip=None,
             created_by=self.user,
             template_key='RD_GOST',
@@ -112,7 +142,7 @@ class ProjectTemplateTests(TestCase):
             company=self.company,
             code='T-FULL',
             name='Полный проект',
-            customer='Заказчик',
+            customer_id=None,
             gip=None,
             created_by=self.user,
             template_key='FULL',
@@ -129,13 +159,59 @@ class ProjectTemplateTests(TestCase):
         }
         self.assertEqual(section_codes, expected_codes)
 
+    def test_deploy_scope_matrix_sizes(self):
+        """Матрица deploy_scope: количество марок по области и типу объекта."""
+        for (scope, obj), expected in DEPLOY_SCOPE_EXPECTED_MARKS.items():
+            stages = {'pd': ['P'], 'rd': ['RD'], 'full': ['P', 'RD']}[scope]
+            marks = set()
+            for stage in stages:
+                marks |= {s['mark'] for s in PRESETS[(stage, obj)]}
+            self.assertEqual(len(marks), expected, msg=f'{scope}/{obj}')
+
+    def test_deploy_scope_creates_sections_by_scope(self):
+        """Проект с deploy_scope создаёт разделы по области и папки по корням ПД/РД."""
+        cases = (
+            ('pd', 'residential', 13),
+            ('rd', 'residential', 24),
+            ('full', 'residential', 36),
+        )
+        for index, (scope, obj, expected) in enumerate(cases):
+            project = create_project_from_template(
+                company=self.company,
+                code=f'SCOPE-{index}',
+                name='Scope',
+                customer_id=None,
+                gip=None,
+                created_by=self.user,
+                template_key=None,
+                base_code='2345-12',
+                object_type=obj,
+                deploy_scope=scope,
+            )
+            codes = set(project.sections.exclude(code='COMMON').values_list('code', flat=True))
+            self.assertEqual(len(codes), expected, msg=scope)
+
+    def test_presets_mark_counts_by_stage_and_object_type(self):
+        """Константы пресетов: количество марок по каждой паре (стадия, тип)."""
+        self.assertEqual(set(PRESETS), set(PRESET_EXPECTED_MARKS))
+        for key, expected in PRESET_EXPECTED_MARKS.items():
+            self.assertEqual(len(PRESETS[key]), expected, msg=str(key))
+
+    def test_linear_pd_preset_is_ten_sections(self):
+        """П-линейный: 10 разделов п. 3(2) ПП №87, без ИС как отдельного раздела."""
+        marks = [s['mark'] for s in PRESETS[('P', 'linear')]]
+        self.assertEqual(
+            marks,
+            ['ПЗ', 'ПО', 'ТКР', 'ЗС', 'ПОС', 'ООС', 'ПБ', 'ТБЭ', 'СМ', 'ИД'],
+        )
+
     def test_create_project_without_template(self):
         """Без шаблона: 0 разделов, 3 суперпапки."""
         project = create_project_from_template(
             company=self.company,
             code='T-2',
             name='Без шаблона',
-            customer='',
+            customer_id=None,
             gip=None,
             created_by=self.user,
             template_key=None,

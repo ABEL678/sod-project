@@ -26,6 +26,7 @@ from ai_checks.tests.base import MediaIsolationMixin
 from ai_checks.tests.mocks import MockEmbeddingService, mock_bge_adapter
 from ai_checks.tests.pdfgen import cyr_font
 from storage.domain.models import (
+    ProjectMembership,
     Company,
     Document,
     DocumentVersion,
@@ -70,8 +71,9 @@ class ProjectDocumentIndexingTests(MediaIsolationMixin, TestCase):
         self.company = Company.objects.create(name='ПИ-Компания')
         self.project = Project.objects.create(
             company=self.company, code='PI-1', name='Проект индексации',
-            status='active', created_by=self.user, gip=self.user,
+            status='active', created_by=self.user,
         )
+        ProjectMembership.objects.update_or_create(project=self.project, user=self.user, defaults={'role_in_project': 'gip'})
         self.section_ov = Section.objects.create(
             project=self.project, code='ОВ', name='Отопление и вентиляция',
             order=1,
@@ -91,6 +93,7 @@ class ProjectDocumentIndexingTests(MediaIsolationMixin, TestCase):
             file=SimpleUploadedFile(
                 'doc.pdf', make_pdf(pages_text), 'application/pdf',
             ),
+            reason_text='Тестовая причина',
         )
 
     def test_upload_document_enqueues_indexing(self):
@@ -121,6 +124,7 @@ class ProjectDocumentIndexingTests(MediaIsolationMixin, TestCase):
             name='Не PDF',
             doc_type='report',
             file=SimpleUploadedFile('data.txt', b'plain text', 'text/plain'),
+            reason_text='Тестовая причина',
         )
         version.refresh_from_db()
         self.assertEqual(version.indexing_status, 'pending')
@@ -154,6 +158,7 @@ class ProjectDocumentIndexingTests(MediaIsolationMixin, TestCase):
                 'doc2.pdf', make_pdf(['Второй текст. ' * 40]),
                 'application/pdf',
             ),
+            reason_text='Тестовая причина',
         )
         new_version.refresh_from_db()  # eager-задача уже отработала
         old_chunks = ProjectDocumentChunk.objects.filter(
@@ -184,6 +189,7 @@ class ProjectDocumentIndexingTests(MediaIsolationMixin, TestCase):
             file=ContentFile(b'%PDF-1.4 broken', name='broken.pdf'),
             file_size=len(b'%PDF-1.4 broken'),
             uploaded_by=self.user,
+            reason_text='Тестовая причина (фикстура)',
         )
         self.document = version.document
         count = index_project_document(version.pk, self.embedding)
@@ -212,8 +218,9 @@ class ReindexTests(MediaIsolationMixin, TestCase):
         self.company = Company.objects.create(name='Рекс-Компания')
         self.project = Project.objects.create(
             company=self.company, code='RX-1', name='Проект рекс',
-            status='active', created_by=self.user, gip=self.user,
+            status='active', created_by=self.user,
         )
+        ProjectMembership.objects.update_or_create(project=self.project, user=self.user, defaults={'role_in_project': 'gip'})
         self.section = Section.objects.create(
             project=self.project, code='ЭОМ', name='Электрика', order=1,
         )
@@ -233,6 +240,7 @@ class ReindexTests(MediaIsolationMixin, TestCase):
                 'doc.pdf', make_pdf([f'Текст {code}. ' * 40]),
                 'application/pdf',
             ),
+            reason_text='Тестовая причина',
         )
         return version.document
 
@@ -263,6 +271,7 @@ class ReindexTests(MediaIsolationMixin, TestCase):
                 'kb.pdf', make_pdf(['Стандарт. ' * 40]), 'application/pdf',
             ),
             skip_ai_index=True,
+            reason_text='Тестовая причина',
         )
         with mock.patch(
             'ai_checks.tasks.index_project_document_task',

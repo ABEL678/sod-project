@@ -11,6 +11,7 @@ from ai_checks.domain.services import generate_gip_report, rag_answer
 from ai_checks.ports.llm import LLMResponse
 from ai_checks.tests.mocks import MockEmbeddingService, MockVectorBackend
 from storage.domain.models import (
+    ProjectMembership,
     Company,
     Document,
     DocumentVersion,
@@ -48,8 +49,9 @@ class ModelSelectionServiceTests(TestCase):
         self.company = Company.objects.create(name='Модель-Компания')
         self.project = Project.objects.create(
             company=self.company, code='MODEL-1', name='Проект модели',
-            status='active', created_by=self.user, gip=self.user,
+            status='active', created_by=self.user,
         )
+        ProjectMembership.objects.update_or_create(project=self.project, user=self.user, defaults={'role_in_project': 'gip'})
         self.section = Section.objects.create(
             project=self.project, code='АР', name='Архитектура', order=1,
         )
@@ -62,6 +64,7 @@ class ModelSelectionServiceTests(TestCase):
             document=self.document, version_number=1,
             file='documents/test/model.pdf', file_size=10,
             uploaded_by=self.user,
+            reason_text='Тестовая причина (фикстура)',
         )
 
     def test_gip_report_passes_model_to_llm(self):
@@ -136,8 +139,9 @@ class ModelSelectionViewTests(TestCase):
         self.company = Company.objects.create(name='Вью-Модель')
         self.project = Project.objects.create(
             company=self.company, code='VMODEL-1', name='Вью проект',
-            status='active', created_by=self.user, gip=self.user,
+            status='active', created_by=self.user,
         )
+        ProjectMembership.objects.update_or_create(project=self.project, user=self.user, defaults={'role_in_project': 'gip'})
         self.section = Section.objects.create(
             project=self.project, code='АР', name='Архитектура', order=1,
         )

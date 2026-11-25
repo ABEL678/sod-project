@@ -375,8 +375,12 @@ class ReminderTasksTests(DesignTaskTestBase):
     def test_deadline_tasks_use_single_query(self):
         """Производительность: один запрос на выборку заданий (select_related)."""
         self._issued_task(due=self.today - timedelta(days=1))
-        with self.assertNumQueries(3):
-            # 1 — выборка заданий, 2 — идемпотентность, 3 — bulk_create.
+        # Проверка ГИП идёт по составу проекта (ProjectMembership),
+        # состав подтягивается prefetch_related (1 запрос); объекты
+        # пользователей не требуются — сравнение по user_id. Итого:
+        # задания + состав + идемпотентность + bulk_create = 4.
+        # Константа, от числа задач не зависит.
+        with self.assertNumQueries(4):
             notify_tasks_overdue()
 
     def _uploaded(self, name, content):

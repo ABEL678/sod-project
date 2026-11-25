@@ -7,7 +7,15 @@ from django.test import TestCase, override_settings
 from django.urls import reverse
 from openpyxl import load_workbook
 
-from storage.domain.models import Company, MailRule, Project, Section, UserProfile
+from storage.domain.models import (
+    ProjectMembership,
+    Company,
+    Document,
+    MailRule,
+    Project,
+    Section,
+    UserProfile,
+)
 from storage.domain.services import upload_document
 
 
@@ -38,25 +46,25 @@ class ViewTests(TestCase):
             code='P-1',
             name='Проект',
             status='active',
-            gip=self.user_gip,
             created_by=self.user_gip,
         )
+        ProjectMembership.objects.update_or_create(project=self.project, user=self.user_gip, defaults={'role_in_project': 'gip'})
         self.project_other = Project.objects.create(
             company=self.company,
             code='P-2',
             name='Другой проект',
             status='active',
-            gip=self.user_gip,
             created_by=self.user_gip,
         )
+        ProjectMembership.objects.update_or_create(project=self.project_other, user=self.user_gip, defaults={'role_in_project': 'gip'})
         self.foreign_project = Project.objects.create(
             company=self.other_company,
             code='P-FOREIGN',
             name='Чужой проект',
             status='active',
-            gip=self.user_foreign_gip,
             created_by=self.user_foreign_gip,
         )
+        ProjectMembership.objects.update_or_create(project=self.foreign_project, user=self.user_foreign_gip, defaults={'role_in_project': 'gip'})
         self.section = Section.objects.create(
             project=self.project,
             code='АР',
@@ -202,9 +210,9 @@ class ViewTests(TestCase):
 
     def test_search_page_filters_by_status(self):
         approved = self._upload(code='АР-01')
-        approved.document.status = 'approved'
+        approved.document.state = Document.STATE_APPROVED
         approved.document._from_service = True
-        approved.document.save(update_fields=['status'])
+        approved.document.save(update_fields=['state'])
         self._upload(code='АР-02')
         self.client.force_login(self.user_gip)
 
@@ -241,6 +249,8 @@ class ViewTests(TestCase):
                 'section_id': self.section.pk,
                 'code': 'АР-01',
                 'name': 'План 1 этажа',
+                'reason_type': 'other',
+                'reason_text': 'Тестовая причина',
                 'file': SimpleUploadedFile('plan.pdf', b'data', content_type='application/pdf'),
             },
         )
@@ -256,6 +266,8 @@ class ViewTests(TestCase):
             'section_id': self.section.pk,
             'code': 'АР-01',
             'name': 'План 1 этажа',
+            'reason_type': 'other',
+            'reason_text': 'Тестовая причина',
         }
         self.client.post(
             url,
@@ -334,6 +346,7 @@ class ViewTests(TestCase):
             doc_type=doc_type,
             file=SimpleUploadedFile(f'{code}.pdf', content, content_type='application/pdf'),
             comment=comment,
+            reason_text='Тестовая причина',
         )
 
     def _upload_foreign(self):
@@ -345,6 +358,7 @@ class ViewTests(TestCase):
             name='Схема вентиляции',
             doc_type='drawing',
             file=SimpleUploadedFile('foreign.pdf', b'foreign', content_type='application/pdf'),
+            reason_text='Тестовая причина',
         )
 
     def _make_contractor_docs(self):

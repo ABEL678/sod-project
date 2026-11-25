@@ -18,6 +18,7 @@ from ai_checks.domain.services import (
 )
 from issues.models import Issue
 from storage.domain.models import (
+    ProjectMembership,
     Company,
     Document,
     DocumentVersion,
@@ -39,8 +40,9 @@ class GipReportTests(TestCase):
         self.company = Company.objects.create(name='ГИП-Компания')
         self.project = Project.objects.create(
             company=self.company, code='GIP-1', name='Проект отчёта',
-            status='active', created_by=self.user, gip=self.user,
+            status='active', created_by=self.user,
         )
+        ProjectMembership.objects.update_or_create(project=self.project, user=self.user, defaults={'role_in_project': 'gip'})
         self.section = Section.objects.create(
             project=self.project, code='АР', name='Архитектура', order=1,
         )
@@ -53,6 +55,7 @@ class GipReportTests(TestCase):
             document=self.document, version_number=1,
             file='documents/test/gip.pdf', file_size=100,
             uploaded_by=self.user,
+            reason_text='Тестовая причина (фикстура)',
         )
 
     def _issue(self, status='NEW', due_date=None, assignee='auto',

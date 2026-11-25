@@ -4,10 +4,12 @@ from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
 import io
 import logging
+import re
 
 from django.conf import settings
 import uuid
 
+from django.contrib.contenttypes.models import ContentType
 from PIL import Image, UnidentifiedImageError
 
 from django.core.exceptions import PermissionDenied, ValidationError
@@ -21,10 +23,12 @@ from django.utils import timezone
 logger = logging.getLogger(__name__)
 
 from storage.domain.models import (
+    ChangeSetEntry,
     Company,
     DesignTask,
     DesignTaskAttachment,
     DesignTaskChecklistItem,
+    Customer,
     DesignTaskStatusLog,
     Document,
     DocumentVersion,
@@ -41,6 +45,7 @@ from storage.domain.models import (
     TaskTemplate,
     User,
     UserProfile,
+    VERSION_REASON_CHOICES,
     VorItem,
 )
 from issues.models import Issue, IssueComment, Notification
@@ -50,8 +55,16 @@ from issues.notify import (
     notify_issue_commented,
     notify_issue_status_changed,
 )
+from issues.services import (
+    ACTIVE_ISSUE_STATUSES,
+    APPROVAL_BLOCKED_MESSAGE,
+    OPEN_ISSUE_STATUSES,
+    approval_outcome,
+    blocking_issues_for_document,
+)
 from storage.domain.design_colors import ISSUE_STATUS_RGB as PDF_ISSUE_COLORS
 from storage.domain.project_templates import (
+    PRESETS,
     IRD_FOLDERS,
     PD_SECTIONS,
     PROJECT_TEMPLATES,
@@ -74,7 +87,7 @@ from storage.domain.tasks_matrix import (
 
 DOCUMENT_VIEW_COLUMNS = (
     'code', 'section', 'folder', 'name', 'doc_type', 'zone', 'suitability',
-    'internal_status', 'issues', 'version', 'date', 'author',
+    'review_result', 'internal_status', 'issues', 'version', 'date', 'author',
 )
 DOCUMENT_VIEW_FILTERS = (
     'section', 'doc_type', 'status', 'suitability_code', 'internal_status',
@@ -120,23 +133,49 @@ def _suitability_for_zone(folder: Folder | None) -> str | None:
     return ZONE_SUITABILITY_MAP.get(folder.zone)
 
 
-def _approval_target_changes(
-    document: Document,
-    target_status: str | None,
-    target_suitability: str | None,
-    target_zone: str | None,
-) -> bool:
-    """True, если операция фактически переводит документ в approved/A."""
-    status_changed = (
-        target_status in ('approved', 'S4')
-        and target_status != document.status
+def _states_matching(
+    status: str | None = None,
+    suitability: str | None = None,
+    internal_status: str | None = None,
+) -> list[str]:
+    """Состояния, у которых совпадают заданные прежние признаки.
+
+    ``review_result`` — не проекция состояния: ручные коды S1/S2/S4 здесь
+    не обрабатываются (для них фильтры используют ``review_result`` напрямую).
+    """
+    result = []
+    for state, (st, suit, internal, _zone) in Document.STATE_PROJECTION.items():
+        if status is not None and st != status:
+            continue
+        if suitability is not None and suit != suitability:
+            continue
+        if internal_status is not None and (
+            state.startswith('wip_') and internal != internal_status
+        ):
+            continue
+        if internal_status is not None and not state.startswith('wip_'):
+            continue
+        result.append(state)
+    return result
+
+
+def _initial_state_for_folder(folder: Folder | None) -> str:
+    """Состояние нового документа по зоне его папки (канонической)."""
+    zone = folder.zone if folder is not None else 'WIP'
+    return {
+        'WIP': Document.STATE_WIP_DRAFT,
+        'SHARED': Document.STATE_SHARED,
+        'PUBLISHED': Document.STATE_APPROVED,
+        'ARCHIVE': Document.STATE_ARCHIVED,
+    }.get(zone, Document.STATE_WIP_DRAFT)
+
+
+def _approval_target_changes(document: Document, target_state: str) -> bool:
+    """True, если операция переводит документ в утверждённое состояние."""
+    return (
+        target_state in (Document.STATE_APPROVED, Document.STATE_AS_BUILT)
+        and target_state != document.state
     )
-    suitability_changed = (
-        target_suitability in ('A', 'S4')
-        and target_suitability != document.suitability_code
-        and target_zone == 'PUBLISHED'
-    )
-    return status_changed or suitability_changed
 
 
 def _is_canonical_zone_folder(folder: Folder | None) -> bool:
@@ -149,6 +188,21 @@ def _is_canonical_zone_folder(folder: Folder | None) -> bool:
         and folder.section_id is None
         and folder.zone in dict(Folder.ZONE_CHOICES)
     )
+
+
+def review_result_code(document: Document) -> str:
+    """Код ручного вердикта проверки; вне зоны WIP нерелевантен."""
+    if document.state.startswith('wip_') and document.review_result:
+        return document.review_result
+    return ''
+
+
+def review_result_display(document: Document) -> str:
+    """Подпись ручного вердикта проверки для интерфейса и экспорта."""
+    code = review_result_code(document)
+    if not code:
+        return '—'
+    return dict(Document.REVIEW_RESULT_CHOICES).get(code, code)
 
 
 def _document_row(document: Document) -> dict:
@@ -179,6 +233,8 @@ def _document_row(document: Document) -> dict:
         'date': version.uploaded_at if version else '',
         'author': author,
         'section_id': document.section_id,
+        'review_result': review_result_code(document),
+        'review_result_display': review_result_display(document),
     }
 
 
@@ -457,10 +513,7 @@ def can_manage_project_participants(user: User, project: Project) -> bool:
     if profile.role == 'admin':
         return True
 
-    if project.gip_id == user.id:
-        return True
-
-    return project.memberships.filter(user=user, role_in_project='gip').exists()
+    return _is_project_gip(user, project)
 
 
 def list_project_participants(actor: User, project: Project):
@@ -603,11 +656,20 @@ def get_project_documents_queryset(
     if 'doc_type' in filters:
         queryset = queryset.filter(doc_type=filters['doc_type'])
     if 'status' in filters:
-        queryset = queryset.filter(status=filters['status'])
+        queryset = queryset.filter(state__in=_states_matching(status=filters['status']))
     if 'suitability_code' in filters:
-        queryset = queryset.filter(suitability_code=filters['suitability_code'])
+        suitability_value = filters['suitability_code']
+        if suitability_value in Document.MANUAL_REVIEW_CODES:
+            # Ручной вердикт хранится в review_result (не проекция состояния).
+            queryset = queryset.filter(review_result=suitability_value)
+        else:
+            queryset = queryset.filter(
+                state__in=_states_matching(suitability=suitability_value)
+            )
     if 'internal_status' in filters:
-        queryset = queryset.filter(internal_status=filters['internal_status'])
+        queryset = queryset.filter(
+            state__in=_states_matching(internal_status=filters['internal_status'])
+        )
     if 'code' in filters:
         queryset = queryset.filter(code__icontains=filters['code'])
     if 'name' in filters:
@@ -627,9 +689,19 @@ def get_project_documents_queryset(
         ordering = ['section__order', 'code']
 
     queryset = queryset.annotate(
+        # «Открытые» для реестра/бейджа включают DISCUSSION; блокирующими
+        # для итога C считаются только NEW/IN_PROGRESS/REJECTED с флагом.
         open_issues_count=Count(
             'issues',
-            filter=Q(issues__status__in=OPEN_ISSUE_STATUSES),
+            filter=Q(issues__status__in=ACTIVE_ISSUE_STATUSES),
+            distinct=True,
+        ),
+        blocking_issues_count=Count(
+            'issues',
+            filter=Q(
+                issues__status__in=OPEN_ISSUE_STATUSES,
+                issues__is_blocking=True,
+            ),
             distinct=True,
         ),
         issues_total=Count('issues', distinct=True),
@@ -687,15 +759,25 @@ def update_project_member_role(
     if role == 'gip':
         _validate_gip_role(membership.user)
 
-    if membership.role_in_project == 'gip' and role != 'gip':
-        other_gips = membership.project.memberships.filter(
-            role_in_project='gip',
-        ).exclude(pk=membership.pk)
-        if not other_gips.exists() and membership.project.gip_id is None:
-            raise ValueError("Нельзя снять роль последнего ГИП проекта")
+    with transaction.atomic():
+        if membership.role_in_project == 'gip' and role != 'gip':
+            # Снять роль ГИП можно только если останется другой ГИП в составе.
+            other_gips = membership.project.memberships.filter(
+                role_in_project='gip',
+            ).exclude(pk=membership.pk)
+            if not other_gips.exists():
+                raise ValueError("Нельзя снять роль последнего ГИП проекта")
 
-    membership.role_in_project = role
-    membership.save(update_fields=['role_in_project'])
+        if role == 'gip' and membership.role_in_project != 'gip':
+            # Один ГИП на проект: прямое назначение поверх действующего — отказ.
+            # Замена ГИП — отдельная операция update_project(gip=...).
+            if membership.project.memberships.filter(role_in_project='gip').exclude(pk=membership.pk).exists():
+                raise ValueError(
+                    "На проекте уже назначен ГИП. Для смены используйте замену ГИП в карточке проекта"
+                )
+
+        membership.role_in_project = role
+        membership.save(update_fields=['role_in_project'])
     return membership
 
 
@@ -810,30 +892,69 @@ def _create_ird_structure(
     actor: User,
     superfolders: dict[str, Folder],
 ) -> None:
-    """Создаёт группу изысканий и прочие исходные данные."""
+    """Создаёт группу изысканий и прочие исходные данные (идемпотентно).
+
+    Каждая папка ищется по (project, parent, name) и создаётся только если
+    отсутствует — повторный вызов (из шаблона и из пресета) не дублирует ИРД.
+    """
     root = superfolders['IRD']
     common = _get_or_create_common_section(project)
 
-    for item in IRD_FOLDERS:
-        group = create_folder(
+    def _ensure(name: str, parent: Folder) -> Folder:
+        existing = Folder.objects.filter(
+            project=project, parent=parent, name=name, is_deleted=False,
+        ).first()
+        if existing is not None:
+            return existing
+        return create_folder(
             actor,
             project,
-            name=item['name'],
+            name=name,
             section=common,
-            parent=root,
+            parent=parent,
             code='',
             force=True,
         )
+
+    for item in IRD_FOLDERS:
+        group = _ensure(item['name'], root)
         for child in item.get('children', ()):
-            create_folder(
-                actor,
-                project,
-                name=child['name'],
-                section=common,
-                parent=group,
-                code='',
-                force=True,
-            )
+            _ensure(child['name'], group)
+
+
+def _create_mark_folder(
+    project: Project,
+    actor: User,
+    parent: Folder,
+    section_obj: Section,
+    name: str,
+    child_name: str,
+    child_mark_code: str,
+) -> Folder:
+    """Общая сборка марочной папки: папка марки + вложенная папка с шифром.
+
+    Единая реализация для шаблонного и пресетного путей. Формула шифра
+    вложенной папки — ``{prefix}{mark}1`` (передаётся готовым child_mark_code).
+    """
+    mark_folder = create_folder(
+        actor,
+        project,
+        name=name,
+        section=section_obj,
+        parent=parent,
+        code='',
+        force=True,
+    )
+    create_folder(
+        actor,
+        project,
+        name=child_name,
+        section=section_obj,
+        parent=mark_folder,
+        code=child_mark_code,
+        force=True,
+    )
+    return mark_folder
 
 
 def _create_pd_structure(
@@ -842,7 +963,12 @@ def _create_pd_structure(
     superfolders: dict[str, Folder],
     sections: dict[str, Section] | None = None,
 ) -> None:
-    """Создаёт разделы ПД и папки «Часть 1» по ПП №87."""
+    """Создаёт разделы ПД и папки «Часть 1» по ПП №87.
+
+    LEGACY: шаблонный путь. Не вызывать извне модуля — для существующих проектов
+    использовать deploy_preset_to_project(). Внутренние вызовы путей создания
+    проекта из шаблона и _populate_project_template сохранены без изменений.
+    """
     root = superfolders['PD']
     prefix = _code_prefix(project)
     common = _get_or_create_common_section(project)
@@ -905,7 +1031,12 @@ def _create_rd_structure(
     superfolders: dict[str, Folder],
     sections: dict[str, Section] | None = None,
 ) -> None:
-    """Создаёт марки РД и папки «Комплект 1» по ГОСТ Р 21.101-2020."""
+    """Создаёт марки РД и папки «Комплект 1» по ГОСТ Р 21.101-2020.
+
+    LEGACY: шаблонный путь. Не вызывать извне модуля — для существующих проектов
+    использовать deploy_preset_to_project(). Внутренние вызовы путей создания
+    проекта из шаблона и _populate_project_template сохранены без изменений.
+    """
     root = superfolders['RD']
     prefix = _code_prefix(project)
     common = _get_or_create_common_section(project)
@@ -914,23 +1045,14 @@ def _create_rd_structure(
     for section_data in RD_SECTIONS:
         mark = section_data['mark']
         section_obj = sections.get(mark, common)
-        mark_folder = create_folder(
-            actor,
+        _create_mark_folder(
             project,
-            name=section_data['name'],
-            section=section_obj,
+            actor,
             parent=root,
-            code='',
-            force=True,
-        )
-        create_folder(
-            actor,
-            project,
+            section_obj=section_obj,
             name=section_data['name'],
-            section=section_obj,
-            parent=mark_folder,
-            code=f'{prefix}{mark}1',
-            force=True,
+            child_name=section_data['name'],
+            child_mark_code=f'{prefix}{mark}1',
         )
 
 
@@ -1082,14 +1204,56 @@ def generate_gost_code(
     return '-'.join(parts)
 
 
+def resolve_customer_name(company: Company, name: str | None) -> Customer | None:
+    """Маршрутизация внешнего API: имя заказчика -> карточка компании.
+
+    Используется только входом API (строка не хранится в проекте). Карточка
+    создаётся при первом упоминании; пустое имя -> None.
+    """
+    name = (name or '').strip()
+    if not name:
+        return None
+    customer, _ = Customer.objects.get_or_create(company=company, name=name)
+    return customer
+
+
+def create_customer(user: User, company: Company, name: str) -> Customer:
+    """Создаёт карточку организации-заказчика. Точный дубль имени в компании — отказ."""
+    if not _check_company_access(user, company.pk):
+        raise PermissionDenied("Нет прав на создание заказчика в этой компании")
+    name = (name or '').strip()
+    if not name:
+        raise ValueError("Наименование организации обязательно")
+    if Customer.objects.filter(company=company, name=name).exists():
+        raise ValueError("Организация с таким наименованием уже есть")
+    return Customer.objects.create(company=company, name=name)
+
+
+def list_customers(company: Company):
+    """Карточки организаций-заказчиков компании."""
+    return Customer.objects.filter(company=company).order_by('name')
+
+
+def _customer_in_company(company: Company, customer_id: int | None) -> Customer | None:
+    """Карточка заказчика по id; она обязана принадлежать компании проекта."""
+    if customer_id in (None, ''):
+        return None
+    customer = Customer.objects.filter(pk=customer_id, company=company).first()
+    if customer is None:
+        raise ValueError("Заказчик не найден в компании проекта")
+    return customer
+
+
 def create_project(
     company: Company,
     code: str,
     name: str,
-    customer: str,
+    customer_id: int | None = None,
     gip: User | None = None,
     created_by: User | None = None,
     base_code: str = '',
+    stage: str | None = None,
+    object_type: str | None = None,
 ) -> Project:
     """Создает проект в указанной компании.
 
@@ -1129,25 +1293,39 @@ def create_project(
         project.company = company
         project.base_code = (base_code or '').strip()
         project.name = name
-        project.customer = customer
-        project.gip = gip
+        project.customer_org = _customer_in_company(company, customer_id)
         project.created_by = actor
         project.status = 'active'
         project.is_deleted = False
         project.deleted_at = None
+        if stage:
+            project.stage = stage
+        if object_type:
+            project.object_type = object_type
         project.save(
             update_fields=[
                 'company',
                 'base_code',
                 'name',
-                'customer',
-                'gip',
+                'customer_org',
                 'created_by',
                 'status',
                 'is_deleted',
                 'deleted_at',
+                'stage',
+                'object_type',
             ]
         )
+        # Состав команды: старый ГИП снимается, новый (если задан) назначается.
+        project.memberships.filter(role_in_project='gip').update(
+            role_in_project='developer'
+        )
+        if gip is not None:
+            ProjectMembership.objects.update_or_create(
+                project=project,
+                user=gip,
+                defaults={'role_in_project': 'gip'},
+            )
         if old_base_code != project.base_code:
             _refresh_project_full_codes(project, old_base_code)
         restored = True
@@ -1157,11 +1335,18 @@ def create_project(
             code=code,
             base_code=(base_code or '').strip(),
             name=name,
-            customer=customer,
-            gip=gip,
+            customer_org=_customer_in_company(company, customer_id),
             status='active',
             created_by=actor,
+            stage=stage or None,
+            object_type=object_type or None,
         )
+        if gip is not None:
+            ProjectMembership.objects.create(
+                project=project,
+                user=gip,
+                role_in_project='gip',
+            )
 
     _ensure_project_zones(project, actor)
     project._restored_from_trash = restored
@@ -1249,12 +1434,16 @@ def update_project(
     *,
     code: str | None = None,
     name: str | None = None,
-    customer: str | None = None,
+    customer_id: int | None | object = _UNSET,
     base_code: str | None = None,
     status: str | None = None,
+    stage: str | None | object = _UNSET,
     gip: User | None | object = _UNSET,
 ) -> Project:
-    """Обновляет карточку проекта с проверкой прав."""
+    """Обновляет карточку проекта с проверкой прав.
+
+    customer_id: id карточки заказчика; None — снять заказчика; _UNSET — не менять.
+    """
     if not can_edit_project(user, project):
         raise PermissionDenied("Нет прав на редактирование проекта")
 
@@ -1276,9 +1465,9 @@ def update_project(
         project.name = name
         update_fields.append('name')
 
-    if customer is not None:
-        project.customer = customer.strip()
-        update_fields.append('customer')
+    if customer_id is not _UNSET:
+        project.customer_org = _customer_in_company(project.company, customer_id)
+        update_fields.append('customer_org')
 
     base_changed = False
     if base_code is not None:
@@ -1296,14 +1485,46 @@ def update_project(
         project.status = status
         update_fields.append('status')
 
+    if stage is not _UNSET:
+        stage = stage or None
+        if stage is not None and stage not in dict(Project.STAGE_CHOICES):
+            raise ValueError("Неверная стадия проекта")
+        if stage != project.stage:
+            project.stage = stage
+            update_fields.append('stage')
+
     if gip is not _UNSET:
-        gip_changed = (gip.pk if gip is not None else None) != project.gip_id
+        current = project.gip
+        gip_changed = (gip.pk if gip is not None else None) != (
+            current.pk if current is not None else None
+        )
         if gip is not None and gip_changed:
             if not _check_company_access(gip, project.company_id):
                 raise PermissionDenied("ГИП должен принадлежать компании проекта")
             _validate_gip_role(gip)
-        project.gip = gip
-        update_fields.append('gip')
+        if gip_changed:
+            # Явная замена ГИП: в одной транзакции прежний понижается, новый назначается.
+            # Инвариант «у проекта один ГИП» сохраняется; протокол — в логе.
+            with transaction.atomic():
+                previous = list(
+                    project.memberships.filter(role_in_project='gip').select_related('user')
+                )
+                project.memberships.filter(role_in_project='gip').update(
+                    role_in_project='developer'
+                )
+                if gip is not None:
+                    ProjectMembership.objects.update_or_create(
+                        project=project,
+                        user=gip,
+                        defaults={'role_in_project': 'gip'},
+                    )
+            logger.info(
+                "Смена ГИП проекта %s: %s -> %s, кто=%s",
+                project.code,
+                ', '.join(m.user.username for m in previous) or '—',
+                gip.username if gip is not None else '—',
+                user.username,
+            )
 
     if update_fields:
         project.save(update_fields=update_fields)
@@ -1783,7 +2004,7 @@ def move_document(
     target_zone = (
         folder.zone
         if folder is not None
-        else _ZONE_BY_STATUS.get(document.status, 'WIP')
+        else document.zone
     )
     if (
         current_zone in ('ARCHIVE', 'PUBLISHED', 'SHARED')
@@ -1865,46 +2086,23 @@ def move_document(
         document.section = folder.section
         update_fields.append('section')
 
-    # Автоматическое изменение статуса и кода пригодности
-    # только для канонических зон.
-    target_status = _status_for_zone(folder)
-    target_suitability = _suitability_for_zone(folder)
-    if target_status is not None and (
-        target_status != document.status
-        or target_suitability != document.suitability_code
-    ):
-        validate_transition(
-            document,
-            target_status,
-            user,
-            target_suitability,
-        )
+    # Состояние меняется только для канонических зон папки.
+    target_state = (
+        _initial_state_for_folder(folder)
+        if _status_for_zone(folder) is not None
+        else document.state
+    )
     if (
-        _approval_target_changes(
-            document,
-            target_status,
-            target_suitability,
-            target_zone,
-        )
-        and _has_open_issues(document)
+        _approval_target_changes(document, target_state)
+        and approval_outcome(document) == 'C'
     ):
-        raise ValueError(
-            "Нельзя переместить документ с открытыми замечаниями "
-            "в опубликованную зону"
-        )
-    if target_status is not None and target_status != document.status:
-        document.status = target_status
-        update_fields.append('status')
-
-    if (
-        target_suitability is not None
-        and target_suitability != document.suitability_code
-    ):
-        document.suitability_code = target_suitability
-        update_fields.append('suitability_code')
-
-    document._from_service = True
-    document.save(update_fields=update_fields)
+        raise ValueError(APPROVAL_BLOCKED_MESSAGE)
+    if target_state != document.state:
+        _apply_state(user, document, target_state, folder=folder)
+    else:
+        document.folder = folder
+        document._from_service = True
+        document.save(update_fields=update_fields)
     return document
 
 
@@ -1961,6 +2159,82 @@ def _unique_copy_code(document: Document, section: Section) -> str:
     return candidate
 
 
+def _create_changeset_release(version, user, affected_sheets=''):
+    """Создаёт запись журнала «выпуск версии» (SPEC 2.0, волна 0, п. 8).
+
+    Единая точка контракта: состав изменений и причина читаются с самой
+    версии, в запись не дублируются. ``affected_sheets`` — свободный
+    текст, необязателен.
+    """
+    return ChangeSetEntry.objects.create(
+        version=version,
+        entry_type='version_release',
+        affected_sheets=(affected_sheets or '').strip(),
+        created_by=user,
+    )
+
+
+def _create_changeset_approval(document: Document, user: User):
+    """Создаёт запись об одобрении (SPEC 2.0, волна 0, п. 7).
+
+    «Замечаний нет, принято» — полноправная запись журнала: кто одобрил,
+    итог A/B, review_result на момент одобрения, при B — перечень открытых
+    неблокирующих замечаний. Вызывается в фактической точке перехода в
+    approved (``_apply_state``) и при «рождении» документа сразу в
+    утверждённом состоянии (``upload_document``/``copy_document``).
+    """
+    version = document.current_version
+    if version is None:
+        logger.warning(
+            'Одобрение документа %s без текущей версии: запись журнала '
+            'не создана', document.pk,
+        )
+        return None
+
+    outcome = approval_outcome(document)
+    lines = [
+        'Одобрил: {}'.format(
+            (user.get_full_name() or user.username) if user else '—'
+        ),
+        f'Итог: {outcome}',
+        'review_result: {}'.format(document.review_result or '—'),
+    ]
+    if document.outcome_override:
+        lines.append(
+            'Переопределение ГИПа: {}'.format(document.outcome_override_text)
+        )
+    if outcome == 'B':
+        open_issues = list(
+            document.issues.filter(status__in=ACTIVE_ISSUE_STATUSES)
+            .order_by('pk')
+        )
+        if open_issues:
+            lines.append('Открытые неблокирующие замечания:')
+            for issue in open_issues:
+                marker = ''
+                if (
+                    issue.is_blocking
+                    and issue.status in OPEN_ISSUE_STATUSES
+                ):
+                    marker = ' [блокирующее, переопределено]'
+                lines.append(
+                    '- #{} {}: {} ({}){}'.format(
+                        issue.pk,
+                        issue.document.code,
+                        (issue.description or '').strip()[:160],
+                        issue.status,
+                        marker,
+                    )
+                )
+
+    return ChangeSetEntry.objects.create(
+        version=version,
+        entry_type='approval',
+        text='\n'.join(lines),
+        created_by=user,
+    )
+
+
 def copy_document(
     user: User,
     document: Document,
@@ -1968,7 +2242,11 @@ def copy_document(
     section: Section | None,
     file_storage,
 ) -> Document:
-    """Создаёт копию документа со всеми версиями и файлами."""
+    """Создаёт копию документа со всеми версиями и файлами.
+
+    SPEC 2.0, волна 0, п. 7: копия в утверждённой зоне рождается сразу
+    approved — вместе с записью одобрения ('approval', итог A).
+    """
     if document.is_deleted:
         raise ValueError("Нельзя копировать документ из корзины")
     if not check_read_permission(user, document):
@@ -1996,6 +2274,10 @@ def copy_document(
             raise PermissionDenied(f"Нет прав на запись в зону «{zone_name}»")
 
     versions = list(document.versions.order_by('version_number'))
+    # SPEC 2.0, волна 0, п. 5: у копии своя причина, причина оригинала
+    # не наследуется. Первая версия (и все скопированные) получают текст
+    # с шифром оригинала.
+    copy_reason_text = f'Копия документа {document.code}'
     with transaction.atomic():
         copied = Document.objects.create(
             project=document.project,
@@ -2004,17 +2286,8 @@ def copy_document(
             code=_unique_copy_code(document, target_section),
             name=f'{document.name} (копия)'[:255],
             doc_type=document.doc_type,
-            # Спринт 5: статус-триплет синхронизируем с целевой папкой,
-            # иначе копия утверждённого документа попадает в WIP со статусом
-            # approved и ломает маппинг статус-зона и сегмент-контрол.
-            status=(
-                ZONE_STATUS_MAP.get(folder.zone, 'draft')
-                if folder is not None else 'draft'
-            ),
-            suitability_code=(
-                ZONE_SUITABILITY_MAP.get(folder.zone, 'S0')
-                if folder is not None else 'S0'
-            ),
+            # Состояние копии — по зоне целевой папки (единое состояние).
+            state=_initial_state_for_folder(folder),
             created_by=user,
         )
         current_copy = None
@@ -2034,13 +2307,23 @@ def copy_document(
                 file_hash=version.file_hash,
                 comment=version.comment,
                 uploaded_by=user,
+                reason_type='other',
+                reason_text=copy_reason_text,
             )
+            _create_changeset_release(copied_version, user)
             if document.current_version_id == version.pk:
                 current_copy = copied_version
 
         if current_copy is not None:
             copied.current_version = current_copy
             copied.save(update_fields=['current_version'])
+            # SPEC 2.0 w0 п. 7 (решение владельца): копия, рождённая сразу в
+            # утверждённой зоне, получает запись одобрения (итог A, вердикта
+            # на момент создания нет).
+            if copied.state in (
+                Document.STATE_APPROVED, Document.STATE_AS_BUILT,
+            ):
+                _create_changeset_approval(copied, user)
 
     return copied
 
@@ -2450,14 +2733,7 @@ def check_write_permission(user: User, section: Section) -> bool:
         return True
 
     if role == 'gip':
-        project = section.project
-        # ГИП может писать, если его gip_id совпадает с gip проекта
-        # ИЛИ если есть запись ProjectMembership с ролью gip
-        if project.gip_id == user.id:
-            return True
-        if project.memberships.filter(user=user, role_in_project='gip').exists():
-            return True
-        return False
+        return _is_project_gip(user, section.project)
 
     if role in ('developer', 'contractor'):
         return section in profile.allowed_sections.all()
@@ -2514,12 +2790,7 @@ def check_zone_permission(
         if profile.role == 'admin':
             return True
         if profile.role == 'gip' and project is not None:
-            if project.gip_id == user.id:
-                return True
-            if project.memberships.filter(
-                user=user, role_in_project='gip'
-            ).exists():
-                return True
+            return _is_project_gip(user, project)
         return False
 
     # WIP — стандартные правила записи
@@ -2530,13 +2801,7 @@ def check_zone_permission(
     if profile.role == 'gip':
         if project is None:
             return False
-        if project.gip_id == user.id:
-            return True
-        if project.memberships.filter(
-            user=user, role_in_project='gip'
-        ).exists():
-            return True
-        return False
+        return _is_project_gip(user, project)
     if profile.role in ('developer', 'contractor'):
         # Разработчик и смежник пишут в WIP только в выданные разделы
         if section is not None:
@@ -2571,11 +2836,7 @@ def check_read_permission(user: User, document: Document) -> bool:
         return True
 
     if role == 'gip':
-        if project.gip_id == user.id:
-            return True
-        return project.memberships.filter(
-            user=user, role_in_project='gip'
-        ).exists()
+        return _is_project_gip(user, project)
 
     if role == 'developer':
         return project.memberships.filter(
@@ -2631,9 +2892,8 @@ def get_readable_documents(user: User, project: Project | None = None):
         return qs
     if role == 'gip':
         return qs.filter(
-            Q(project__gip_id=user.id)
-            | Q(project__memberships__user=user,
-                project__memberships__role_in_project='gip')
+            project__memberships__user=user,
+            project__memberships__role_in_project='gip',
         ).distinct()
     if role == 'developer':
         return qs.filter(
@@ -2716,9 +2976,8 @@ SUITABILITY_TRANSITIONS = {
     'S2': frozenset({'S0', 'S1', 'S2', 'S3', 'S4'}),
     'S3': frozenset({'S0', 'S1', 'S2', 'S3', 'S4', 'A', 'B'}),
     'S4': frozenset({'S3', 'S4', 'A', 'B'}),
-    'A': frozenset({'A', 'B', 'CR'}),
-    'B': frozenset({'A', 'B', 'CR'}),
-    'CR': frozenset({'A', 'B', 'CR'}),
+    'A': frozenset({'A', 'B'}),
+    'B': frozenset({'A', 'B'}),
 }
 
 _STATUS_SUITABILITY = {
@@ -2765,14 +3024,16 @@ def can_transition(
         if new_suitability is not None
         else _STATUS_SUITABILITY.get(new_status)
     )
-    # T70: открытые замечания блокируют утверждение (кроме архивации).
+    # T70 (SPEC 2.0 w0 п. 6): утверждение блокирует только итог C —
+    # есть открытое замечание с блокирующим флагом. Открытые
+    # неблокирующие замечания (итог B) переход не блокируют.
     if (
         new_status == 'approved'
         or (
             target_suitability in ('S4', 'A')
             and new_status != 'archived'
         )
-    ) and _has_open_issues(document):
+    ) and approval_outcome(document) == 'C':
         return False
 
     if new_status == document.status:
@@ -2836,10 +3097,8 @@ def validate_transition(
         raise ValidationError(
             "Нельзя выйти из архива без прав администратора"
         )
-    if new_status == 'approved' and _has_open_issues(document):
-        raise ValidationError(
-            "Нельзя утвердить документ с открытыми замечаниями"
-        )
+    if new_status == 'approved' and approval_outcome(document) == 'C':
+        raise ValidationError(APPROVAL_BLOCKED_MESSAGE)
     current_label = dict(Document.STATUS_CHOICES).get(
         document.status, document.status
     )
@@ -2849,33 +3108,54 @@ def validate_transition(
     )
 
 
-def update_document_status(
+def _apply_state(
     user: User,
     document: Document,
-    new_status: str,
-    new_suitability: str | None = None,
+    new_state: str,
+    folder: Folder | None = None,
 ) -> Document:
-    """Единая точка смены статуса с FSM-валидацией."""
-    validate_transition(document, new_status, user, new_suitability)
-    update_fields = ['status', 'updated_at']
-    document.status = new_status
-    if (
-        new_suitability is not None
-        and new_suitability != document.suitability_code
-    ):
-        document.suitability_code = new_suitability
-        update_fields.append('suitability_code')
+    """Единственная точка записи ``Document.state`` в сервисах.
+
+    Проверяет переход FSM по признакам целевого состояния, затем
+    сохраняет состояние (и папку, если передана) с пометкой сервиса.
+    Прямые присваивания признаков вне этой функции не используются.
+    При входе в approved/as_built ручной вердикт сначала фиксируется в
+    записи одобрения, затем очищается (решение владельца 25.11.2026).
+    """
+    if new_state not in dict(Document.STATE_CHOICES):
+        raise ValueError("Неизвестное состояние документа")
+    status, suitability, _, _ = Document.STATE_PROJECTION[new_state]
+    state_changed = new_state != document.state
+    if state_changed:
+        validate_transition(document, status, user, suitability)
+    update_fields = ['state', 'updated_at']
+    document.state = new_state
+    if folder is not None:
+        document.folder = folder
+        update_fields.append('folder')
     document._from_service = True
     document.save(update_fields=update_fields)
+    # SPEC 2.0 w0 п. 7: фактический переход в approved — запись одобрения.
+    # Решение владельца (25.11.2026): ручной вердикт действует до утверждения
+    # (сопровождает документ через SHARED и попадает в запись одобрения) и
+    # очищается при входе в approved/as_built. Порядок строгий: запись читает
+    # вердикт ДО очистки. Очистка техническая — записи журнала не создаёт.
+    if state_changed and new_state in (
+        Document.STATE_APPROVED, Document.STATE_AS_BUILT,
+    ):
+        _create_changeset_approval(document, user)
+        if document.review_result:
+            document.review_result = ''
+            document.save(update_fields=['review_result'])
     return document
 
 
 def _effective_zone(document: Document) -> str:
-    """Зона документа; документы вне зон-папок считаются в WIP (черновик)."""
+    """Зона документа: каноническая папка зоны, иначе зона его состояния."""
     folder = document.folder
     if folder is not None and _is_canonical_zone_folder(folder):
         return folder.zone
-    return _ZONE_BY_STATUS.get(document.status, 'WIP')
+    return document.zone
 
 
 def _zone_filter_q(zone: str) -> Q:
@@ -2885,25 +3165,20 @@ def _zone_filter_q(zone: str) -> Q:
         section__isnull=True,
         is_system_zone=True,
     )
+    zone_states = [
+        state for state, proj in Document.STATE_PROJECTION.items()
+        if proj[3] == zone
+    ]
     return (
         Q(folder_id__in=canonical.filter(zone=zone).values('pk'))
         | (
-            Q(status=ZONE_STATUS_MAP[zone])
+            Q(state__in=zone_states)
             & (
                 Q(folder__isnull=True)
                 | ~Q(folder_id__in=canonical.values('pk'))
             )
         )
     )
-
-
-def _is_project_gip(user: User, project: Project) -> bool:
-    """ГИП проекта: прямой owner или членство с ролью gip."""
-    if project.gip_id == user.id:
-        return True
-    return project.memberships.filter(
-        user=user, role_in_project='gip'
-    ).exists()
 
 
 def _workflow_role_allowed(user: User, document: Document, action_code: str) -> bool:
@@ -2935,25 +3210,98 @@ def _workflow_role_allowed(user: User, document: Document, action_code: str) -> 
     return True
 
 
-OPEN_ISSUE_STATUSES = ('NEW', 'IN_PROGRESS', 'REJECTED')
+def apply_outcome_override(user: User, document: Document, justification: str) -> Document:
+    """Переопределяет итог C на B (SPEC 2.0, волна 0, п. 6).
+
+    Только ГИП проекта, только при итоге C, с непустым обоснованием.
+    Каждое переопределение — запись ChangeSetEntry('result_override')
+    в журнал текущей версии документа.
+    """
+    justification = (justification or '').strip()
+    if not justification:
+        raise ValueError("Обоснование переопределения обязательно")
+    if not _is_project_gip(user, document.project):
+        raise PermissionDenied(
+            "Переопределить итог согласования может только ГИП проекта"
+        )
+    if approval_outcome(document) != 'C':
+        raise ValueError(
+            "Переопределение доступно только при итоге C "
+            "(есть блокирующие замечания)"
+        )
+    version = document.current_version
+    if version is None:
+        raise ValueError(
+            "Нельзя переопределить итог: у документа нет текущей версии"
+        )
+
+    with transaction.atomic():
+        document.outcome_override = True
+        document.outcome_override_by = user
+        document.outcome_override_at = timezone.now()
+        document.outcome_override_text = justification
+        document.save(update_fields=[
+            'outcome_override',
+            'outcome_override_by',
+            'outcome_override_at',
+            'outcome_override_text',
+        ])
+        ChangeSetEntry.objects.create(
+            version=version,
+            entry_type='result_override',
+            text=justification,
+            created_by=user,
+        )
+    return document
+
+
+def _clear_outcome_override(document: Document) -> None:
+    """Сбрасывает переопределение итога (новое блокирующее замечание)."""
+    if not getattr(document, 'outcome_override', False):
+        return
+    document.outcome_override = False
+    document.outcome_override_by = None
+    document.outcome_override_at = None
+    document.outcome_override_text = ''
+    document.save(update_fields=[
+        'outcome_override',
+        'outcome_override_by',
+        'outcome_override_at',
+        'outcome_override_text',
+    ])
+
+
+def can_override_outcome(user: User, document: Document) -> bool:
+    """Показывать ли ГИПу форму «B вопреки блокирующим»."""
+    return (
+        approval_outcome(document) == 'C'
+        and _is_project_gip(user, document.project)
+        and bool(approval_override_action(document))
+    )
+
+
+def approval_override_action(document: Document) -> str:
+    """Действие, которое блокирует итог C и может быть переопределено."""
+    zone = _effective_zone(document)
+    if zone == 'WIP':
+        if document.internal_status == 'internal_review':
+            return 'approve_internal'
+        if document.internal_status == 'ready_to_share':
+            return 'submit_review'
+    if zone == 'SHARED':
+        return 'publish'
+    return ''
 
 
 def _open_issues_count(document: Document) -> int:
+    """Открытые замечания: каноническое множество, как в аннотации."""
     annotated = getattr(document, 'open_issues_count', None)
     if annotated is not None:
         return annotated
     return Issue.objects.filter(
         document=document,
-        status__in=OPEN_ISSUE_STATUSES,
+        status__in=ACTIVE_ISSUE_STATUSES,
     ).count()
-
-
-def _has_open_issues(document: Document) -> bool:
-    """Открытые замечания (NEW/IN_PROGRESS/REJECTED) блокируют публикацию."""
-    annotated = getattr(document, 'open_issues_count', None)
-    if annotated is not None:
-        return annotated > 0
-    return _open_issues_count(document) > 0
 
 
 INTERNAL_ACTION_SPECS = {
@@ -2981,6 +3329,7 @@ def update_internal_status(
     user: User,
     document: Document,
     action: str,
+    override_justification: str | None = None,
 ) -> Document:
     """Выполняет внутреннее действие WIP-документа.
 
@@ -2995,7 +3344,10 @@ def update_internal_status(
 
     action = (action or '').strip()
     if action == 'submit_review':
-        return transition_document_zone(user, document, 'submit_review')
+        return transition_document_zone(
+            user, document, 'submit_review',
+            override_justification=override_justification,
+        )
 
     is_admin, is_author, is_gip = _internal_permissions(user, document)
     spec = INTERNAL_ACTION_SPECS.get(action)
@@ -3011,20 +3363,17 @@ def update_internal_status(
     elif not (is_admin or is_gip):
         raise PermissionDenied("Нет прав на проверку документа")
 
-    if new_status == 'ready_to_share' and _has_open_issues(document):
-        raise ValueError(
-            "Нельзя утвердить документ с открытыми замечаниями"
-        )
+    if new_status == 'ready_to_share' and override_justification is not None:
+        apply_outcome_override(user, document, override_justification)
+    if new_status == 'ready_to_share' and approval_outcome(document) == 'C':
+        raise ValueError(APPROVAL_BLOCKED_MESSAGE)
 
-    document.internal_status = new_status
-    update_fields = ['internal_status', 'updated_at']
-    # Синхронизация старого поля status с внутренним WIP-статусом
-    if document.status != 'draft':
-        validate_transition(document, 'draft', user)
-        document.status = 'draft'
-        update_fields.append('status')
-    document._from_service = True
-    document.save(update_fields=update_fields)
+    # Единый переход состояния (без прямой записи признаков): внутренний
+    # статус работы — часть главного состояния.
+    target_state = Document.state_from_projection(
+        'draft', 'S0', new_status,
+    )
+    _apply_state(user, document, target_state)
     return document
 
 
@@ -3056,7 +3405,7 @@ def document_internal_actions(user: User, document: Document) -> list[dict]:
             'icon': 'bi-arrow-counterclockwise',
             'kind': 'internal',
         })
-        if not _has_open_issues(document):
+        if approval_outcome(document) != 'C':
             actions.append({
                 'code': 'approve_internal',
                 'label': 'Согласовать',
@@ -3085,10 +3434,10 @@ def document_workflow_actions(user: User, document: Document) -> list[dict]:
             continue
         if code == 'submit_review' and (
             document.internal_status != 'ready_to_share'
-            or _has_open_issues(document)
+            or approval_outcome(document) == 'C'
         ):
             continue
-        if code in ('publish', 'approve') and _has_open_issues(document):
+        if code in ('publish', 'approve') and approval_outcome(document) == 'C':
             continue
         target_status = ZONE_STATUS_MAP.get(spec['to'])
         target_suitability = ZONE_SUITABILITY_MAP.get(spec['to'])
@@ -3137,6 +3486,7 @@ def transition_document_zone(
     user: User,
     document: Document,
     action_code: str,
+    override_justification: str | None = None,
 ) -> Document:
     """Контролируемый переход документа между зонами ISO 19650.
 
@@ -3164,6 +3514,19 @@ def transition_document_zone(
             )
         )
 
+    if action_code == 'submit_review' and document.internal_status != 'ready_to_share':
+        raise ValueError(
+            "Подать на согласование можно только после статуса "
+            "«Готов к передаче»"
+        )
+
+    if override_justification is not None:
+        if action_code not in ('submit_review', 'publish', 'approve'):
+            raise ValueError(
+                "Переопределение итога применимо только к переходу согласования"
+            )
+        apply_outcome_override(user, document, override_justification)
+
     target_status = ZONE_STATUS_MAP.get(action['to'])
     target_suitability = ZONE_SUITABILITY_MAP.get(action['to'])
     validate_transition(
@@ -3173,35 +3536,26 @@ def transition_document_zone(
         target_suitability,
     )
 
-    if action_code == 'submit_review':
-        if document.internal_status != 'ready_to_share':
-            raise ValueError(
-                "Подать на согласование можно только после статуса "
-                "«Готов к передаче»"
-            )
-        if _has_open_issues(document):
-            raise ValueError(
-                "Нельзя подать на согласование документ с открытыми замечаниями"
-            )
+    if action_code == 'submit_review' and approval_outcome(document) == 'C':
+        raise ValueError(APPROVAL_BLOCKED_MESSAGE)
 
     target_folder = document.folder
     if target_folder is None or _is_canonical_zone_folder(target_folder):
         target_folder = _get_or_create_zone_folder(
             document.project, action['to'], user
         )
-    document.folder = target_folder
-    if target_status is not None and target_status != document.status:
-        document.status = target_status
-
-    if target_suitability is not None:
-        document.suitability_code = target_suitability
     if action_code == 'return_wip':
-        document.internal_status = 'rework'
-
-    document._from_service = True
-    document.save(update_fields=[
-        'folder', 'status', 'suitability_code', 'internal_status', 'updated_at',
-    ])
+        target_state = Document.STATE_WIP_REWORK
+    else:
+        # Состояние задаёт зона действия (action['to']), а не папка: папка
+        # может остаться прежней (виртуальные зоны — без канонической папки).
+        target_state = {
+            'WIP': Document.STATE_WIP_DRAFT,
+            'SHARED': Document.STATE_SHARED,
+            'PUBLISHED': Document.STATE_APPROVED,
+            'ARCHIVE': Document.STATE_ARCHIVED,
+        }[action['to']]
+    _apply_state(user, document, target_state, folder=target_folder)
 
     _notify_zone_transition(user, document, action_code)
     return document
@@ -3283,12 +3637,21 @@ def _generate_document_code(
     коллизии разрешаем перебором (уникальность в рамках project+section).
     """
     base = (project.base_code or project.code or '').strip()
-    parts = [part for part in (
-        base,
-        (section.code or '').strip(),
-        ((folder.code or '').strip() if folder is not None else ''),
-    ) if part]
-    prefix = '-'.join(parts) + '-' if parts else 'DOC-'
+    kit_code = (folder.code or '').strip() if folder is not None else ''
+    if kit_code:
+        # Шифр комплекта уже полный ({base}-{mark}1 / {base}-ИОС1.N) — основа префикса.
+        # Базовое обозначение встречается в шифре ровно один раз (SPEC 2.0 w0 п.9):
+        # если код папки начинается с base, префикс берём от него как есть; иначе
+        # дописываем base один раз, а не повторяем его поверх готового шифра.
+        if base and kit_code.startswith(f'{base}-'):
+            prefix = f'{kit_code}-'
+        elif base and kit_code.count(base) == 0:
+            prefix = f'{base}-{kit_code}-'
+        else:
+            prefix = f'{kit_code}-'
+    else:
+        parts = [part for part in (base, (section.code or '').strip()) if part]
+        prefix = '-'.join(parts) + '-' if parts else 'DOC-'
     existing_codes = set(
         Document.objects
         .filter(project=project, section=section, code__startswith=prefix)
@@ -3298,6 +3661,56 @@ def _generate_document_code(
     while f'{prefix}{number:02d}' in existing_codes:
         number += 1
     return f'{prefix}{number:02d}'
+
+
+def _validate_version_reason(
+    project: Project,
+    reason_type: str,
+    reason_object,
+    reason_text: str,
+) -> str:
+    """Проверяет причину версии (SPEC 2.0, волна 0, п. 5).
+
+    issue/task/rfi требуют объект-источник того же проекта; other —
+    непустой текст. Возвращает нормализованный текст причины.
+    """
+    if reason_type not in dict(VERSION_REASON_CHOICES):
+        raise ValueError("Неверный тип причины версии")
+
+    reason_text = (reason_text or '').strip()
+    if reason_type == 'other':
+        if reason_object is not None:
+            raise ValueError(
+                "Для причины «Другое» ссылка на источник не заполняется"
+            )
+        if not reason_text:
+            raise ValueError(
+                "Для причины «Другое» заполните текст причины версии"
+            )
+        return reason_text
+
+    expected_models = {
+        'issue': Issue,
+        'task': DesignTask,
+        'rfi': RfiTask,
+    }
+    expected = expected_models[reason_type]
+    if reason_object is None:
+        raise ValueError(
+            "Для причины версии укажите источник "
+            f"«{dict(VERSION_REASON_CHOICES)[reason_type]}»"
+        )
+    if not isinstance(reason_object, expected):
+        raise ValueError("Источник причины не соответствует выбранному типу")
+
+    if reason_type == 'issue':
+        source_project_id = reason_object.document.project_id
+    else:
+        source_project_id = reason_object.project_id
+    if source_project_id != project.pk:
+        raise ValueError("Источник причины относится к другому проекту")
+
+    return reason_text
 
 
 def upload_document(
@@ -3313,6 +3726,10 @@ def upload_document(
     skip_ai_index: bool = False,
     skip_section_write_check: bool = False,
     skip_zone_check: bool = False,
+    reason_type: str = 'other',
+    reason_object=None,
+    reason_text: str = '',
+    affected_sheets: str = '',
 ) -> DocumentVersion:
     """Единственная точка создания версий документа.
 
@@ -3330,6 +3747,15 @@ def upload_document(
       в InternalChunk через ai_checks).
     - UI-аудит (треб. 2.1/3.1): пустой code → генерация шифра по
       ГОСТ Р 21.101; пустой doc_type → определение по расширению файла.
+    - SPEC 2.0, волна 0, п. 5: причина версии обязательна. Для
+      issue/task/rfi — объект-источник того же проекта, для other —
+      непустой reason_text; иначе ValueError.
+    - SPEC 2.0, волна 0, п. 8: при выпуске версии создаётся запись
+      журнала ChangeSetEntry ('version_release'); affected_sheets —
+      необязательный свободный текст «затронутые листы».
+    - SPEC 2.0, волна 0, п. 7: новый документ, рождённый сразу в
+      утверждённом состоянии (папка PUBLISHED), получает запись
+      одобрения ('approval') — итог A, создатель как одобривший.
     """
     if not skip_section_write_check and not check_write_permission(user, section):
         raise PermissionDenied("Нет прав на запись в этот раздел")
@@ -3353,6 +3779,13 @@ def upload_document(
 
     if section.project != project:
         raise ValueError("Раздел не относится к указанному проекту")
+
+    reason_text = _validate_version_reason(
+        project,
+        reason_type,
+        reason_object,
+        reason_text,
+    )
 
     # Треб. 2.1: явный шифр от пользователя имеет приоритет; пустой —
     # генерируем по ГОСТ Р 21.101.
@@ -3418,14 +3851,7 @@ def upload_document(
             defaults={
                 'name': name,
                 'doc_type': doc_type,
-                'status': (
-                    ZONE_STATUS_MAP.get(folder.zone, 'draft')
-                    if folder is not None else 'draft'
-                ),
-                'suitability_code': (
-                    ZONE_SUITABILITY_MAP.get(folder.zone, 'S0')
-                    if folder is not None else 'S0'
-                ),
+                'state': _initial_state_for_folder(folder),
                 'folder': folder,
                 'created_by': user,
             },
@@ -3434,49 +3860,18 @@ def upload_document(
             # Обновляем поля, если документ уже существует
             doc.name = name
             doc.doc_type = doc_type
-            update_fields = ['name', 'doc_type', 'updated_at']
+            doc.save(update_fields=['name', 'doc_type', 'updated_at'])
             if folder is not None:
-                doc.folder = folder
-                update_fields.append('folder')
-                target_status = _status_for_zone(folder)
-                target_suitability = _suitability_for_zone(folder)
-                if target_status is not None and (
-                    target_status != doc.status
-                    or target_suitability != doc.suitability_code
-                ):
-                    validate_transition(
-                        doc,
-                        target_status,
-                        user,
-                        target_suitability,
-                    )
+                target_state = _initial_state_for_folder(folder)
                 if (
                     (
-                        _approval_target_changes(
-                            doc,
-                            target_status,
-                            target_suitability,
-                            folder.zone,
-                        )
+                        _approval_target_changes(doc, target_state)
                         or folder.zone == 'PUBLISHED'
                     )
-                    and _has_open_issues(doc)
+                    and approval_outcome(doc) == 'C'
                 ):
-                    raise ValueError(
-                        "Нельзя обновить документ с открытыми замечаниями "
-                        "в опубликованной зоне"
-                    )
-                if target_status is not None and target_status != doc.status:
-                    doc.status = target_status
-                    update_fields.append('status')
-                if (
-                    target_suitability is not None
-                    and target_suitability != doc.suitability_code
-                ):
-                    doc.suitability_code = target_suitability
-                    update_fields.append('suitability_code')
-            doc._from_service = True
-            doc.save(update_fields=update_fields)
+                    raise ValueError(APPROVAL_BLOCKED_MESSAGE)
+                _apply_state(user, doc, target_state, folder=folder)
 
         # Вычисляем следующую версию
         max_number = DocumentVersion.objects.filter(document=doc).aggregate(Max('version_number'))['version_number__max']
@@ -3490,12 +3885,30 @@ def upload_document(
             file_size=file.size,
             uploaded_by=user,
             comment=comment,
+            reason_type=reason_type,
+            content_type=(
+                ContentType.objects.get_for_model(reason_object)
+                if reason_object is not None
+                else None
+            ),
+            object_id=reason_object.pk if reason_object is not None else None,
+            reason_text=reason_text,
         )
+        _create_changeset_release(version, user, affected_sheets)
 
         # Обновляем документ: текущая версия и отметка времени
         doc.current_version = version
         doc.updated_at = timezone.now()
         doc.save(update_fields=['current_version', 'updated_at'])
+
+        # SPEC 2.0 w0 п. 7 (решение владельца): «рождение» документа сразу в
+        # утверждённом состоянии легально (запись в PUBLISHED — только админ).
+        # Одобрение фиксируется после появления текущей версии: у нового
+        # документа замечаний нет — итог A.
+        if created and doc.state in (
+            Document.STATE_APPROVED, Document.STATE_AS_BUILT,
+        ):
+            _create_changeset_approval(doc, user)
 
     # Этап 20 (треб. 4): после фиксации версии — автоиндексация PDF для
     # ИИ-поиска. Ленивый импорт задачи (домен storage не зависит от
@@ -3623,7 +4036,7 @@ def search_documents(
     if doc_type:
         queryset = queryset.filter(doc_type=doc_type)
     if status:
-        queryset = queryset.filter(status=status)
+        queryset = queryset.filter(state__in=_states_matching(status=status))
 
     return list(
         queryset.select_related(
@@ -3824,8 +4237,13 @@ def create_issue(
     answer_text: str = '',
     due_date=None,
     revision: str = '',
+    is_blocking: bool = False,
 ) -> Issue:
-    """Создаёт замечание к документу с проверкой прав и валидацией координат."""
+    """Создаёт замечание к документу с проверкой прав и валидацией координат.
+
+    ``is_blocking`` — блокирующий флаг (SPEC 2.0 w0 п. 6). Новое
+    блокирующее замечание сбрасывает активное переопределение итога.
+    """
     if not check_issue_permission(user, document):
         raise PermissionDenied("Нет прав на добавление замечания к документу")
 
@@ -3872,27 +4290,31 @@ def create_issue(
 
     crop_image = _decode_crop_image(crop_image_base64)
 
-    issue = Issue.objects.create(
-        document=document,
-        version=version,
-        author=user,
-        assignee=assignee,
-        description=description,
-        status='NEW',
-        page_number=page_number,
-        x_ratio=x_ratio,
-        y_ratio=y_ratio,
-        x1_ratio=x1_ratio,
-        y1_ratio=y1_ratio,
-        x2_ratio=x2_ratio,
-        y2_ratio=y2_ratio,
-        crop_image=crop_image,
-        department=department,
-        project_organization=project_organization,
-        answer_text=answer_text,
-        due_date=due_date,
-        revision=revision,
-    )
+    with transaction.atomic():
+        issue = Issue.objects.create(
+            document=document,
+            version=version,
+            author=user,
+            assignee=assignee,
+            description=description,
+            status='NEW',
+            is_blocking=bool(is_blocking),
+            page_number=page_number,
+            x_ratio=x_ratio,
+            y_ratio=y_ratio,
+            x1_ratio=x1_ratio,
+            y1_ratio=y1_ratio,
+            x2_ratio=x2_ratio,
+            y2_ratio=y2_ratio,
+            crop_image=crop_image,
+            department=department,
+            project_organization=project_organization,
+            answer_text=answer_text,
+            due_date=due_date,
+            revision=revision,
+        )
+        if issue.is_blocking:
+            _clear_outcome_override(document)
     notify_issue_assigned(issue, user)
     return issue
 
@@ -4132,27 +4554,43 @@ def create_project_from_template(
     company: Company,
     code: str,
     name: str,
-    customer: str,
+    customer_id: int | None,
     gip: User | None,
     created_by: User | None,
     template_key: str | None = None,
     base_code: str = '',
+    stage: str | None = None,
+    object_type: str | None = None,
+    deploy_scope: str = 'rd',
 ) -> Project:
-    """Создаёт проект и, при необходимости, разделы/папки из шаблона."""
+    """Создаёт проект и, при необходимости, разделы/папки из шаблона.
+
+    Если template_key пуст и object_type указан — разворачиваются пресеты
+    PRESETS по deploy_scope: 'pd' — П-пресет, 'rd' — РД-пресет,
+    'full' — оба (П под ПД, РД под РД). stage проекта: 'pd' → П, иначе РД.
+    Если object_type не указан — прежний путь только по template_key.
+    """
+    if deploy_scope not in PRESET_SCOPES:
+        raise ValueError(f"Неизвестный deploy_scope: {deploy_scope!r}")
     actor = created_by or gip
     if actor is None:
         raise ValueError("Не указан создатель проекта")
     if not can_create_project(actor):
         raise PermissionDenied("Нет прав на создание проекта")
 
+    if stage is None:
+        stage = Project.STAGE_P if deploy_scope == 'pd' else Project.STAGE_RD
+
     project = create_project(
         company=company,
         code=code,
         name=name,
-        customer=customer,
+        customer_id=customer_id,
         gip=gip,
         created_by=created_by,
         base_code=base_code,
+        stage=stage,
+        object_type=object_type,
     )
     stored_template_key = template_key or ''
     if project.template_key != stored_template_key:
@@ -4201,11 +4639,261 @@ def create_project_from_template(
 
     # Любой новый проект получает 4 корневые суперпапки.
     if template is None:
-        _ensure_root_superfolders(project, actor)
+        if object_type:
+            _populate_presets(project, actor, deploy_scope)
+        else:
+            _ensure_root_superfolders(project, actor)
         return project
 
     _populate_project_template(project, template, actor)
     return project
+
+
+PRESET_SCOPES = ('pd', 'rd', 'full')
+_PRESET_STAGES_BY_SCOPE = {
+    'pd': (Project.STAGE_P,),
+    'rd': (Project.STAGE_RD,),
+    'full': (Project.STAGE_P, Project.STAGE_RD),
+}
+
+
+def _strip_sub_prefix(name: str) -> str:
+    """«Подраздел 5.3. Система водоотведения» → «Система водоотведения»."""
+    return re.sub(r'^Подраздел\s+\d+\.\d+\.\s*', '', (name or '').strip())
+
+
+_RE_SECTION_PREFIX = re.compile(r'^Раздел\s+\d+\.\s*')
+
+
+def pd_volume_name(k: int, section_name: str) -> str:
+    """Имя ПД-тома: «Часть {K}. {имя раздела без префикса «Раздел N. »}».
+
+    Единая формула для пресетного пути и подсказки в форме создания папки.
+    """
+    title = _RE_SECTION_PREFIX.sub('', (section_name or '').strip()).strip()
+    return f'Часть {k}. {title}'
+
+
+def _populate_presets(project: Project, actor: User, deploy_scope: str) -> None:
+    """Разворачивает пресеты PRESETS[(stage, object_type)] по deploy_scope.
+
+    Для каждой стадии из области — свой пресет в своей корневой папке
+    (ПД для П, РД для РД). Разделы создаются только при отсутствии
+    (get_or_create), переименования существующих разделов не выполняются.
+    Пресет РД с кодом, уже созданным пресетом П (например, ЭОМ), не дублирует
+    раздел: коды уникальны в проекте.
+    """
+    superfolders = _ensure_root_superfolders(project, actor)
+    _create_ird_structure(project, actor, superfolders)
+    common = _get_or_create_common_section(project)
+
+    for stage in _PRESET_STAGES_BY_SCOPE[deploy_scope]:
+        preset = PRESETS[(stage, project.object_type)]
+        root = superfolders['PD' if stage == Project.STAGE_P else 'RD']
+        sections: dict[str, Section] = {}
+        for index, item in enumerate(preset, start=1):
+            mark = item['mark']
+            section_obj, _ = Section.objects.get_or_create(
+                project=project,
+                code=mark,
+                defaults={'name': item['name'], 'order': index},
+            )
+            sections[mark] = section_obj
+        # Заполняем full_code только у разделов без шифра: существующие не трогаем.
+        for section in project.sections.filter(full_code=''):
+            section.full_code = generate_gost_code(project.base_code, section.code)
+            section.save(update_fields=['full_code'])
+        prefix = _code_prefix(project)
+        for item in preset:
+            mark = item['mark']
+            section_obj = sections.get(mark, common)
+            if stage == Project.STAGE_P and item.get('subsections'):
+                # ИОС-ветка — копия из _create_pd_structure (сведение на волне 1).
+                section_folder = _ensure_preset_folder(
+                    actor,
+                    project,
+                    name=item['name'],
+                    section=section_obj,
+                    parent=root,
+                )
+                # Схема (решение владельца): подраздел 5.N → {base}-ИОС{N},
+                # том → {base}-ИОС{N}.K. Схема ИОС1.{N} старого пути — дефект,
+                # в пресетный путь не переносится.
+                # Подраздел без шифра (code=''); шифр несёт только том {base}-ИОС{N}.K.
+                for subsection in item['subsections']:
+                    sub_number = subsection['number'].split('.')[-1]
+                    sub_code = f'{prefix}ИОС{sub_number}'
+                    sub_folder = _ensure_preset_folder(
+                        actor,
+                        project,
+                        name=subsection['name'],
+                        section=section_obj,
+                        parent=section_folder,
+                    )
+                    sub_name = _strip_sub_prefix(subsection['name'])
+                    _ensure_preset_folder(
+                        actor,
+                        project,
+                        name=f'Часть 1. {sub_name}',
+                        section=section_obj,
+                        parent=sub_folder,
+                        code=f'{sub_code}.1',
+                    )
+                continue
+            if stage == Project.STAGE_P:
+                # ПД-марка без подразделов: папка марки + том «Часть 1. {раздел}» (МИКРО-2, МИКРО-7).
+                _deploy_mark_folder(
+                    project,
+                    actor,
+                    parent=root,
+                    section_obj=section_obj,
+                    name=item['name'],
+                    child_name=pd_volume_name(1, item['name']),
+                    child_mark_code=f'{prefix}{mark}1',
+                )
+                continue
+            # РД-марка: комплект {prefix}{mark}1; имя комплекта — «Комплект {код}» (МИКРО-5).
+            _deploy_mark_folder(
+                project,
+                actor,
+                parent=root,
+                section_obj=section_obj,
+                name=item['name'],
+                child_name=f'Комплект {mark}1',
+                child_mark_code=f'{prefix}{mark}1',
+            )
+
+
+def _ensure_preset_folder(
+    actor: User,
+    project: Project,
+    *,
+    name: str,
+    section: Section | None,
+    parent: Folder,
+    code: str = '',
+) -> Folder:
+    """Возвращает живую папку с тем же именем или шифром под parent, иначе создаёт.
+
+    Идемпотентность пресетного пути: повторный вызов не дублирует папку и не
+    переименовывает существующую. Совпадение по шифру нужно, чтобы не упасть
+    на уникальности кода, если том переименован вручную.
+    """
+    lookup = Q(name=name)
+    if code:
+        lookup |= Q(code=code)
+    existing = (
+        Folder.objects.filter(project=project, parent=parent, is_deleted=False)
+        .filter(lookup)
+        .order_by('pk')
+        .first()
+    )
+    if existing is not None:
+        return existing
+    return create_folder(
+        actor,
+        project,
+        name=name,
+        section=section,
+        parent=parent,
+        code=code,
+        force=True,
+    )
+
+
+def _deploy_mark_folder(
+    project: Project,
+    actor: User,
+    parent: Folder,
+    section_obj: Section,
+    name: str,
+    child_name: str,
+    child_mark_code: str,
+) -> Folder:
+    """Идемпотентный аналог _create_mark_folder для пресетного пути."""
+    mark_folder = _ensure_preset_folder(
+        actor,
+        project,
+        name=name,
+        section=section_obj,
+        parent=parent,
+    )
+    _ensure_preset_folder(
+        actor,
+        project,
+        name=child_name,
+        section=section_obj,
+        parent=mark_folder,
+        code=child_mark_code,
+    )
+    return mark_folder
+
+
+def deploy_preset_to_project(
+    actor: User,
+    project: Project,
+    deploy_scope: str,
+) -> list[dict]:
+    """Разворачивает пресет (stage, object_type) в существующий проект.
+
+    deploy_scope: 'pd' — только ПД, 'rd' — только РД, 'full' — ПД и РД.
+    Только создаёт недостающее: существующие разделы и папки не переименовываются
+    и не дублируются, повторный вызов на том же проекте возвращает пустой список.
+    Возвращает список созданных сущностей (для лога): dict с ключами
+    type ('section' | 'folder'), id, code, name, full_code.
+    """
+    if deploy_scope not in PRESET_SCOPES:
+        raise ValueError(f"Неизвестный deploy_scope: {deploy_scope!r}")
+    if not can_edit_project(actor, project):
+        raise PermissionDenied("Нет прав на изменение структуры проекта")
+    if project.is_deleted:
+        raise ValueError("Проект находится в корзине")
+    if not project.object_type:
+        raise ValueError("У проекта не указан тип объекта (object_type)")
+    for stage in _PRESET_STAGES_BY_SCOPE[deploy_scope]:
+        if (stage, project.object_type) not in PRESETS:
+            raise ValueError(
+                f"Нет пресета для стадии {stage} и типа {project.object_type}"
+            )
+
+    with transaction.atomic():
+        folder_ids_before = set(
+            Folder.objects.filter(project=project).values_list('pk', flat=True)
+        )
+        section_ids_before = set(
+            Section.objects.filter(project=project).values_list('pk', flat=True)
+        )
+        _populate_presets(project, actor, deploy_scope)
+
+        created: list[dict] = []
+        new_sections = Section.objects.filter(project=project).exclude(
+            pk__in=section_ids_before,
+        ).order_by('pk')
+        for section in new_sections:
+            created.append({
+                'type': 'section',
+                'id': section.pk,
+                'code': section.code,
+                'name': section.name,
+                'full_code': section.full_code,
+            })
+        new_folders = Folder.objects.filter(project=project).exclude(
+            pk__in=folder_ids_before,
+        ).order_by('pk')
+        for folder in new_folders:
+            created.append({
+                'type': 'folder',
+                'id': folder.pk,
+                'code': folder.code,
+                'name': folder.name,
+                'full_code': folder.full_code,
+            })
+
+    logger.info(
+        "Preset deploy scope=%s project=%s created=%d",
+        deploy_scope, project.pk, len(created),
+    )
+    return created
 
 
 def get_company_members(company: Company):
@@ -4904,16 +5592,29 @@ def _design_task_url(task: DesignTask) -> str:
 
 
 def _is_project_gip(user: User, project: Project) -> bool:
-    """ГИП именно этого проекта: Project.gip или ProjectMembership(role=gip).
+    """ГИП именно этого проекта: членство в составе с ролью gip.
 
     UserProfile.role == 'gip' сам по себе права на чужой проект не даёт —
     в отличие от роли 'admin', которая глобальна.
     """
     if user.is_superuser:
         return True
-    if project.gip_id == user.pk:
-        return True
-    return project.memberships.filter(user=user, role_in_project='gip').exists()
+    # all() при prefetch_related('memberships') читает кэш без запроса.
+    return any(m.user_id == user.pk and m.role_in_project == 'gip'
+               for m in project.memberships.all())
+
+
+def _project_gip_user_id(project: Project) -> int | None:
+    """user_id действующего ГИП проекта из состава (кэш prefetch, без запроса)."""
+    gips = [m for m in project.memberships.all() if m.role_in_project == 'gip']
+    if not gips:
+        return None
+    return max(gips, key=lambda m: m.pk).user_id
+
+
+def _project_gip_user(project: Project) -> User | None:
+    """Действующий ГИП проекта из состава (для уведомлений и маршрутизации)."""
+    return project.gip
 
 
 def _is_project_admin(user: User, project: Project) -> bool:
@@ -4946,7 +5647,7 @@ def _is_project_participant(user: User | None, project: Project) -> bool:
     """
     if user is None:
         return False
-    if user.is_superuser or project.gip_id == user.pk:
+    if user.is_superuser or _is_project_gip(user, project):
         return True
     profile = getattr(user, 'userprofile', None)
     return profile is not None and profile.company_id == project.company_id
@@ -5197,7 +5898,7 @@ def update_task_status(
         # актора), действия автора/ГИПа видит исполнитель. Длинная причина
         # обрезается до 200 знаков (полный текст — в DesignTaskStatusLog).
         if new_status == DesignTask.Status.COMPLETED:
-            for recipient in {task.author, task.project.gip} - {None, user}:
+            for recipient in {task.author, _project_gip_user(task.project)} - {None, user}:
                 _notify_task(
                     task,
                     recipient,
@@ -5213,10 +5914,10 @@ def update_task_status(
                 if old_status == DesignTask.Status.ISSUED
                 else f'Задание #{task.pk} возобновлено'
             )
-            for recipient in {task.author, task.project.gip} - {None, user}:
+            for recipient in {task.author, _project_gip_user(task.project)} - {None, user}:
                 _notify_task(task, recipient, user, message)
         elif new_status == DesignTask.Status.ON_HOLD:
-            for recipient in {task.author, task.project.gip} - {None, user}:
+            for recipient in {task.author, _project_gip_user(task.project)} - {None, user}:
                 _notify_task(
                     task,
                     recipient,
@@ -5397,7 +6098,7 @@ def tasks_requiring_attention(project: Project) -> list[DesignTask]:
     from issues.models import Issue
 
     today = timezone.localdate()
-    active_issue_statuses = ('NEW', 'IN_PROGRESS', 'REJECTED', 'DISCUSSION')
+    active_issue_statuses = ACTIVE_ISSUE_STATUSES
     rows = (
         DesignTask.objects.filter(project=project)
         .filter(
@@ -5609,15 +6310,14 @@ def _deadline_tasks(target_date, statuses, overdue: bool = False) -> QuerySet:
         else queryset.filter(due_date=target_date)
     )
     return queryset.select_related(
-        'project', 'project__gip', 'project__gip__userprofile',
+        'project',
         'assignee', 'assignee__userprofile',
         'author', 'author__userprofile',
+    ).prefetch_related(
+        'project__memberships',
     ).only(
         'id', 'title', 'due_date',
-        'project_id', 'project__id', 'project__company_id', 'project__gip_id',
-        'project__gip__id', 'project__gip__is_superuser',
-        'project__gip__userprofile__id',
-        'project__gip__userprofile__company_id',
+        'project_id', 'project__id', 'project__company_id',
         'assignee_id', 'assignee__id', 'assignee__is_superuser',
         'assignee__userprofile__id', 'assignee__userprofile__company_id',
         'author_id', 'author__id', 'author__is_superuser',
@@ -5625,21 +6325,32 @@ def _deadline_tasks(target_date, statuses, overdue: bool = False) -> QuerySet:
     )
 
 
-def _reminder_recipients(task: DesignTask, include_author: bool) -> set:
-    """Получатели напоминания: исполнитель (просрочка — ещё автор и ГИП).
+def _reminder_recipients(task: DesignTask, include_author: bool) -> set[int]:
+    """user_id получателей напоминания: исполнитель (просрочка — ещё автор и ГИП).
 
-    Каждый кандидат проверяется через _is_project_participant —
-    уведомления не уходят за пределы проекта (спека Этап 5).
+    Кандидаты-участники (исполнитель, автор) проверяются через
+    _is_project_participant — уведомления не уходят за пределы проекта
+    (спека Этап 5). ГИП берётся из состава и участник по определению,
+    поэтому обязательный получатель просрочки всегда попадает в набор.
     """
+    # Бюджет запросов — константа, от числа задач не зависит:
+    # 1 (задания) + 1 (состав проекта, prefetch) + 1 (идемпотентность) +
+    # 1 (bulk_create) = 4. Объекты пользователей состава не загружаются:
+    # получатели — user_id; исполнитель и автор уже приходят из
+    # select_related с профилями.
     candidates = {task.assignee_id: task.assignee}
     if include_author:
         candidates[task.author_id] = task.author
-        candidates[task.project.gip_id] = task.project.gip
-    return {
-        user
+    recipient_ids = {
+        user_id
         for user_id, user in candidates.items()
         if user_id is not None and _is_project_participant(user, task.project)
     }
+    if include_author:
+        gip_id = _project_gip_user_id(task.project)
+        if gip_id is not None:
+            recipient_ids.add(gip_id)
+    return recipient_ids
 
 
 def _send_task_deadline_notifications(tasks, today, recipients_of, message_of) -> int:
@@ -5667,11 +6378,11 @@ def _send_task_deadline_notifications(tasks, today, recipients_of, message_of) -
     for task in tasks:
         url = _design_task_url(task)
         message = message_of(task)[:300]
-        for recipient in recipients_of(task):
-            if (recipient.pk, url, message) in existing:
+        for recipient_id in recipients_of(task):
+            if (recipient_id, url, message) in existing:
                 continue
             rows.append(Notification(
-                recipient_id=recipient.pk,
+                recipient_id=recipient_id,
                 actor=None,
                 project_id=task.project_id,
                 verb='status_changed',
@@ -5997,6 +6708,9 @@ def upload_rfi_document(
         doc_type='source_data', file=file, folder=folder,
         skip_section_write_check=True,
         skip_zone_check=True,
+        reason_type='rfi',
+        reason_object=rfi,
+        reason_text=f'RFI №{rfi.number}: {suffix.lower()}',
     )
     doc = version.document
     if kind == 'request':

@@ -1,7 +1,7 @@
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 
-from storage.domain.models import Company, Project
+from storage.domain.models import Company, Project, ProjectMembership
 from storage.domain.services import (
     create_folder,
     create_section,
@@ -25,9 +25,9 @@ class GostCodeTests(TestCase):
             base_code='2345-12',
             name='Проект',
             status='active',
-            gip=self.user,
             created_by=self.user,
         )
+        ProjectMembership.objects.update_or_create(project=self.project, user=self.user, defaults={'role_in_project': 'gip'})
 
     def test_generate_gost_code_section(self):
         self.assertEqual(

@@ -146,16 +146,19 @@ class CreateDemoProjectTests(TestCase):
             pairs,
             [
                 ('COMMON', 0),
-                ('АР', 1), ('КР', 2), ('ОВ', 3), ('ВК', 4),
-                ('ЭОМ', 5), ('СПА', 6), ('АК', 7),
+                ('ГП', 1), ('АР', 2), ('КЖ', 3), ('КМ', 4), ('ОВ', 5),
+                ('ВК', 6), ('ХС', 7), ('ТМ', 8), ('ЭС', 9), ('ЭМ', 10),
+                ('ЭО', 11), ('ЭОМ', 12), ('ПС', 13), ('ОС', 14), ('СС', 15),
+                ('РТ', 16), ('СПА', 17), ('ОГЗ', 18), ('АК', 19), ('ГСН', 20),
+                ('ГСВ', 21), ('НВК', 22), ('ТС', 23), ('ЭН', 24),
             ],
         )
-        self.assertEqual(Section.objects.filter(project=project).exclude(code='COMMON').count(), 7)
+        self.assertEqual(Section.objects.filter(project=project).exclude(code='COMMON').count(), 24)
         eom = Section.objects.get(project=project, code='ЭОМ')
         self.assertEqual(
             eom.name,
-            'Силовое электрооборудование и электрическое освещение',
+            'Силовое электрооборудование и электрическое освещение (внутреннее)',
         )
-        # Никаких PD/RD-разделов из RD_SECTIONS (например, КЖ, КМ, СС, ТХ).
-        for pd_code in ('КЖ', 'КМ', 'СС', 'ТХ', 'ПЗ', 'ПЗУ'):
+        # Разделы ПД (ПЗ, ПЗУ) в РД-пресете не разворачиваются.
+        for pd_code in ('ПЗ', 'ПЗУ', 'ИОС', 'ТБЭ'):
             self.assertFalse(Section.objects.filter(project=project, code=pd_code).exists())

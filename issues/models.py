@@ -34,6 +34,13 @@ class Issue(models.Model):
     )
     description = models.TextField()
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='NEW')
+    # SPEC 2.0, волна 0, п. 6: блокирующий флаг замечания. Итог A/B/C
+    # вычисляется из открытых замечаний и этого флага; смена флага — только
+    # через сервис с обязательным обоснованием и записью в IssueFlagLog.
+    is_blocking = models.BooleanField(
+        default=False,
+        verbose_name="Блокирующее замечание",
+    )
     external_id = models.CharField(
         max_length=100,
         blank=True,
@@ -94,6 +101,46 @@ class Issue(models.Model):
 
     def __str__(self):
         return f'Замечание #{self.pk} — {self.document.code} ({self.get_status_display()})'
+
+
+class IssueFlagLog(models.Model):
+    """Протокол смены блокирующего флага (SPEC 2.0, волна 0, п. 6).
+
+    Каждая смена флага — с обязательным обоснованием; запись создаётся
+    атомарно с переключением в ``issues.services.set_issue_blocking``.
+    """
+
+    issue = models.ForeignKey(
+        Issue,
+        on_delete=models.CASCADE,
+        related_name='flag_logs',
+        verbose_name='Замечание',
+    )
+    old_value = models.BooleanField(verbose_name='Было блокирующим')
+    new_value = models.BooleanField(verbose_name='Стало блокирующим')
+    justification = models.TextField(verbose_name='Обоснование')
+    changed_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='issue_flag_changes',
+        verbose_name='Кто изменил',
+    )
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+        verbose_name='Дата изменения',
+    )
+
+    class Meta:
+        ordering = ['-created_at', '-pk']
+        verbose_name = 'Запись журнала флага замечания'
+        verbose_name_plural = 'Журнал флагов замечаний'
+
+    def __str__(self):
+        return 'Флаг замечания #{}: {} → {}'.format(
+            self.issue_id, self.old_value, self.new_value,
+        )
 
 
 class IssueComment(models.Model):

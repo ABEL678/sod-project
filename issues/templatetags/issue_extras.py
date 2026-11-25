@@ -12,6 +12,7 @@ from datetime import date
 
 from django import template
 
+from issues.services import ACTIVE_ISSUE_STATUSES
 from storage.domain.design_colors import DEFAULT_STATUS, ISSUE_STATUS_CLASS
 from storage.domain.services import ru_plural
 
@@ -28,12 +29,9 @@ def plural_ru(number, forms):
 
 # Живой срок показываем только по активным замечаниям:
 # у закрытых и аннулированных дедлайн уже не давит.
-ACTIVE_STATUSES = {"NEW", "IN_PROGRESS", "DISCUSSION", "REJECTED"}
-
-
 def _days_left(issue):
     due = getattr(issue, "due_date", None)
-    if not due or getattr(issue, "status", "") not in ACTIVE_STATUSES:
+    if not due or getattr(issue, "status", "") not in ACTIVE_ISSUE_STATUSES:
         return None
     return (due - date.today()).days
 

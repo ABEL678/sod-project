@@ -14,7 +14,7 @@ from ai_checks.tests.base import MediaIsolationMixin
 from ai_checks.tests.mocks import mock_bge_adapter
 from ai_checks.tests.test_project_indexing import make_pdf
 from issues.models import Issue
-from storage.domain.models import Company, Project, Section
+from storage.domain.models import Company, Project, ProjectMembership, Section
 
 
 def _upload_pdf(user, project, section, code='ОВ-01'):
@@ -32,6 +32,7 @@ def _upload_pdf(user, project, section, code='ОВ-01'):
             'doc.pdf', make_pdf([f'Нагрузка вентиляции {code}. ' * 40]),
             'application/pdf',
         ),
+        reason_text='Тестовая причина',
     )
 
 
@@ -53,8 +54,9 @@ class KnowledgeBaseViewTests(MediaIsolationMixin, TestCase):
         self.company = Company.objects.create(name='KBV-Компания')
         self.project = Project.objects.create(
             company=self.company, code='KBV-1', name='Проект KBV',
-            status='active', created_by=self.gip, gip=self.gip,
+            status='active', created_by=self.gip,
         )
+        ProjectMembership.objects.update_or_create(project=self.project, user=self.gip, defaults={'role_in_project': 'gip'})
         self.section = Section.objects.create(
             project=self.project, code='ОВ', name='ОВ', order=1,
         )
@@ -136,8 +138,9 @@ class RagSearchViewTests(MediaIsolationMixin, TestCase):
         self.company = Company.objects.create(name='RGV-Компания')
         self.project = Project.objects.create(
             company=self.company, code='RGV-1', name='Проект RGV',
-            status='active', created_by=self.gip, gip=self.gip,
+            status='active', created_by=self.gip,
         )
+        ProjectMembership.objects.update_or_create(project=self.project, user=self.gip, defaults={'role_in_project': 'gip'})
         self.section_ov = Section.objects.create(
             project=self.project, code='ОВ', name='ОВ', order=1,
         )
@@ -212,8 +215,9 @@ class ReportHistoryViewTests(MediaIsolationMixin, TestCase):
         self.company = Company.objects.create(name='RVG-Компания')
         self.project = Project.objects.create(
             company=self.company, code='RVG-1', name='Проект RVG',
-            status='active', created_by=self.gip, gip=self.gip,
+            status='active', created_by=self.gip,
         )
+        ProjectMembership.objects.update_or_create(project=self.project, user=self.gip, defaults={'role_in_project': 'gip'})
         self.section = Section.objects.create(
             project=self.project, code='АР', name='АР', order=1,
         )

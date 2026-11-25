@@ -26,7 +26,7 @@ class T9UiTests(T8UltimateTestBase):
     def test_htmx_filter_request_returns_only_documents_panel(self):
         approved = self.make_document(code='T9-APPROVED')
         self.make_document(code='T9-DRAFT')
-        type(approved).objects.filter(pk=approved.pk).update(status='approved')
+        type(approved).objects.filter(pk=approved.pk).update(state='approved')
 
         self.client.force_login(self.user_gip)
         response = self.client.get(

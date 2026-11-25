@@ -35,7 +35,7 @@ class DocumentFilter(django_filters.FilterSet):
         }),
     )
     status = django_filters.ChoiceFilter(
-        field_name='status',
+        method='filter_status',
         choices=Document.STATUS_CHOICES,
         label='Статус',
         empty_label='Все статусы',
@@ -46,7 +46,7 @@ class DocumentFilter(django_filters.FilterSet):
         }),
     )
     suitability_code = django_filters.ChoiceFilter(
-        field_name='suitability_code',
+        method='filter_suitability_code',
         choices=Document.SUITABILITY_CHOICES,
         # UI-аудит (треб. 1.4): подпись как у колонки «Статус документа»;
         # варианты — текстовые названия из SUITABILITY_CHOICES (без кодов).
@@ -60,7 +60,7 @@ class DocumentFilter(django_filters.FilterSet):
         }),
     )
     internal_status = django_filters.ChoiceFilter(
-        field_name='internal_status',
+        method='filter_internal_status',
         choices=Document.INTERNAL_STATUS_CHOICES,
         label='Внутренний статус',
         # «Все внутренние» (95px) впритык к min-width 130px селекта и
@@ -110,10 +110,31 @@ class DocumentFilter(django_filters.FilterSet):
 
     class Meta:
         model = Document
-        fields = [
-            'section', 'doc_type', 'status', 'suitability_code',
-            'internal_status', 'code', 'name',
-        ]
+        fields = ['section', 'doc_type', 'code', 'name']
+
+    @staticmethod
+    def _by_states(queryset, **projection):
+        from storage.domain.services import _states_matching
+
+        return queryset.filter(state__in=_states_matching(**projection))
+
+    def filter_status(self, queryset, name, value):
+        if not value:
+            return queryset
+        return self._by_states(queryset, status=value)
+
+    def filter_suitability_code(self, queryset, name, value):
+        if not value:
+            return queryset
+        if value in Document.MANUAL_REVIEW_CODES:
+            # Ручные коды S1/S2/S4 хранятся в review_result, а не в проекции.
+            return queryset.filter(review_result=value)
+        return self._by_states(queryset, suitability=value)
+
+    def filter_internal_status(self, queryset, name, value):
+        if not value:
+            return queryset
+        return self._by_states(queryset, internal_status=value)
 
     def filter_search(self, queryset, name, value):
         value = (value or '').strip()

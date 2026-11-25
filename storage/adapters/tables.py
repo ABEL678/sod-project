@@ -9,10 +9,11 @@ from django_tables2.utils import AttributeDict
 
 from storage.domain.models import Document, Folder
 from storage.domain.services import (
-    OPEN_ISSUE_STATUSES,
+    ACTIVE_ISSUE_STATUSES,
     _effective_zone,
     document_actions,
     get_folder_mark_id,
+    review_result_display,
 )
 
 
@@ -85,12 +86,19 @@ class DocumentTable(tables.Table):
     suitability_code = tables.Column(
         verbose_name='Статус документа',
         attrs=_column_attrs('suitability'),
-        order_by=('suitability_code',),
+        order_by=('state',),
+    )
+    # Ручной вердикт проверки: хранится в review_result, читается только в WIP.
+    review_result = tables.Column(
+        verbose_name='Результат проверки',
+        attrs=_column_attrs('review_result'),
+        order_by=('state',),
+        empty_values=(),
     )
     internal_status = tables.Column(
         verbose_name='Внутренний статус',
         attrs=_column_attrs('internal-status'),
-        order_by=('internal_status',),
+        order_by=('state',),
         empty_values=(),
     )
     issues = tables.Column(
@@ -140,6 +148,7 @@ class DocumentTable(tables.Table):
             'doc_type',
             'zone',
             'suitability_code',
+            'review_result',
             'internal_status',
             'issues',
             'current_version',
@@ -250,6 +259,10 @@ class DocumentTable(tables.Table):
             record.get_suitability_code_display(),
         )
 
+    def render_review_result(self, record):
+        """Результат проверки: подпись S1/S2/S4 в WIP, иначе прочерк."""
+        return review_result_display(record)
+
     def render_internal_status(self, record):
         if _effective_zone(record) != 'WIP':
             return '—'
@@ -264,9 +277,12 @@ class DocumentTable(tables.Table):
         total = getattr(record, 'issues_total', None)
         closed = getattr(record, 'issues_closed', None)
         if open_count is None or total is None or closed is None:
+            # Каноническое множество открытых — как в аннотации
+            # get_project_documents_queryset (NEW/IN_PROGRESS/REJECTED +
+            # DISCUSSION), иначе бейдж расходится с реестром.
             counts = record.issues.aggregate(
                 total=Count('pk'),
-                open=Count('pk', filter=Q(status__in=OPEN_ISSUE_STATUSES)),
+                open=Count('pk', filter=Q(status__in=ACTIVE_ISSUE_STATUSES)),
                 closed=Count('pk', filter=Q(status__in=('CLOSED', 'CANCELLED'))),
             )
             open_count = counts['open']

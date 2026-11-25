@@ -42,6 +42,7 @@ from storage.domain.services import (
 )
 
 from issues.models import Issue, Notification
+from issues.services import can_change_issue_blocking, set_issue_blocking
 
 
 STATUS_CODE_RE = re.compile(
@@ -160,6 +161,9 @@ class IssueCreateView(LoginRequiredMixin, CreateView):
                 answer_text=self.request.POST.get('answer_text', ''),
                 due_date=due_date,
                 revision=self.request.POST.get('revision', ''),
+                is_blocking=self.request.POST.get('is_blocking') in (
+                    '1', 'true', 'on',
+                ),
             )
         except PermissionDenied as exc:
             if self._is_ajax():
@@ -279,6 +283,38 @@ class IssueDeleteView(View):
         return redirect('storage:document_detail', pk=issue.document_id)
 
 
+class IssueFlagUpdateView(View):
+    """Смена блокирующего флага замечания с обязательным обоснованием."""
+
+    def post(self, request, issue_id):
+        if not request.user.is_authenticated:
+            return HttpResponseForbidden('Требуется авторизация')
+        issues = Issue.objects.select_related(
+            'document', 'document__project', 'author',
+        ).filter(document__in=get_accessible_documents(request.user))
+        issue = get_object_or_404(issues, pk=issue_id)
+        if not check_read_permission(request.user, issue.document):
+            return HttpResponseForbidden('Нет доступа к замечанию')
+
+        try:
+            set_issue_blocking(
+                request.user,
+                issue,
+                request.POST.get('is_blocking') in ('1', 'true', 'on'),
+                request.POST.get('justification', ''),
+            )
+        except PermissionDenied as exc:
+            return HttpResponseForbidden(str(exc))
+        except ValueError as exc:
+            messages.error(request, str(exc))
+            return redirect(
+                'storage:document_detail', pk=issue.document_id,
+            )
+
+        messages.success(request, 'Блокирующий флаг обновлён.')
+        return redirect('storage:document_detail', pk=issue.document_id)
+
+
 @login_required
 def issue_detail_htmx(request, issue_id):
     issues = Issue.objects.select_related(
@@ -312,6 +348,10 @@ def issue_detail_htmx(request, issue_id):
             'answer_text_display': _humanize_status_codes(
                 issue.answer_text
             ),
+            'can_change_flag': can_change_issue_blocking(
+                request.user, issue,
+            ),
+            'flag_logs': list(issue.flag_logs.select_related('changed_by')),
         },
     )
 
@@ -865,6 +905,4 @@ def _can_change_issue(issue, user):
     profile = getattr(user, 'userprofile', None)
     if profile is not None and profile.role == 'admin':
         return True
-    if project.gip_id == user.pk:
-        return True
-    return False
+    return project.memberships.filter(user=user, role_in_project='gip').exists()

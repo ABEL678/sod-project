@@ -47,8 +47,6 @@ class ServiceTests(TestCase):
             company=self.company,
             code='PROJ-01',
             name='Проект 01',
-            customer='Заказчик',
-            gip=self.user_gip,
             status='active',
             created_by=self.user_admin,
         )
@@ -56,7 +54,6 @@ class ServiceTests(TestCase):
             company=self.company,
             code='PROJ-02',
             name='Проект 02',
-            customer='Заказчик 2',
             status='active',
             created_by=self.user_admin,
         )
@@ -64,7 +61,6 @@ class ServiceTests(TestCase):
             company=self.other_company,
             code='PROJ-FOREIGN',
             name='Чужой проект',
-            customer='Чужой заказчик',
             status='active',
             created_by=self.user_admin,
         )
@@ -88,11 +84,7 @@ class ServiceTests(TestCase):
             order=1,
         )
 
-        ProjectMembership.objects.create(
-            project=self.project_own,
-            user=self.user_gip,
-            role_in_project='gip',
-        )
+        ProjectMembership.objects.update_or_create(project=self.project_own, user=self.user_gip, defaults={'role_in_project': 'gip'})
 
         self.user_developer.userprofile.allowed_sections.add(self.section_own)
 
@@ -102,7 +94,7 @@ class ServiceTests(TestCase):
             code='ДО-001',
             name='Чертеж А',
             doc_type='drawing',
-            status='draft',
+            state=Document.STATE_WIP_DRAFT,
             created_by=self.user_admin,
         )
 
@@ -130,7 +122,7 @@ class ServiceTests(TestCase):
             code='ЧУЖ-001',
             name='Чужой чертеж',
             doc_type='drawing',
-            status='draft',
+            state=Document.STATE_WIP_DRAFT,
             created_by=self.user_admin,
         )
         self.assertFalse(check_read_permission(self.user_viewer, foreign_document))
@@ -144,7 +136,7 @@ class ServiceTests(TestCase):
             code='ЧУЖ-003',
             name='Чужой чертеж',
             doc_type='drawing',
-            status='draft',
+            state=Document.STATE_WIP_DRAFT,
             created_by=self.user_admin,
         )
         self.assertTrue(check_write_permission(superuser, self.foreign_section))
@@ -155,7 +147,7 @@ class ServiceTests(TestCase):
             company=self.company,
             code='NEW-01',
             name='Новый проект',
-            customer='Заказчик',
+            customer_id=None,
             gip=self.user_gip,
             created_by=self.user_gip,
         )
@@ -170,7 +162,7 @@ class ServiceTests(TestCase):
                 company=self.other_company,
                 code='NEW-02',
                 name='Чужой проект',
-                customer='Заказчик',
+                customer_id=None,
                 gip=self.user_gip,
                 created_by=self.user_gip,
             )
@@ -184,7 +176,7 @@ class ServiceTests(TestCase):
                 company=self.company,
                 code='NEW-03',
                 name='Проект',
-                customer='Заказчик',
+                customer_id=None,
                 gip=foreign_gip,
                 created_by=self.user_admin,
             )
@@ -199,6 +191,7 @@ class ServiceTests(TestCase):
             name='Чертеж А',
             doc_type='drawing',
             file=file,
+            reason_text='Тестовая причина',
         )
         self.assertEqual(version.version_number, 1)
         self.document.refresh_from_db()
@@ -214,6 +207,7 @@ class ServiceTests(TestCase):
             name='Чертеж А',
             doc_type='drawing',
             file=file1,
+            reason_text='Тестовая причина',
         )
         file2 = SimpleUploadedFile('test2.pdf', b'content 2', content_type='application/pdf')
         version = upload_document(
@@ -224,6 +218,7 @@ class ServiceTests(TestCase):
             name='Чертеж А',
             doc_type='drawing',
             file=file2,
+            reason_text='Тестовая причина',
         )
         self.assertEqual(version.version_number, 2)
         self.document.refresh_from_db()
@@ -239,6 +234,7 @@ class ServiceTests(TestCase):
                 name='Чертеж Б',
                 doc_type='drawing',
                 file=SimpleUploadedFile('test.pdf', b'content', content_type='application/pdf'),
+                reason_text='Тестовая причина',
             )
 
     def test_upload_document_denied_across_companies(self):
@@ -251,6 +247,7 @@ class ServiceTests(TestCase):
                 name='Чужой чертеж',
                 doc_type='drawing',
                 file=SimpleUploadedFile('test.pdf', b'content', content_type='application/pdf'),
+                reason_text='Тестовая причина',
             )
 
     def test_upload_document_wrong_project(self):
@@ -263,6 +260,7 @@ class ServiceTests(TestCase):
                 name='Чертеж В',
                 doc_type='drawing',
                 file=SimpleUploadedFile('test.pdf', b'content', content_type='application/pdf'),
+                reason_text='Тестовая причина',
             )
         self.assertIn('Раздел не относится к указанному проекту', str(ctx.exception))
 
@@ -273,7 +271,7 @@ class ServiceTests(TestCase):
             code='ДО-002',
             name='Чертеж Б',
             doc_type='drawing',
-            status='draft',
+            state=Document.STATE_WIP_DRAFT,
             created_by=self.user_admin,
         )
         vedomost = generate_vedomost(self.project_own, company=self.company)
@@ -306,7 +304,7 @@ class ServiceTests(TestCase):
             code='ДО-002',
             name='Чертеж Б',
             doc_type='drawing',
-            status='draft',
+            state=Document.STATE_WIP_DRAFT,
             created_by=self.user_admin,
         )
 
@@ -357,6 +355,7 @@ class ServiceTests(TestCase):
             doc_type='drawing',
             file=SimpleUploadedFile('v1.pdf', b'v1', content_type='application/pdf'),
             comment='УникальныйКомментарийВерсии',
+            reason_text='Тестовая причина',
         )
 
         results = search_documents(
@@ -374,7 +373,7 @@ class ServiceTests(TestCase):
             code='ОТ-001',
             name='Отчет',
             doc_type='report',
-            status='approved',
+            state=Document.STATE_APPROVED,
             created_by=self.user_admin,
         )
 
@@ -423,6 +422,7 @@ class ServiceTests(TestCase):
                     content_type='application/pdf',
                 ),
                 comment='ПовторяющеесяСловоВКомментарии',
+                reason_text='Тестовая причина',
             )
 
         results = search_documents(

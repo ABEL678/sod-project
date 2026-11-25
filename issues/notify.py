@@ -198,8 +198,6 @@ def notify_document_workflow(
     recipients: dict[int, User] = {}
 
     if action_code == 'submit_review':
-        if document.project.gip_id is not None:
-            recipients[document.project.gip_id] = document.project.gip
         for membership in document.project.memberships.filter(
             role_in_project='gip'
         ).select_related('user'):

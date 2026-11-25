@@ -24,6 +24,7 @@
                id="folderCodeInput"
                name="code"
                maxlength="50"
+               value="{{ suggested_code }}"
                {% if not parent %}required{% endif %}
                data-gost-folder-code
                placeholder="{% if parent %}Можно оставить пустым{% else %}Например, 20138-ПЗ2{% endif %}">
@@ -34,6 +35,7 @@
                id="folderNameInput"
                name="name"
                maxlength="255"
+               value="{{ suggested_name }}"
                required
                autofocus
                placeholder="Например, Рабочая документация">

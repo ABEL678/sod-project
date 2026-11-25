@@ -63,9 +63,9 @@ class Sprint3SecurityTests(TestCase):
             code='S3-1',
             name='Проект зачистки',
             status='active',
-            gip=self.gip,
             created_by=self.gip,
         )
+        ProjectMembership.objects.update_or_create(project=self.project, user=self.gip, defaults={'role_in_project': 'gip'})
         self.section_ar = Section.objects.create(
             project=self.project, code='АР', name='Архитектура', order=1,
         )
@@ -81,6 +81,7 @@ class Sprint3SecurityTests(TestCase):
             name='План АР',
             doc_type='drawing',
             file=SimpleUploadedFile('ar.pdf', b'data', content_type='application/pdf'),
+            reason_text='Тестовая причина',
         )
         self.doc_kr = upload_document(
             user=self.gip,
@@ -90,6 +91,7 @@ class Sprint3SecurityTests(TestCase):
             name='Схема КР',
             doc_type='drawing',
             file=SimpleUploadedFile('kr.pdf', b'data', content_type='application/pdf'),
+            reason_text='Тестовая причина',
         )
 
         self.contractor_profile.allowed_sections.add(self.section_ar)

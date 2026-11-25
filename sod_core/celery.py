@@ -19,7 +19,8 @@ from dotenv import load_dotenv
 _BASE_DIR = Path(__file__).resolve().parent.parent
 _dotenv_path = _BASE_DIR / '.env'
 if _dotenv_path.exists():
-    load_dotenv(_dotenv_path, override=True)
+    # Реальные переменные окружения главнее .env: без override.
+    load_dotenv(_dotenv_path)
 
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'sod_core.settings')
 
