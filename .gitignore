@@ -16,6 +16,7 @@ staticfiles/
 # Service / audit artifacts (not part of the product)
 .kilo/
 docs/audit/
+docs/*AUDIT*.md
 
 # PyCharm
 .idea/
