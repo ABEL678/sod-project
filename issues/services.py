@@ -10,6 +10,7 @@ from django.db.models import Count, Q
 from django.utils import timezone
 
 from .models import Issue, IssueFlagLog
+from .notify import notify_issue_blocking_changed
 
 # Статусы, которые традиционно считались «открытыми» (без спора).
 # Каноническое множество «открытых» для реестра/бейджа/рассылок/отчётов —
@@ -341,6 +342,8 @@ def set_issue_blocking(user, issue, is_blocking: bool, justification: str):
         )
         if new_value:
             _clear_outcome_override(issue.document)
+    if issue.status == 'DISCUSSION':
+        notify_issue_blocking_changed(issue, user, old_value, new_value)
     return issue
 
 

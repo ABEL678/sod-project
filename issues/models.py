@@ -186,6 +186,8 @@ class Notification(models.Model):
         ('doc_published', 'Документ опубликован'),
         ('doc_returned', 'Документ возвращён в работу'),
         ('doc_archived', 'Документ отправлен в архив'),
+        ('discussion_opened', 'Замечание переведено в обсуждение'),
+        ('blocking_changed', 'Изменён блокирующий флаг замечания'),
     ]
 
     recipient = models.ForeignKey(
