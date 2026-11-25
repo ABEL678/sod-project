@@ -6,6 +6,7 @@
 """
 
 from django.contrib.auth.models import User
+from django.db.models import Q
 
 from .models import Issue, Notification
 
@@ -34,11 +35,27 @@ def create_notification(
     project=None,
     message: str = '',
     url: str = '',
+    dedupe: bool = False,
 ) -> Notification | None:
-    """Создаёт уведомление; сам актёру ничего не отправляется."""
+    """Создаёт уведомление; сам актёру ничего не отправляется.
+
+    ``dedupe`` — не создавать второе уведомление, если по паре
+    (замечание, событие) у получателя уже есть непрочитанное.
+    """
     if recipient is None or recipient_id(recipient) == actor_id(actor):
         return None
     try:
+        if (
+            dedupe
+            and issue is not None
+            and Notification.objects.filter(
+                recipient=recipient,
+                issue=issue,
+                verb=verb,
+                is_read=False,
+            ).exists()
+        ):
+            return None
         notification = Notification.objects.create(
             recipient=recipient,
             actor=actor,
@@ -114,8 +131,15 @@ def notify_issue_status_changed(
     issue: Issue,
     actor: User | None,
     old_status: str,
+    exclude_user_ids: set[int] | None = None,
 ) -> None:
-    """Смена статуса — уведомляем автора и ответственного (кроме актёра)."""
+    """Смена статуса — уведомляем автора и ответственного (кроме актёра).
+
+    ``exclude_user_ids`` — получатели, которым событие уже отправлено
+    отдельным (семантическим) уведомлением; используется для перевода
+    в DISCUSSION, чтобы автор не получал два уведомления об одном
+    событии.
+    """
     verb = 'status_changed'
     message = 'Статус замечания №{} ({}): {} → {}'.format(
         issue.pk,
@@ -127,6 +151,12 @@ def notify_issue_status_changed(
     recipients = {issue.author_id: issue.author}
     if issue.assignee_id is not None:
         recipients[issue.assignee_id] = issue.assignee
+    if exclude_user_ids:
+        recipients = {
+            user_id: recipient
+            for user_id, recipient in recipients.items()
+            if user_id not in exclude_user_ids
+        }
     for recipient in recipients.values():
         create_notification(
             recipient=recipient,
@@ -137,6 +167,98 @@ def notify_issue_status_changed(
             project=issue.document.project,
             message=message,
             url=url,
+        )
+
+
+def _discussion_initiator(issue: Issue) -> User | None:
+    """Кто последним перевёл замечание в DISCUSSION.
+
+    Отдельной истории статусов у Issue нет, поэтому инициатор берётся из
+    уже созданных событийных уведомлений: явного ``discussion_opened``
+    или общего ``status_changed`` с целевым статусом «К обсуждению».
+    """
+    notification = (
+        Notification.objects.filter(
+            Q(verb='discussion_opened')
+            | Q(verb='status_changed', message__contains='К обсуждению'),
+            issue=issue,
+            actor__isnull=False,
+        )
+        .select_related('actor')
+        .order_by('-created_at', '-pk')
+        .first()
+    )
+    return notification.actor if notification is not None else None
+
+
+def notify_issue_discussion_opened(issue: Issue, actor: User | None) -> None:
+    """Замечание переведено в DISCUSSION — уведомляем автора.
+
+    Событие ``discussion_opened`` создаётся один раз на пару
+    (замечание, событие), пока у получателя есть непрочитанное.
+    Автор-инициатор уведомление о своём действии не получает — общее
+    правило ``create_notification``.
+    """
+    if issue.author_id is None:
+        return
+    message = 'Замечание №{} ({}) переведено в обсуждение{}'.format(
+        issue.pk,
+        issue.document.code,
+        ' — блокирующее' if issue.is_blocking else '',
+    )
+    create_notification(
+        recipient=issue.author,
+        actor=actor,
+        verb='discussion_opened',
+        issue=issue,
+        document=issue.document,
+        project=issue.document.project,
+        message=message,
+        url=issue_url(issue),
+        dedupe=True,
+    )
+
+
+def notify_issue_blocking_changed(
+    issue: Issue,
+    actor: User | None,
+    old_value: bool,
+    new_value: bool,
+) -> None:
+    """У замечания в DISCUSSION изменён блокирующий флаг.
+
+    Получатели — обе стороны спора: автор замечания и инициатор перевода
+    в DISCUSSION. Актёр своего действия уведомление не получает.
+    Событие ``blocking_changed`` одно на пару (замечание, событие):
+    повторная смена при непрочитанном уведомлении дубль не создаёт.
+    """
+    if issue.status != 'DISCUSSION':
+        return
+    recipients: dict[int, User] = {}
+    if issue.author_id is not None:
+        recipients[issue.author_id] = issue.author
+    initiator = _discussion_initiator(issue)
+    if initiator is not None:
+        recipients.setdefault(initiator.pk, initiator)
+
+    message = 'Блокирующий флаг замечания №{} ({}): {} → {}'.format(
+        issue.pk,
+        issue.document.code,
+        'блокирующее' if old_value else 'неблокирующее',
+        'блокирующее' if new_value else 'неблокирующее',
+    )
+    url = issue_url(issue)
+    for recipient in recipients.values():
+        create_notification(
+            recipient=recipient,
+            actor=actor,
+            verb='blocking_changed',
+            issue=issue,
+            document=issue.document,
+            project=issue.document.project,
+            message=message,
+            url=url,
+            dedupe=True,
         )
 
 

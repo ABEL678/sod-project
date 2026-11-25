@@ -53,6 +53,7 @@ from issues.notify import (
     create_notification,
     notify_issue_assigned,
     notify_issue_commented,
+    notify_issue_discussion_opened,
     notify_issue_status_changed,
 )
 from issues.services import (
@@ -4169,7 +4170,16 @@ def update_issue_status(user: User, issue: Issue, new_status: str) -> Issue:
         update_fields.append('assignee')
 
     issue.save(update_fields=update_fields)
-    notify_issue_status_changed(issue, user, current_status)
+    if new_status == 'DISCUSSION':
+        notify_issue_discussion_opened(issue, user)
+        notify_issue_status_changed(
+            issue,
+            user,
+            current_status,
+            exclude_user_ids={issue.author_id},
+        )
+    else:
+        notify_issue_status_changed(issue, user, current_status)
     return issue
 
 
