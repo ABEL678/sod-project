@@ -8,6 +8,7 @@
         '/ai/',
         '/api-tokens/',
         '/api/',
+        '/customers/',
         '/dashboard/',
         '/documents/',
         '/download/',
