@@ -2179,8 +2179,9 @@ def _create_changeset_approval(document: Document, user: User):
 
     «Замечаний нет, принято» — полноправная запись журнала: кто одобрил,
     итог A/B, review_result на момент одобрения, при B — перечень открытых
-    неблокирующих замечаний. Вызывается только в фактической точке
-    перехода в approved (``_apply_state``), после успешной проверки замка.
+    неблокирующих замечаний. Вызывается в фактической точке перехода в
+    approved (``_apply_state``) и при «рождении» документа сразу в
+    утверждённом состоянии (``upload_document``/``copy_document``).
     """
     version = document.current_version
     if version is None:
@@ -2241,7 +2242,11 @@ def copy_document(
     section: Section | None,
     file_storage,
 ) -> Document:
-    """Создаёт копию документа со всеми версиями и файлами."""
+    """Создаёт копию документа со всеми версиями и файлами.
+
+    SPEC 2.0, волна 0, п. 7: копия в утверждённой зоне рождается сразу
+    approved — вместе с записью одобрения ('approval', итог A).
+    """
     if document.is_deleted:
         raise ValueError("Нельзя копировать документ из корзины")
     if not check_read_permission(user, document):
@@ -2312,6 +2317,13 @@ def copy_document(
         if current_copy is not None:
             copied.current_version = current_copy
             copied.save(update_fields=['current_version'])
+            # SPEC 2.0 w0 п. 7 (решение владельца): копия, рождённая сразу в
+            # утверждённой зоне, получает запись одобрения (итог A, вердикта
+            # на момент создания нет).
+            if copied.state in (
+                Document.STATE_APPROVED, Document.STATE_AS_BUILT,
+            ):
+                _create_changeset_approval(copied, user)
 
     return copied
 
@@ -3107,6 +3119,8 @@ def _apply_state(
     Проверяет переход FSM по признакам целевого состояния, затем
     сохраняет состояние (и папку, если передана) с пометкой сервиса.
     Прямые присваивания признаков вне этой функции не используются.
+    При входе в approved/as_built ручной вердикт сначала фиксируется в
+    записи одобрения, затем очищается (решение владельца 25.11.2026).
     """
     if new_state not in dict(Document.STATE_CHOICES):
         raise ValueError("Неизвестное состояние документа")
@@ -3122,10 +3136,17 @@ def _apply_state(
     document._from_service = True
     document.save(update_fields=update_fields)
     # SPEC 2.0 w0 п. 7: фактический переход в approved — запись одобрения.
+    # Решение владельца (25.11.2026): ручной вердикт действует до утверждения
+    # (сопровождает документ через SHARED и попадает в запись одобрения) и
+    # очищается при входе в approved/as_built. Порядок строгий: запись читает
+    # вердикт ДО очистки. Очистка техническая — записи журнала не создаёт.
     if state_changed and new_state in (
         Document.STATE_APPROVED, Document.STATE_AS_BUILT,
     ):
         _create_changeset_approval(document, user)
+        if document.review_result:
+            document.review_result = ''
+            document.save(update_fields=['review_result'])
     return document
 
 
@@ -3273,12 +3294,13 @@ def approval_override_action(document: Document) -> str:
 
 
 def _open_issues_count(document: Document) -> int:
+    """Открытые замечания: каноническое множество, как в аннотации."""
     annotated = getattr(document, 'open_issues_count', None)
     if annotated is not None:
         return annotated
     return Issue.objects.filter(
         document=document,
-        status__in=OPEN_ISSUE_STATUSES,
+        status__in=ACTIVE_ISSUE_STATUSES,
     ).count()
 
 
@@ -3731,6 +3753,9 @@ def upload_document(
     - SPEC 2.0, волна 0, п. 8: при выпуске версии создаётся запись
       журнала ChangeSetEntry ('version_release'); affected_sheets —
       необязательный свободный текст «затронутые листы».
+    - SPEC 2.0, волна 0, п. 7: новый документ, рождённый сразу в
+      утверждённом состоянии (папка PUBLISHED), получает запись
+      одобрения ('approval') — итог A, создатель как одобривший.
     """
     if not skip_section_write_check and not check_write_permission(user, section):
         raise PermissionDenied("Нет прав на запись в этот раздел")
@@ -3875,6 +3900,15 @@ def upload_document(
         doc.current_version = version
         doc.updated_at = timezone.now()
         doc.save(update_fields=['current_version', 'updated_at'])
+
+        # SPEC 2.0 w0 п. 7 (решение владельца): «рождение» документа сразу в
+        # утверждённом состоянии легально (запись в PUBLISHED — только админ).
+        # Одобрение фиксируется после появления текущей версии: у нового
+        # документа замечаний нет — итог A.
+        if created and doc.state in (
+            Document.STATE_APPROVED, Document.STATE_AS_BUILT,
+        ):
+            _create_changeset_approval(doc, user)
 
     # Этап 20 (треб. 4): после фиксации версии — автоиндексация PDF для
     # ИИ-поиска. Ленивый импорт задачи (домен storage не зависит от

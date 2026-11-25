@@ -11,9 +11,16 @@ def backfill_version_release_entries(apps, schema_editor):
     Журнал без исторических записей читался бы как «изменений не было»,
     хотя версии выпускались. Состав изменений и причина остаются на
     версии (в запись не дублируются); затронутые листы неизвестны.
+
+    Защита от повторного исполнения: версии, у которых запись «выпуск
+    версии» уже есть, пропускаются — дублей не создаётся.
     """
     DocumentVersion = apps.get_model('storage', 'DocumentVersion')
     ChangeSetEntry = apps.get_model('storage', 'ChangeSetEntry')
+    already_filled = set(
+        ChangeSetEntry.objects.filter(entry_type='version_release')
+        .values_list('version_id', flat=True)
+    )
     entries = [
         ChangeSetEntry(
             version_id=version.pk,
@@ -21,7 +28,9 @@ def backfill_version_release_entries(apps, schema_editor):
             affected_sheets='',
             created_by_id=version.uploaded_by_id,
         )
-        for version in DocumentVersion.objects.all().iterator()
+        for version in DocumentVersion.objects.exclude(
+            pk__in=already_filled,
+        ).iterator()
     ]
     ChangeSetEntry.objects.bulk_create(entries, batch_size=500)
 

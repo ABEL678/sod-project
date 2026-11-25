@@ -9,7 +9,7 @@ from django_tables2.utils import AttributeDict
 
 from storage.domain.models import Document, Folder
 from storage.domain.services import (
-    OPEN_ISSUE_STATUSES,
+    ACTIVE_ISSUE_STATUSES,
     _effective_zone,
     document_actions,
     get_folder_mark_id,
@@ -277,9 +277,12 @@ class DocumentTable(tables.Table):
         total = getattr(record, 'issues_total', None)
         closed = getattr(record, 'issues_closed', None)
         if open_count is None or total is None or closed is None:
+            # Каноническое множество открытых — как в аннотации
+            # get_project_documents_queryset (NEW/IN_PROGRESS/REJECTED +
+            # DISCUSSION), иначе бейдж расходится с реестром.
             counts = record.issues.aggregate(
                 total=Count('pk'),
-                open=Count('pk', filter=Q(status__in=OPEN_ISSUE_STATUSES)),
+                open=Count('pk', filter=Q(status__in=ACTIVE_ISSUE_STATUSES)),
                 closed=Count('pk', filter=Q(status__in=('CLOSED', 'CANCELLED'))),
             )
             open_count = counts['open']
