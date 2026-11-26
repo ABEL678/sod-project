@@ -304,6 +304,35 @@ tr[data-href],
 .zone-chip--archive.is-active .zone-count { background: var(--s-closed-solid); color: var(--c-text-inverse); }
 
 /* Workflow-кнопки в колонке «Действия» */
+.doc-actions {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+}
+
+.doc-kebab {
+    display: inline-grid;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--c-text-secondary);
+    line-height: 1;
+    cursor: pointer;
+    transition: color .15s ease, border-color .15s ease, background-color .15s ease;
+}
+
+.doc-kebab:hover,
+.doc-kebab:focus-visible {
+    border-color: var(--c-border-hairline);
+    background: var(--c-accent-subtle);
+    color: var(--c-accent-on-subtle);
+}
+
 .wf-actions {
     display: inline-flex;
     flex-wrap: wrap;

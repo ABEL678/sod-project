@@ -1763,6 +1763,22 @@
         });
 
         document.addEventListener('click', function (event) {
+            // Видимый кебаб строки — тот же #docRowMenu, что и по правому
+            // клику; нужен для тач-устройств, где contextmenu недоступен.
+            var kebab = event.target.closest('[data-doc-kebab]');
+            if (kebab) {
+                event.preventDefault();
+                event.stopPropagation();
+                var kebabRow = kebab.closest('#documentsTable tbody tr[data-document-id]');
+                if (!kebabRow) {
+                    return;
+                }
+                hideBootstrapDropdowns(null);
+                var rect = kebab.getBoundingClientRect();
+                openDocumentMenu(kebabRow, rect.right, rect.bottom + 4);
+                return;
+            }
+
             var menu = document.getElementById('docRowMenu');
             if (!menu) {
                 return;
@@ -2073,12 +2089,19 @@
             });
     }
 
-    function renderWorkflowButtons(cell, actions, documentId) {
+    function renderWorkflowButtons(cell, actions, documentId, withKebab) {
         if (!cell) {
             return;
         }
+        var kebab = withKebab
+            ? '<button type="button" class="doc-kebab" data-doc-kebab ' +
+              'title="Действия с документом" aria-label="Действия с документом">' +
+              '<i class="bi bi-three-dots-vertical" aria-hidden="true"></i></button>'
+            : '';
         if (!actions || !actions.length) {
-            cell.innerHTML = '<span class="text-muted">—</span>';
+            cell.innerHTML = withKebab
+                ? '<span class="doc-actions">' + kebab + '</span>'
+                : '<span class="text-muted">—</span>';
             return;
         }
         var buttons = actions.map(function (item) {
@@ -2091,8 +2114,11 @@
                 'aria-label="' + escapeHtml(item.label) + '">' +
                 escapeHtml(item.label) + '</button>';
         });
-        cell.innerHTML = '<span class="wf-actions" data-role="workflow-actions">' +
+        var buttonGroup = '<span class="wf-actions" data-role="workflow-actions">' +
             buttons.join('') + '</span>';
+        cell.innerHTML = withKebab
+            ? '<span class="doc-actions">' + buttonGroup + kebab + '</span>'
+            : buttonGroup;
     }
 
     function updateDocumentCard(data) {
@@ -2110,7 +2136,7 @@
             internal.textContent = data.internal_display || '';
             internal.title = data.internal_display || '';
         }
-        renderWorkflowButtons(card, data.actions, data.document_id);
+        renderWorkflowButtons(card, data.actions, data.document_id, false);
     }
 
     function updateDocumentRow(data) {
@@ -2179,7 +2205,7 @@
 
         var actionsCell = row.querySelector('[data-column="actions"]');
         if (actionsCell && data.actions) {
-            renderWorkflowButtons(actionsCell, data.actions, data.document_id);
+            renderWorkflowButtons(actionsCell, data.actions, data.document_id, true);
         }
 
         row.classList.remove('doc-row-flash');

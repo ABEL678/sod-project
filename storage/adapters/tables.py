@@ -333,11 +333,21 @@ class DocumentTable(tables.Table):
         return record.created_by.get_full_name() or record.created_by.username
 
     def render_actions(self, record):
-        """Кнопки внутреннего workflow и зон ISO 19650."""
+        """Кебаб-меню строки и кнопки внутреннего workflow/зон ISO 19650."""
+        # Кебаб доступен на тач-устройствах: правый клик по строке (открытие
+        # #docRowMenu) там недоступен. Кнопка есть у каждой строки, даже если
+        # workflow-действий нет (viewer/архив), — меню не зависит от роли.
+        kebab = mark_safe(
+            '<button type="button" class="doc-kebab" data-doc-kebab '
+            'title="Действия с документом" '
+            'aria-label="Действия с документом">'
+            '<i class="bi bi-three-dots-vertical" aria-hidden="true"></i>'
+            '</button>'
+        )
         user = getattr(self.request, 'user', None)
         actions = document_actions(user, record)
         if not actions:
-            return mark_safe('<span class="text-muted">—</span>')
+            return format_html('<span class="doc-actions">{}</span>', kebab)
         buttons = []
         for action in actions:
             if action.get('kind') == 'internal':
@@ -356,8 +366,10 @@ class DocumentTable(tables.Table):
                 url=url,
                 title=action['label'],
             ))
-        return mark_safe(
-            '<span class="wf-actions" data-role="workflow-actions">{}</span>'.format(
-                ''.join(str(button) for button in buttons)
-            )
+        return format_html(
+            '<span class="doc-actions">'
+            '<span class="wf-actions" data-role="workflow-actions">{}</span>'
+            '{}</span>',
+            mark_safe(''.join(str(button) for button in buttons)),
+            kebab,
         )

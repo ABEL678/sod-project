@@ -1736,6 +1736,11 @@ body.modal-open {
         justify-content: center;
     }
 
+    .doc-table .doc-kebab {
+        min-width: 36px;
+        min-height: 36px;
+    }
+
     .toolbar-select {
         min-width: 88px;
     }
