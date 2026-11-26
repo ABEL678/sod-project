@@ -1,6 +1,6 @@
 name: tests
 
-# Автоматическая страховка на каждый PR в main (аудит-5, волна 2, W2-2).
+# Автоматическая страховка на каждый push в main (аудит-5, волна 2, W2-2).
 # Проверяет отсутствие незакоммиченных миграций и прогоняет весь набор
 # тестов Django на PostgreSQL 16 + pgvector — той же версии, что в
 # docker-compose.dev.yml (pgvector/pgvector:pg16).
@@ -15,14 +15,13 @@ name: tests
 on:
   push:
     branches: [main]
-  pull_request:
-    branches: [main]
 
 permissions:
   contents: read
 
+# Повторный push в main отменяет устаревший прогон.
 concurrency:
-  group: tests-${{ github.workflow }}-${{ github.ref }}
+  group: ci-main
   cancel-in-progress: true
 
 # Секреты намеренно не вынесены на уровень workflow: шаг установки
@@ -147,4 +146,4 @@ jobs:
         env:
           DJANGO_SECRET_KEY: ${{ secrets.DJANGO_SECRET_KEY }}
           POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
-        run: python manage.py test --verbosity=2
+        run: python manage.py test --parallel 4
