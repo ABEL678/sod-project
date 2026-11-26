@@ -1,0 +1,154 @@
+name: tests
+
+# Автоматическая страховка на каждый PR в main (аудит-5, волна 2, W2-2).
+# Проверяет отсутствие незакоммиченных миграций и прогоняет весь набор
+# тестов Django на PostgreSQL 16 + pgvector — той же версии, что в
+# docker-compose.dev.yml (pgvector/pgvector:pg16).
+#
+# Секреты/переменные GitHub (значения в логи не попадают):
+#   secrets.DJANGO_SECRET_KEY — CI-ключ Django (DJANGO_DEBUG=False требует явный);
+#   secrets.POSTGRES_PASSWORD — пароль эфемерного PostgreSQL-сервиса;
+#   vars.POSTGRES_DB / vars.POSTGRES_USER — необязательны, по умолчанию "sod".
+# Внешние сервисы (LLM, S3, Celery-брокер) не нужны: тесты используют
+# моки/moto, а Celery в тестах работает в eager-режиме.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Секреты намеренно не вынесены на уровень workflow: шаг установки
+# зависимостей не должен видеть DJANGO_SECRET_KEY/POSTGRES_PASSWORD.
+# Они передаются только в шаги, которым действительно нужны.
+env:
+  # Django: CI-окружение, не прод. DJANGO_DEBUG=False требует DJANGO_SECRET_KEY.
+  DJANGO_DEBUG: 'False'
+  DJANGO_ALLOWED_HOSTS: 'localhost,127.0.0.1,testserver'
+  # CI работает по HTTP: HTTPS-редирект и Secure-cookies не нужны.
+  DJANGO_SECURE_COOKIES: 'False'
+  DJANGO_SECURE_SSL_REDIRECT: 'False'
+
+  # PostgreSQL-сервис ниже. Хост/порт — опубликованный порт контейнера.
+  POSTGRES_DB: ${{ vars.POSTGRES_DB || 'sod' }}
+  POSTGRES_USER: ${{ vars.POSTGRES_USER || 'sod' }}
+  POSTGRES_HOST: '127.0.0.1'
+  POSTGRES_PORT: '5432'
+
+  # Тесты герметичны: внешние контуры выключены, Celery — синхронно.
+  AI_CHECKS_ENABLED: 'False'
+  S3_SYNC_ENABLED: 'False'
+  CELERY_TASK_ALWAYS_EAGER: 'True'
+  PIP_DISABLE_PIP_VERSION_CHECK: '1'
+
+  # Фиктивный ключ для тестов CloudRu-эмбеддингов: они мокают сеть,
+  # но конструктор сервиса проверяет наличие ключа (локально он из .env).
+  AI_EMBEDDING_API_KEY: 'ci-dummy-key-not-real'
+
+jobs:
+  tests:
+    name: Django tests (Python 3.12, PostgreSQL 16 + pgvector)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_DB: ${{ vars.POSTGRES_DB || 'sod' }}
+          POSTGRES_USER: ${{ vars.POSTGRES_USER || 'sod' }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+        ports:
+          - 5432:5432
+
+    steps:
+      - name: Проверка обязательных секретов
+        env:
+          DJANGO_SECRET_KEY: ${{ secrets.DJANGO_SECRET_KEY }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+        run: |
+          if [ -z "${DJANGO_SECRET_KEY}" ]; then
+            echo "::error::Не задан секрет DJANGO_SECRET_KEY"
+            exit 1
+          fi
+          if [ -z "${POSTGRES_PASSWORD}" ]; then
+            echo "::error::Не задан секрет POSTGRES_PASSWORD"
+            exit 1
+          fi
+
+      - name: Получение кода
+        uses: actions/checkout@v4
+
+      - name: Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: requirements.txt
+
+      - name: Установка зависимостей
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      # pgvector: образ уже содержит расширение, но включаем его явно до
+      # тестов. Скрипт также ждёт готовности PostgreSQL. Пароль не печатается.
+      # В тестовой БД расширение повторно создаёт миграция ai_checks.0002
+      # (CREATE EXTENSION IF NOT EXISTS vector), поэтому `manage.py test`
+      # работает и без этого шага; шаг делает отказ ранним и явным.
+      - name: Ожидание PostgreSQL и CREATE EXTENSION vector
+        env:
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+        run: |
+          python - <<'PY'
+          import os
+          import time
+
+          import psycopg
+
+          for attempt in range(60):
+              try:
+                  with psycopg.connect(
+                      host=os.environ['POSTGRES_HOST'],
+                      port=os.environ['POSTGRES_PORT'],
+                      dbname=os.environ['POSTGRES_DB'],
+                      user=os.environ['POSTGRES_USER'],
+                      password=os.environ['POSTGRES_PASSWORD'],
+                      connect_timeout=5,
+                  ) as conn:
+                      conn.execute('CREATE EXTENSION IF NOT EXISTS vector;')
+                      conn.commit()
+                  print('PostgreSQL готов, расширение vector включено.')
+                  break
+              except psycopg.OperationalError:
+                  if attempt == 59:
+                      raise SystemExit(
+                          'PostgreSQL не поднялся за 120 секунд.'
+                      )
+                  time.sleep(2)
+          PY
+
+      - name: Проверка конфигурации Django
+        env:
+          DJANGO_SECRET_KEY: ${{ secrets.DJANGO_SECRET_KEY }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+        run: python manage.py check
+
+      - name: Проверка миграций (makemigrations --check)
+        env:
+          DJANGO_SECRET_KEY: ${{ secrets.DJANGO_SECRET_KEY }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+        run: python manage.py makemigrations --check --dry-run
+
+      - name: Тесты
+        env:
+          DJANGO_SECRET_KEY: ${{ secrets.DJANGO_SECRET_KEY }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+        run: python manage.py test --verbosity=2
