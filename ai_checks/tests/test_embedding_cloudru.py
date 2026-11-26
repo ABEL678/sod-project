@@ -3,11 +3,16 @@
 Зачистка 2026-11-10: мокается httpx.Client.
 """
 
+import os
 from unittest.mock import patch
 
 from django.test import SimpleTestCase, override_settings
 
 from ai_checks.adapters.embedding_onnx import CloudRuEmbedding
+
+# Ключ задаётся тестами, а не окружением: CI не подставляет .env,
+# а конструктор CloudRuEmbedding читает ключ из os.environ.
+TEST_API_KEY = 'test-key'
 
 
 class FakeResponse:
@@ -56,8 +61,13 @@ class FakeClient:
 class CloudRuEmbeddingTests(SimpleTestCase):
     def setUp(self):
         FakeClient.posts = []
+        # CloudRuEmbedding берёт ключ из os.environ, а не из settings,
+        # поэтому override_settings здесь не работает. Задаём ключ в
+        # окружении теста: без .env тест самодостаточен и в CI.
+        env = patch.dict(os.environ, {'AI_EMBEDDING_API_KEY': TEST_API_KEY})
+        env.start()
+        self.addCleanup(env.stop)
 
-    @override_settings(AI_EMBEDDING_API_KEY='test-key')
     def test_embed_texts_returns_vectors(self):
         with patch('ai_checks.adapters.embedding_onnx.httpx.Client', FakeClient):
             svc = CloudRuEmbedding()
@@ -66,7 +76,6 @@ class CloudRuEmbeddingTests(SimpleTestCase):
         self.assertEqual(len(result), 2)
         self.assertEqual(len(result[0]), 1024)
 
-    @override_settings(AI_EMBEDDING_API_KEY='test-key')
     def test_empty_texts_returns_empty(self):
         with patch('ai_checks.adapters.embedding_onnx.httpx.Client', FakeClient):
             svc = CloudRuEmbedding()
@@ -74,32 +83,27 @@ class CloudRuEmbeddingTests(SimpleTestCase):
 
         self.assertEqual(result, [])
 
-    @override_settings(AI_EMBEDDING_API_KEY='test-key')
     def test_model_version(self):
         with patch('ai_checks.adapters.embedding_onnx.httpx.Client', FakeClient):
             svc = CloudRuEmbedding()
         self.assertIn('cloudru', svc.model_version)
 
-    @override_settings(AI_EMBEDDING_API_KEY='test-key')
     def test_dim_property(self):
         with patch('ai_checks.adapters.embedding_onnx.httpx.Client', FakeClient):
             svc = CloudRuEmbedding()
         self.assertEqual(svc.dim, 1024)
 
-    @override_settings(AI_EMBEDDING_API_KEY='test-key')
     def test_dim_custom(self):
         with patch('ai_checks.adapters.embedding_onnx.httpx.Client', FakeClient):
             svc = CloudRuEmbedding(dim=1536)
         self.assertEqual(svc.dim, 1536)
 
     def test_no_key_raises(self):
-        import os
         with patch.dict(os.environ, {'AI_EMBEDDING_API_KEY': ''}):
             with self.assertRaises(RuntimeError) as ctx:
                 CloudRuEmbedding()
             self.assertIn('AI_EMBEDDING_API_KEY', str(ctx.exception))
 
-    @override_settings(AI_EMBEDDING_API_KEY='test-key')
     def test_402_raises_without_retry(self):
         import httpx
 
@@ -131,7 +135,6 @@ class CloudRuEmbeddingTests(SimpleTestCase):
                 svc.embed_texts(['текст'])
             self.assertIn('402', str(ctx.exception))
 
-    @override_settings(AI_EMBEDDING_API_KEY='test-key')
     def test_base_url_from_settings(self):
         with patch('ai_checks.adapters.embedding_onnx.httpx.Client', FakeClient):
             svc = CloudRuEmbedding(
@@ -140,7 +143,7 @@ class CloudRuEmbeddingTests(SimpleTestCase):
         self.assertEqual(svc._base_url, 'https://custom.api.cloud.ru')
         self.assertEqual(svc._verify_ssl, True)
 
-    @override_settings(AI_EMBEDDING_API_KEY='test-key', AI_EMBEDDING_VERIFY_SSL=False)
+    @override_settings(AI_EMBEDDING_VERIFY_SSL=False)
     def test_verify_ssl_from_settings(self):
         with patch('ai_checks.adapters.embedding_onnx.httpx.Client', FakeClient):
             svc = CloudRuEmbedding()

@@ -48,10 +48,6 @@ env:
   CELERY_TASK_ALWAYS_EAGER: 'True'
   PIP_DISABLE_PIP_VERSION_CHECK: '1'
 
-  # Фиктивный ключ для тестов CloudRu-эмбеддингов: они мокают сеть,
-  # но конструктор сервиса проверяет наличие ключа (локально он из .env).
-  AI_EMBEDDING_API_KEY: 'ci-dummy-key-not-real'
-
 jobs:
   tests:
     name: Django tests (Python 3.12, PostgreSQL 16 + pgvector)

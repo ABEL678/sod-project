@@ -129,7 +129,8 @@ class GigaChatEmbeddingTests(SimpleTestCase):
 
 
 class GetEmbeddingServiceTests(SimpleTestCase):
-    @override_settings(AI_EMBEDDING_PROVIDER='cloudru', AI_EMBEDDING_API_KEY='k')
+    @override_settings(AI_EMBEDDING_PROVIDER='cloudru')
+    @patch.dict(os.environ, {'AI_EMBEDDING_API_KEY': 'k'})
     def test_factory_returns_cloudru(self):
         with patch('ai_checks.adapters.embedding_onnx.httpx.Client', FakeEmbedClient):
             svc = get_embedding_service()
