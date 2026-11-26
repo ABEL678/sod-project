@@ -75,6 +75,7 @@ from storage.domain.services import (
     ALLOWED_UPLOAD_EXTENSIONS,
     DOCUMENT_VIEW_COLUMNS,
     MAX_UPLOAD_SIZE,
+    FeedbackRateLimited,
     approval_outcome,
     approval_override_action,
     blocking_issues_for_document,
@@ -5606,6 +5607,16 @@ class SubmitFeedbackView(LoginRequiredMixin, View):
                 },
                 status=403,
             )
+        except FeedbackRateLimited as exc:
+            response = JsonResponse(
+                {
+                    "ok": False,
+                    "errors": {"non_field_errors": [str(exc)]},
+                },
+                status=429,
+            )
+            response["Retry-After"] = str(exc.retry_after)
+            return response
         except ValidationError as exc:
             if getattr(exc, "error_dict", None):
                 errors = exc.message_dict

@@ -16,7 +16,7 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from django.core.files.base import ContentFile
 from django.core.files.storage import default_storage
 from django.core.validators import validate_email
-from django.db.models import Count, Max, Prefetch, Q, QuerySet
+from django.db.models import Count, Max, Min, Prefetch, Q, QuerySet
 from django.db import transaction
 from django.utils import timezone
 
@@ -5061,6 +5061,103 @@ FEEDBACK_SCREENSHOT_TYPES = {
 }
 FEEDBACK_SCREENSHOT_EXTENSIONS = {"jpg", "jpeg", "png", "webp"}
 FEEDBACK_ADMIN_COMMENT_MAX_LENGTH = 2000
+# Аудит-5, волна 2 (W2-3): защита от спама через модалку обратной связи.
+FEEDBACK_SUBMIT_RATE_LIMIT = 10
+FEEDBACK_SUBMIT_RATE_WINDOW_SECONDS = 60 * 60
+
+
+class FeedbackRateLimited(Exception):
+    """Превышен лимит отправок обратной связи (HTTP 429 на уровне вьюхи)."""
+
+    def __init__(self, retry_after: int):
+        self.retry_after = max(1, int(retry_after))
+        super().__init__(
+            "Слишком много обращений за короткое время. Попробуйте позже."
+        )
+
+
+def _check_feedback_rate_limit(user) -> None:
+    """Ограничивает число сохранённых обращений пользователя за окно.
+
+    Считаем именно созданные записи Feedback, а не попытки: это защищает
+    от спама в БД, не наказывает за опечатки в форме и не требует
+    внешнего кэша (лимит остаётся корректным при нескольких воркерах).
+    """
+    limit = int(
+        getattr(settings, "FEEDBACK_SUBMIT_RATE_LIMIT", FEEDBACK_SUBMIT_RATE_LIMIT)
+    )
+    window = int(
+        getattr(
+            settings,
+            "FEEDBACK_SUBMIT_RATE_WINDOW_SECONDS",
+            FEEDBACK_SUBMIT_RATE_WINDOW_SECONDS,
+        )
+    )
+    if limit <= 0 or window <= 0 or not getattr(user, "pk", None):
+        return
+
+    since = timezone.now() - timedelta(seconds=window)
+    aggregate = Feedback.objects.filter(
+        author=user, created_at__gte=since
+    ).aggregate(count=Count("pk"), oldest=Min("created_at"))
+    if aggregate["count"] < limit:
+        return
+
+    oldest = aggregate["oldest"]
+    if oldest is None:
+        retry_after = window
+    else:
+        retry_after = (
+            oldest + timedelta(seconds=window) - timezone.now()
+        ).total_seconds()
+    raise FeedbackRateLimited(retry_after)
+
+
+def _notify_feedback_status_changed(feedback, actor, old_status: str) -> None:
+    """Сообщает автору обратной связи о смене статуса по email.
+
+    In-app Notification завязан на Issue/Document и не подходит для
+    Feedback; у автора обращения нет админского экрана обратной связи.
+    Ошибка отправки не должна откатывать смену статуса.
+    """
+    author = feedback.author
+    if author is None or author.pk == getattr(actor, "pk", None):
+        return
+
+    recipient_email = (author.email or feedback.contact_email or "").strip()
+    if not recipient_email:
+        return
+
+    old_label = Feedback.Status(old_status).label
+    new_label = feedback.get_status_display()
+    subject = f"Обратная связь #{feedback.pk}: статус изменён"
+    lines = [
+        "Здравствуйте!",
+        "",
+        (
+            "Статус вашего обращения "
+            f"от {feedback.created_at:%d.%m.%Y} изменён: "
+            f"{old_label} → {new_label}."
+        ),
+    ]
+    if feedback.admin_comment:
+        lines += ["", f"Комментарий: {feedback.admin_comment}"]
+    if feedback.page_url:
+        lines += ["", f"Страница: {feedback.page_url}"]
+
+    try:
+        from storage.tasks import send_notification_email
+
+        send_notification_email.delay(
+            recipient_email,
+            subject,
+            "\n".join(lines),
+        )
+    except Exception:  # noqa: BLE001 — статус важнее письма
+        logger.exception(
+            "Не удалось отправить email автору обратной связи #%s",
+            feedback.pk,
+        )
 
 
 def _resolve_feedback_company(user, company):
@@ -5127,6 +5224,7 @@ def submit_feedback(
         raise PermissionDenied("Отправить обратную связь может только пользователь")
 
     company = _resolve_feedback_company(user, company)
+    _check_feedback_rate_limit(user)
 
     message = (message or "").strip()
     if not message:
@@ -5310,12 +5408,15 @@ def update_feedback_status(
             }
         )
 
+    old_status = feedback.status
     feedback.status = new_status
     update_fields = ["status", "updated_at"]
     if comment:
         feedback.admin_comment = comment
         update_fields.append("admin_comment")
     feedback.save(update_fields=update_fields)
+    if old_status != feedback.status:
+        _notify_feedback_status_changed(feedback, user, old_status)
     return feedback
 
 
