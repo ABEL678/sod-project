@@ -17,6 +17,7 @@ staticfiles/
 .kilo/
 docs/audit/
 docs/*AUDIT*.md
+audit-history-*.zip
 
 # PyCharm
 .idea/
