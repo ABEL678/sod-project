@@ -164,14 +164,6 @@ def _initial_state_for_folder(folder: Folder | None) -> str:
     }.get(zone, Document.STATE_WIP_DRAFT)
 
 
-def _approval_target_changes(document: Document, target_state: str) -> bool:
-    """True, если операция переводит документ в утверждённое состояние."""
-    return (
-        target_state in (Document.STATE_APPROVED, Document.STATE_AS_BUILT)
-        and target_state != document.state
-    )
-
-
 def _is_canonical_zone_folder(folder: Folder | None) -> bool:
     """Проверяет, является ли папка системной папкой зоны проекта."""
     if folder is None:
@@ -3207,10 +3199,15 @@ def _workflow_role_allowed(user: User, document: Document, action_code: str) -> 
         return check_write_permission(user, document.section)
     if profile.role in ('checker', 'normocontrol'):
         # проверяющий действует только в проектах, где состоит
-        # с осмысленной ролью (Спринт 5: наблюдатель не считается)
-        return document.project.memberships.filter(user=user).exclude(
-            role_in_project='viewer'
-        ).exists()
+        # с осмысленной ролью (Спринт 5: наблюдатель не считается).
+        # W2-6: в реестре project.memberships загружен префетчем; проверка
+        # по нему идёт без ORM-запроса. Раньше .filter().exists() обходил
+        # префетч и давал запрос на каждую строку (M1).
+        return any(
+            membership.user_id == user.pk
+            and membership.role_in_project != 'viewer'
+            for membership in document.project.memberships.all()
+        )
     return True
 
 
@@ -3861,21 +3858,23 @@ def upload_document(
             },
         )
         if not created:
-            # Обновляем поля, если документ уже существует
+            # Обновляем поля, если документ уже существует.
+            # Этап жизненного цикла при повторной загрузке не меняется:
+            # переходы этапов — только transition_document_zone
+            # (правило о независимости размещения и этапа).
             doc.name = name
             doc.doc_type = doc_type
             doc.save(update_fields=['name', 'doc_type', 'updated_at'])
-            if folder is not None:
-                target_state = _initial_state_for_folder(folder)
-                if (
-                    (
-                        _approval_target_changes(doc, target_state)
-                        or folder.zone == 'PUBLISHED'
-                    )
-                    and approval_outcome(doc) == 'C'
-                ):
-                    raise ValueError(APPROVAL_BLOCKED_MESSAGE)
-                _apply_state(user, doc, target_state, folder=folder)
+            # Самостоятельная валидация публикуемого содержимого: даже без
+            # смены этапа новая версия не должна попадать в PUBLISHED при
+            # итоге C (блокирующие замечания). Это не переход этапа, а
+            # запрет загрузки в опубликованную папку.
+            if (
+                folder is not None
+                and folder.zone == 'PUBLISHED'
+                and approval_outcome(doc) == 'C'
+            ):
+                raise ValueError(APPROVAL_BLOCKED_MESSAGE)
 
         # Вычисляем следующую версию
         max_number = DocumentVersion.objects.filter(document=doc).aggregate(Max('version_number'))['version_number__max']

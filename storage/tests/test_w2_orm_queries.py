@@ -15,15 +15,18 @@ from issues.context_processors import notifications_badges
 from issues.models import Notification
 from storage.domain.models import (
     Company,
+    Document,
     Folder,
     Project,
     ProjectMembership,
+    Section,
     UserProfile,
 )
 from storage.domain.services import (
     _clear_profile_cache,
     _ensure_project_access,
     _is_project_gip,
+    _workflow_role_allowed,
     attach_user_to_company,
 )
 from storage.tests.test_sprint5 import Sprint5TestBase
@@ -114,6 +117,43 @@ class AccessAndGipQueryTests(TestCase):
         with CaptureQueriesContext(connection) as ctx:
             for _ in range(4):
                 self.assertTrue(_is_project_gip(gip, project))
+        self.assertEqual(len(ctx), 0)
+
+    def test_workflow_role_allowed_reads_prefetched_checker_membership(self):
+        """M1: checker/normocontrol не даёт ORM-запроса на префетчнутой связи."""
+        checker = User.objects.create_user('checker_p2', password='pass')
+        UserProfile.objects.update_or_create(
+            user=checker,
+            defaults={'company': self.company, 'role': 'checker'},
+        )
+        ProjectMembership.objects.create(
+            project=self.project, user=checker, role_in_project='checker',
+        )
+        section = Section.objects.create(
+            project=self.project, code='АР', name='Архитектура', order=1,
+        )
+        document = Document.objects.create(
+            project=self.project,
+            section=section,
+            code='P2-CHK',
+            name='Документ проверяющего',
+            doc_type='drawing',
+            created_by=self.root,
+        )
+        prefetched = Document.objects.select_related(
+            'project',
+        ).prefetch_related(
+            'project__memberships',
+        ).get(pk=document.pk)
+        # Прогрев кэша компании на инстансе пользователя — вне замера.
+        self.assertTrue(
+            _workflow_role_allowed(checker, prefetched, 'return_wip'),
+        )
+        with CaptureQueriesContext(connection) as ctx:
+            for _ in range(4):
+                self.assertTrue(
+                    _workflow_role_allowed(checker, prefetched, 'return_wip'),
+                )
         self.assertEqual(len(ctx), 0)
 
     def test_notifications_badges_queries_only_once_per_request(self):

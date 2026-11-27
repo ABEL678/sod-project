@@ -233,6 +233,125 @@ class PlacementStageIndependenceTest(TestCase):
         self.assertEqual(doc.status, original_status)
 
 
+class UploadStageIndependenceTest(TestCase):
+    """Повторная загрузка версии не меняет этап жизненного цикла.
+
+    Решение владельца 27.11.2026 (вариант 1): этап меняется только через
+    transition_document_zone(); загрузка новой версии — не исключение.
+    """
+
+    def setUp(self):
+        data = _create_test_data()
+        self.admin = data['admin']
+        self.project = data['project']
+        self.section = data['section']
+
+        self.wip_folder = Folder.objects.get(project=self.project, zone='WIP')
+        self.shared_folder = Folder.objects.get(project=self.project, zone='SHARED')
+        self.published_folder = Folder.objects.get(
+            project=self.project, zone='PUBLISHED'
+        )
+        self.archive_folder = Folder.objects.get(project=self.project, zone='ARCHIVE')
+
+    def _make_file(self):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+
+        return SimpleUploadedFile(
+            'test.pdf', b'%PDF-1.4 test content', content_type='application/pdf'
+        )
+
+    def _upload(self, folder=None, code='UPL-STAGE'):
+        upload_document(
+            user=self.admin,
+            project=self.project,
+            section=self.section,
+            code=code,
+            name='Документ этапа',
+            doc_type='drawing',
+            file=self._make_file(),
+            folder=folder,
+            reason_text='Тестовая причина',
+        )
+        return Document.objects.get(
+            project=self.project, section=self.section, code=code
+        )
+
+    def _make_ready(self, doc):
+        doc.state = Document.STATE_WIP_READY
+        doc._from_service = True
+        doc.save(update_fields=['state'])
+        return doc
+
+    def test_reupload_into_foreign_stage_folder_keeps_stage(self):
+        """Загрузка версии в системную папку другого этапа не меняет этап."""
+        doc = self._upload(folder=self.wip_folder)
+        self.assertEqual(doc.state, Document.STATE_WIP_DRAFT)
+
+        self._upload(folder=self.shared_folder)
+
+        doc.refresh_from_db()
+        self.assertEqual(doc.state, Document.STATE_WIP_DRAFT)
+        self.assertEqual(doc.status, 'draft')
+        self.assertEqual(doc.versions.count(), 2)
+
+    def test_reupload_on_shared_stage_keeps_stage(self):
+        """Повторная загрузка документа на этапе SHARED этап не меняет."""
+        doc = self._make_ready(self._upload(folder=self.wip_folder))
+        transition_document_zone(self.admin, doc, 'submit_review')
+        doc.refresh_from_db()
+        self.assertEqual(doc.state, Document.STATE_SHARED)
+
+        self._upload(folder=self.wip_folder)
+
+        doc.refresh_from_db()
+        self.assertEqual(doc.state, Document.STATE_SHARED)
+        self.assertEqual(doc.status, 'in_review')
+
+    def test_reupload_on_published_stage_keeps_stage(self):
+        """Повторная загрузка документа на этапе PUBLISHED этап не меняет."""
+        doc = self._make_ready(self._upload(folder=self.wip_folder))
+        transition_document_zone(self.admin, doc, 'submit_review')
+        transition_document_zone(self.admin, doc, 'publish')
+        doc.refresh_from_db()
+        self.assertEqual(doc.state, Document.STATE_APPROVED)
+
+        self._upload(folder=self.published_folder)
+
+        doc.refresh_from_db()
+        self.assertEqual(doc.state, Document.STATE_APPROVED)
+        self.assertEqual(doc.status, 'approved')
+
+    def test_reupload_on_archive_stage_is_forbidden_and_keeps_stage(self):
+        """Загрузка версии в архив запрещена, этап ARCHIVE сохраняется."""
+        doc = self._make_ready(self._upload(folder=self.wip_folder))
+        transition_document_zone(self.admin, doc, 'submit_review')
+        transition_document_zone(self.admin, doc, 'publish')
+        transition_document_zone(self.admin, doc, 'archive')
+        doc.refresh_from_db()
+        self.assertEqual(doc.state, Document.STATE_ARCHIVED)
+
+        with self.assertRaises(PermissionDenied):
+            self._upload(folder=self.wip_folder)
+
+        doc.refresh_from_db()
+        self.assertEqual(doc.state, Document.STATE_ARCHIVED)
+        self.assertEqual(doc.status, 'archived')
+
+    def test_transition_after_reupload_still_changes_stage(self):
+        """После повторной загрузки этап по-прежнему меняет только workflow."""
+        doc = self._upload(folder=self.wip_folder)
+        self._upload(folder=self.shared_folder)
+        doc.refresh_from_db()
+        self.assertEqual(doc.state, Document.STATE_WIP_DRAFT)
+
+        self._make_ready(doc)
+        transition_document_zone(self.admin, doc, 'submit_review')
+
+        doc.refresh_from_db()
+        self.assertEqual(doc.state, Document.STATE_SHARED)
+        self.assertEqual(doc.status, 'in_review')
+
+
 class ZonePermissionTest(TestCase):
     """Тесты прав доступа на основе зон."""
 
