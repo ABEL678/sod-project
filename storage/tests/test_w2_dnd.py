@@ -5,11 +5,11 @@
 без новых зависимостей. Это не полноценный браузерный E2E, а два слоя:
 
 1. Серверная сторона DnD (``POST /documents/<id>/move/``,
-   ``POST /documents/<id>/copy/``, ``POST /folders/<id>/move/``) —
-   обычные Django-тесты: отказы по зонам, правам, чужим проектам и
-   удалённым/чужим документам. Базовые сценарии (перенос в папку/раздел,
-   циклы папок, viewer) уже закреплены в ``test_t9_dnd.py`` и
-   ``test_t9_dnd_copy.py`` — здесь только незакрытые ветки.
+   ``POST /folders/<id>/move/``) — обычные Django-тесты: отказы по
+   зонам, правам, чужим проектам и удалённым/чужим документам. Базовые
+   сценарии (перенос в папку/раздел, циклы папок, viewer) уже закреплены
+   в ``test_t9_dnd.py`` и ``test_t9_dnd_copy.py`` — здесь только
+   незакрытые ветки.
 2. Клиентская сторона — контрактные проверки в стиле W2-4: статические
    строки в ``static/js/app.js`` и в шаблонах не должны развязываться с
    сервером (data-атрибуты, MIME-типы, URL-шаблоны, HTMX-обновление).
@@ -442,43 +442,6 @@ class DndFolderEndpointTests(T8UltimateTestBase):
         self.assertIsNone(folder.parent_id)
 
 
-class DndCopyEndpointTests(T8UltimateTestBase):
-    """Ctrl+drop (копирование) подчиняется тем же правам и зонам."""
-
-    def test_viewer_cannot_copy_document(self):
-        folder = create_folder(
-            self.user_gip, self.project, 'Целевая', section=self.section,
-        )
-        document = self.make_document(code='DND-C-1')
-
-        self.client.force_login(self.user_viewer)
-        response = self.client.post(
-            reverse('storage:document_copy', args=[document.pk]),
-            {'folder_id': folder.pk},
-        )
-
-        self.assertEqual(response.status_code, 403)
-        self.assertFalse(
-            Document.objects.filter(code__startswith='DND-C-1 (копия)').exists()
-        )
-
-    def test_gip_cannot_copy_into_archive_zone(self):
-        _ensure_project_zones(self.project, self.user_gip)
-        archive_zone = Folder.objects.get(project=self.project, zone='ARCHIVE')
-        document = self.make_document(code='DND-C-2')
-
-        self.client.force_login(self.user_gip)
-        response = self.client.post(
-            reverse('storage:document_copy', args=[document.pk]),
-            {'folder_id': archive_zone.pk},
-        )
-
-        self.assertEqual(response.status_code, 403)
-        self.assertFalse(
-            Document.objects.filter(code__startswith='DND-C-2 (копия)').exists()
-        )
-
-
 class DndMarkupContractTests(T8UltimateTestBase):
     """Серверный рендер отдаёт все крючки, на которые смотрит app.js."""
 
@@ -507,10 +470,6 @@ class DndMarkupContractTests(T8UltimateTestBase):
         # URL-шаблоны, которые app.js подставляет вместо /0/.
         self.assertIn(
             f'data-move-url-template="{reverse("storage:document_move", args=[0])}"',
-            html,
-        )
-        self.assertIn(
-            f'data-copy-url-template="{reverse("storage:document_copy", args=[0])}"',
             html,
         )
         self.assertIn(
@@ -565,10 +524,8 @@ class DndClientContractTests(T8UltimateTestBase):
     def test_app_js_uses_panel_url_templates(self):
         js = self._read('static/js/app.js')
         self.assertIn('root.dataset.moveUrlTemplate', js)
-        self.assertIn('root.dataset.copyUrlTemplate', js)
         self.assertIn('root.dataset.folderMoveUrlTemplate', js)
         self.assertIn('apiUrl(root.dataset.folderMoveUrlTemplate', js)
-        self.assertIn('? root.dataset.copyUrlTemplate', js)
         self.assertIn(': root.dataset.moveUrlTemplate', js)
 
     def test_app_js_guards_archive_and_confirms_section_change(self):
@@ -625,7 +582,6 @@ class DndClientContractTests(T8UltimateTestBase):
             'storage/adapters/templates/storage/project_detail.html'
         )
         self.assertIn('data-move-url-template', panel)
-        self.assertIn('data-copy-url-template', panel)
         self.assertIn('data-folder-move-url-template', panel)
         self.assertIn('data-drop-folder="{{ folder.pk }}"', tree)
         self.assertIn('data-drop-name', tree)

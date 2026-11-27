@@ -138,7 +138,6 @@ urlpatterns = [
     path('documents/<int:document_id>/workflow/', views.DocumentWorkflowView.as_view(), name='document_workflow'),
     path('documents/<int:document_id>/internal-status/', views.DocumentInternalStatusView.as_view(), name='document_internal_status_update'),
     path('documents/<int:document_id>/code/', views.DocumentCodeUpdateView.as_view(), name='document_code_update'),
-    path('documents/<int:document_id>/copy/', views.DocumentCopyView.as_view(), name='document_copy'),
     path('documents/<int:document_id>/delete/', views.DocumentDeleteView.as_view(), name='document_delete'),
     path('folders/<int:folder_id>/move/', views.FolderMoveView.as_view(), name='folder_move'),
     path('projects/<int:project_id>/folders/reorder/', views.FolderReorderView.as_view(), name='folder_reorder'),

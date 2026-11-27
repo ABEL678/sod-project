@@ -606,11 +606,11 @@ class Folder(models.Model):
         max_length=20,
         choices=ZONE_CHOICES,
         default='WIP',
-        verbose_name="Зона жизненного цикла",
+        verbose_name="Этап жизненного цикла",
     )
     is_system_zone = models.BooleanField(
         default=False,
-        verbose_name="Системная папка зоны",
+        verbose_name="Системная папка этапа",
     )
     is_deleted = models.BooleanField(default=False, verbose_name="Удалена")
     deleted_at = models.DateTimeField(null=True, blank=True, verbose_name="Дата удаления")

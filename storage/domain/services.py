@@ -290,16 +290,42 @@ def _clear_profile_cache(user: User) -> None:
     управления админ ещё воспринимался как viewer до конца запроса.
 
     Вместе с профилем сбрасываются производные кэши доступа на инстансе
-    пользователя: компания (_sod_company_cache) и проверенные проекты
-    (_sod_project_access_cache). Оба живут не дольше запроса, но при
+    пользователя: компания (_sod_company_cache), проверенные проекты
+    (_sod_project_access_cache) и набор разрешённых разделов
+    (_sod_allowed_sections_cache). Все они живут не дольше запроса, но при
     смене компании/роли в пределах одного запроса обязаны быть свежими.
     """
     cache = getattr(getattr(user, '_state', None), 'fields_cache', None)
     if cache is not None:
         cache.pop('userprofile', None)
-    for attribute in ('_sod_company_cache', '_sod_project_access_cache'):
+    for attribute in (
+        '_sod_company_cache',
+        '_sod_project_access_cache',
+        '_sod_allowed_sections_cache',
+    ):
         if hasattr(user, attribute):
             delattr(user, attribute)
+
+
+def _allowed_section_ids(user: User, profile) -> frozenset[int]:
+    """Набор ID разделов из ``allowed_sections`` на время запроса.
+
+    Developer/contractor проверяются по членству в наборе на каждое
+    перемещение и каждую строку реестра; повторные ``.all()`` возвращают
+    тот же набор, поэтому он вычисляется один раз на инстансе
+    пользователя. Кэш сбрасывается в ``_clear_profile_cache`` при смене
+    роли/компании, поэтому устаревший набор не переиспользуется.
+    """
+    cached = getattr(user, '_sod_allowed_sections_cache', None)
+    if cached is None or cached[0] != profile.pk:
+        cached = (
+            profile.pk,
+            frozenset(
+                profile.allowed_sections.values_list('pk', flat=True)
+            ),
+        )
+        user._sod_allowed_sections_cache = cached
+    return cached[1]
 
 
 def _check_company_access(user: User, company_id: int) -> bool:
@@ -2140,21 +2166,6 @@ def move_document_to_section(user: User, document: Document, section: Section) -
     return document
 
 
-def _unique_copy_code(document: Document, section: Section) -> str:
-    base = f'{document.code} (копия)'
-    candidate = base[:100]
-    counter = 2
-    while Document.objects.filter(
-        project=document.project,
-        section=section,
-        code=candidate,
-    ).exists():
-        suffix = f' (копия {counter})'
-        candidate = f'{document.code[:max(1, 100 - len(suffix))]}{suffix}'
-        counter += 1
-    return candidate
-
-
 def _create_changeset_release(version, user, affected_sheets=''):
     """Создаёт запись журнала «выпуск версии» (SPEC 2.0, волна 0, п. 8).
 
@@ -2177,7 +2188,7 @@ def _create_changeset_approval(document: Document, user: User):
     итог A/B, review_result на момент одобрения, при B — перечень открытых
     неблокирующих замечаний. Вызывается в фактической точке перехода в
     approved (``_apply_state``) и при «рождении» документа сразу в
-    утверждённом состоянии (``upload_document``/``copy_document``).
+    утверждённом состоянии (``upload_document``).
     """
     version = document.current_version
     if version is None:
@@ -2229,99 +2240,6 @@ def _create_changeset_approval(document: Document, user: User):
         text='\n'.join(lines),
         created_by=user,
     )
-
-
-def copy_document(
-    user: User,
-    document: Document,
-    folder: Folder | None,
-    section: Section | None,
-    file_storage,
-) -> Document:
-    """Создаёт копию документа со всеми версиями и файлами.
-
-    SPEC 2.0, волна 0, п. 7: копия в утверждённой зоне рождается сразу
-    approved — вместе с записью одобрения ('approval', итог A).
-    """
-    if document.is_deleted:
-        raise ValueError("Нельзя копировать документ из корзины")
-    if not check_read_permission(user, document):
-        raise PermissionDenied("Нет прав на копирование документа")
-
-    target_section = section or (
-        folder.section if folder is not None and folder.section_id else document.section
-    )
-    if target_section.project_id != document.project_id:
-        raise ValueError("Раздел относится к другому проекту")
-    if not check_write_permission(user, target_section):
-        raise PermissionDenied("Нет прав на запись в целевой раздел")
-
-    if folder is not None:
-        if folder.project_id != document.project_id:
-            raise ValueError("Папка относится к другому проекту")
-        if folder.is_deleted:
-            raise ValueError("Нельзя скопировать документ в удалённую папку")
-        if folder.section_id is not None and folder.section_id != target_section.pk:
-            raise ValueError("Папка относится к другому разделу")
-
-        # Проверка прав по зоне
-        if not check_zone_permission(user, folder, target_section):
-            zone_name = folder.get_zone_display()
-            raise PermissionDenied(f"Нет прав на запись в зону «{zone_name}»")
-
-    versions = list(document.versions.order_by('version_number'))
-    # SPEC 2.0, волна 0, п. 5: у копии своя причина, причина оригинала
-    # не наследуется. Первая версия (и все скопированные) получают текст
-    # с шифром оригинала.
-    copy_reason_text = f'Копия документа {document.code}'
-    with transaction.atomic():
-        copied = Document.objects.create(
-            project=document.project,
-            section=target_section,
-            folder=folder,
-            code=_unique_copy_code(document, target_section),
-            name=f'{document.name} (копия)'[:255],
-            doc_type=document.doc_type,
-            # Состояние копии — по зоне целевой папки (единое состояние).
-            state=_initial_state_for_folder(folder),
-            created_by=user,
-        )
-        current_copy = None
-        for version in versions:
-            extension = version.file.name.rsplit('.', 1)
-            suffix = f'.{extension[1]}' if len(extension) == 2 else ''
-            target_path = (
-                f'documents/{timezone.now():%Y/%m}/'
-                f'{uuid.uuid4().hex}{suffix}'
-            )
-            copied_path = file_storage.copy(version.file.name, target_path)
-            copied_version = DocumentVersion.objects.create(
-                document=copied,
-                version_number=version.version_number,
-                file=copied_path,
-                file_size=version.file_size,
-                file_hash=version.file_hash,
-                comment=version.comment,
-                uploaded_by=user,
-                reason_type='other',
-                reason_text=copy_reason_text,
-            )
-            _create_changeset_release(copied_version, user)
-            if document.current_version_id == version.pk:
-                current_copy = copied_version
-
-        if current_copy is not None:
-            copied.current_version = current_copy
-            copied.save(update_fields=['current_version'])
-            # SPEC 2.0 w0 п. 7 (решение владельца): копия, рождённая сразу в
-            # утверждённой зоне, получает запись одобрения (итог A, вердикта
-            # на момент создания нет).
-            if copied.state in (
-                Document.STATE_APPROVED, Document.STATE_AS_BUILT,
-            ):
-                _create_changeset_approval(copied, user)
-
-    return copied
 
 
 def _refresh_folder_subtree(folder: Folder, section: Section | None) -> None:
@@ -2732,7 +2650,7 @@ def check_write_permission(user: User, section: Section) -> bool:
         return _is_project_gip(user, section.project)
 
     if role in ('developer', 'contractor'):
-        return section in profile.allowed_sections.all()
+        return section.pk in _allowed_section_ids(user, profile)
 
     # checker, normocontrol, customer, viewer и прочие — не могут писать
     return False
@@ -2801,7 +2719,7 @@ def check_zone_permission(
     if profile.role in ('developer', 'contractor'):
         # Разработчик и смежник пишут в WIP только в выданные разделы
         if section is not None:
-            return section in profile.allowed_sections.all()
+            return section.pk in _allowed_section_ids(user, profile)
         return True
 
     return False
@@ -2844,7 +2762,7 @@ def check_read_permission(user: User, document: Document) -> bool:
 
     if role == 'contractor':
         # contractor читает только разрешенные разделы
-        return document.section in profile.allowed_sections.all()
+        return document.section.pk in _allowed_section_ids(user, profile)
 
     return False
 
@@ -3341,7 +3259,7 @@ def update_internal_status(
     if document.is_deleted:
         raise ValueError("Документ находится в корзине")
     if _effective_zone(document) != 'WIP':
-        raise ValueError("Внутренний статус доступен только в зоне WIP")
+        raise ValueError("Внутренний статус доступен только на этапе «В работе»")
 
     action = (action or '').strip()
     if action == 'submit_review':
@@ -3508,7 +3426,7 @@ def transition_document_zone(
     current_zone = _effective_zone(document)
     if current_zone != action['from']:
         raise ValueError(
-            "Действие недоступно: документ находится в зоне «{}»".format(
+            "Действие недоступно: документ находится на этапе «{}»".format(
                 document.folder.get_zone_display()
                 if (document.folder and _is_canonical_zone_folder(document.folder))
                 else dict(Folder.ZONE_CHOICES).get(current_zone, current_zone)
@@ -3820,7 +3738,7 @@ def upload_document(
                 else dict(Folder.ZONE_CHOICES).get(existing_zone, existing_zone)
             )
             raise PermissionDenied(
-                f"Нет прав на запись в текущую зону «{zone_name}»"
+                f"Нет прав на запись на текущем этапе «{zone_name}»"
             )
 
     if folder is not None:
@@ -3835,7 +3753,7 @@ def upload_document(
         if not skip_zone_check and not check_zone_permission(user, folder, section):
             zone_name = folder.get_zone_display()
             raise PermissionDenied(
-                f"Нет прав на запись в зону «{zone_name}»"
+                f"Нет прав на запись на этапе «{zone_name}»"
             )
 
     # Валидация doc_type
@@ -4082,7 +4000,7 @@ def check_issue_permission(user: User, document: Document) -> bool:
     if profile is None or profile.role not in ISSUE_CREATOR_ROLES:
         return False
     if profile.role == 'contractor':
-        return document.section in profile.allowed_sections.all()
+        return document.section.pk in _allowed_section_ids(user, profile)
     return True
 
 

@@ -927,7 +927,7 @@
                         ARCHIVE: 'в архиве'
                     };
                     window.alert(
-                        'Документ ' + (zoneLabels[zone] || 'вне зоны WIP') +
+                        'Документ ' + (zoneLabels[zone] || 'вне этапа В работе') +
                         ', перемещение запрещено'
                     );
                     event.preventDefault();
@@ -938,7 +938,7 @@
                 dragFolderId = null;
                 dragDocumentSectionId = row.dataset.sectionId || '';
                 dragFolderSectionId = null;
-                event.dataTransfer.effectAllowed = 'copyMove';
+                event.dataTransfer.effectAllowed = 'move';
                 event.dataTransfer.clearData();
                 event.dataTransfer.setData('text/plain', documentId);
                 event.dataTransfer.setData('application/x-sod-document-id', documentId);
@@ -1000,9 +1000,7 @@
                 return;
             }
             event.preventDefault();
-            event.dataTransfer.dropEffect = (
-                isDocumentDrag(event) && (event.ctrlKey || event.metaKey)
-            ) ? 'copy' : 'move';
+            event.dataTransfer.dropEffect = 'move';
             dropTargets().forEach(function (other) {
                 other.classList.toggle('is-dnd-over', other === target);
             });
@@ -1039,7 +1037,6 @@
                 transfer.getData('text/plain');
             var targetName = target.dataset.dropName || 'папку';
             var root = panel();
-            var copyRequested = event.ctrlKey || event.metaKey;
             clearDropHighlights();
 
             if (!root) {
@@ -1118,7 +1115,6 @@
                     'application/x-sod-section-id'
                 ) || dragDocumentSectionId || '';
                 if (
-                    !copyRequested &&
                     targetDocSection &&
                     sourceDocSection &&
                     targetDocSection !== sourceDocSection
@@ -1137,7 +1133,6 @@
                     'application/x-sod-section-id'
                 ) || dragDocumentSectionId || '';
                 if (
-                    !copyRequested &&
                     sourceSection &&
                     target.dataset.dropSection !== sourceSection
                 ) {
@@ -1151,20 +1146,12 @@
                 }
             }
 
-            var verb = copyRequested ? 'Копируем' : 'Перемещаем';
-            showDndToast(verb + ' документ в ' + targetName + '…', false);
+            showDndToast('Перемещаем документ в ' + targetName + '…', false);
             postMoveRequest(
-                apiUrl(
-                    copyRequested
-                        ? root.dataset.copyUrlTemplate
-                        : root.dataset.moveUrlTemplate,
-                    documentId
-                ),
+                apiUrl(root.dataset.moveUrlTemplate, documentId),
                 body,
-                function (data) {
-                    return copyRequested
-                        ? 'Создана копия: ' + (data.code || 'документ')
-                        : 'Документ перемещён в ' + targetName;
+                function () {
+                    return 'Документ перемещён в ' + targetName;
                 }
             );
         });

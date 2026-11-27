@@ -2,7 +2,7 @@
 
 Покрывает:
 - R4-1: запись одобрения при «рождении» документа сразу в утверждённом
-  состоянии (upload_document и copy_document);
+  состоянии (upload_document);
 - R3-1: fallback-счётчик открытых замечаний в таблице — каноническое
   множество ACTIVE_ISSUE_STATUSES (DISCUSSION учитывается);
 - R1-2: повторный вызов бэкфила 0042 не создаёт дублей;
@@ -19,7 +19,6 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase, override_settings
 
 from issues.models import Issue
-from storage.adapters.local_storage import LocalFileStorage
 from storage.adapters.tables import DocumentTable
 from storage.domain.models import (
     ChangeSetEntry,
@@ -35,7 +34,6 @@ from storage.domain.models import (
 from storage.domain.services import (
     _apply_state,
     _open_issues_count,
-    copy_document,
     create_issue,
     create_project,
     get_project_documents_queryset,
@@ -122,21 +120,6 @@ class BirthInPublishedTests(Audit3TestBase):
         self.assertEqual(entry.created_by, self.admin)
         self.assertIn('Итог: A', entry.text)
         self.assertIn('review_result: —', entry.text)
-
-    def test_copy_in_published_gets_approval_record(self):
-        original = self._upload('АР-SRC').document
-        copied = copy_document(
-            self.admin,
-            original,
-            folder=self.published_folder,
-            section=self.section,
-            file_storage=LocalFileStorage(),
-        )
-
-        self.assertEqual(copied.state, Document.STATE_APPROVED)
-        entries = self._approval_entries(copied)
-        self.assertEqual(entries.count(), 1)
-        self.assertIn('Итог: A', entries.get().text)
 
     def test_repeat_upload_to_existing_published_keeps_behavior(self):
         self._upload('АР-PUB-REPEAT', folder=self.published_folder)

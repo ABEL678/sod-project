@@ -4,7 +4,6 @@
      data-view-id="{% if selected_view %}{{ selected_view.pk }}{% else %}none{% endif %}"
      data-upload-url="{% url 'storage:document_upload_ajax' project.pk %}"
      data-move-url-template="{% url 'storage:document_move' 0 %}"
-     data-copy-url-template="{% url 'storage:document_copy' 0 %}"
      data-folder-move-url-template="{% url 'storage:folder_move' 0 %}"
      data-target-name="{{ upload_target_name }}">
 
@@ -95,7 +94,7 @@
             </div>
             {% if active_filter_chips %}
             <button type="button" class="filter-bar__reset" data-filter-reset
-                    title="Сбросить все фильтры, зоны и поиск">
+                    title="Сбросить все фильтры, этапы и поиск">
                 <i class="bi bi-x-circle" aria-hidden="true"></i>
                 Сбросить всё
             </button>

@@ -5,7 +5,6 @@
   документа в другой раздел;
 - матрица прав на редактирование ответа на замечание;
 - валидация загружаемых файлов (расширение, размер);
-- синхронизация статус-триплета при копировании;
 - колоночные фильтры suitability_code/internal_status в сохранённом виде;
 - гейт замечаний по публичной share-ссылке;
 - парольная политика при создании пользователя.
@@ -22,7 +21,6 @@ from django.test import TestCase
 from django.urls import reverse
 
 from issues.models import Issue
-from storage.adapters.local_storage import LocalFileStorage
 from storage.domain.models import (
     Company,
     Document,
@@ -33,7 +31,6 @@ from storage.domain.models import (
     UserProfile,
 )
 from storage.domain.services import (
-    copy_document,
     get_project_documents_for_view,
     move_document_to_section,
     save_document_view,
@@ -253,43 +250,6 @@ class UploadValidationTests(Sprint5TestBase):
             reason_text='Тестовая причина',
         )
         self.assertEqual(version.document.code, 'OK-1')
-
-
-class CopyDocumentSyncTests(Sprint5TestBase):
-    def test_copy_into_wip_folder_resets_status_triplet(self):
-        document = self.make_document(
-            code='CPY-1', folder=self.published_folder, state=Document.STATE_APPROVED,
-        )
-
-        copied = copy_document(
-            self.user_gip,
-            document,
-            folder=self.wip_folder,
-            section=self.section_kr,
-            file_storage=LocalFileStorage(),
-        )
-
-        self.assertEqual(copied.status, 'draft')
-        self.assertEqual(copied.suitability_code, 'S0')
-        self.assertEqual(copied.internal_status, 'draft')
-
-    def test_copy_keeps_zone_when_target_is_published(self):
-        document = self.make_document(
-            code='CPY-2', folder=self.published_folder, state=Document.STATE_APPROVED,
-        )
-
-        # Зона PUBLISHED доступна на запись только администратору — копию
-        # в каноническую папку публикует админ (см. check_zone_permission).
-        copied = copy_document(
-            self.user_admin,
-            document,
-            folder=self.published_folder,
-            section=self.section_ar,
-            file_storage=LocalFileStorage(),
-        )
-
-        self.assertEqual(copied.status, 'approved')
-        self.assertEqual(copied.suitability_code, 'A')
 
 
 class SavedViewColumnFilterTests(Sprint5TestBase):

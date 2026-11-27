@@ -99,7 +99,6 @@ from storage.domain.services import (
     check_read_permission,
     check_write_permission,
     check_zone_permission,
-    copy_document,
     create_folder,
     create_project,
     create_project_from_template,
@@ -4124,65 +4123,6 @@ class DocumentDeleteView(LoginRequiredMixin, View):
         return JsonResponse({
             'status': 'ok',
             'document_id': document.pk,
-        })
-
-
-class DocumentCopyView(LoginRequiredMixin, View):
-    """AJAX-копирование документа при drop с зажатым Ctrl."""
-
-    def post(self, request, document_id):
-        document = get_object_or_404(
-            get_accessible_documents(request.user),
-            pk=document_id,
-            is_deleted=False,
-        )
-        folder_id = (request.POST.get('folder_id') or '').strip()
-        section_id = (request.POST.get('section_id') or '').strip()
-        folder = None
-        section = None
-
-        try:
-            if folder_id:
-                folder = Folder.objects.filter(
-                    project=document.project,
-                    pk=folder_id,
-                    is_deleted=False,
-                ).first()
-                if folder is None:
-                    raise ValueError('Папка не найдена.')
-            elif section_id:
-                section = get_object_or_404(
-                    get_accessible_sections(request.user, document.project),
-                    pk=section_id,
-                )
-            else:
-                folder = document.folder
-                section = document.section
-
-            copied = copy_document(
-                request.user,
-                document,
-                folder,
-                section,
-                LocalFileStorage(),
-            )
-        except PermissionDenied as exc:
-            return JsonResponse(
-                {'status': 'error', 'error': str(exc)},
-                status=403,
-            )
-        except ValueError as exc:
-            return JsonResponse(
-                {'status': 'error', 'error': str(exc)},
-                status=400,
-            )
-
-        return JsonResponse({
-            'status': 'ok',
-            'document_id': copied.pk,
-            'code': copied.code,
-            'folder_id': copied.folder_id,
-            'section_id': copied.section_id,
         })
 
 

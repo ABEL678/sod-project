@@ -34,13 +34,13 @@
         <i class="bi bi-folder2 folder-icon" aria-hidden="true"></i>
         {% if folder.parent is None and folder.section is None %}
             {% if folder.zone == 'WIP' %}
-                <i class="bi bi-pencil-square folder-zone-icon text-primary" title="Зона: В работе" aria-hidden="true"></i>
+                <i class="bi bi-pencil-square folder-zone-icon text-primary" title="Этап: В работе" aria-hidden="true"></i>
             {% elif folder.zone == 'SHARED' %}
-                <i class="bi bi-people folder-zone-icon text-warning" title="Зона: На согласовании" aria-hidden="true"></i>
+                <i class="bi bi-people folder-zone-icon text-warning" title="Этап: На согласовании" aria-hidden="true"></i>
             {% elif folder.zone == 'PUBLISHED' %}
-                <i class="bi bi-shield-check folder-zone-icon text-success" title="Зона: Опубликовано" aria-hidden="true"></i>
+                <i class="bi bi-shield-check folder-zone-icon text-success" title="Этап: Опубликовано" aria-hidden="true"></i>
             {% elif folder.zone == 'ARCHIVE' %}
-                <i class="bi bi-lock folder-zone-icon text-secondary" title="Зона: Архив" aria-hidden="true"></i>
+                <i class="bi bi-lock folder-zone-icon text-secondary" title="Этап: Архив" aria-hidden="true"></i>
             {% endif %}
         {% endif %}
         <a class="folder-name flex-grow-1 text-truncate"

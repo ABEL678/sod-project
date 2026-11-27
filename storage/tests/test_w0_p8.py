@@ -6,7 +6,6 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase, override_settings
 from django.urls import reverse
 
-from storage.adapters.local_storage import LocalFileStorage
 from storage.domain.models import (
     ChangeSetEntry,
     Company,
@@ -16,7 +15,7 @@ from storage.domain.models import (
     Section,
     UserProfile,
 )
-from storage.domain.services import copy_document, upload_document
+from storage.domain.services import upload_document
 
 
 User = get_user_model()
@@ -73,23 +72,6 @@ class ChangeSetJournalTests(TestCase):
         self.assertEqual(entry.affected_sheets, 'листы 3, 7–9')
         self.assertEqual(entry.version.comment, 'Заменены узлы 3 и 4')
         self.assertEqual(entry.text, '')
-
-    def test_copy_creates_release_entry_for_copy(self):
-        original = self._upload(reason_text='Первичная загрузка')
-
-        copied = copy_document(
-            self.user,
-            original.document,
-            folder=None,
-            section=self.section,
-            file_storage=LocalFileStorage(),
-        )
-
-        copied_version = copied.versions.get()
-        entry = ChangeSetEntry.objects.get(version=copied_version)
-        self.assertEqual(entry.entry_type, 'version_release')
-        self.assertEqual(entry.created_by, self.user)
-        self.assertEqual(entry.version.comment, original.comment)
 
     def test_backfill_creates_one_entry_per_existing_version(self):
         first = self._upload(code='АР-01')

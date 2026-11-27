@@ -7,7 +7,6 @@ from django.test import TestCase, override_settings
 from django.urls import reverse
 
 from issues.models import Issue
-from storage.adapters.local_storage import LocalFileStorage
 from storage.domain.models import (
     Company,
     Document,
@@ -16,7 +15,7 @@ from storage.domain.models import (
     Section,
     UserProfile,
 )
-from storage.domain.services import copy_document, upload_document
+from storage.domain.services import upload_document
 
 
 User = get_user_model()
@@ -109,25 +108,6 @@ class VersionReasonTests(TestCase):
             version.reason_text,
             'Причина не фиксировалась до волны 0',
         )
-
-    def test_copy_reason_contains_source_code(self):
-        original = self._upload(reason_text='Первичная загрузка')
-
-        copied = copy_document(
-            self.user,
-            original.document,
-            folder=None,
-            section=self.section,
-            file_storage=LocalFileStorage(),
-        )
-
-        copied_version = copied.versions.get()
-        self.assertEqual(copied_version.reason_type, 'other')
-        self.assertEqual(
-            copied_version.reason_text,
-            f'Копия документа {original.document.code}',
-        )
-        self.assertNotEqual(copied_version.reason_text, original.reason_text)
 
     def test_upload_form_passes_comment_and_reason(self):
         self.client.force_login(self.user)
