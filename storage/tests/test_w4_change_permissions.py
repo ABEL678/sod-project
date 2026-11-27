@@ -35,32 +35,37 @@ class ChangePermissionTestBase(TestCase):
         self.admin = User.objects.create_user(
             username='rvi_admin', password='pass123',
         )
-        UserProfile.objects.create(
-            user=self.admin, role='admin', company=self.company,
+        UserProfile.objects.update_or_create(
+            user=self.admin,
+            defaults={'role': 'admin', 'company': self.company},
         )
         self.gip = User.objects.create_user(
             username='rvi_gip', password='pass123',
         )
-        UserProfile.objects.create(
-            user=self.gip, role='gip', company=self.company,
+        UserProfile.objects.update_or_create(
+            user=self.gip,
+            defaults={'role': 'gip', 'company': self.company},
         )
         self.manager = User.objects.create_user(
             username='rvi_manager', password='pass123',
         )
-        UserProfile.objects.create(
-            user=self.manager, role='manager', company=self.company,
+        UserProfile.objects.update_or_create(
+            user=self.manager,
+            defaults={'role': 'manager', 'company': self.company},
         )
         self.viewer = User.objects.create_user(
             username='rvi_viewer', password='pass123',
         )
-        UserProfile.objects.create(
-            user=self.viewer, role='viewer', company=self.company,
+        UserProfile.objects.update_or_create(
+            user=self.viewer,
+            defaults={'role': 'viewer', 'company': self.company},
         )
         self.outsider = User.objects.create_user(
             username='rvi_outsider', password='pass123',
         )
-        UserProfile.objects.create(
-            user=self.outsider, role='developer', company=self.company,
+        UserProfile.objects.update_or_create(
+            user=self.outsider,
+            defaults={'role': 'developer', 'company': self.company},
         )
         self.project = create_project(
             company=self.company,
@@ -105,7 +110,6 @@ class ChangePermissionTestBase(TestCase):
             self.gip,
             permission,
             document or self.wip_document,
-            change_number=1,
             sheets='Лист 1',
         )
         return permission
@@ -233,7 +237,7 @@ class ChangePermissionImmutabilityTests(ChangePermissionTestBase):
         another = self._document('RVI-EXTRA', Document.STATE_WIP_DRAFT)
         with self.assertRaises(ValidationError):
             add_change_permission_document(
-                self.gip, self.permission, another, change_number=2,
+                self.gip, self.permission, another,
             )
 
     def test_direct_link_change_is_forbidden(self):
@@ -268,16 +272,18 @@ class ChangePermissionDocumentsTests(ChangePermissionTestBase):
         )
         first = add_change_permission_document(
             self.gip, permission, self.wip_document,
-            change_number=1, sheets='Лист 1',
+            sheets='Лист 1',
         )
         second = add_change_permission_document(
             self.gip, permission, self.archive_document,
-            change_number=2, sheets='Все',
+            sheets='Все',
         )
 
         self.assertEqual(first.change_number, 1)
         self.assertEqual(first.sheets, 'Лист 1')
-        self.assertEqual(second.change_number, 2)
+        # Номер изменения — per документ, а не per РВИ: два документа в
+        # одном общем РВИ могут иметь одинаковый номер.
+        self.assertEqual(second.change_number, 1)
         self.assertEqual(second.sheets, 'Все')
         self.assertEqual(permission.document_links.count(), 2)
 
@@ -287,7 +293,6 @@ class ChangePermissionDocumentsTests(ChangePermissionTestBase):
         with self.assertRaises(ValueError):
             add_change_permission_document(
                 self.gip, permission, self.wip_document,
-                change_number=2,
             )
 
         self.assertEqual(permission.document_links.count(), 1)
