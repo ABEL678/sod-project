@@ -74,7 +74,7 @@
 - Hotfix M1: `_workflow_role_allowed` для checker/normocontrol читает префетчнутый `project.memberships` без `.filter().exists()`, лишний ORM-запрос на строку реестра устранён.
 - Тесты: обновлены/добавлены в `storage/tests/test_zones.py` (повторная загрузка в чужой этап и на этапах SHARED/PUBLISHED/ARCHIVE, переход после загрузки — только workflow) и `storage/tests/test_w2_orm_queries.py` (M1).
 - Документация: ARCHITECTURE.md и MASTER_SPEC.md 1.7 → 1.8 — правило «повторная загрузка версии не меняет этап жизненного цикла» зафиксировано явно.
-- Ветка `w3-2-upload-stage-m1` от `origin/main`; изменения в рабочей копии (коммит — после разрешения владельца).
+- Ветка `w3-2-upload-stage-m1` от `origin/main`; коммит `064a1d5`, слит в `main` fast-forward.
 
 ### 27.11.2026 — Решение владельца: размещение и этап жизненного цикла независимы (Волна 3)
 
@@ -430,15 +430,16 @@ BLOCKER и MAJOR не обнаружены; 5 MINOR:
 
 - [x] **W3-UPLOAD-STAGE (MAJOR-1).** Повторная загрузка версии не меняет этап жизненного цикла. Решение владельца от 27.11.2026 — вариант 1: выровнять код под правило 1.7, правило не уточнять. `upload_document` сохраняет `Document.state`; этап меняется только `transition_document_zone()`. Проверка итога C при загрузке в PUBLISHED оставлена как самостоятельная валидация; `_approval_target_changes` удалён. Тесты — `storage/tests/test_zones.py`; документация — ARCHITECTURE.md/MASTER_SPEC.md 1.8.
 - [x] **INFO-4.** Закрыто: устаревшие исторические пометки в PROGRESS.md исправлены (коммит W3-1 `67db735`; ветка `w2-7-e2e-dnd` влита в main).
-- [ ] **MINOR-1.** Уточнить правило 1.7 про копирование: `copy_document` рождает копию сразу в целевом этапе (`storage/domain/services.py:2294`; эндпоинт `storage/adapters/views.py:4130`) — это не переход этапа существующего документа.
+- [ ] **MINOR-1.** Уточнить правило 1.7 про копирование: `copy_document` рождает копию сразу в целевом этапе (`storage/domain/services.py:2286`; эндпоинт `storage/adapters/views.py:4130`) — это не переход этапа существующего документа.
 - [ ] **MINOR-2.** Пробелы покрытия инварианта «этап неизменен»: этап Shared, сброс в корень, ассерт этапа в `test_developer_can_drop_within_allowed_section` (`storage/tests/test_w2_dnd.py`).
 - [ ] **MINOR-3/MINOR-5.** Вернуть негативные тесты прав перемещения по текущему этапу (ГИП/разработчик → 403) вместо заменённых позитивных (`storage/tests/test_sprint5.py:112-127`, `storage/tests/test_sprint7.py:56-76`).
-- [ ] **MINOR-4.** Переименовать/исправить докстринг `test_archive_document_cannot_be_moved_even_by_admin` (`storage/tests/test_zones.py:551-570`) — имя противоречит фактическому поведению.
+- [ ] **MINOR-4.** Переименовать/исправить докстринг `test_archive_document_cannot_be_moved_even_by_admin` (`storage/tests/test_zones.py:694-713`) — имя противоречит фактическому поведению.
 - [ ] **MINOR-6.** Усилить слабые подстрочные проверки JS (`storage/tests/test_w2_dnd.py:525-558`): `data-drop-folder` с pk, фактический вызов подтверждений в цепочке drop.
 - [ ] **MINOR-7.** CWD-независимые пути к статикам в `storage/tests/test_w2_dnd.py` (паттерн `Path(__file__).resolve().parents[2]`).
 - [ ] **MINOR-8.** Термин «зона» в пользовательских строках UI: `_documents_panel.html:98`, `static/js/app.js:930`, `verbose_name` моделей (`storage/domain/models.py:608, 613`).
-- [ ] **INFO-2.** Терминальность этапа «Архив»: нет штатного workflow-действия возврата (`ZONE_WORKFLOW_ACTIONS`, `storage/domain/services.py:2919-2946`); кандидат на продуктовое решение владельца.
-- [ ] **INFO-5.** Наблюдение `allowed_sections.all()` актуальнее: теперь и в DnD-пути (`storage/domain/services.py:2040, 2094, 2811-2812`).
+- [ ] **INFO-2.** Терминальность этапа «Архив»: нет штатного workflow-действия возврата (`ZONE_WORKFLOW_ACTIONS`, `storage/domain/services.py:2911-2940`); кандидат на продуктовое решение владельца.
+  - **Решение владельца по INFO-2 (27.11.2026):** вывод документа из этапа «Архив» — только на основании РВИ (Разрешение на внесение изменений, ГОСТ 21.101-2026, с внесением в реестр/журнал). Реализация двухэтапная: (1) тип документа РВИ по ГОСТ + реестр/журнал; (2) workflow-действие «вывод из архива» ARCHIVE → WIP (выполняет ГИП), требующее связанного зарегистрированного РВИ. До выполнения п.1 этап «Архив» фактически терминален. Размещение при выводе не меняется.
+- [ ] **INFO-5.** Наблюдение `allowed_sections.all()` актуальнее: теперь и в DnD-пути (`storage/domain/services.py:2032, 2086, 2803-2804`).
 
 ### ИИ-контур (Этап 19)
 

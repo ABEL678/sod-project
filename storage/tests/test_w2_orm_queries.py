@@ -28,6 +28,7 @@ from storage.domain.services import (
     _is_project_gip,
     _workflow_role_allowed,
     attach_user_to_company,
+    transition_document_zone,
 )
 from storage.tests.test_sprint5 import Sprint5TestBase
 
@@ -35,7 +36,7 @@ User = get_user_model()
 
 
 class AccessAndGipQueryTests(TestCase):
-    """Точечные проверки кэша доступа и чтения префетча состава."""
+    """Точечные проверки кэша доступа, префетча состава и прав workflow."""
 
     @classmethod
     def setUpTestData(cls):
@@ -155,6 +156,54 @@ class AccessAndGipQueryTests(TestCase):
                     _workflow_role_allowed(checker, prefetched, 'return_wip'),
                 )
         self.assertEqual(len(ctx), 0)
+
+    def _shared_workflow_document(self):
+        """Документ на этапе SHARED — цель действия «Вернуть в работу»."""
+        section = Section.objects.create(
+            project=self.project, code='P2-WF', name='Workflow', order=1,
+        )
+        return Document.objects.create(
+            project=self.project,
+            section=section,
+            code='P2-WF-DOC',
+            name='Документ workflow',
+            doc_type='drawing',
+            state=Document.STATE_SHARED,
+            created_by=self.root,
+        )
+
+    def _checker(self, username):
+        user = User.objects.create_user(username, password='pass')
+        UserProfile.objects.update_or_create(
+            user=user,
+            defaults={'company': self.company, 'role': 'checker'},
+        )
+        return user
+
+    def test_checker_with_viewer_membership_cannot_return_from_shared(self):
+        """M1: membership role_in_project='viewer' не даёт действие проверяющего."""
+        checker = self._checker('checker_viewer_p2')
+        ProjectMembership.objects.create(
+            project=self.project, user=checker, role_in_project='viewer',
+        )
+        document = self._shared_workflow_document()
+
+        with self.assertRaises(PermissionDenied):
+            transition_document_zone(checker, document, 'return_wip')
+
+        document.refresh_from_db()
+        self.assertEqual(document.state, Document.STATE_SHARED)
+
+    def test_checker_not_in_project_cannot_return_from_shared(self):
+        """M1: без членства в проекте действие проверяющего недоступно."""
+        checker = self._checker('checker_outsider_p2')
+        document = self._shared_workflow_document()
+
+        with self.assertRaises(PermissionDenied):
+            transition_document_zone(checker, document, 'return_wip')
+
+        document.refresh_from_db()
+        self.assertEqual(document.state, Document.STATE_SHARED)
 
     def test_notifications_badges_queries_only_once_per_request(self):
         user = User.objects.create_user('notify_p2', password='pass')
