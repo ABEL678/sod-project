@@ -1,0 +1,512 @@
+"""Волна 2, задача W2-7: регрессионная защита drag-and-drop документов.
+
+Пункт бэклога аудита-5 «E2E-тесты DnD» закрывается в объёме, допустимом
+правилами волны 2: без Playwright/Selenium/любых браузерных драйверов и
+без новых зависимостей. Это не полноценный браузерный E2E, а два слоя:
+
+1. Серверная сторона DnD (``POST /documents/<id>/move/``,
+   ``POST /documents/<id>/copy/``, ``POST /folders/<id>/move/``) —
+   обычные Django-тесты: отказы по зонам, правам, чужим проектам и
+   удалённым/чужим документам. Базовые сценарии (перенос в папку/раздел,
+   циклы папок, viewer) уже закреплены в ``test_t9_dnd.py`` и
+   ``test_t9_dnd_copy.py`` — здесь только незакрытые ветки.
+2. Клиентская сторона — контрактные проверки в стиле W2-4: статические
+   строки в ``static/js/app.js`` и в шаблонах не должны развязываться с
+   сервером (data-атрибуты, MIME-типы, URL-шаблоны, HTMX-обновление).
+
+Ручные шаги, которые нельзя проверить без браузера, вынесены владельцу
+в отчёте задачи (открыть реестр → перетащить документ в папку → проверить).
+"""
+
+from pathlib import Path
+
+from django.contrib.auth import get_user_model
+from django.urls import reverse
+
+from storage.domain.models import (
+    Company,
+    Document,
+    Folder,
+    Project,
+    Section,
+    UserProfile,
+)
+from storage.domain.services import _ensure_project_zones, create_folder, move_document
+from storage.tests.test_t8_ultimate import T8UltimateTestBase
+
+
+User = get_user_model()
+
+
+class DndZoneEndpointTests(T8UltimateTestBase):
+    """DnD не должен обходить зоны жизненного цикла на уровне эндпоинта."""
+
+    def setUp(self):
+        super().setUp()
+        _ensure_project_zones(self.project, self.user_gip)
+        self.wip_zone = Folder.objects.get(project=self.project, zone='WIP')
+        self.shared_zone = Folder.objects.get(project=self.project, zone='SHARED')
+        self.published_zone = Folder.objects.get(project=self.project, zone='PUBLISHED')
+        self.archive_zone = Folder.objects.get(project=self.project, zone='ARCHIVE')
+
+    def test_published_document_cannot_be_dragged_back_to_wip(self):
+        """Опубликованный документ нельзя вытащить из зоны обычным DnD."""
+        document = self.make_document(code='DND-Z-1', folder=self.wip_zone)
+        move_document(self.user_admin, document, self.published_zone)
+
+        self.client.force_login(self.user_admin)
+        response = self.client.post(
+            reverse('storage:document_move', args=[document.pk]),
+            {'folder_id': self.wip_zone.pk},
+        )
+
+        self.assertEqual(response.status_code, 403)
+        document.refresh_from_db()
+        self.assertEqual(document.folder_id, self.published_zone.pk)
+
+    def test_archived_document_cannot_be_dragged_out_even_by_admin(self):
+        """ARCHIVE только на чтение: DnD-перенос запрещён всем, включая админа."""
+        document = self.make_document(code='DND-Z-2', folder=self.wip_zone)
+        move_document(self.user_admin, document, self.archive_zone)
+
+        self.client.force_login(self.user_admin)
+        response = self.client.post(
+            reverse('storage:document_move', args=[document.pk]),
+            {'folder_id': self.wip_zone.pk},
+        )
+
+        self.assertEqual(response.status_code, 403)
+        document.refresh_from_db()
+        self.assertEqual(document.folder_id, self.archive_zone.pk)
+
+    def test_developer_cannot_drop_into_shared_zone(self):
+        """Разработчик не может перетащить документ в зону «На согласовании»."""
+        profile = UserProfile.objects.get(user=self.user_developer)
+        profile.allowed_sections.add(self.section)
+        document = self.make_document(code='DND-Z-3', folder=self.wip_zone)
+
+        self.client.force_login(self.user_developer)
+        response = self.client.post(
+            reverse('storage:document_move', args=[document.pk]),
+            {'folder_id': self.shared_zone.pk},
+        )
+
+        self.assertEqual(response.status_code, 403)
+        document.refresh_from_db()
+        self.assertEqual(document.folder_id, self.wip_zone.pk)
+
+    def test_gip_cannot_drop_into_published_zone(self):
+        """Публикация — не DnD: ГИП получает отказ, зона остаётся прежней."""
+        document = self.make_document(code='DND-Z-4', folder=self.wip_zone)
+
+        self.client.force_login(self.user_gip)
+        response = self.client.post(
+            reverse('storage:document_move', args=[document.pk]),
+            {'folder_id': self.published_zone.pk},
+        )
+
+        self.assertEqual(response.status_code, 403)
+        document.refresh_from_db()
+        self.assertEqual(document.folder_id, self.wip_zone.pk)
+
+
+class DndPermissionEndpointTests(T8UltimateTestBase):
+    """Права и изоляция проектов/компаний на эндпоинте перемещения."""
+
+    def test_developer_can_drop_within_allowed_section(self):
+        profile = UserProfile.objects.get(user=self.user_developer)
+        profile.allowed_sections.add(self.section)
+        target = create_folder(
+            self.user_gip, self.project, 'Разрешённая', section=self.section,
+        )
+        document = self.make_document(code='DND-P-1')
+
+        self.client.force_login(self.user_developer)
+        response = self.client.post(
+            reverse('storage:document_move', args=[document.pk]),
+            {'folder_id': target.pk},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        document.refresh_from_db()
+        self.assertEqual(document.folder_id, target.pk)
+
+    def test_developer_cannot_drop_into_foreign_section_even_with_flag(self):
+        profile = UserProfile.objects.get(user=self.user_developer)
+        profile.allowed_sections.add(self.section)
+        foreign_folder = create_folder(
+            self.user_gip, self.project, 'Чужой раздел',
+            section=self.other_section,
+        )
+        document = self.make_document(code='DND-P-2')
+
+        self.client.force_login(self.user_developer)
+        response = self.client.post(
+            reverse('storage:document_move', args=[document.pk]),
+            {
+                'folder_id': foreign_folder.pk,
+                'allow_section_change': '1',
+            },
+        )
+
+        self.assertEqual(response.status_code, 403)
+        document.refresh_from_db()
+        self.assertIsNone(document.folder_id)
+        self.assertEqual(document.section_id, self.section.pk)
+
+    def test_contractor_cannot_move_into_section_outside_allowed(self):
+        """Смежник пишет только в allowed_sections — DnD не исключение."""
+        contractor = User.objects.create_user('contractor', password='pass')
+        profile = UserProfile.objects.update_or_create(
+            user=contractor,
+            defaults={'role': 'contractor', 'company': self.company},
+        )[0]
+        profile.allowed_sections.add(self.section)
+        foreign_folder = create_folder(
+            self.user_gip, self.project, 'Чужой раздел',
+            section=self.other_section,
+        )
+        document = self.make_document(code='DND-P-3')
+
+        self.client.force_login(contractor)
+        response = self.client.post(
+            reverse('storage:document_move', args=[document.pk]),
+            {
+                'folder_id': foreign_folder.pk,
+                'allow_section_change': '1',
+            },
+        )
+
+        self.assertEqual(response.status_code, 403)
+        document.refresh_from_db()
+        self.assertIsNone(document.folder_id)
+        self.assertEqual(document.section_id, self.section.pk)
+
+    def test_drop_on_foreign_project_folder_is_rejected(self):
+        other_project = Project.objects.create(
+            company=self.company,
+            code='T8-FOREIGN',
+            name='Foreign project',
+            status='active',
+            created_by=self.user_gip,
+        )
+        other_section = Section.objects.create(
+            project=other_project, code='AR', name='Foreign', order=1,
+        )
+        foreign_folder = Folder.objects.create(
+            project=other_project,
+            section=other_section,
+            name='Foreign folder',
+            zone='WIP',
+            created_by=self.user_gip,
+        )
+        document = self.make_document(code='DND-P-4')
+
+        self.client.force_login(self.user_gip)
+        response = self.client.post(
+            reverse('storage:document_move', args=[document.pk]),
+            {'folder_id': foreign_folder.pk},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        document.refresh_from_db()
+        self.assertIsNone(document.folder_id)
+        self.assertEqual(document.section_id, self.section.pk)
+
+    def test_trashed_document_is_not_a_drop_source(self):
+        folder = create_folder(
+            self.user_gip, self.project, 'Целевая', section=self.section,
+        )
+        document = self.make_document(code='DND-P-5')
+        Document.objects.filter(pk=document.pk).update(is_deleted=True)
+
+        self.client.force_login(self.user_gip)
+        response = self.client.post(
+            reverse('storage:document_move', args=[document.pk]),
+            {'folder_id': folder.pk},
+        )
+
+        self.assertEqual(response.status_code, 404)
+        document.refresh_from_db()
+        self.assertIsNone(document.folder_id)
+
+    def test_document_of_another_company_is_not_a_drop_source(self):
+        other_company = Company.objects.create(name='Other Company')
+        other_admin = User.objects.create_user('other_admin', password='pass')
+        UserProfile.objects.update_or_create(
+            user=other_admin,
+            defaults={'role': 'admin', 'company': other_company},
+        )
+        other_project = Project.objects.create(
+            company=other_company,
+            code='OTHER-1',
+            name='Other project',
+            status='active',
+            created_by=other_admin,
+        )
+        other_section = Section.objects.create(
+            project=other_project, code='AR', name='Architecture', order=1,
+        )
+        foreign_document = Document.objects.create(
+            project=other_project,
+            section=other_section,
+            code='OTHER-DOC',
+            name='Other document',
+            doc_type='drawing',
+            created_by=other_admin,
+        )
+        folder = create_folder(
+            self.user_gip, self.project, 'Целевая', section=self.section,
+        )
+
+        self.client.force_login(self.user_gip)
+        response = self.client.post(
+            reverse('storage:document_move', args=[foreign_document.pk]),
+            {'folder_id': folder.pk},
+        )
+
+        self.assertEqual(response.status_code, 404)
+
+
+class DndFolderEndpointTests(T8UltimateTestBase):
+    """DnD папок: отказы, которые не покрыты test_t9_dnd_copy.py."""
+
+    def test_folder_with_documents_cannot_move_to_project_root(self):
+        folder = create_folder(
+            self.user_gip, self.project, 'С документами', section=self.section,
+        )
+        self.make_document(code='DND-F-1', folder=folder)
+
+        self.client.force_login(self.user_gip)
+        response = self.client.post(
+            reverse('storage:folder_move', args=[folder.pk]),
+            {},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        folder.refresh_from_db()
+        self.assertEqual(folder.section_id, self.section.pk)
+
+    def test_folder_cannot_move_into_canonical_zone(self):
+        _ensure_project_zones(self.project, self.user_gip)
+        wip_zone = Folder.objects.get(project=self.project, zone='WIP')
+        folder = create_folder(
+            self.user_gip, self.project, 'Обычная', section=self.section,
+        )
+
+        self.client.force_login(self.user_gip)
+        response = self.client.post(
+            reverse('storage:folder_move', args=[folder.pk]),
+            {'parent_id': wip_zone.pk},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        folder.refresh_from_db()
+        self.assertIsNone(folder.parent_id)
+
+    def test_folder_cannot_move_into_another_project_folder(self):
+        other_project = Project.objects.create(
+            company=self.company,
+            code='T8-FOREIGN-2',
+            name='Foreign project',
+            status='active',
+            created_by=self.user_gip,
+        )
+        other_section = Section.objects.create(
+            project=other_project, code='AR', name='Foreign', order=1,
+        )
+        foreign_folder = Folder.objects.create(
+            project=other_project,
+            section=other_section,
+            name='Foreign folder',
+            zone='WIP',
+            created_by=self.user_gip,
+        )
+        folder = create_folder(
+            self.user_gip, self.project, 'Своя', section=self.section,
+        )
+
+        self.client.force_login(self.user_gip)
+        response = self.client.post(
+            reverse('storage:folder_move', args=[folder.pk]),
+            {'parent_id': foreign_folder.pk},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        folder.refresh_from_db()
+        self.assertIsNone(folder.parent_id)
+
+    def test_developer_cannot_move_folders(self):
+        folder = create_folder(
+            self.user_gip, self.project, 'Своя', section=self.section,
+        )
+        target = create_folder(
+            self.user_gip, self.project, 'Целевая', section=self.section,
+        )
+
+        self.client.force_login(self.user_developer)
+        response = self.client.post(
+            reverse('storage:folder_move', args=[folder.pk]),
+            {'parent_id': target.pk},
+        )
+
+        self.assertEqual(response.status_code, 403)
+        folder.refresh_from_db()
+        self.assertIsNone(folder.parent_id)
+
+
+class DndCopyEndpointTests(T8UltimateTestBase):
+    """Ctrl+drop (копирование) подчиняется тем же правам и зонам."""
+
+    def test_viewer_cannot_copy_document(self):
+        folder = create_folder(
+            self.user_gip, self.project, 'Целевая', section=self.section,
+        )
+        document = self.make_document(code='DND-C-1')
+
+        self.client.force_login(self.user_viewer)
+        response = self.client.post(
+            reverse('storage:document_copy', args=[document.pk]),
+            {'folder_id': folder.pk},
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertFalse(
+            Document.objects.filter(code__startswith='DND-C-1 (копия)').exists()
+        )
+
+    def test_gip_cannot_copy_into_archive_zone(self):
+        _ensure_project_zones(self.project, self.user_gip)
+        archive_zone = Folder.objects.get(project=self.project, zone='ARCHIVE')
+        document = self.make_document(code='DND-C-2')
+
+        self.client.force_login(self.user_gip)
+        response = self.client.post(
+            reverse('storage:document_copy', args=[document.pk]),
+            {'folder_id': archive_zone.pk},
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertFalse(
+            Document.objects.filter(code__startswith='DND-C-2 (копия)').exists()
+        )
+
+
+class DndMarkupContractTests(T8UltimateTestBase):
+    """Серверный рендер отдаёт все крючки, на которые смотрит app.js."""
+
+    def test_page_exposes_drag_sources_drop_targets_and_url_templates(self):
+        folder = create_folder(
+            self.user_gip, self.project, 'РД DnD', section=self.section,
+        )
+        document = self.make_document(code='DND-M-1', folder=folder)
+
+        self.client.force_login(self.user_gip)
+        response = self.client.get(
+            reverse('storage:project_detail', args=[self.project.pk]),
+        )
+
+        html = response.content.decode()
+        self.assertEqual(response.status_code, 200)
+        # Строка-источник dragstart.
+        self.assertIn(f'data-document-id="{document.pk}"', html)
+        self.assertIn('draggable="true"', html)
+        self.assertIn('data-zone="WIP"', html)
+        self.assertIn(f'data-section-id="{self.section.pk}"', html)
+        # Цели drop: папка и раздел.
+        self.assertIn(f'data-drop-folder="{folder.pk}"', html)
+        self.assertIn(f'data-drop-name="{folder.name}"', html)
+        self.assertIn(f'data-drop-section="{self.section.pk}"', html)
+        # URL-шаблоны, которые app.js подставляет вместо /0/.
+        self.assertIn(
+            f'data-move-url-template="{reverse("storage:document_move", args=[0])}"',
+            html,
+        )
+        self.assertIn(
+            f'data-copy-url-template="{reverse("storage:document_copy", args=[0])}"',
+            html,
+        )
+        self.assertIn(
+            'data-folder-move-url-template="'
+            f'{reverse("storage:folder_move", args=[0])}"',
+            html,
+        )
+        self.assertIn('id="documentsTable"', html)
+
+
+class DndClientContractTests(T8UltimateTestBase):
+    """Контракт клиентской части DnD (W2-4 style, без браузера)."""
+
+    def _read(self, path):
+        return Path(path).read_text(encoding='utf-8')
+
+    def test_app_js_has_delegated_dnd_handlers(self):
+        js = self._read('static/js/app.js')
+        self.assertIn('function initDocumentDragAndDrop()', js)
+        self.assertIn("document.addEventListener('dragstart'", js)
+        self.assertIn("document.addEventListener('dragend'", js)
+        self.assertIn("document.addEventListener('dragover'", js)
+        self.assertIn("document.addEventListener('drop'", js)
+        self.assertIn('initDocumentDragAndDrop();', js)
+        # Делегирование: строки переживают HTMX-замену панели.
+        self.assertIn(
+            "'#documentsTable tbody tr[data-document-id]'",
+            js,
+        )
+
+    def test_app_js_payload_matches_server_field_names(self):
+        js = self._read('static/js/app.js')
+        self.assertIn(
+            "'application/x-sod-document-id'",
+            js,
+        )
+        self.assertIn("'application/x-sod-folder-id'", js)
+        self.assertIn('body.append(\'folder_id\'', js)
+        self.assertIn('body.append(\'section_id\'', js)
+        self.assertIn('folderBody.append(\'parent_id\'', js)
+        self.assertIn("body.append('allow_section_change', '1')", js)
+        self.assertIn("headers: {'X-CSRFToken': csrfToken()}", js)
+
+    def test_app_js_uses_panel_url_templates(self):
+        js = self._read('static/js/app.js')
+        self.assertIn('root.dataset.moveUrlTemplate', js)
+        self.assertIn('root.dataset.copyUrlTemplate', js)
+        self.assertIn('root.dataset.folderMoveUrlTemplate', js)
+        self.assertIn('apiUrl(root.dataset.folderMoveUrlTemplate', js)
+        self.assertIn('? root.dataset.copyUrlTemplate', js)
+        self.assertIn(': root.dataset.moveUrlTemplate', js)
+
+    def test_app_js_guards_archive_and_confirms_section_change(self):
+        js = self._read('static/js/app.js')
+        self.assertIn('function isArchiveZone(target)', js)
+        self.assertIn("'Нельзя переместить файл в архив'", js)
+        self.assertIn('Это изменит его марку.', js)
+        self.assertIn('Сменить раздел', js)
+
+    def test_app_js_refreshes_panel_and_tree_counts_after_drop(self):
+        js = self._read('static/js/app.js')
+        self.assertIn('function refreshDocumentsPanel()', js)
+        self.assertIn('function refreshTreeCounts(sourceDocument)', js)
+        self.assertIn('function postMoveRequest(url, body, successMessage, options)', js)
+        self.assertIn("method: 'POST'", js)
+        self.assertIn('initHtmx();', js)
+
+    def test_panel_and_tree_templates_keep_dnd_hooks(self):
+        panel = self._read(
+            'storage/adapters/templates/storage/_documents_panel.html'
+        )
+        tree = self._read(
+            'storage/adapters/templates/storage/_folder_tree.html'
+        )
+        page = self._read(
+            'storage/adapters/templates/storage/project_detail.html'
+        )
+        self.assertIn('data-move-url-template', panel)
+        self.assertIn('data-copy-url-template', panel)
+        self.assertIn('data-folder-move-url-template', panel)
+        self.assertIn('data-drop-folder', tree)
+        self.assertIn('data-drop-name', tree)
+        self.assertIn('draggable="true"', tree)
+        self.assertIn('data-section-id', tree)
+        self.assertIn('data-drop-section', page)
+        self.assertIn('data-drop-name', page)
