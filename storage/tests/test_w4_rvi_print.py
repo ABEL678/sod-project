@@ -208,7 +208,9 @@ class RviPrintContractTests(RviPrintTestBase):
         )
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response['Content-Type'], 'application/pdf')
-        self.assertTrue(response.content.startswith(b'%PDF'))
+        self.assertTrue(
+            b''.join(response.streaming_content).startswith(b'%PDF'),
+        )
 
 
 class RviAnnulmentTests(RviPrintTestBase):
@@ -423,4 +425,6 @@ class DocumentChangeTableTests(RviPrintTestBase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response['Content-Type'], 'application/pdf')
-        self.assertTrue(response.content.startswith(b'%PDF'))
+        self.assertTrue(
+            b''.join(response.streaming_content).startswith(b'%PDF'),
+        )
