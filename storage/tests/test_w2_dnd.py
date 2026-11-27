@@ -31,7 +31,7 @@ from storage.domain.models import (
     Section,
     UserProfile,
 )
-from storage.domain.services import _ensure_project_zones, create_folder, move_document
+from storage.domain.services import _ensure_project_zones, create_folder
 from storage.tests.test_t8_ultimate import T8UltimateTestBase
 
 
@@ -39,7 +39,12 @@ User = get_user_model()
 
 
 class DndZoneEndpointTests(T8UltimateTestBase):
-    """DnD не должен обходить зоны жизненного цикла на уровне эндпоинта."""
+    """DnD меняет только размещение; этап жизненного цикла сохраняется.
+
+    Решение владельца 27.11.2026: папка и этап жизненного цикла —
+    независимые атрибуты; переход между этапами — только явным
+    workflow-действием. Системные папки этапов не являются целью DnD.
+    """
 
     def setUp(self):
         super().setUp()
@@ -48,42 +53,81 @@ class DndZoneEndpointTests(T8UltimateTestBase):
         self.shared_zone = Folder.objects.get(project=self.project, zone='SHARED')
         self.published_zone = Folder.objects.get(project=self.project, zone='PUBLISHED')
         self.archive_zone = Folder.objects.get(project=self.project, zone='ARCHIVE')
+        self.target_folder = create_folder(
+            self.user_gip, self.project, 'Целевая', section=self.section,
+        )
 
-    def test_published_document_cannot_be_dragged_back_to_wip(self):
-        """Опубликованный документ нельзя вытащить из зоны обычным DnD."""
-        document = self.make_document(code='DND-Z-1', folder=self.wip_zone)
-        move_document(self.user_admin, document, self.published_zone)
+    def _document_in_stage(self, code, folder, state):
+        document = self.make_document(code=code)
+        document.state = state
+        document.folder = folder
+        document._from_service = True
+        document.save(update_fields=['state', 'folder'])
+        return document
+
+    def test_published_document_drag_keeps_stage(self):
+        """DnD опубликованного документа меняет папку, но не этап."""
+        document = self._document_in_stage(
+            'DND-Z-1', self.published_zone, Document.STATE_APPROVED,
+        )
 
         self.client.force_login(self.user_admin)
         response = self.client.post(
             reverse('storage:document_move', args=[document.pk]),
-            {'folder_id': self.wip_zone.pk},
+            {'folder_id': self.target_folder.pk},
         )
 
-        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.status_code, 200)
         document.refresh_from_db()
-        self.assertEqual(document.folder_id, self.published_zone.pk)
+        self.assertEqual(document.folder_id, self.target_folder.pk)
+        self.assertEqual(document.status, 'approved')
+        self.assertEqual(document.state, Document.STATE_APPROVED)
 
-    def test_archived_document_cannot_be_dragged_out_even_by_admin(self):
-        """ARCHIVE только на чтение: DnD-перенос запрещён всем, включая админа."""
-        document = self.make_document(code='DND-Z-2', folder=self.wip_zone)
-        move_document(self.user_admin, document, self.archive_zone)
+    def test_archived_document_drag_by_admin_keeps_stage(self):
+        """Админ может переставить архивный документ; этап остаётся архивным."""
+        document = self._document_in_stage(
+            'DND-Z-2', self.archive_zone, Document.STATE_ARCHIVED,
+        )
 
         self.client.force_login(self.user_admin)
         response = self.client.post(
             reverse('storage:document_move', args=[document.pk]),
-            {'folder_id': self.wip_zone.pk},
+            {'folder_id': self.target_folder.pk},
         )
 
-        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.status_code, 200)
         document.refresh_from_db()
-        self.assertEqual(document.folder_id, self.archive_zone.pk)
+        self.assertEqual(document.folder_id, self.target_folder.pk)
+        self.assertEqual(document.status, 'archived')
+        self.assertEqual(document.state, Document.STATE_ARCHIVED)
 
-    def test_developer_cannot_drop_into_shared_zone(self):
-        """Разработчик не может перетащить документ в зону «На согласовании»."""
+    def test_published_document_section_drag_keeps_stage(self):
+        """DnD в другой раздел меняет только размещение, не этап."""
+        document = self._document_in_stage(
+            'DND-Z-3', self.published_zone, Document.STATE_APPROVED,
+        )
+
+        self.client.force_login(self.user_admin)
+        response = self.client.post(
+            reverse('storage:document_move', args=[document.pk]),
+            {
+                'section_id': self.other_section.pk,
+                'allow_section_change': '1',
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        document.refresh_from_db()
+        self.assertEqual(document.section_id, self.other_section.pk)
+        self.assertIsNone(document.folder_id)
+        self.assertEqual(document.status, 'approved')
+        self.assertEqual(document.state, Document.STATE_APPROVED)
+
+    def test_developer_cannot_drop_into_system_stage_folder(self):
+        """Системная папка этапа — не цель DnD: этап меняется workflow."""
         profile = UserProfile.objects.get(user=self.user_developer)
         profile.allowed_sections.add(self.section)
-        document = self.make_document(code='DND-Z-3', folder=self.wip_zone)
+        document = self.make_document(code='DND-Z-4', folder=self.wip_zone)
 
         self.client.force_login(self.user_developer)
         response = self.client.post(
@@ -94,10 +138,11 @@ class DndZoneEndpointTests(T8UltimateTestBase):
         self.assertEqual(response.status_code, 403)
         document.refresh_from_db()
         self.assertEqual(document.folder_id, self.wip_zone.pk)
+        self.assertEqual(document.status, 'draft')
 
-    def test_gip_cannot_drop_into_published_zone(self):
-        """Публикация — не DnD: ГИП получает отказ, зона остаётся прежней."""
-        document = self.make_document(code='DND-Z-4', folder=self.wip_zone)
+    def test_gip_cannot_drop_into_system_stage_folder(self):
+        """Публикация — workflow-действие, а не DnD в системную папку."""
+        document = self.make_document(code='DND-Z-5', folder=self.wip_zone)
 
         self.client.force_login(self.user_gip)
         response = self.client.post(
@@ -108,6 +153,7 @@ class DndZoneEndpointTests(T8UltimateTestBase):
         self.assertEqual(response.status_code, 403)
         document.refresh_from_db()
         self.assertEqual(document.folder_id, self.wip_zone.pk)
+        self.assertEqual(document.status, 'draft')
 
 
 class DndPermissionEndpointTests(T8UltimateTestBase):

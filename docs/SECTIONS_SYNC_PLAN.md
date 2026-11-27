@@ -39,7 +39,7 @@
 | Факт | Где |
 |---|---|
 | Правило Этапа 1: «все папки внутри суперпапок ИРД/ПД/РД создаются в едином скрытом разделе `Section(code='COMMON')` … марка определялась по папке, а не по `Section`» | `docs/ARCHITECTURE.md:151` (раздел Folder, блок «Плоская структура ПД/РД») |
-| `create_project` создаёт только проект + 4 зонные папки; разделы не создаёт | `storage/domain/services.py:1009-1092` (`_ensure_project_zones` на стр. 1090) |
+| `create_project` создаёт только проект + 4 системные папки этапов жизненного цикла; разделы не создаёт | `storage/domain/services.py:1009-1092` (`_ensure_project_zones` на стр. 1090) |
 | Генератор каркаса `_populate_project_template` → `_create_ird_structure` / `_create_pd_structure` / `_create_rd_structure` создаёт папки марок, но **все с `section=common`** | `storage/domain/services.py:862-873`, `727-828`, `830-859` (`_get_or_create_common_section`, стр. 727) |
 | Реальные `Section` создают только: легаси-шаблон `residential`, ручной `SectionCreateView`, демо-команда | `services.py:4096-4122`; `storage/adapters/views.py:2051-2075`; `create_demo_project.py:164-180` |
 | Текущее поведение закреплено тестом | `storage/tests/test_project_templates.py:62` — `self.assertEqual(project.sections.count(), 0)` |
@@ -79,7 +79,7 @@
 - Подразделы ИОС (ЭС, ВС, ВО, СС, ГС — «Раздел 5.x») **не** порождают отдельных разделов:
   папки подразделов остаются внутри дерева, но принадлежат разделу `ИОС`.
 - ИРД остаётся в `COMMON` (исходные данные — не проектный раздел).
-- Зонная модель (WIP/SHARED/PUBLISHED/ARCHIVE) и `update_task_status` не затрагиваются.
+- Модель этапов жизненного цикла (WIP/SHARED/PUBLISHED/ARCHIVE) и `update_task_status` не затрагиваются.
 
 ### Отклонённые альтернативы
 
@@ -109,7 +109,7 @@
   с `name` (правило D3, §6) и `full_code = generate_gost_code(project.base_code, mark)`
   (`services.py:992`), `order` — сквозной порядковый номер.
 - COMMON не создаёт (им занимаются `_get_or_create_common_section` и ИРД-ветка).
-- `Section.folder_template` не заполняет (легаси-поле, вне зоны фикса).
+- `Section.folder_template` не заполняет (легаси-поле, вне рамок фикса).
 
 **1.2. Правка `_populate_project_template` (`services.py:862-873`)**
 
@@ -169,7 +169,7 @@ sections = _ensure_project_sections(project, actor, template)
    - **дерево ПД:** папка верхнего уровня с именем из `PD_SECTIONS` → свой раздел;
      дочерние папки («Часть 1 …», подразделы 5.x, их «Часть 1 …») → раздел родителя
      (подразделы ИОС → `ИОС`);
-   - **дерево ИРД и системные зонные папки** — не трогаются (остаются COMMON/None);
+   - **дерево ИРД и системные папки этапов жизненного цикла** — не трогаются (остаются COMMON/None);
    - папки, имя которых не совпало ни с одним шаблонным именем (переименованные
      пользователем, «Прочие…») — **остаются в COMMON**, попадают в отчёт «не сопоставлено»;
    - сопоставление строго по совпадению имени; по коду не матчим (у папок марок код пуст).

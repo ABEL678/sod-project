@@ -53,13 +53,13 @@ class DemoCommandGuardTests(TestCase):
 
 
 class DocumentSectionMoveViewTests(Sprint5TestBase):
-    """Вьюха перемещения: зона-гвардия сильнее явного флага."""
+    """Вьюха перемещения: DnD меняет только размещение, не этап."""
 
-    def test_published_document_rejected_even_with_flag(self):
+    def test_published_document_section_move_keeps_stage(self):
         document = self.make_document(
             code='PUB-7', folder=self.published_folder, state=Document.STATE_APPROVED,
         )
-        self.client.force_login(self.user_gip)
+        self.client.force_login(self.user_admin)
 
         response = self.client.post(
             reverse('storage:document_move', args=[document.pk]),
@@ -69,11 +69,12 @@ class DocumentSectionMoveViewTests(Sprint5TestBase):
             },
         )
 
-        self.assertEqual(response.status_code, 403)
-        self.assertIn('workflow-кнопки', response.json()['error'])
+        self.assertEqual(response.status_code, 200)
         document.refresh_from_db()
-        self.assertEqual(document.section_id, self.section_ar.pk)
-        self.assertEqual(document.folder_id, self.published_folder.pk)
+        self.assertEqual(document.section_id, self.section_kr.pk)
+        self.assertIsNone(document.folder_id)
+        self.assertEqual(document.status, 'approved')
+        self.assertEqual(document.state, Document.STATE_APPROVED)
 
 
 class FeedbackScreenshotPilTests(TestCase):

@@ -113,8 +113,8 @@ class ZoneFolderCreationTest(TestCase):
             self.assertIsNone(zone.parent)
 
 
-class ZoneStatusLinkTest(TestCase):
-    """Тесты связи статуса документа и зоны."""
+class PlacementStageIndependenceTest(TestCase):
+    """Размещение и этап жизненного цикла — независимые атрибуты."""
 
     def setUp(self):
         data = _create_test_data()
@@ -151,46 +151,74 @@ class ZoneStatusLinkTest(TestCase):
             project=self.project, section=self.section, code='TEST-001'
         )
 
-    def test_move_to_published_changes_status(self):
-        """Перемещение в PUBLISHED меняет статус на approved."""
+    def _make_ready_to_share(self, doc):
+        doc.state = Document.STATE_WIP_READY
+        doc._from_service = True
+        doc.save(update_fields=['state'])
+        return doc
+
+    def test_drag_into_stage_folder_does_not_change_stage(self):
+        """DnD не меняет этап жизненного цикла — только размещение."""
         doc = self._create_document(self.wip_folder)
         self.assertEqual(doc.status, 'draft')
 
-        move_document(self.admin, doc, self.published_folder)
+        for target in (
+            self.shared_folder,
+            self.published_folder,
+            self.archive_folder,
+        ):
+            with self.assertRaises(PermissionDenied):
+                move_document(self.admin, doc, target)
+
         doc.refresh_from_db()
-        self.assertEqual(doc.status, 'approved')
-        self.assertEqual(doc.suitability_code, 'A')
-
-    def test_move_to_archive_changes_status(self):
-        """Перемещение в ARCHIVE меняет статус на archived."""
-        doc = self._create_document(self.wip_folder)
+        self.assertEqual(doc.folder, self.wip_folder)
         self.assertEqual(doc.status, 'draft')
 
-        move_document(self.admin, doc, self.archive_folder)
-        doc.refresh_from_db()
-        self.assertEqual(doc.status, 'archived')
-        self.assertEqual(doc.suitability_code, 'A')
+    def test_workflow_to_shared_changes_stage(self):
+        """Переход в SHARED выполняется workflow-действием."""
+        doc = self._make_ready_to_share(
+            self._create_document(self.wip_folder)
+        )
 
-    def test_move_to_shared_changes_status(self):
-        """Перемещение в SHARED меняет статус на in_review."""
-        doc = self._create_document(self.wip_folder)
-        self.assertEqual(doc.status, 'draft')
-
-        move_document(self.admin, doc, self.shared_folder)
+        transition_document_zone(self.admin, doc, 'submit_review')
         doc.refresh_from_db()
         self.assertEqual(doc.status, 'in_review')
         self.assertEqual(doc.suitability_code, 'S3')
 
+    def test_workflow_to_published_changes_stage(self):
+        """Переход в PUBLISHED выполняется workflow-действием."""
+        doc = self._make_ready_to_share(
+            self._create_document(self.wip_folder)
+        )
+        transition_document_zone(self.admin, doc, 'submit_review')
+        transition_document_zone(self.admin, doc, 'publish')
+
+        doc.refresh_from_db()
+        self.assertEqual(doc.status, 'approved')
+        self.assertEqual(doc.suitability_code, 'A')
+
+    def test_workflow_to_archive_changes_stage(self):
+        """Переход в ARCHIVE выполняется workflow-действием."""
+        doc = self._make_ready_to_share(
+            self._create_document(self.wip_folder)
+        )
+        transition_document_zone(self.admin, doc, 'submit_review')
+        transition_document_zone(self.admin, doc, 'publish')
+        transition_document_zone(self.admin, doc, 'archive')
+
+        doc.refresh_from_db()
+        self.assertEqual(doc.status, 'archived')
+        self.assertEqual(doc.suitability_code, 'A')
+
     def test_return_from_shared_changes_status(self):
         """Возврат из SHARED в WIP выполняется workflow-действием."""
-        # Создаём документ и перемещаем в SHARED (status=in_review)
-        doc = self._create_document(self.wip_folder)
-        self.assertEqual(doc.status, 'draft')
-        move_document(self.admin, doc, self.shared_folder)
+        doc = self._make_ready_to_share(
+            self._create_document(self.wip_folder)
+        )
+        transition_document_zone(self.admin, doc, 'submit_review')
         doc.refresh_from_db()
         self.assertEqual(doc.status, 'in_review')
 
-        # Возврат в WIP — только через контролируемый workflow
         transition_document_zone(self.admin, doc, 'return_wip')
         doc.refresh_from_db()
         self.assertEqual(doc.status, 'draft')
@@ -488,7 +516,7 @@ class EnsureProjectZonesTest(TestCase):
 
 
 class MoveDocumentZoneCheckTest(TestCase):
-    """B1: move_document() проверяет зоны."""
+    """B1: DnD не подменяет workflow-переход между этапами."""
 
     def setUp(self):
         data = _create_test_data()
@@ -684,7 +712,7 @@ class CopyDocumentZoneCheckTest(TestCase):
 
 
 class MoveToRegularFolderStatusTest(TestCase):
-    """B5: Перемещение в обычную папку не меняет статус в пределах зоны."""
+    """B5: Перемещение в обычную папку не меняет этап жизненного цикла."""
 
     def setUp(self):
         data = _create_test_data()
@@ -737,22 +765,23 @@ class MoveToRegularFolderStatusTest(TestCase):
         # Статус должен остаться draft (не изменился)
         self.assertEqual(doc.status, 'draft')
 
-    def test_move_from_published_to_regular_folder_blocked(self):
-        """DnD из PUBLISHED в обычную папку запрещён даже администратору."""
+    def test_move_from_published_to_regular_folder_keeps_stage(self):
+        """DnD из PUBLISHED в обычную папку меняет только размещение."""
         doc = self._create_document()
-        # Сначала в PUBLISHED
         published = Folder.objects.get(project=self.project, zone='PUBLISHED')
-        move_document(self.admin, doc, published)
-        doc.refresh_from_db()
+        doc.state = Document.STATE_APPROVED
+        doc.folder = published
+        doc._from_service = True
+        doc.save(update_fields=['state', 'folder'])
         self.assertEqual(doc.status, 'approved')
         self.assertEqual(doc.suitability_code, 'A')
 
-        # Смена effective_zone через перемещение запрещена
-        with self.assertRaises(PermissionDenied):
-            move_document(self.admin, doc, self.regular_folder)
+        move_document(self.admin, doc, self.regular_folder)
         doc.refresh_from_db()
         self.assertEqual(doc.status, 'approved')
-        self.assertEqual(doc.folder, published)
+        self.assertEqual(doc.suitability_code, 'A')
+        self.assertEqual(doc.folder, self.regular_folder)
+        self.assertEqual(doc.state, Document.STATE_APPROVED)
 
 
 class ArchiveEscapePreventionTest(TestCase):
@@ -776,10 +805,7 @@ class ArchiveEscapePreventionTest(TestCase):
         )
 
     def _create_document_in_archive(self):
-        """Создаёт документ в ARCHIVE (через WIP + move)."""
-        from storage.domain.services import move_document
-
-        # Сначала создаём в WIP
+        """Создаёт документ в ARCHIVE явными workflow-действиями."""
         file = self._make_file()
         upload_document(
             user=self.admin,
@@ -795,8 +821,12 @@ class ArchiveEscapePreventionTest(TestCase):
         doc = Document.objects.get(
             project=self.project, section=self.section, code='TEST-ESCAPE'
         )
-        # Перемещаем в ARCHIVE (устанавливает статус 'archived')
-        move_document(self.admin, doc, self.archive_folder)
+        doc.state = Document.STATE_WIP_READY
+        doc._from_service = True
+        doc.save(update_fields=['state'])
+        transition_document_zone(self.admin, doc, 'submit_review')
+        transition_document_zone(self.admin, doc, 'publish')
+        transition_document_zone(self.admin, doc, 'archive')
         doc.refresh_from_db()
         return doc
 

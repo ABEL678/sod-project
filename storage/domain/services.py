@@ -121,12 +121,6 @@ ALLOWED_UPLOAD_EXTENSIONS = frozenset({
 MAX_UPLOAD_SIZE = 100 * 1024 * 1024  # 100 МБ — согласовано с nginx client_max_body_size
 
 
-def _status_for_zone(folder: Folder | None) -> str | None:
-    if not _is_canonical_zone_folder(folder):
-        return None
-    return ZONE_STATUS_MAP.get(folder.zone)
-
-
 def _suitability_for_zone(folder: Folder | None) -> str | None:
     if not _is_canonical_zone_folder(folder):
         return None
@@ -2029,58 +2023,45 @@ def move_document(
     folder: Folder | None,
     allow_section_change: bool = False,
 ) -> Document:
-    """Перемещает документ в папку проекта."""
+    """Перемещает документ в папку проекта.
+
+    Меняет только размещение (``folder``/``section``); этап жизненного
+    цикла (``Document.state``) не меняется. Переходы между этапами
+    выполняются только явными workflow-действиями
+    (``transition_document_zone``), решение владельца 27.11.2026.
+    """
     if not check_write_permission(user, document.section):
         raise PermissionDenied("Нет прав на перемещение документа")
     if document.is_deleted:
         raise ValueError("Нельзя перемещать документ из корзины")
 
-    # Проверка прав на покидание текущей зоны: смена effective_zone
-    # через DnD запрещена всем, включая администратора. Для контролируемых
-    # переходов между зонами есть workflow-действия (transition_document_zone).
-    current_zone = _effective_zone(document)
-    target_zone = (
-        folder.zone
-        if folder is not None
-        else document.zone
-    )
-    if (
-        current_zone in ('ARCHIVE', 'PUBLISHED', 'SHARED')
-        and target_zone != current_zone
-    ):
-        zone_name = (
-            document.folder.get_zone_display()
-            if document.folder is not None
-            else dict(Folder.ZONE_CHOICES).get(current_zone, current_zone)
-        )
-        raise PermissionDenied(
-            f"Документ в зоне «{zone_name}» — смена зоны через "
-            "перемещение запрещена"
-        )
-
-    # Папки внутри зон не должны становиться обходным путём смены зоны.
-    if (
-        folder is not None
-        and not _is_canonical_zone_folder(folder)
-        and folder.zone != 'WIP'
-        and folder.zone != current_zone
+    # Права на изменение размещения определяются текущим этапом.
+    # Это не переход этапа: состояние документа остаётся неизменным.
+    if not check_zone_permission(
+        user, document.folder, document.section,
+        zone=_effective_zone(document),
     ):
         raise PermissionDenied(
-            "Нельзя перемещать документы между зонами через папки — "
-            "используйте workflow-кнопки"
+            "Нет прав на перемещение документа с текущего этапа "
+            "жизненного цикла"
         )
 
     if folder is not None:
+        # Системные папки этапов принадлежат workflow: DnD не должен
+        # подменять явный переход этапа перемещением.
+        if _is_canonical_zone_folder(folder):
+            raise PermissionDenied(
+                "Системная папка этапа жизненного цикла — смена этапа "
+                "выполняется только workflow-действием"
+            )
         if folder.project_id != document.project_id:
             raise ValueError("Папка относится к другому проекту")
         if folder.is_deleted:
             raise ValueError("Нельзя переместить документ в удалённую папку")
         if folder.section_id is None:
-            if not _is_canonical_zone_folder(folder):
-                raise ValueError("Папка относится к другому разделу")
-            section_change = False
-        else:
-            section_change = folder.section_id != document.section_id
+            raise ValueError("Папка относится к другому разделу")
+
+        section_change = folder.section_id != document.section_id
 
         current_mark_id = get_folder_mark_id(document.folder)
         target_mark_id = get_folder_mark_id(folder)
@@ -2109,10 +2090,12 @@ def move_document(
             )
 
         target_section = folder.section or document.section
-        # Проверка прав на запись в целевую зону
+        # Проверка прав на запись в целевую папку
         if not check_zone_permission(user, folder, target_section):
             zone_name = folder.get_zone_display()
-            raise PermissionDenied(f"Нет прав на запись в зону «{zone_name}»")
+            raise PermissionDenied(
+                f"Нет прав на запись в этап жизненного цикла «{zone_name}»"
+            )
 
     document.folder = folder
     update_fields = ['folder', 'updated_at']
@@ -2124,23 +2107,8 @@ def move_document(
         document.section = folder.section
         update_fields.append('section')
 
-    # Состояние меняется только для канонических зон папки.
-    target_state = (
-        _initial_state_for_folder(folder)
-        if _status_for_zone(folder) is not None
-        else document.state
-    )
-    if (
-        _approval_target_changes(document, target_state)
-        and approval_outcome(document) == 'C'
-    ):
-        raise ValueError(APPROVAL_BLOCKED_MESSAGE)
-    if target_state != document.state:
-        _apply_state(user, document, target_state, folder=folder)
-    else:
-        document.folder = folder
-        document._from_service = True
-        document.save(update_fields=update_fields)
+    document._from_service = True
+    document.save(update_fields=update_fields)
     return document
 
 
@@ -2151,7 +2119,11 @@ def move_documents(user: User, documents, folder: Folder | None) -> list[Documen
 
 
 def move_document_to_section(user: User, document: Document, section: Section) -> Document:
-    """Перемещает документ в корень другого раздела проекта."""
+    """Перемещает документ в корень другого раздела проекта.
+
+    Меняет только размещение (``section``/``folder``); этап жизненного
+    цикла не меняется (решение владельца 27.11.2026).
+    """
     if document.is_deleted:
         raise ValueError("Нельзя перемещать документ из корзины")
     if section.project_id != document.project_id:
@@ -2160,24 +2132,18 @@ def move_document_to_section(user: User, document: Document, section: Section) -
         raise PermissionDenied("Нет прав на перемещение документа")
     if not check_write_permission(user, section):
         raise PermissionDenied("Нет прав на запись в целевой раздел")
-
-    # Спринт 5: перенос в другой раздел — это смена эффективной зоны на WIP.
-    # Запрещаем выносить документы из канонических зон, как и в move_document:
-    # иначе утверждённый документ «исчезает» из папки зоны через обходной путь.
-    current_zone = _effective_zone(document)
-    if current_zone in ('ARCHIVE', 'PUBLISHED', 'SHARED'):
-        zone_name = (
-            document.folder.get_zone_display()
-            if document.folder is not None
-            else dict(Folder.ZONE_CHOICES).get(current_zone, current_zone)
-        )
+    if not check_zone_permission(
+        user, document.folder, document.section,
+        zone=_effective_zone(document),
+    ):
         raise PermissionDenied(
-            f"Документ в зоне «{zone_name}» — перенос в другой раздел "
-            "запрещён, используйте workflow-кнопки"
+            "Нет прав на перемещение документа с текущего этапа "
+            "жизненного цикла"
         )
 
     document.section = section
     document.folder = None
+    document._from_service = True
     document.save(update_fields=['section', 'folder', 'updated_at'])
     return document
 

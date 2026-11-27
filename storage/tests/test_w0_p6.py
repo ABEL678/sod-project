@@ -28,7 +28,6 @@ from storage.domain.services import (
     create_project,
     document_internal_actions,
     document_workflow_actions,
-    move_document,
     transition_document_zone,
     update_internal_status,
     upload_document,
@@ -205,8 +204,8 @@ class ApprovalOutcomeABCTests(TestCase):
         ]
         self.assertNotIn('submit_review', workflow_codes)
 
-    def test_upload_to_published_and_move_block_only_c(self):
-        # PUT/перемещение в PUBLISHED: B разрешён, C запрещён.
+    def test_upload_to_published_blocks_only_c(self):
+        # PUT в PUBLISHED: B разрешён, C запрещён.
         allowed = self._upload(
             'АР-PUB-B', user=self.admin, folder=self.published_folder,
         ).document
@@ -225,15 +224,6 @@ class ApprovalOutcomeABCTests(TestCase):
             self._upload(
                 'АР-PUB-C', user=self.admin, folder=self.published_folder,
             )
-
-        move_allowed = self._ready_document('АР-MOVE-B')
-        self._issue(move_allowed, 'Неблокирующее')
-        move_document(self.admin, move_allowed, self.published_folder)
-
-        move_blocked = self._ready_document('АР-MOVE-C')
-        self._issue(move_blocked, 'Блокирующее', is_blocking=True)
-        with self.assertRaisesMessage(ValueError, APPROVAL_BLOCKED_MESSAGE):
-            move_document(self.admin, move_blocked, self.published_folder)
 
     # --- переопределение итога -----------------------------------------
 

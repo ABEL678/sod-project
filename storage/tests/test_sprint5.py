@@ -1,7 +1,8 @@
 """Спринт 5: надёжность и безопасность.
 
 Покрывает фиксы генерального аудита 4.0:
-- зоны ISO 19650 при переносе документа в другой раздел;
+- независимость размещения и этапа жизненного цикла при переносе
+  документа в другой раздел;
 - матрица прав на редактирование ответа на замечание;
 - валидация загружаемых файлов (расширение, размер);
 - синхронизация статус-триплета при копировании;
@@ -108,17 +109,24 @@ class Sprint5TestBase(TestCase):
         return document
 
 
-class ZoneGuardOnSectionMoveTests(Sprint5TestBase):
-    def test_cannot_move_published_document_to_another_section(self):
-        document = self.make_document(code='PUB-1', folder=self.published_folder, state=Document.STATE_APPROVED)
+class SectionMoveStageIndependenceTests(Sprint5TestBase):
+    """DnD в другой раздел меняет только размещение (решение 27.11.2026)."""
 
-        with self.assertRaises(PermissionDenied):
-            move_document_to_section(
-                self.user_gip, document, self.section_kr,
-            )
+    def test_published_document_moves_between_sections_without_stage_change(self):
+        document = self.make_document(
+            code='PUB-1',
+            folder=self.published_folder,
+            state=Document.STATE_APPROVED,
+        )
 
-        document.refresh_from_db()
-        self.assertEqual(document.section_id, self.section_ar.pk)
+        moved = move_document_to_section(
+            self.user_admin, document, self.section_kr,
+        )
+
+        self.assertEqual(moved.section_id, self.section_kr.pk)
+        self.assertIsNone(moved.folder_id)
+        self.assertEqual(moved.status, 'approved')
+        self.assertEqual(moved.state, Document.STATE_APPROVED)
 
     def test_wip_document_still_moves_between_sections(self):
         document = self.make_document(code='WIP-1', folder=self.wip_folder)
