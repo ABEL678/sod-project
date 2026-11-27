@@ -651,8 +651,11 @@ class MoveDocumentZoneCheckTest(TestCase):
             project=self.project, zone='PUBLISHED'
         )
         self.archive_folder = Folder.objects.get(project=self.project, zone='ARCHIVE')
+        self.regular_folder = create_folder(
+            self.admin, self.project, 'Обычная папка', section=self.section,
+        )
 
-    def _create_document(self, folder=None):
+    def _create_document(self, folder=None, code='TEST-MOVE', state=None):
         from django.core.files.uploadedfile import SimpleUploadedFile
 
         file = SimpleUploadedFile(
@@ -662,16 +665,21 @@ class MoveDocumentZoneCheckTest(TestCase):
             user=self.admin,
             project=self.project,
             section=self.section,
-            code='TEST-MOVE',
+            code=code,
             name='Test Document',
             doc_type='drawing',
             file=file,
             folder=folder,
             reason_text='Тестовая причина',
         )
-        return Document.objects.get(
-            project=self.project, section=self.section, code='TEST-MOVE'
+        document = Document.objects.get(
+            project=self.project, section=self.section, code=code
         )
+        if state is not None:
+            document.state = state
+            document._from_service = True
+            document.save(update_fields=['state'])
+        return document
 
     def test_developer_cannot_move_to_archive(self):
         """Разработчик не может переместить документ в ARCHIVE."""
@@ -691,16 +699,88 @@ class MoveDocumentZoneCheckTest(TestCase):
         with self.assertRaises(PermissionDenied):
             move_document(self.developer, doc, self.shared_folder)
 
-    def test_archive_document_cannot_be_moved_even_by_admin(self):
-        """DnD из ARCHIVE запрещён всем, включая администратора."""
-        doc = self._create_document(self.archive_folder)
+    def test_developer_cannot_move_document_from_shared_stage(self):
+        """Права перемещения считаются по текущему этапу: SHARED — не для разработчика."""
+        doc = self._create_document(
+            self.shared_folder,
+            code='TEST-MOVE-SHARED',
+            state=Document.STATE_SHARED,
+        )
+        with self.assertRaises(PermissionDenied):
+            move_document(self.developer, doc, self.regular_folder)
+
+        doc.refresh_from_db()
+        self.assertEqual(doc.folder_id, self.shared_folder.pk)
+        self.assertEqual(doc.state, Document.STATE_SHARED)
+
+    def test_gip_cannot_move_document_from_published_stage(self):
+        """Права перемещения считаются по текущему этапу: PUBLISHED — только админ."""
+        doc = self._create_document(
+            self.published_folder,
+            code='TEST-MOVE-PUBLISHED',
+            state=Document.STATE_APPROVED,
+        )
+        with self.assertRaises(PermissionDenied):
+            move_document(self.gip, doc, self.regular_folder)
+
+        doc.refresh_from_db()
+        self.assertEqual(doc.folder_id, self.published_folder.pk)
+        self.assertEqual(doc.state, Document.STATE_APPROVED)
+
+    def test_gip_cannot_move_document_from_archive_stage(self):
+        """Права перемещения считаются по текущему этапу: ARCHIVE — только админ."""
+        doc = self._create_document(
+            self.archive_folder,
+            code='TEST-MOVE-ARCHIVE',
+            state=Document.STATE_ARCHIVED,
+        )
+        with self.assertRaises(PermissionDenied):
+            move_document(self.gip, doc, self.regular_folder)
+
+        doc.refresh_from_db()
+        self.assertEqual(doc.folder_id, self.archive_folder.pk)
+        self.assertEqual(doc.state, Document.STATE_ARCHIVED)
+
+    def test_admin_can_move_documents_from_any_stage(self):
+        """Админ перемещает документ любого этапа в обычную папку; этап не меняется."""
+        cases = (
+            ('TEST-ADMIN-SHARED', self.shared_folder,
+             Document.STATE_SHARED, 'in_review'),
+            ('TEST-ADMIN-PUBLISHED', self.published_folder,
+             Document.STATE_APPROVED, 'approved'),
+            ('TEST-ADMIN-ARCHIVE', self.archive_folder,
+             Document.STATE_ARCHIVED, 'archived'),
+        )
+        for code, folder, state, status in cases:
+            with self.subTest(state=state):
+                doc = self._create_document(folder, code=code, state=state)
+
+                moved = move_document(self.admin, doc, self.regular_folder)
+
+                self.assertEqual(moved.folder_id, self.regular_folder.pk)
+                self.assertEqual(moved.state, state)
+                self.assertEqual(moved.status, status)
+
+    def test_archive_document_move_into_canonical_wip_folder_is_rejected(self):
+        """Запрет в тесте даёт цель — каноническая папка WIP, а не этап архива.
+
+        DnD в системную папку этапа запрещён всем: проверка канонической
+        цели в ``move_document`` срабатывает до сохранения. Для ГИП и
+        разработчика дополнительно действует запрет перемещения документа
+        с этапа ARCHIVE; администратору запрещает только каноническая цель.
+        """
+        doc = self._create_document(
+            self.archive_folder,
+            code='TEST-MOVE-ARCHIVE-CANONICAL',
+            state=Document.STATE_ARCHIVED,
+        )
         # ГИП не может
         with self.assertRaises(PermissionDenied):
             move_document(self.gip, doc, self.wip_folder)
         # Разработчик не может
         with self.assertRaises(PermissionDenied):
             move_document(self.developer, doc, self.wip_folder)
-        # Админ тоже не может сменить зону через DnD
+        # Админ тоже не может: цель — системная папка этапа
         with self.assertRaises(PermissionDenied):
             move_document(self.admin, doc, self.wip_folder)
 

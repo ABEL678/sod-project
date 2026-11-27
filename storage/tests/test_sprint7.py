@@ -76,6 +76,29 @@ class DocumentSectionMoveViewTests(Sprint5TestBase):
         self.assertEqual(document.status, 'approved')
         self.assertEqual(document.state, Document.STATE_APPROVED)
 
+    def test_published_document_rejected_even_with_flag(self):
+        """allow_section_change не обходит права перемещения по текущему этапу."""
+        document = self.make_document(
+            code='PUB-7-NEG', folder=self.published_folder,
+            state=Document.STATE_APPROVED,
+        )
+        self.client.force_login(self.user_gip)
+
+        response = self.client.post(
+            reverse('storage:document_move', args=[document.pk]),
+            {
+                'section_id': self.section_kr.pk,
+                'allow_section_change': '1',
+            },
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertIn('текущего этапа', response.json()['error'])
+        document.refresh_from_db()
+        self.assertEqual(document.section_id, self.section_ar.pk)
+        self.assertEqual(document.folder_id, self.published_folder.pk)
+        self.assertEqual(document.state, Document.STATE_APPROVED)
+
 
 class FeedbackScreenshotPilTests(TestCase):
     """Скриншот обратной связи: PIL-верификация байтов."""

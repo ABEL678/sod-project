@@ -37,6 +37,8 @@ from storage.tests.test_t8_ultimate import T8UltimateTestBase
 
 User = get_user_model()
 
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
 
 class DndZoneEndpointTests(T8UltimateTestBase):
     """DnD меняет только размещение; этап жизненного цикла сохраняется.
@@ -83,6 +85,24 @@ class DndZoneEndpointTests(T8UltimateTestBase):
         self.assertEqual(document.status, 'approved')
         self.assertEqual(document.state, Document.STATE_APPROVED)
 
+    def test_shared_document_drag_by_gip_keeps_stage(self):
+        """ГИП переносит документ на согласовании; этап остаётся SHARED."""
+        document = self._document_in_stage(
+            'DND-Z-6', self.shared_zone, Document.STATE_SHARED,
+        )
+
+        self.client.force_login(self.user_gip)
+        response = self.client.post(
+            reverse('storage:document_move', args=[document.pk]),
+            {'folder_id': self.target_folder.pk},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        document.refresh_from_db()
+        self.assertEqual(document.folder_id, self.target_folder.pk)
+        self.assertEqual(document.status, 'in_review')
+        self.assertEqual(document.state, Document.STATE_SHARED)
+
     def test_archived_document_drag_by_admin_keeps_stage(self):
         """Админ может переставить архивный документ; этап остаётся архивным."""
         document = self._document_in_stage(
@@ -122,6 +142,25 @@ class DndZoneEndpointTests(T8UltimateTestBase):
         self.assertIsNone(document.folder_id)
         self.assertEqual(document.status, 'approved')
         self.assertEqual(document.state, Document.STATE_APPROVED)
+
+    def test_shared_document_reset_to_root_keeps_stage(self):
+        """Сброс в корень (folder=None) меняет размещение, но не этап."""
+        document = self._document_in_stage(
+            'DND-Z-7', self.shared_zone, Document.STATE_SHARED,
+        )
+
+        self.client.force_login(self.user_gip)
+        response = self.client.post(
+            reverse('storage:document_move', args=[document.pk]),
+            {},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        document.refresh_from_db()
+        self.assertIsNone(document.folder_id)
+        self.assertEqual(document.section_id, self.section.pk)
+        self.assertEqual(document.status, 'in_review')
+        self.assertEqual(document.state, Document.STATE_SHARED)
 
     def test_developer_cannot_drop_into_system_stage_folder(self):
         """Системная папка этапа — не цель DnD: этап меняется workflow."""
@@ -176,6 +215,8 @@ class DndPermissionEndpointTests(T8UltimateTestBase):
         self.assertEqual(response.status_code, 200)
         document.refresh_from_db()
         self.assertEqual(document.folder_id, target.pk)
+        self.assertEqual(document.state, Document.STATE_WIP_DRAFT)
+        self.assertEqual(document.status, 'draft')
 
     def test_developer_cannot_drop_into_foreign_section_even_with_flag(self):
         profile = UserProfile.objects.get(user=self.user_developer)
@@ -484,7 +525,15 @@ class DndClientContractTests(T8UltimateTestBase):
     """Контракт клиентской части DnD (W2-4 style, без браузера)."""
 
     def _read(self, path):
-        return Path(path).read_text(encoding='utf-8')
+        return (PROJECT_ROOT / path).read_text(encoding='utf-8')
+
+    def _js_block(self, js, start_marker, end_marker):
+        """Возвращает участок app.js между двумя маркерами."""
+        start = js.find(start_marker)
+        self.assertNotEqual(start, -1, f'не найден маркер: {start_marker}')
+        end = js.find(end_marker, start)
+        self.assertNotEqual(end, -1, f'не найден маркер: {end_marker}')
+        return js[start:end]
 
     def test_app_js_has_delegated_dnd_handlers(self):
         js = self._read('static/js/app.js')
@@ -524,18 +573,46 @@ class DndClientContractTests(T8UltimateTestBase):
 
     def test_app_js_guards_archive_and_confirms_section_change(self):
         js = self._read('static/js/app.js')
+        drop_handler = self._js_block(
+            js,
+            "document.addEventListener('drop', function (event) {",
+            '/* ---------- Tables helpers ---------- */',
+        )
         self.assertIn('function isArchiveZone(target)', js)
-        self.assertIn("'Нельзя переместить файл в архив'", js)
-        self.assertIn('Это изменит его марку.', js)
+        self.assertIn(
+            'isDocumentDrag(event) && isArchiveZone(target)', drop_handler,
+        )
+        self.assertIn(
+            "showDndToast('Нельзя переместить файл в архив', true)",
+            drop_handler,
+        )
+        # Оба подтверждения смены раздела живут в drop-обработчике и
+        # действительно вызывают confirm, а не просто содержат текст.
+        self.assertGreaterEqual(drop_handler.count('window.confirm('), 2)
+        self.assertIn(
+            'Переместить документ в папку другого раздела', drop_handler,
+        )
+        self.assertIn('Это изменит его марку.', drop_handler)
+        self.assertIn("body.append('allow_section_change', '1')", drop_handler)
         self.assertIn('Сменить раздел', js)
 
     def test_app_js_refreshes_panel_and_tree_counts_after_drop(self):
         js = self._read('static/js/app.js')
+        post_move = self._js_block(
+            js,
+            'function postMoveRequest(',
+            'function initDocumentDragAndDrop(',
+        )
+        init_block = self._js_block(
+            js,
+            'function init() {',
+            "if (document.readyState === 'loading') {",
+        )
         self.assertIn('function refreshDocumentsPanel()', js)
         self.assertIn('function refreshTreeCounts(sourceDocument)', js)
         self.assertIn('function postMoveRequest(url, body, successMessage, options)', js)
-        self.assertIn("method: 'POST'", js)
-        self.assertIn('initHtmx();', js)
+        self.assertIn("method: 'POST'", post_move)
+        self.assertIn('initHtmx();', init_block)
 
     def test_panel_and_tree_templates_keep_dnd_hooks(self):
         panel = self._read(
@@ -550,7 +627,7 @@ class DndClientContractTests(T8UltimateTestBase):
         self.assertIn('data-move-url-template', panel)
         self.assertIn('data-copy-url-template', panel)
         self.assertIn('data-folder-move-url-template', panel)
-        self.assertIn('data-drop-folder', tree)
+        self.assertIn('data-drop-folder="{{ folder.pk }}"', tree)
         self.assertIn('data-drop-name', tree)
         self.assertIn('draggable="true"', tree)
         self.assertIn('data-section-id', tree)

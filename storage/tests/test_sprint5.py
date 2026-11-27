@@ -137,6 +137,24 @@ class SectionMoveStageIndependenceTests(Sprint5TestBase):
 
         self.assertEqual(moved.section_id, self.section_kr.pk)
 
+    def test_gip_cannot_move_published_document_to_another_section(self):
+        """Права перемещения считаются по текущему этапу: PUBLISHED — только админ."""
+        document = self.make_document(
+            code='PUB-NEG-5',
+            folder=self.published_folder,
+            state=Document.STATE_APPROVED,
+        )
+
+        with self.assertRaises(PermissionDenied):
+            move_document_to_section(
+                self.user_gip, document, self.section_kr,
+            )
+
+        document.refresh_from_db()
+        self.assertEqual(document.section_id, self.section_ar.pk)
+        self.assertEqual(document.folder_id, self.published_folder.pk)
+        self.assertEqual(document.state, Document.STATE_APPROVED)
+
 
 class IssueAnswerPermissionTests(Sprint5TestBase):
     def setUp(self):
