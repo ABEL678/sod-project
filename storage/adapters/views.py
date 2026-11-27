@@ -5713,7 +5713,7 @@ class FeedbackStatusUpdateView(LoginRequiredMixin, View):
                 request.user,
                 feedback,
                 request.POST.get("status") or feedback.status,
-                request.POST.get("admin_comment", ""),
+                request.POST.get("admin_comment"),
             )
         except PermissionDenied as exc:
             return JsonResponse(

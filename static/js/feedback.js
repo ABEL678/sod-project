@@ -231,8 +231,8 @@
             if (status) {
                 body.append('status', status);
             }
-            if (comment) {
-                body.append('admin_comment', comment);
+            if (comment || fromDetail) {
+                body.append('admin_comment', comment || '');
             }
 
             setRowBusy(row, true, row.dataset.currentStatus);
@@ -262,8 +262,8 @@
                 if (result.ok && result.payload.ok) {
                     var newStatus = result.payload.status;
                     row.dataset.currentStatus = newStatus;
-                    if (comment) {
-                        row.dataset.adminComment = comment;
+                    if (comment || fromDetail) {
+                        row.dataset.adminComment = comment || '';
                     }
 
                     var badge = row.querySelector('[data-feedback-status-badge]');
@@ -288,11 +288,13 @@
                             detailStatus.textContent = result.payload.status_display;
                             detailStatus.className = 'cde-badge ' + result.payload.status_class;
                         }
-                        if (detailComment && comment) {
+                        if (detailComment && fromDetail) {
                             detailComment.value = comment;
                         }
                     }
-                    showToast(comment ? 'Комментарий сохранён.' : 'Статус обновлён.');
+                    showToast(
+                        fromDetail ? 'Комментарий сохранён.' : 'Статус обновлён.'
+                    );
                     return;
                 }
 

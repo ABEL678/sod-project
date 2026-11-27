@@ -575,7 +575,7 @@ def delete_issue_crop(user, issue) -> Issue: ... (удаление маркап�
 def get_all_companies(platform_owner) -> QuerySet[Company]: ... (только для суперюзера)
 def submit_feedback(user, company, message, category="BUG", page_url="", contact_email="", screenshot=None, file_storage=None) -> Feedback: ... (валидация message/category/email; скриншот через FileStorage)
 def list_feedback(user, company, status=None, category=None) -> QuerySet[Feedback]: ... (admin компании / superuser; фильтры status/category)
-def update_feedback_status(user, feedback, new_status, admin_comment="") -> Feedback: ... (admin компании feedback / superuser; new_status in Status.values; admin_comment ≤ 2000)
+def update_feedback_status(user, feedback, new_status, admin_comment=None) -> Feedback: ... (admin компании feedback / superuser; new_status in Status.values; admin_comment ≤ 2000; None — не менять, "" — очистить)
 def create_api_token(user, company, name, scopes, expires_at=None) -> tuple[ApiToken, str]: ... (admin компании / superuser; валидные scopes; возвращает сырой токен один раз)
 def revoke_api_token(user, token) -> None: ... (admin компании токена / superuser; is_active=False)
 def list_api_tokens(user, company) -> QuerySet[ApiToken]: ... (admin компании / superuser; только токены своей компании)

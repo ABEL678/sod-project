@@ -5379,9 +5379,14 @@ def update_feedback_status(
     user,
     feedback,
     new_status: str,
-    admin_comment: str = "",
+    admin_comment: str | None = None,
 ) -> Feedback:
-    """Меняет статус обратной связи и, при необходимости, комментарий админа."""
+    """Меняет статус обратной связи и, при необходимости, комментарий админа.
+
+    ``admin_comment=None`` — комментарий не трогаем (быстрая смена статуса);
+    ``admin_comment=""`` — очищаем комментарий;
+    непустая строка — заменяем комментарий.
+    """
     if user is None or not user.is_authenticated:
         raise PermissionDenied("Нет доступа к обратной связи")
 
@@ -5397,21 +5402,24 @@ def update_feedback_status(
     if new_status not in Feedback.Status.values:
         raise ValidationError({"status": "Неверный статус обратной связи"})
 
-    comment = (admin_comment or "").strip()
-    if len(comment) > FEEDBACK_ADMIN_COMMENT_MAX_LENGTH:
-        raise ValidationError(
-            {
-                "admin_comment": (
-                    "Комментарий не может быть длиннее "
-                    f"{FEEDBACK_ADMIN_COMMENT_MAX_LENGTH} символов"
-                )
-            }
-        )
+    if admin_comment is None:
+        comment = None
+    else:
+        comment = admin_comment.strip()
+        if len(comment) > FEEDBACK_ADMIN_COMMENT_MAX_LENGTH:
+            raise ValidationError(
+                {
+                    "admin_comment": (
+                        "Комментарий не может быть длиннее "
+                        f"{FEEDBACK_ADMIN_COMMENT_MAX_LENGTH} символов"
+                    )
+                }
+            )
 
     old_status = feedback.status
     feedback.status = new_status
     update_fields = ["status", "updated_at"]
-    if comment:
+    if comment is not None:
         feedback.admin_comment = comment
         update_fields.append("admin_comment")
     feedback.save(update_fields=update_fields)
