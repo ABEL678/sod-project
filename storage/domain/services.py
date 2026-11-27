@@ -23,6 +23,10 @@ from django.utils import timezone
 logger = logging.getLogger(__name__)
 
 from storage.domain.models import (
+    CHANGE_PERMISSION_REASON_CHOICES,
+    ChangePermission,
+    ChangePermissionDocument,
+    ChangePermissionRegistry,
     ChangeSetEntry,
     Company,
     DesignTask,
@@ -2757,7 +2761,7 @@ def check_read_permission(user: User, document: Document) -> bool:
             user=user, role_in_project__in=('gip', 'developer')
         ).exists()
 
-    if role in ('checker', 'normocontrol', 'customer', 'viewer'):
+    if role in ('checker', 'normocontrol', 'customer', 'viewer', 'manager'):
         return True
 
     if role == 'contractor':
@@ -2802,7 +2806,7 @@ def get_readable_documents(user: User, project: Project | None = None):
     role = profile.role
     if role == 'admin':
         return qs
-    if role in ('checker', 'normocontrol', 'customer', 'viewer'):
+    if role in ('checker', 'normocontrol', 'customer', 'viewer', 'manager'):
         return qs
     if role == 'gip':
         return qs.filter(
@@ -3980,6 +3984,7 @@ ISSUE_REVIEWER_STATUSES = ('REJECTED', 'CLOSED', 'CANCELLED')
 ISSUE_CLOSED_STATUSES = ('CLOSED', 'CANCELLED')
 ISSUE_CREATOR_ROLES = (
     'admin',
+    'manager',
     'gip',
     'developer',
     'checker',
@@ -4872,6 +4877,14 @@ def add_company_member(
     if role == 'admin' and not _is_company_admin(actor):
         raise PermissionDenied(
             'Только администратор или суперюзер может назначать администраторов'
+        )
+
+    # «Руководитель» — системная роль организации, назначается её
+    # владельцем (администратором компании), см. SPEC 2.0, этап РВИ.
+    if role == 'manager' and not _is_company_admin(actor):
+        raise PermissionDenied(
+            'Только администратор или суперюзер организации может '
+            'назначать руководителя'
         )
 
     profile = UserProfile.objects.filter(user=user).first()
@@ -6936,3 +6949,284 @@ def notify_tasks_overdue() -> int:
             f'срок был {task.due_date:%d.%m.%Y}'
         ),
     )
+
+
+# =====================================================================
+# Этап РВИ — разрешения на внесение изменений (SPEC 2.0, волна 4).
+# Бизнес-логика РВИ живёт только здесь. Черновик редактирует ГИП;
+# утверждает Руководитель организации либо ГИП, если ни один документ
+# РВИ не находится в архиве. Нумерацию выдаёт реестр организации.
+# =====================================================================
+
+
+def _is_organization_manager(user: User | None, organization: Company) -> bool:
+    """Руководитель организации: системная роль manager в этой компании."""
+    if user is None or not user.is_authenticated:
+        return False
+    profile = getattr(user, 'userprofile', None)
+    return bool(
+        profile is not None
+        and profile.role == 'manager'
+        and profile.company_id == organization.pk
+    )
+
+
+def change_permission_requires_manager(permission: ChangePermission) -> bool:
+    """Требуется ли Руководитель: хотя бы один документ РВИ в архиве."""
+    return permission.document_links.filter(
+        document__state=Document.STATE_ARCHIVED,
+    ).exists()
+
+
+def can_approve_change_permission(
+    user: User | None,
+    permission: ChangePermission,
+) -> bool:
+    """Кто утверждает РВИ — вычисляется в момент действия, не хранится.
+
+    - документ РВИ в архиве → только Руководитель организации;
+    - все документы вне архива → ГИП проекта или Руководитель;
+    - черновик и утверждённое РВИ утверждать нельзя.
+    """
+    if user is None or not user.is_authenticated:
+        return False
+    if permission.status != ChangePermission.STATUS_DRAFT:
+        return False
+    if _is_organization_manager(user, permission.organization):
+        return True
+    if change_permission_requires_manager(permission):
+        return False
+    return _is_project_gip(user, permission.project)
+
+
+def _ensure_change_permission_draft_editor(
+    user: User,
+    permission: ChangePermission,
+) -> None:
+    """Черновик РВИ составляет и правит ГИП проекта."""
+    if not _is_project_gip(user, permission.project):
+        raise PermissionDenied(
+            "Составлять и редактировать РВИ может только ГИП проекта"
+        )
+    if permission.status != ChangePermission.STATUS_DRAFT:
+        raise ValidationError(
+            "Утверждённое разрешение на внесение изменений неизменяемо"
+        )
+
+
+def create_change_permission_draft(
+    user: User,
+    project: Project,
+    content: str,
+    reason_code: str = '',
+    note: str = '',
+) -> ChangePermission:
+    """Создаёт черновик РВИ. Составление — ГИП проекта.
+
+    ``code`` остаётся пустым до утверждения: обозначение выдаёт реестр.
+    """
+    if not _is_project_gip(user, project):
+        raise PermissionDenied("Составить РВИ может только ГИП проекта")
+    content = (content or '').strip()
+    if not content:
+        raise ValueError("Содержание изменения обязательно")
+    reason_code = (reason_code or '').strip()
+    if reason_code and reason_code not in dict(
+        CHANGE_PERMISSION_REASON_CHOICES
+    ):
+        raise ValueError("Неверный код причины изменения")
+    return ChangePermission.objects.create(
+        project=project,
+        organization=project.company,
+        author=user,
+        content=content,
+        reason_code=reason_code,
+        note=note or '',
+        status=ChangePermission.STATUS_DRAFT,
+    )
+
+
+def update_change_permission_draft(
+    user: User,
+    permission: ChangePermission,
+    **fields,
+) -> ChangePermission:
+    """Правит содержимое черновика. Утверждённое РВИ неизменяемо."""
+    _ensure_change_permission_draft_editor(user, permission)
+    editable = {'content', 'reason_code', 'note'}
+    unknown = set(fields) - editable
+    if unknown:
+        raise ValueError(
+            "Недопустимые поля РВИ: " + ', '.join(sorted(unknown))
+        )
+
+    update_fields = []
+    if 'content' in fields:
+        content = (fields['content'] or '').strip()
+        if not content:
+            raise ValueError("Содержание изменения обязательно")
+        permission.content = content
+        update_fields.append('content')
+    if 'reason_code' in fields:
+        reason_code = (fields['reason_code'] or '').strip()
+        if reason_code and reason_code not in dict(
+            CHANGE_PERMISSION_REASON_CHOICES
+        ):
+            raise ValueError("Неверный код причины изменения")
+        permission.reason_code = reason_code
+        update_fields.append('reason_code')
+    if 'note' in fields:
+        permission.note = fields['note'] or ''
+        update_fields.append('note')
+
+    if update_fields:
+        update_fields.append('updated_at')
+        permission.save(update_fields=update_fields)
+    return permission
+
+
+def add_change_permission_document(
+    user: User,
+    permission: ChangePermission,
+    document: Document,
+    change_number: int,
+    sheets: str = '',
+) -> ChangePermissionDocument:
+    """Связывает документ с черновиком РВИ (графы 4 и 5)."""
+    _ensure_change_permission_draft_editor(user, permission)
+    if document.project_id != permission.project_id:
+        raise ValueError("Документ относится к другому проекту")
+    if not isinstance(change_number, int) or change_number < 1:
+        raise ValueError("Номер изменения должен быть положительным числом")
+    if ChangePermissionDocument.objects.filter(
+        permission=permission, document=document,
+    ).exists():
+        raise ValueError("Документ уже включён в это РВИ")
+    return ChangePermissionDocument.objects.create(
+        permission=permission,
+        document=document,
+        change_number=change_number,
+        sheets=sheets or '',
+    )
+
+
+def remove_change_permission_document(
+    user: User,
+    permission: ChangePermission,
+    document: Document,
+) -> None:
+    """Убирает документ из черновика РВИ."""
+    _ensure_change_permission_draft_editor(user, permission)
+    link = ChangePermissionDocument.objects.filter(
+        permission=permission, document=document,
+    ).first()
+    if link is None:
+        raise ValueError("Документ не входит в это РВИ")
+    link.delete()
+
+
+def _next_change_permission_code(organization: Company) -> str:
+    """Выдаёт сквозной номер реестра организации атомарно.
+
+    Формат обозначения — «номер-год» (допущение W4-1: точный формат
+    уточняется по ГОСТ Р 21.1003 при реализации печатной формы).
+    Вызывается только внутри ``transaction.atomic``.
+    """
+    registry, _ = ChangePermissionRegistry.objects.get_or_create(
+        organization=organization,
+    )
+    registry = ChangePermissionRegistry.objects.select_for_update().get(
+        pk=registry.pk,
+    )
+    registry.last_number += 1
+    registry.save(update_fields=['last_number'])
+    return f'{registry.last_number}-{timezone.localdate().year}'
+
+
+def approve_change_permission(
+    user: User,
+    permission: ChangePermission,
+) -> ChangePermission:
+    """Утверждает РВИ и присваивает обозначение из реестра.
+
+    Утверждающий вычисляется в момент действия: Руководитель организации
+    всегда; ГИП проекта — только если ни один документ РВИ не в архиве.
+    """
+    with transaction.atomic():
+        locked = (
+            ChangePermission.objects
+            .select_for_update()
+            .select_related('project', 'organization')
+            .get(pk=permission.pk)
+        )
+        if locked.status != ChangePermission.STATUS_DRAFT:
+            raise ValidationError(
+                "Утвердить можно только черновик разрешения"
+            )
+        if not can_approve_change_permission(user, locked):
+            if change_permission_requires_manager(locked):
+                raise PermissionDenied(
+                    "Документ РВИ находится в архиве — утверждать может "
+                    "только Руководитель организации"
+                )
+            raise PermissionDenied(
+                "Утвердить РВИ может ГИП проекта или Руководитель "
+                "организации"
+            )
+        locked.code = _next_change_permission_code(locked.organization)
+        locked.status = ChangePermission.STATUS_APPROVED
+        locked.approved_by = user
+        locked.approved_at = timezone.now()
+        locked.save(update_fields=[
+            'code', 'status', 'approved_by', 'approved_at', 'updated_at',
+        ])
+    permission.refresh_from_db()
+    return permission
+
+
+def get_unapplied_change_permission(
+    document: Document,
+    change_number: int | None = None,
+) -> ChangePermissionDocument | None:
+    """Утверждённое РВИ с нерасходованным изменением для документа.
+
+    Точка срабатывания W4-2 (повторная загрузка версии, вывод из архива,
+    аннулирование) будет вызывать этот запрос. Черновики и уже
+    израсходованные изменения не возвращаются.
+    """
+    links = ChangePermissionDocument.objects.filter(
+        document=document,
+        permission__status=ChangePermission.STATUS_APPROVED,
+        applied_at__isnull=True,
+    ).select_related('permission')
+    if change_number is not None:
+        links = links.filter(change_number=change_number)
+    return links.order_by('pk').first()
+
+
+def mark_change_permission_applied(
+    permission: ChangePermission,
+    document: Document,
+) -> ChangePermissionDocument:
+    """Фиксирует расходование изменения РВИ для документа."""
+    with transaction.atomic():
+        link = (
+            ChangePermissionDocument.objects
+            .select_for_update()
+            .select_related('permission')
+            .filter(permission=permission, document=document)
+            .first()
+        )
+        if link is None:
+            raise ValueError("Документ не входит в это РВИ")
+        if link.permission.status != ChangePermission.STATUS_APPROVED:
+            raise ValidationError(
+                "Расходовать можно только утверждённое РВИ"
+            )
+        if link.applied_at is not None:
+            raise ValidationError(
+                "Изменение по этому РВИ уже израсходовано"
+            )
+        link.applied_at = timezone.now()
+        link.save(update_fields=['applied_at'])
+    return link

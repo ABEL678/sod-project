@@ -20,7 +20,7 @@ sod_project/
 ├── sod_core/              # настройки Django, URLs, общие утилиты
 ├── storage/               # ЯДРО
 │   ├── domain/
-│   │   ├── models.py      # Company, Project, Section, Folder, Document, DocumentVersion, UserProfile, ProjectMembership, DocumentView
+│   │   ├── models.py      # Company, Project, Section, Folder, Document, DocumentVersion, UserProfile, ProjectMembership, ChangePermission, DocumentView
 │   │   └── services.py    # upload_document(), create_project(), create_folder(), generate_share_link() и др.
 │   ├── ports/
 │   │   ├── file_storage.py # интерфейс FileStorage: save(), get(), delete()
@@ -200,11 +200,12 @@ sod_project/
 |---|---|---|
 | user | OneToOne → User | |
 | company | FK → Company, null=True, on_delete=SET_NULL | Компания пользователя |
-| role | CharField(20), choices | admin, gip, developer, checker, normocontrol, customer, contractor, viewer |
+| role | CharField(20), choices | admin, manager, gip, developer, checker, normocontrol, customer, contractor, viewer |
 | allowed_sections | ManyToMany → Section, blank | Разделы, куда можно писать |
 
 **Правила ролей (ГОСТ, T11-ROLES):**
 - admin (Администратор) — всё (в рамках своей компании).
+- manager (Руководитель) — системная роль организации (назначается владельцем/администратором компании): утверждение РВИ, чтение документов организации, создание замечаний.
 - gip (ГИП) — всё в своих проектах.
 - developer (Разработчик) — пишет только в allowed_sections (WIP), читает всё в своих проектах.
 - checker (Проверяющий) — только чтение, создаёт и закрывает замечания.
@@ -223,6 +224,47 @@ sod_project/
 | role_in_project | CharField(20) | gip, developer, checker, normocontrol, customer, contractor, viewer |
 
 **Уникальность:** (project, user).
+
+#### ChangePermission (РВИ, Волна 4)
+
+Разрешение на внесение изменений — отдельная сущность по формам 9 и 9а приложения К ГОСТ Р 21.101-2026. Бизнес-логика — `storage/domain/services.py` (черновик, утверждение, реестр, расходование).
+
+| Поле | Тип | Описание |
+|---|---|---|
+| id | PK | |
+| code | CharField(50), null=True, blank=True | Обозначение РВИ (графа 1), уникально в рамках организации; выдаёт реестр при первом утверждении, в черновике пусто |
+| project | FK → Project, related_name=change_permissions | Проект (организация — `project.company`) |
+| status | CharField(20), choices | draft, approved, annulled |
+| content | TextField | Содержание изменения (графа 6) |
+| reason_code | CharField(1), choices 1..5, blank | Код причины по таблице К.1 (графа 7); допускается прочерк |
+| note | TextField, blank | Примечание (графа 8) |
+| author | FK → User, PROTECT | Составил (ГИП) |
+| approved_by | FK → User, null=True, SET_NULL | Утвердил |
+| approved_at | DateTimeField, null=True | Дата утверждения |
+| created_at / updated_at | DateTimeField | |
+
+**Правила:** черновик редактирует ГИП; утверждённое РВИ неизменяемо (опечатка — выпуск нового разрешения). Утверждает Руководитель организации; если все документы вне архива — также ГИП проекта. Утверждающий вычисляется в момент действия и не хранится.
+
+#### ChangePermissionDocument (РВИ, Волна 4)
+
+| Поле | Тип | Описание |
+|---|---|---|
+| permission | FK → ChangePermission, related_name=document_links | РВИ |
+| document | FK → Document, related_name=change_permission_links | Документ |
+| change_number | PositiveIntegerField | Номер изменения для документа (графа 4) |
+| sheets | CharField(255), blank | Список листов или «Все» (графа 5) |
+| applied_at | DateTimeField, null=True | Изменение израсходовано (выпуск версии / вывод из архива) |
+
+**Уникальность:** (permission, document). После утверждения РВИ допускается только заполнение `applied_at`.
+
+#### ChangePermissionRegistry (РВИ, Волна 4)
+
+| Поле | Тип | Описание |
+|---|---|---|
+| organization | OneToOne → Company, related_name=change_permission_registry | Организация реестра |
+| last_number | PositiveIntegerField | Последний сквозной номер |
+
+Счётчик блокируется строкой реестра (`select_for_update`) при утверждении РВИ; формат обозначения — «номер-год» (уточняется по ГОСТ Р 21.1003).
 
 #### DocumentView
 | Поле | Тип | Описание |

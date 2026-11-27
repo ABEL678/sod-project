@@ -815,6 +815,274 @@ class ChangeSetEntry(models.Model):
         )
 
 
+# Разрешение на внесение изменений (РВИ), SPEC 2.0, волна 4.
+# Формы 9 и 9а приложения К ГОСТ Р 21.101-2026. Точные наименования
+# причин по таблице К.1 уточняются при реализации печатной формы
+# (W4-2); здесь фиксируются только коды 1..5.
+CHANGE_PERMISSION_REASON_CHOICES = [
+    ('1', 'Код 1'),
+    ('2', 'Код 2'),
+    ('3', 'Код 3'),
+    ('4', 'Код 4'),
+    ('5', 'Код 5'),
+]
+
+
+class ChangePermission(models.Model):
+    """Разрешение на внесение изменений (РВИ).
+
+    Черновик редактируется ГИПом и не влияет на действия. При первом
+    утверждении реестр организации присваивает сквозной ``code``;
+    утверждённое РВИ неизменяемо (опечатка аннулируется выпуском нового
+    разрешения). Связь с документами — через ``ChangePermissionDocument``.
+    """
+
+    STATUS_DRAFT = 'draft'
+    STATUS_APPROVED = 'approved'
+    STATUS_ANNULLED = 'annulled'
+    STATUS_CHOICES = [
+        (STATUS_DRAFT, 'Черновик'),
+        (STATUS_APPROVED, 'Утверждено'),
+        (STATUS_ANNULLED, 'Аннулировано'),
+    ]
+
+    code = models.CharField(
+        max_length=50,
+        null=True,
+        blank=True,
+        verbose_name="Обозначение РВИ",
+    )
+    project = models.ForeignKey(
+        Project,
+        on_delete=models.CASCADE,
+        related_name='change_permissions',
+        verbose_name="Проект",
+    )
+    organization = models.ForeignKey(
+        Company,
+        on_delete=models.CASCADE,
+        related_name='change_permissions',
+        verbose_name="Организация",
+    )
+    status = models.CharField(
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default=STATUS_DRAFT,
+        verbose_name="Статус",
+    )
+    content = models.TextField(verbose_name="Содержание изменения")
+    reason_code = models.CharField(
+        max_length=1,
+        choices=CHANGE_PERMISSION_REASON_CHOICES,
+        blank=True,
+        default='',
+        verbose_name="Код причины",
+    )
+    note = models.TextField(
+        blank=True,
+        default='',
+        verbose_name="Примечание",
+    )
+    author = models.ForeignKey(
+        User,
+        on_delete=models.PROTECT,
+        related_name='authored_change_permissions',
+        verbose_name="Составил",
+    )
+    approved_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='approved_change_permissions',
+        verbose_name="Утвердил",
+    )
+    approved_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        verbose_name="Дата утверждения",
+    )
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+        verbose_name="Дата создания",
+    )
+    updated_at = models.DateTimeField(
+        auto_now=True,
+        verbose_name="Дата обновления",
+    )
+
+    class Meta:
+        ordering = ['-created_at', '-pk']
+        verbose_name = "Разрешение на внесение изменений"
+        verbose_name_plural = "Разрешения на внесение изменений"
+        constraints = [
+            models.UniqueConstraint(
+                fields=['organization', 'code'],
+                condition=models.Q(code__isnull=False),
+                name='uniq_change_permission_code_per_org',
+            ),
+        ]
+
+    def __str__(self):
+        return self.code or f'РВИ-черновик #{self.pk}'
+
+    def save(self, *args, **kwargs):
+        """Утверждённое/аннулированное РВИ неизменяемо."""
+        if self.project_id and self.organization_id:
+            if self.project.company_id != self.organization_id:
+                raise ValidationError(
+                    "Организация РВИ должна совпадать с компанией проекта"
+                )
+        if not self._state.adding:
+            old_status = (
+                ChangePermission.objects
+                .filter(pk=self.pk)
+                .values_list('status', flat=True)
+                .first()
+            )
+            if old_status in (
+                self.STATUS_APPROVED, self.STATUS_ANNULLED,
+            ):
+                raise ValidationError(
+                    "Утверждённое разрешение на внесение изменений "
+                    "неизменяемо"
+                )
+        return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        if self.status in (self.STATUS_APPROVED, self.STATUS_ANNULLED):
+            raise ValidationError(
+                "Утверждённое разрешение на внесение изменений "
+                "нельзя удалить"
+            )
+        return super().delete(*args, **kwargs)
+
+
+class ChangePermissionDocument(models.Model):
+    """Связь РВИ с документом: номер изменения и список листов.
+
+    ``applied_at`` — факт расходования изменения (выпуск версии по РВИ
+    или вывод документа из архива). Утверждённая связь допускает только
+    заполнение ``applied_at``; остальные поля неизменяемы.
+    """
+
+    permission = models.ForeignKey(
+        ChangePermission,
+        on_delete=models.CASCADE,
+        related_name='document_links',
+        verbose_name="Разрешение",
+    )
+    document = models.ForeignKey(
+        Document,
+        on_delete=models.CASCADE,
+        related_name='change_permission_links',
+        verbose_name="Документ",
+    )
+    change_number = models.PositiveIntegerField(
+        verbose_name="Номер изменения",
+    )
+    sheets = models.CharField(
+        max_length=255,
+        blank=True,
+        default='',
+        verbose_name="Листы",
+    )
+    applied_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        verbose_name="Изменение израсходовано",
+    )
+
+    class Meta:
+        unique_together = ('permission', 'document')
+        verbose_name = "Документ разрешения на изменения"
+        verbose_name_plural = "Документы разрешений на изменения"
+
+    def __str__(self):
+        return (
+            f'{self.permission_id} → {self.document.code} '
+            f'(изм. {self.change_number})'
+        )
+
+    def save(self, *args, **kwargs):
+        if self._state.adding:
+            if not ChangePermission.objects.filter(
+                pk=self.permission_id,
+                status=ChangePermission.STATUS_DRAFT,
+            ).exists():
+                raise ValidationError(
+                    "Добавлять документы можно только в черновик РВИ"
+                )
+        else:
+            old = (
+                ChangePermissionDocument.objects
+                .filter(pk=self.pk)
+                .values(
+                    'permission_id', 'document_id', 'change_number',
+                    'sheets', 'applied_at',
+                )
+                .first()
+            )
+            if old is not None and ChangePermission.objects.filter(
+                pk=old['permission_id'],
+                status__in=(
+                    ChangePermission.STATUS_APPROVED,
+                    ChangePermission.STATUS_ANNULLED,
+                ),
+            ).exists():
+                update_fields = kwargs.get('update_fields')
+                if (
+                    update_fields is None
+                    or set(update_fields) != {'applied_at'}
+                    or old['permission_id'] != self.permission_id
+                    or old['document_id'] != self.document_id
+                    or old['change_number'] != self.change_number
+                    or old['sheets'] != self.sheets
+                ):
+                    raise ValidationError(
+                        "Связи утверждённого разрешения на внесение "
+                        "изменений неизменяемы"
+                    )
+        return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        if self.permission.status in (
+            ChangePermission.STATUS_APPROVED,
+            ChangePermission.STATUS_ANNULLED,
+        ):
+            raise ValidationError(
+                "Связи утверждённого разрешения на внесение изменений "
+                "нельзя удалить"
+            )
+        return super().delete(*args, **kwargs)
+
+
+class ChangePermissionRegistry(models.Model):
+    """Сквозной счётчик обозначений РВИ в рамках организации.
+
+    Реестр — журнал регистрации разрешений (ГОСТ Р 21.1003-2009).
+    Блокировка строки реестра сериализует выдачу номеров.
+    """
+
+    organization = models.OneToOneField(
+        Company,
+        on_delete=models.CASCADE,
+        related_name='change_permission_registry',
+        verbose_name="Организация",
+    )
+    last_number = models.PositiveIntegerField(
+        default=0,
+        verbose_name="Последний номер",
+    )
+
+    class Meta:
+        verbose_name = "Реестр разрешений на изменения"
+        verbose_name_plural = "Реестры разрешений на изменения"
+
+    def __str__(self):
+        return f'{self.organization}: {self.last_number}'
+
+
 class UserProfile(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE, verbose_name="Пользователь")
     company = models.ForeignKey(
@@ -827,6 +1095,7 @@ class UserProfile(models.Model):
     )
     ROLE_CHOICES = [
         ('admin', 'Администратор'),
+        ('manager', 'Руководитель'),
         ('gip', 'ГИП'),
         ('developer', 'Разработчик'),
         ('checker', 'Проверяющий'),
