@@ -1,0 +1,244 @@
+{% extends 'storage/base.html' %}
+{% comment %}
+SPEC 2.0, волна 4, шаг 3 (W4-3): печатная форма РВИ — форма 9
+(первый лист) и 9а (последующие), приложение К ГОСТ Р 21.101-2026.
+Наименования граф — дословно. Размеры — A4 альбомная, рабочая
+ширина 277 мм (поля 10 мм); графы 1–8: 28/45/52/11/14/88/10/29 мм.
+Графы 13–16 (согласования/нормоконтроль) — прочерки.
+{% endcomment %}
+{% block title %}{{ permission.code|default:"РВИ" }} — печатная форма{% endblock %}
+{% block topbar %}{% endblock %}
+{% block extra_css %}
+<style>
+  .rvi-print-wrap {
+    padding: 8mm;
+    background: #e9ecef;
+    overflow-x: auto;
+  }
+  .rvi-print-toolbar {
+    max-width: 277mm;
+    margin: 0 auto 4mm;
+    display: flex;
+    flex-wrap: wrap;
+    gap: .5rem;
+    align-items: center;
+  }
+  .rvi-page {
+    width: 277mm;
+    min-height: 190mm;
+    margin: 0 auto 8mm;
+    padding: 0;
+    background: #fff;
+    color: #000;
+    font-family: "Golos Text", Arial, sans-serif;
+    font-size: 9pt;
+    box-sizing: border-box;
+  }
+  .rvi-form-line {
+    text-align: right;
+    font-weight: 700;
+    font-size: 8pt;
+    line-height: 1.2;
+  }
+  .rvi-title {
+    margin: 0 0 2mm;
+    text-align: center;
+    font-size: 11pt;
+    font-weight: 700;
+    line-height: 1.2;
+  }
+  .rvi-table,
+  .rvi-signatures,
+  .rvi-approvals {
+    width: 100%;
+    border-collapse: collapse;
+    table-layout: fixed;
+  }
+  .rvi-table th,
+  .rvi-table td,
+  .rvi-signatures th,
+  .rvi-signatures td,
+  .rvi-approvals th,
+  .rvi-approvals td {
+    border: 0.5pt solid #000;
+    padding: 1mm;
+    vertical-align: top;
+    font-size: 6.5pt;
+    line-height: 1.25;
+    word-wrap: break-word;
+  }
+  .rvi-table th,
+  .rvi-signatures th,
+  .rvi-approvals th {
+    text-align: center;
+    font-weight: 700;
+  }
+  .rvi-graph-numbers th {
+    font-weight: 400;
+    font-size: 6pt;
+    padding: .4mm;
+  }
+  .rvi-content {
+    font-size: 7pt;
+  }
+  .rvi-doc-code {
+    font-weight: 700;
+    text-decoration: underline;
+  }
+  .rvi-signatures {
+    margin-top: 2mm;
+  }
+  .rvi-signatures td {
+    text-align: center;
+  }
+  .rvi-approvals {
+    margin-top: 1.5mm;
+  }
+  .rvi-approvals td {
+    text-align: center;
+    height: 8mm;
+  }
+  .rvi-approvals-caption,
+  .rvi-footer {
+    margin-top: 1mm;
+    text-align: right;
+    font-size: 6.5pt;
+  }
+  @page {
+    size: A4 landscape;
+    margin: 8mm;
+  }
+  @media print {
+    .rvi-print-wrap {
+      padding: 0;
+      background: #fff;
+      overflow: visible;
+    }
+    .no-print {
+      display: none !important;
+    }
+    .rvi-page {
+      width: auto;
+      min-height: auto;
+      margin: 0;
+      page-break-after: always;
+    }
+    .rvi-page:last-child {
+      page-break-after: auto;
+    }
+  }
+</style>
+{% endblock %}
+{% block content %}
+<div class="rvi-print-wrap">
+  <div class="rvi-print-toolbar no-print">
+    <a href="{% url 'storage:change_permission_detail' permission.pk %}"
+       class="btn btn-sm btn-outline-secondary">← К карточке РВИ</a>
+    <button type="button" class="btn btn-sm btn-primary"
+            onclick="window.print()">Печать</button>
+    <a href="{% url 'storage:change_permission_print_pdf' permission.pk %}"
+       class="btn btn-sm btn-outline-danger">Скачать PDF</a>
+    <span class="text-muted small">
+      Форма 9 (первый лист) / 9а (последующие)
+    </span>
+  </div>
+
+  {% for page in pages %}
+    <section class="rvi-page" data-role="rvi-print-page"
+             data-form="{% if forloop.first %}9{% else %}9а{% endif %}">
+      <div class="rvi-form-line">Форма {% if forloop.first %}9{% else %}9а{% endif %}</div>
+      <h1 class="rvi-title">Разрешение на внесение изменений</h1>
+
+      <table class="rvi-table">
+        <colgroup>
+          <col style="width:28mm">
+          <col style="width:45mm">
+          <col style="width:52mm">
+          <col style="width:11mm">
+          <col style="width:14mm">
+          <col style="width:88mm">
+          <col style="width:10mm">
+          <col style="width:29mm">
+        </colgroup>
+        <thead>
+          <tr class="rvi-graph-numbers">
+            <th>1</th><th>2</th><th>3</th><th>4</th>
+            <th>5</th><th>6</th><th>7</th><th>8</th>
+          </tr>
+          <tr>
+            <th>Разрешение</th>
+            <th>Обозначение</th>
+            <th>Наименование объекта строительства</th>
+            <th>Изм.</th>
+            <th>Лист</th>
+            <th>Содержание изменения</th>
+            <th>Код</th>
+            <th>Примечание</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in page %}
+            <tr data-role="rvi-print-row">
+              {% if forloop.first %}
+                <td rowspan="{{ page|length }}">{{ print_data.code }}</td>
+                <td rowspan="{{ page|length }}">{{ print_data.designations }}</td>
+                <td rowspan="{{ page|length }}">{{ print_data.project_name }}</td>
+              {% endif %}
+              <td>{{ row.change_number }}</td>
+              <td>{{ row.sheets }}</td>
+              <td class="rvi-content">
+                <div class="rvi-doc-code"><u>{{ row.document_code }}</u></div>
+                <div>{{ row.content|linebreaksbr }}</div>
+              </td>
+              <td>{{ row.reason_code }}</td>
+              <td>{{ row.note }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+
+      <table class="rvi-signatures">
+        <tr>
+          <th style="width:46mm">Изм. внес</th>
+          <th style="width:26mm">Лист</th>
+          <th style="width:30mm">Листов</th>
+          <th style="width:59mm">Составил</th>
+          <th style="width:58mm">ГИП</th>
+          <th style="width:58mm">Утв.</th>
+        </tr>
+        <tr>
+          <td>{{ print_data.author.get_full_name|default:print_data.author.username }}</td>
+          <td>—</td>
+          <td>—</td>
+          <td>
+            {{ print_data.author.get_full_name|default:print_data.author.username }}<br>
+            {{ print_data.created_at|date:"d.m.y" }}
+          </td>
+          <td>
+            {% if print_data.gip %}
+              {{ print_data.gip.get_full_name|default:print_data.gip.username }}<br>
+              {% if print_data.approved_at %}{{ print_data.approved_at|date:"d.m.y" }}{% else %}—{% endif %}
+            {% else %}—{% endif %}
+          </td>
+          <td>
+            {% if print_data.approved_by %}
+              {{ print_data.approved_by.get_full_name|default:print_data.approved_by.username }}<br>
+              {{ print_data.approved_at|date:"d.m.y" }}
+            {% else %}—{% endif %}
+          </td>
+        </tr>
+      </table>
+
+      <table class="rvi-approvals">
+        <tr><th>13</th><th>14</th><th>15</th><th>16</th></tr>
+        <tr><td>—</td><td>—</td><td>—</td><td>—</td></tr>
+      </table>
+      <div class="rvi-approvals-caption">Согласования / нормоконтроль</div>
+      <div class="rvi-footer">
+        {{ print_data.project_code }} · {{ print_data.code }} ·
+        Форма {% if forloop.first %}9{% else %}9а{% endif %}
+      </div>
+    </section>
+  {% endfor %}
+</div>
+{% endblock %}

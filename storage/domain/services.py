@@ -7293,9 +7293,10 @@ def remove_change_permission_document(
 def _next_change_permission_code(organization: Company) -> str:
     """Выдаёт сквозной номер реестра организации атомарно.
 
-    Формат обозначения — «номер-год» (допущение W4-1: точный формат
-    уточняется по ГОСТ Р 21.1003 при реализации печатной формы).
-    Вызывается только внутри ``transaction.atomic``.
+    Формат обозначения (приложение К, графа 1) — «номер-YY»: порядковый
+    номер по журналу регистрации, дефис и ДВЕ последние цифры года
+    (примеры ГОСТ: 15-12, 15/12). Вызывается только внутри
+    ``transaction.atomic``.
     """
     registry, _ = ChangePermissionRegistry.objects.get_or_create(
         organization=organization,
@@ -7305,7 +7306,8 @@ def _next_change_permission_code(organization: Company) -> str:
     )
     registry.last_number += 1
     registry.save(update_fields=['last_number'])
-    return f'{registry.last_number}-{timezone.localdate().year}'
+    year_suffix = timezone.localdate().year % 100
+    return f'{registry.last_number}-{year_suffix:02d}'
 
 
 def approve_change_permission(
@@ -7411,6 +7413,223 @@ def mark_change_permission_applied(
         link.applied_action = action
         link.save(update_fields=['applied_at', 'applied_action'])
     return link
+
+
+# ---------------------------------------------------------------------
+# W4-3: печатные формы 9/9а, 10 и аннулирование РВИ
+# ---------------------------------------------------------------------
+
+
+def abbreviate_document_codes(codes, base_code: str = '') -> str:
+    """Обозначения документов для графы 2 формы 9/9а.
+
+    Первый документ печатается полностью, у последующих допускается
+    сокращение базовой части (пример ГОСТ: «2345-12-АР; КЖ; ОВ»).
+    База берётся из ``Project.base_code``; если её нет или коды не
+    начинаются с неё, общая часть вычисляется по самим обозначениям.
+    """
+    codes = [str(code).strip() for code in codes if str(code).strip()]
+    if not codes:
+        return '—'
+    if len(codes) == 1:
+        return codes[0]
+
+    base = (base_code or '').strip()
+    prefix = ''
+    if base and all(code.startswith(f'{base}-') for code in codes):
+        prefix = f'{base}-'
+    else:
+        common = codes[0]
+        for code in codes[1:]:
+            while common and not code.startswith(common):
+                common = common[:-1]
+        cut = common.rfind('-')
+        if cut > 0:
+            prefix = common[:cut + 1]
+
+    if not prefix:
+        return '; '.join(codes)
+    shortened = []
+    for index, code in enumerate(codes):
+        if index and code.startswith(prefix):
+            shortened.append(code[len(prefix):])
+        else:
+            shortened.append(code)
+    return '; '.join(shortened)
+
+
+def get_change_permission_print_rows(permission: ChangePermission) -> dict:
+    """Данные печатной формы 9/9а (приложение К).
+
+    Возвращает шапку формы, обозначения для графы 2 и строки по каждому
+    документу РВИ. Содержание изменения повторяется в каждой строке с
+    подчёркнутым обозначением документа — документы разделяются линией.
+    Если документов нет, печатается одна строка с прочерками.
+    """
+    links = list(
+        permission.document_links
+        .select_related('document')
+        .order_by('document__code', 'change_number', 'pk')
+    )
+    codes = [link.document.code for link in links]
+    designations = abbreviate_document_codes(
+        codes, permission.project.base_code,
+    )
+    rows = [
+        {
+            'document_code': link.document.code,
+            'document_name': link.document.name,
+            'change_number': link.change_number,
+            'sheets': (link.sheets or '').strip() or 'Все',
+            'content': permission.content,
+            'reason_code': permission.reason_code or '—',
+            'note': permission.note or '—',
+        }
+        for link in links
+    ]
+    if not rows:
+        rows = [{
+            'document_code': '—',
+            'document_name': '',
+            'change_number': '—',
+            'sheets': '—',
+            'content': permission.content,
+            'reason_code': permission.reason_code or '—',
+            'note': permission.note or '—',
+        }]
+    return {
+        'permission': permission,
+        'code': permission.code or '—',
+        'project_name': permission.project.name,
+        'project_code': permission.project.code,
+        'designations': designations,
+        'rows': rows,
+        'author': permission.author,
+        'gip': _project_gip_user(permission.project),
+        'approved_by': permission.approved_by,
+        'approved_at': permission.approved_at,
+        'created_at': permission.created_at,
+    }
+
+
+def get_document_change_registration_rows(document: Document) -> list[dict]:
+    """Строки таблицы регистрации изменений (форма 10, приложение М).
+
+    Одна строка — версия, выпущенная по РВИ (``change_permission``
+    заполнен). Графы листов в модели версии отдельно не хранятся:
+    доступен только свободный текст ``ChangeSetEntry.affected_sheets``,
+    поэтому листы изменённые/заменённые/новые/аннулированные и «Всего
+    листов в док.» печатаются прочерком до появления данных.
+    """
+    versions = (
+        document.versions
+        .filter(
+            change_permission__isnull=False,
+            change_number__isnull=False,
+        )
+        .select_related('change_permission')
+        .order_by('change_number', 'version_number', 'pk')
+    )
+    return [
+        {
+            'change_number': version.change_number,
+            'permission_code': (
+                version.change_permission.code
+                if version.change_permission_id
+                else '—'
+            ) or '—',
+            'date': version.uploaded_at,
+            'changed_sheets': '—',
+            'replaced_sheets': '—',
+            'new_sheets': '—',
+            'annulled_sheets': '—',
+            'total_sheets': '—',
+        }
+        for version in versions
+    ]
+
+
+def can_annul_change_permission(
+    user: User | None,
+    permission: ChangePermission,
+) -> bool:
+    """Кто может аннулировать РВИ.
+
+    - черновик — ГИП-автор черновика или Руководитель организации;
+    - утверждённое — Руководитель всегда; ГИП проекта — только если
+      все документы РВИ вне архива;
+    - аннулированное — уже никто (только просмотр).
+    """
+    if user is None or not user.is_authenticated:
+        return False
+    if permission.status == ChangePermission.STATUS_DRAFT:
+        return (
+            user.pk == permission.author_id
+            or _is_organization_manager(user, permission.organization)
+        )
+    if permission.status == ChangePermission.STATUS_APPROVED:
+        if _is_organization_manager(user, permission.organization):
+            return True
+        if change_permission_requires_manager(permission):
+            return False
+        return _is_project_gip(user, permission.project)
+    return False
+
+
+def annul_change_permission(
+    user: User,
+    permission: ChangePermission,
+    comment: str = '',
+) -> ChangePermission:
+    """Аннулирует РВИ с записью в истории статусов.
+
+    Обозначение остаётся занятым в журнале регистрации и не
+    переиспользуется: реестр не откатывается, связь ``code`` уникальна.
+    Аннулированное РВИ доступно только для просмотра; запрос
+    нерасходованного изменения его не возвращает (там фильтр approved).
+    """
+    with transaction.atomic():
+        locked = (
+            ChangePermission.objects
+            .select_for_update()
+            .select_related('project', 'organization')
+            .get(pk=permission.pk)
+        )
+        if locked.status == ChangePermission.STATUS_ANNULLED:
+            raise ValidationError("Разрешение уже аннулировано")
+        if not can_annul_change_permission(user, locked):
+            if (
+                locked.status == ChangePermission.STATUS_APPROVED
+                and change_permission_requires_manager(locked)
+            ):
+                raise PermissionDenied(
+                    "Документ РВИ находится в архиве — аннулировать может "
+                    "только Руководитель организации"
+                )
+            if locked.status == ChangePermission.STATUS_DRAFT:
+                raise PermissionDenied(
+                    "Аннулировать черновик может его автор-ГИП или "
+                    "Руководитель организации"
+                )
+            raise PermissionDenied(
+                "Аннулировать утверждённое РВИ может Руководитель "
+                "организации или ГИП, если все документы вне архива"
+            )
+        old_status = locked.status
+        locked.status = ChangePermission.STATUS_ANNULLED
+        locked.save(
+            update_fields=['status', 'updated_at'],
+            allow_annulment=True,
+        )
+        ChangePermissionStatusLog.objects.create(
+            permission=locked,
+            old_status=old_status,
+            new_status=ChangePermission.STATUS_ANNULLED,
+            changed_by=user,
+            comment=comment or 'РВИ аннулировано',
+        )
+    permission.refresh_from_db()
+    return permission
 
 
 # ---------------------------------------------------------------------

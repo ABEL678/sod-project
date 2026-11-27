@@ -25,6 +25,14 @@ reverse()/client в тестах, без чтения файлов.
         </span>
       </h1>
     </div>
+    <div class="ms-auto d-flex flex-wrap gap-1">
+      <a href="{% url 'storage:change_permission_print' permission.pk %}"
+         class="btn btn-sm btn-outline-secondary"
+         data-role="rvi-print-link">Печатная форма</a>
+      <a href="{% url 'storage:change_permission_print_pdf' permission.pk %}"
+         class="btn btn-sm btn-outline-danger"
+         data-role="rvi-print-pdf">Скачать PDF</a>
+    </div>
   </div>
 
   <div class="row g-3">
@@ -198,6 +206,13 @@ reverse()/client в тестах, без чтения файлов.
     </div>
 
     <div class="col-lg-4">
+      {% if permission.status == 'annulled' %}
+        <div class="alert alert-secondary small" data-role="rvi-annulled-note">
+          РВИ аннулировано — доступно только для просмотра.
+          Обозначение осталось занятым в журнале регистрации.
+        </div>
+      {% endif %}
+
       {% if can_approve and permission.status == 'draft' %}
         <div class="card mb-3" data-role="rvi-approve">
           <div class="card-header small text-secondary">Утверждение</div>
@@ -212,6 +227,30 @@ reverse()/client в тестах, без чтения файлов.
               {% csrf_token %}
               <button type="submit" class="btn btn-sm btn-success w-100">
                 <i class="bi bi-check2-circle me-1" aria-hidden="true"></i>Утвердить
+              </button>
+            </form>
+          </div>
+        </div>
+      {% endif %}
+
+      {% if can_annul %}
+        <div class="card mb-3" data-role="rvi-annul">
+          <div class="card-header small text-secondary">Аннулирование РВИ</div>
+          <div class="card-body">
+            <p class="small text-secondary mb-2">
+              Черновик аннулирует автор-ГИП или Руководитель. Утверждённое
+              РВИ аннулирует Руководитель; ГИП — если все документы РВИ
+              вне архива. Обозначение останется занятым в журнале.
+            </p>
+            <form method="post"
+                  action="{% url 'storage:change_permission_annul' permission_id=permission.pk %}"
+                  onsubmit="return confirm('Аннулировать РВИ? Действие необратимо.');">
+              {% csrf_token %}
+              <label class="form-label small" for="rviAnnulComment">Причина (необязательно)</label>
+              <input type="text" class="form-control form-control-sm mb-2"
+                     id="rviAnnulComment" name="comment">
+              <button type="submit" class="btn btn-sm btn-outline-danger w-100">
+                <i class="bi bi-slash-circle me-1" aria-hidden="true"></i>Аннулировать
               </button>
             </form>
           </div>

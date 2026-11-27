@@ -1,0 +1,153 @@
+{% extends 'storage/base.html' %}
+{% comment %}
+SPEC 2.0, волна 4, шаг 3 (W4-3): печатная форма 10 (приложение М
+ГОСТ Р 21.101-2026) — таблица регистрации изменений документа.
+Строки — версии, выпущенные по РВИ (change_number + обозначение РВИ).
+Графы листов в модели версии отдельно не хранятся — прочерки.
+{% endcomment %}
+{% block title %}Таблица регистрации изменений — {{ document.code }}{% endblock %}
+{% block topbar %}{% endblock %}
+{% block extra_css %}
+<style>
+  .ct-wrap {
+    padding: 8mm;
+    background: #e9ecef;
+    overflow-x: auto;
+  }
+  .ct-toolbar {
+    max-width: 277mm;
+    margin: 0 auto 4mm;
+    display: flex;
+    flex-wrap: wrap;
+    gap: .5rem;
+    align-items: center;
+  }
+  .ct-page {
+    width: 277mm;
+    min-height: 190mm;
+    margin: 0 auto 8mm;
+    padding: 0;
+    background: #fff;
+    color: #000;
+    font-family: "Golos Text", Arial, sans-serif;
+    font-size: 9pt;
+    box-sizing: border-box;
+  }
+  .ct-form-line {
+    text-align: right;
+    font-weight: 700;
+    font-size: 8pt;
+  }
+  .ct-title {
+    margin: 0 0 1mm;
+    font-size: 11pt;
+    font-weight: 700;
+    line-height: 1.2;
+  }
+  .ct-subtitle {
+    margin: 0 0 3mm;
+    font-size: 8pt;
+  }
+  .ct-table {
+    width: 100%;
+    border-collapse: collapse;
+    table-layout: fixed;
+  }
+  .ct-table th,
+  .ct-table td {
+    border: 0.5pt solid #000;
+    padding: 1mm;
+    vertical-align: top;
+    font-size: 7pt;
+    line-height: 1.25;
+    word-wrap: break-word;
+  }
+  .ct-table th {
+    text-align: center;
+    font-weight: 700;
+  }
+  @page {
+    size: A4 landscape;
+    margin: 8mm;
+  }
+  @media print {
+    .ct-wrap {
+      padding: 0;
+      background: #fff;
+      overflow: visible;
+    }
+    .no-print {
+      display: none !important;
+    }
+    .ct-page {
+      width: auto;
+      min-height: auto;
+      margin: 0;
+    }
+  }
+</style>
+{% endblock %}
+{% block content %}
+<div class="ct-wrap">
+  <div class="ct-toolbar no-print">
+    <a href="{% url 'storage:document_detail' document.pk %}"
+       class="btn btn-sm btn-outline-secondary">← К документу</a>
+    <button type="button" class="btn btn-sm btn-primary"
+            onclick="window.print()">Печать</button>
+    <a href="{% url 'storage:document_changes_table_pdf' document.pk %}"
+       class="btn btn-sm btn-outline-danger">Скачать PDF</a>
+    <span class="text-muted small">Форма 10 (приложение М)</span>
+  </div>
+
+  <section class="ct-page" data-role="change-table">
+    <div class="ct-form-line">Форма 10</div>
+    <h1 class="ct-title">Таблица регистрации изменений</h1>
+    <p class="ct-subtitle">
+      {{ document.project.code }} · {{ document.code }} — {{ document.name }}
+    </p>
+    <table class="ct-table">
+      <colgroup>
+        <col style="width:16mm">
+        <col style="width:35mm">
+        <col style="width:24mm">
+        <col style="width:36mm">
+        <col style="width:36mm">
+        <col style="width:30mm">
+        <col style="width:45mm">
+        <col style="width:35mm">
+      </colgroup>
+      <thead>
+        <tr>
+          <th>Изм.</th>
+          <th>Номер док.</th>
+          <th>Дата</th>
+          <th>Листы изменённые</th>
+          <th>Листы заменённые</th>
+          <th>Листы новые</th>
+          <th>Листы аннулированные</th>
+          <th>Всего листов в док.</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+          <tr data-role="change-table-row">
+            <td>{{ row.change_number }}</td>
+            <td>{{ row.permission_code }}</td>
+            <td>{{ row.date|date:"d.m.y" }}</td>
+            <td>{{ row.changed_sheets }}</td>
+            <td>{{ row.replaced_sheets }}</td>
+            <td>{{ row.new_sheets }}</td>
+            <td>{{ row.annulled_sheets }}</td>
+            <td>{{ row.total_sheets }}</td>
+          </tr>
+        {% empty %}
+          <tr>
+            <td>—</td><td>—</td><td>—</td><td>—</td>
+            <td>—</td><td>—</td><td>—</td><td>—</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+</div>
+{% endblock %}

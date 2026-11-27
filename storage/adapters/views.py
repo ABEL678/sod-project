@@ -42,6 +42,11 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
 from storage.adapters.filters import DocumentFilter
 from storage.adapters.local_storage import LocalFileStorage
+from storage.adapters.rvi_print import (
+    build_change_permission_pages,
+    build_change_permission_pdf,
+    build_document_change_table_pdf,
+)
 from storage.adapters.tables import DocumentTable
 from storage.domain.models import (
     CHANGE_PERMISSION_REASON_CHOICES,
@@ -110,8 +115,12 @@ from storage.domain.services import (
     create_task,
     create_change_permission_draft,
     approve_change_permission,
+    annul_change_permission,
+    can_annul_change_permission,
     can_approve_change_permission,
     can_create_change_permission,
+    get_change_permission_print_rows,
+    get_document_change_registration_rows,
     get_visible_change_permissions,
     remove_change_permission_document,
     update_change_permission_draft,
@@ -4987,6 +4996,9 @@ class ChangePermissionDetailView(LoginRequiredMixin, TemplateView):
             'can_approve': can_approve_change_permission(
                 self.request.user, permission,
             ),
+            'can_annul': can_annul_change_permission(
+                self.request.user, permission,
+            ),
         })
         return context
 
@@ -5153,6 +5165,115 @@ class ChangePermissionApproveView(LoginRequiredMixin, View):
         )
         return redirect(
             'storage:change_permission_detail', permission_id=permission.pk,
+        )
+
+
+class ChangePermissionAnnulView(LoginRequiredMixin, View):
+    """Аннулирование РВИ (черновик — автор/Руководитель, утверждённое —
+    Руководитель или ГИП по правилу архива). POST с подтверждением."""
+
+    def post(self, request, permission_id):
+        permission = _get_visible_change_permission_or_404(
+            request.user, permission_id,
+        )
+        try:
+            annul_change_permission(
+                request.user,
+                permission,
+                comment=(request.POST.get('comment') or '').strip(),
+            )
+        except PermissionDenied as exc:
+            return _forbidden(exc)
+        except (ValidationError, ValueError) as exc:
+            return _forbidden(exc)
+        messages.success(
+            request,
+            'РВИ аннулировано. Обозначение осталось занятым в журнале.',
+        )
+        return redirect(
+            'storage:change_permission_detail', permission_id=permission.pk,
+        )
+
+
+class ChangePermissionPrintView(LoginRequiredMixin, TemplateView):
+    """Печатная форма 9/9а (HTML): первый лист — форма 9, далее 9а."""
+
+    template_name = 'storage/change_permission_print.html'
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        permission = _get_visible_change_permission_or_404(
+            self.request.user, self.kwargs['permission_id'],
+        )
+        data = get_change_permission_print_rows(permission)
+        context.update({
+            'permission': permission,
+            'print_data': data,
+            'pages': build_change_permission_pages(data),
+        })
+        return context
+
+
+class ChangePermissionPrintPdfView(LoginRequiredMixin, View):
+    """Экспорт печатной формы 9/9а в PDF (reportlab)."""
+
+    def get(self, request, permission_id):
+        permission = _get_visible_change_permission_or_404(
+            request.user, permission_id,
+        )
+        data = get_change_permission_print_rows(permission)
+        buffer = build_change_permission_pdf(data)
+        filename = 'rvi_{code}.pdf'.format(
+            code=get_valid_filename(permission.code or permission.pk),
+        )
+        return FileResponse(
+            buffer,
+            as_attachment=True,
+            filename=filename,
+            content_type='application/pdf',
+        )
+
+
+class DocumentChangeTablePrintView(LoginRequiredMixin, View):
+    """Форма 10 (приложение М): таблица регистрации изменений документа."""
+
+    template_name = 'storage/document_change_table.html'
+
+    def _get_document(self, request, document_id):
+        document = get_object_or_404(
+            get_accessible_documents(request.user).select_related(
+                'project', 'section',
+            ),
+            pk=document_id,
+        )
+        if not check_read_permission(request.user, document):
+            raise PermissionDenied('Нет прав на просмотр документа')
+        return document
+
+    def get(self, request, document_id):
+        document = self._get_document(request, document_id)
+        rows = get_document_change_registration_rows(document)
+        return render(request, self.template_name, {
+            'document': document,
+            'rows': rows,
+        })
+
+
+class DocumentChangeTablePdfView(DocumentChangeTablePrintView):
+    """Экспорт формы 10 в PDF (reportlab)."""
+
+    def get(self, request, document_id):
+        document = self._get_document(request, document_id)
+        rows = get_document_change_registration_rows(document)
+        buffer = build_document_change_table_pdf(document, rows)
+        filename = 'izmeneniya_{code}.pdf'.format(
+            code=get_valid_filename(document.code or document.pk),
+        )
+        return FileResponse(
+            buffer,
+            as_attachment=True,
+            filename=filename,
+            content_type='application/pdf',
         )
 
 

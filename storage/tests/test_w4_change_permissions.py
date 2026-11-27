@@ -145,9 +145,9 @@ class ChangePermissionDraftTests(ChangePermissionTestBase):
         first.refresh_from_db()
         second.refresh_from_db()
 
-        year = timezone.localdate().year
-        self.assertEqual(first.code, f'1-{year}')
-        self.assertEqual(second.code, f'2-{year}')
+        year_suffix = timezone.localdate().year % 100
+        self.assertEqual(first.code, f'1-{year_suffix:02d}')
+        self.assertEqual(second.code, f'2-{year_suffix:02d}')
         self.assertNotEqual(first.code, second.code)
 
 

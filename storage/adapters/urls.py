@@ -38,6 +38,9 @@ urlpatterns = [
     path('rvi/<int:permission_id>/', views.ChangePermissionDetailView.as_view(), name='change_permission_detail'),
     path('rvi/<int:permission_id>/edit/', views.ChangePermissionEditView.as_view(), name='change_permission_edit'),
     path('rvi/<int:permission_id>/approve/', views.ChangePermissionApproveView.as_view(), name='change_permission_approve'),
+    path('rvi/<int:permission_id>/annul/', views.ChangePermissionAnnulView.as_view(), name='change_permission_annul'),
+    path('rvi/<int:permission_id>/print/', views.ChangePermissionPrintView.as_view(), name='change_permission_print'),
+    path('rvi/<int:permission_id>/print/pdf/', views.ChangePermissionPrintPdfView.as_view(), name='change_permission_print_pdf'),
     path('rvi/<int:permission_id>/documents/add/', views.ChangePermissionDocumentAddView.as_view(), name='change_permission_document_add'),
     path('rvi/<int:permission_id>/documents/<int:document_id>/remove/', views.ChangePermissionDocumentRemoveView.as_view(), name='change_permission_document_remove'),
     path('projects/create/', views.ProjectCreateView.as_view(), name='project_create'),
@@ -172,6 +175,16 @@ urlpatterns = [
         name='membership_role_update',
     ),
     path('documents/<int:pk>/', views.DocumentDetailView.as_view(), name='document_detail'),
+    path(
+        'documents/<int:document_id>/changes-table/',
+        views.DocumentChangeTablePrintView.as_view(),
+        name='document_changes_table',
+    ),
+    path(
+        'documents/<int:document_id>/changes-table/pdf/',
+        views.DocumentChangeTablePdfView.as_view(),
+        name='document_changes_table_pdf',
+    ),
     path('download/<int:version_id>/', views.DocumentDownloadView.as_view(), name='document_download'),
     path(
         'documents/<int:document_id>/pdf-with-issues/',

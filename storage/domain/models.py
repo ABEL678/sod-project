@@ -974,26 +974,53 @@ class ChangePermission(models.Model):
         return self.code or f'РВИ-черновик #{self.pk}'
 
     def save(self, *args, **kwargs):
-        """Утверждённое/аннулированное РВИ неизменяемо."""
+        """Утверждённое/аннулированное РВИ неизменяемо.
+
+        Единственное разрешённое изменение — перевод утверждённого РВИ в
+        «аннулировано» через ``allow_annulment=True`` (это делает сервис
+        ``annul_change_permission``). Обозначение из реестра при этом
+        сохраняется: номер не переиспользуется.
+        """
+        allow_annulment = kwargs.pop('allow_annulment', False)
         if self.project_id and self.organization_id:
             if self.project.company_id != self.organization_id:
                 raise ValidationError(
                     "Организация РВИ должна совпадать с компанией проекта"
                 )
         if not self._state.adding:
-            old_status = (
+            old = (
                 ChangePermission.objects
                 .filter(pk=self.pk)
-                .values_list('status', flat=True)
+                .values(
+                    'status', 'code', 'project_id', 'organization_id',
+                    'content', 'reason_code', 'note', 'author_id',
+                    'approved_by_id', 'approved_at', 'created_at',
+                )
                 .first()
             )
-            if old_status in (
+            if old is not None and old['status'] in (
                 self.STATUS_APPROVED, self.STATUS_ANNULLED,
             ):
-                raise ValidationError(
-                    "Утверждённое разрешение на внесение изменений "
-                    "неизменяемо"
+                immutable_fields = (
+                    'code', 'project_id', 'organization_id', 'content',
+                    'reason_code', 'note', 'author_id', 'approved_by_id',
+                    'approved_at', 'created_at',
                 )
+                changed = any(
+                    getattr(self, field) != old[field]
+                    for field in immutable_fields
+                )
+                allowed_annulment = (
+                    allow_annulment
+                    and old['status'] == self.STATUS_APPROVED
+                    and self.status == self.STATUS_ANNULLED
+                    and not changed
+                )
+                if not allowed_annulment:
+                    raise ValidationError(
+                        "Утверждённое разрешение на внесение изменений "
+                        "неизменяемо"
+                    )
         return super().save(*args, **kwargs)
 
     def delete(self, *args, **kwargs):
