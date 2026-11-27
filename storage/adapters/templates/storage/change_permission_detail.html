@@ -1,0 +1,246 @@
+{% extends 'storage/base.html' %}
+{% comment %}
+SPEC 2.0, волна 4 (W4-2): карточка РВИ (формы 9/9а).
+Черновик редактируется ГИПом; утверждённое РВИ — только просмотр.
+data-role — контракт для UI-тестов; CWD-независимость обеспечивают
+reverse()/client в тестах, без чтения файлов.
+{% endcomment %}
+{% block title %}{{ permission.code|default:"Черновик РВИ" }} — Stream-CAD{% endblock %}
+{% block content %}
+<div class="container-fluid py-3" data-role="rvi-detail"
+     data-rvi-id="{{ permission.pk }}" data-rvi-status="{{ permission.status }}">
+  <div class="d-flex flex-wrap align-items-center gap-2 mb-3">
+    <div>
+      <div class="text-secondary small">
+        <a href="{% url 'storage:change_permission_list' %}">РВИ</a>
+        / {{ permission.project.code }}
+      </div>
+      <h1 class="h4 mb-1">
+        {{ permission.code|default:"Черновик РВИ" }}
+        <span class="badge ms-1
+          {% if permission.status == 'approved' %}text-bg-success
+          {% elif permission.status == 'annulled' %}text-bg-secondary
+          {% else %}text-bg-warning{% endif %}">
+          {{ permission.get_status_display }}
+        </span>
+      </h1>
+    </div>
+  </div>
+
+  <div class="row g-3">
+    <div class="col-lg-8">
+      <div class="card mb-3">
+        <div class="card-header small text-secondary">Форма 9/9а</div>
+        <div class="card-body">
+          <dl class="row small mb-0">
+            <dt class="col-sm-4">Объект / проект</dt>
+            <dd class="col-sm-8">
+              {{ permission.project.code }} — {{ permission.project.name }}
+            </dd>
+            <dt class="col-sm-4">Организация</dt>
+            <dd class="col-sm-8">{{ permission.organization.name }}</dd>
+            <dt class="col-sm-4">Содержание изменения</dt>
+            <dd class="col-sm-8" data-role="rvi-content">
+              {{ permission.content|linebreaksbr }}
+            </dd>
+            <dt class="col-sm-4">Код причины (графа 7)</dt>
+            <dd class="col-sm-8" data-role="rvi-reason">
+              {{ permission.get_reason_code_display|default:"—" }}
+            </dd>
+            <dt class="col-sm-4">Примечание</dt>
+            <dd class="col-sm-8">{{ permission.note|default:"—"|linebreaksbr }}</dd>
+            <dt class="col-sm-4">Составил</dt>
+            <dd class="col-sm-8">
+              {{ permission.author.get_full_name|default:permission.author.username }}
+              <span class="text-secondary">· {{ permission.created_at|date:"d.m.Y H:i" }}</span>
+            </dd>
+            <dt class="col-sm-4">Утвердил</dt>
+            <dd class="col-sm-8">
+              {% if permission.approved_by %}
+                {{ permission.approved_by.get_full_name|default:permission.approved_by.username }}
+                <span class="text-secondary">· {{ permission.approved_at|date:"d.m.Y H:i" }}</span>
+              {% else %}
+                <span class="text-secondary">—</span>
+              {% endif %}
+            </dd>
+          </dl>
+        </div>
+      </div>
+
+      <div class="card mb-3" data-role="rvi-documents">
+        <div class="card-header small text-secondary">Документы РВИ</div>
+        <div class="table-responsive">
+          <table class="table table-sm align-middle mb-0">
+            <thead>
+              <tr>
+                <th>Документ</th>
+                <th>Номер изменения</th>
+                <th>Листы</th>
+                <th>Расход</th>
+                {% if is_draft and can_edit %}<th></th>{% endif %}
+              </tr>
+            </thead>
+            <tbody>
+              {% for link in document_links %}
+                <tr data-role="rvi-document-row">
+                  <td>
+                    <a href="{% url 'storage:document_detail' pk=link.document.pk %}">
+                      {{ link.document.code }}
+                    </a>
+                    <div class="text-secondary small">{{ link.document.name }}</div>
+                  </td>
+                  <td>{{ link.change_number }}</td>
+                  <td>{{ link.sheets|default:"—" }}</td>
+                  <td class="small">
+                    {% if link.applied_at %}
+                      {{ link.get_applied_action_display }}
+                      <span class="text-secondary">· {{ link.applied_at|date:"d.m.Y H:i" }}</span>
+                    {% else %}
+                      <span class="text-secondary">не израсходовано</span>
+                    {% endif %}
+                  </td>
+                  {% if is_draft and can_edit %}
+                    <td class="text-end">
+                      <form method="post"
+                            action="{% url 'storage:change_permission_document_remove' permission_id=permission.pk document_id=link.document.pk %}">
+                        {% csrf_token %}
+                        <button type="submit" class="btn btn-sm btn-outline-danger"
+                                title="Исключить документ">
+                          <i class="bi bi-x-lg" aria-hidden="true"></i>
+                        </button>
+                      </form>
+                    </td>
+                  {% endif %}
+                </tr>
+              {% empty %}
+                <tr><td colspan="5" class="text-secondary">Документы не добавлены</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% if is_draft and can_edit %}
+          <div class="card-body border-top">
+            <form method="post" class="row g-2 align-items-end"
+                  action="{% url 'storage:change_permission_document_add' permission_id=permission.pk %}"
+                  data-role="rvi-add-document">
+              {% csrf_token %}
+              <div class="col-md-6">
+                <label class="form-label small mb-1" for="rviDocumentAdd">Документ проекта</label>
+                <select class="form-select form-select-sm" id="rviDocumentAdd"
+                        name="document_id" required>
+                  <option value="">— выберите —</option>
+                  {% for document in available_documents %}
+                    <option value="{{ document.pk }}">
+                      {{ document.code }} — {{ document.name }}
+                    </option>
+                  {% endfor %}
+                </select>
+              </div>
+              <div class="col-md-4">
+                <label class="form-label small mb-1" for="rviDocumentSheets">Листы</label>
+                <input type="text" class="form-control form-control-sm"
+                       id="rviDocumentSheets" name="sheets"
+                       placeholder="Например: 3, 7–9">
+              </div>
+              <div class="col-md-2">
+                <button type="submit" class="btn btn-sm btn-outline-primary w-100">
+                  Добавить
+                </button>
+              </div>
+            </form>
+            <div class="form-text mt-1">
+              Номер изменения назначается системой: следующий порядковый
+              номер изменения этого документа.
+            </div>
+          </div>
+        {% endif %}
+      </div>
+
+      {% if is_draft and can_edit %}
+        <div class="card mb-3" data-role="rvi-edit">
+          <div class="card-header small text-secondary">Редактирование черновика</div>
+          <div class="card-body">
+            <form method="post"
+                  action="{% url 'storage:change_permission_edit' permission_id=permission.pk %}">
+              {% csrf_token %}
+              <div class="mb-2">
+                <label class="form-label small" for="rviContent">Содержание изменения</label>
+                <textarea class="form-control form-control-sm" id="rviContent"
+                          name="content" rows="3" required>{{ permission.content }}</textarea>
+              </div>
+              <div class="row g-2">
+                <div class="col-md-5">
+                  <label class="form-label small" for="rviReason">Код причины</label>
+                  <select class="form-select form-select-sm" id="rviReason"
+                          name="reason_code">
+                    <option value="">— прочерк —</option>
+                    {% for value, label in reason_choices %}
+                      <option value="{{ value }}"
+                              {% if permission.reason_code == value %}selected{% endif %}>
+                        {{ value }} — {{ label }}
+                      </option>
+                    {% endfor %}
+                  </select>
+                </div>
+                <div class="col-md-7">
+                  <label class="form-label small" for="rviNote">Примечание</label>
+                  <input type="text" class="form-control form-control-sm"
+                         id="rviNote" name="note" value="{{ permission.note }}">
+                </div>
+              </div>
+              <button type="submit" class="btn btn-sm btn-primary mt-2">
+                Сохранить черновик
+              </button>
+            </form>
+          </div>
+        </div>
+      {% endif %}
+    </div>
+
+    <div class="col-lg-4">
+      {% if can_approve and permission.status == 'draft' %}
+        <div class="card mb-3" data-role="rvi-approve">
+          <div class="card-header small text-secondary">Утверждение</div>
+          <div class="card-body">
+            <p class="small text-secondary mb-2">
+              После утверждения обозначение присваивается, редактирование
+              блокируется. Руководитель утверждает всегда; ГИП — если ни
+              один документ РВИ не находится в архиве.
+            </p>
+            <form method="post"
+                  action="{% url 'storage:change_permission_approve' permission_id=permission.pk %}">
+              {% csrf_token %}
+              <button type="submit" class="btn btn-sm btn-success w-100">
+                <i class="bi bi-check2-circle me-1" aria-hidden="true"></i>Утвердить
+              </button>
+            </form>
+          </div>
+        </div>
+      {% endif %}
+
+      <div class="card" data-role="rvi-status-history">
+        <div class="card-header small text-secondary">История статусов</div>
+        <ul class="list-group list-group-flush small">
+          {% for log in status_logs %}
+            <li class="list-group-item">
+              <div>
+                <span class="badge text-bg-light border">{{ log.new_status }}</span>
+                {% if log.old_status %}
+                  <span class="text-secondary">← {{ log.old_status }}</span>
+                {% endif %}
+              </div>
+              <div class="text-secondary">
+                {{ log.created_at|date:"d.m.Y H:i" }} ·
+                {{ log.changed_by.get_full_name|default:log.changed_by.username }}
+              </div>
+              {% if log.comment %}<div>{{ log.comment }}</div>{% endif %}
+            </li>
+          {% empty %}
+            <li class="list-group-item text-secondary">Записей нет</li>
+          {% endfor %}
+        </ul>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

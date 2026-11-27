@@ -174,6 +174,9 @@ sod_project/
 | is_deleted | BooleanField | Мягкое удаление (корзина) |
 | deleted_at | DateTimeField, null=True | Дата помещения в корзину |
 | deleted_with_project | BooleanField | Удалён вместе с проектом (для restore_project) |
+| annulled_at | DateTimeField, null=True | Дата аннулирования по РВИ (W4-2); отличается от корзины |
+| annulled_by | FK → User, null=True, SET_NULL | Кто аннулировал |
+| annulment_permission | FK → ChangePermission, null=True, SET_NULL | РВИ — основание аннулирования |
 | created_at | DateTimeField | |
 | created_by | FK → User | |
 | updated_at | DateTimeField | |
@@ -190,6 +193,9 @@ sod_project/
 | file_size | BigIntegerField | Размер в байтах |
 | file_hash | CharField(64), blank | SHA-256 |
 | comment | TextField, blank | Что изменилось |
+| reason_type / reason_text / affected_sheets | CharField/TextField | Причина версии (SPEC 2.0 w0) |
+| change_permission | FK → ChangePermission, null=True, SET_NULL | РВИ — основание изменения версии (W4-2) |
+| change_number | PositiveIntegerField, null=True | Номер изменения (графа 4), автоназначение по документу |
 | uploaded_at | DateTimeField | |
 | uploaded_by | FK → User | |
 
@@ -236,7 +242,7 @@ sod_project/
 | project | FK → Project, related_name=change_permissions | Проект (организация — `project.company`) |
 | status | CharField(20), choices | draft, approved, annulled |
 | content | TextField | Содержание изменения (графа 6) |
-| reason_code | CharField(1), choices 1..5, blank | Код причины по таблице К.1 (графа 7); допускается прочерк |
+| reason_code | CharField(1), choices 1..5, blank | Код причины по таблице К.1 (графа 7): 1 «Усовершенствования», 2 «Изменение стандартов и норм», 3 «Дополнительные требования заказчика», 4 «Устранение ошибок», 5 «Другие причины»; пусто = прочерк |
 | note | TextField, blank | Примечание (графа 8) |
 | author | FK → User, PROTECT | Составил (ГИП) |
 | approved_by | FK → User, null=True, SET_NULL | Утвердил |
@@ -251,11 +257,18 @@ sod_project/
 |---|---|---|
 | permission | FK → ChangePermission, related_name=document_links | РВИ |
 | document | FK → Document, related_name=change_permission_links | Документ |
-| change_number | PositiveIntegerField | Номер изменения для документа (графа 4) |
+| change_number | PositiveIntegerField | Номер изменения для документа (графа 4), автоназначение: max по утверждённым/аннулированным связям этого документа + 1 |
 | sheets | CharField(255), blank | Список листов или «Все» (графа 5) |
-| applied_at | DateTimeField, null=True | Изменение израсходовано (выпуск версии / вывод из архива) |
+| applied_at | DateTimeField, null=True | Изменение израсходовано (W4-2) |
+| applied_action | CharField(10), choices, blank | Чем израсходовано: version / unarchive / annulment |
 
-**Уникальность:** (permission, document). После утверждения РВИ допускается только заполнение `applied_at`.
+**Семантика расхода (W4-2):** одно изменение расходуется одним действием. Вывод из архива расходует изменение сразу; последующая загрузка версии по тому же РВИ допускается без повторного расхода. Аннулирование документа расходует изменение отдельным действием.
+
+**Уникальность:** (permission, document). После утверждения РВИ допускается только заполнение `applied_at` и `applied_action`.
+
+#### ChangePermissionStatusLog (РВИ, Волна 4)
+
+История статусов карточки РВИ (черновик → утверждено → аннулировано): `permission` (FK, related_name=status_logs), `old_status`/`new_status`, `changed_by`, `comment`, `created_at`. Записи только добавляются.
 
 #### ChangePermissionRegistry (РВИ, Волна 4)
 
@@ -265,6 +278,10 @@ sod_project/
 | last_number | PositiveIntegerField | Последний сквозной номер |
 
 Счётчик блокируется строкой реестра (`select_for_update`) при утверждении РВИ; формат обозначения — «номер-год» (уточняется по ГОСТ Р 21.1003).
+
+**Точки срабатывания РВИ (W4-2):** повторная загрузка версии в документ SHARED (итог A/B), PUBLISHED или ARCHIVE требует утверждённое РВИ с нерасходованным изменением; WIP правится свободно. Вывод из архива (ARCHIVE → WIP, ГИП/админ) и аннулирование документа выполняются только по такому РВИ и расходуют изменение. Расход блокируется `select_for_update` в одной транзакции с действием.
+
+**UI раздела «РВИ» (W4-2):** `/rvi/` — список с фильтрами по проекту и статусу и сортировкой по обозначению; `/rvi/<id>/` — карточка форм 9/9а; создание — ГИП, утверждение — по матрице W4-1. Руководитель видит РВИ организации, ГИП — своих проектов, viewer и не-участники доступа не имеют. Печатная форма 9/9а и аннулирование РВИ — W4-3.
 
 #### DocumentView
 | Поле | Тип | Описание |
@@ -603,7 +620,7 @@ CheckRun 1─N PendingCheckResult
 
 def create_project(company, code, name, customer, gip, created_by) -> Project: ...
 def create_folder(user, project, name, section=None, parent=None) -> Folder: ...
-def upload_document(user, project, section, code, name, doc_type, file, comment, folder=None) -> DocumentVersion: ...
+def upload_document(user, project, section, code, name, doc_type, file, comment, folder=None, ..., change_permission=None) -> DocumentVersion: ...
 def move_document(user, document, folder) -> Document: ...
 def generate_share_link(user, document) -> str: ...
 def delete_document(user, document) -> Document: ... (мягкое удаление)

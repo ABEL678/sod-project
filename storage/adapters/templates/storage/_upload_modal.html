@@ -54,6 +54,23 @@ UI-аудит (треб. 2.2/3.2): модалка загрузки докуме�
               {% endfor %}
             </select>
           </div>
+          <div class="mb-3">
+            <label class="form-label small" for="uploadModalChangePermission">Основание изменения (РВИ)</label>
+            <select class="form-select form-select-sm" id="uploadModalChangePermission"
+                    name="change_permission_id">
+              <option value="">— не требуется для документа в работе —</option>
+              {% for link in change_permission_choices %}
+                <option value="{{ link.permission_id }}">
+                  {{ link.permission.code|default:"РВИ-черновик" }} · {{ link.document.code }} · изм. {{ link.change_number }}
+                </option>
+              {% endfor %}
+            </select>
+            <div class="form-text">
+              Для документа на согласовании (итог А/В), опубликованного
+              или архивного обязательна — утверждённое РВИ с нерасходованным
+              изменением.
+            </div>
+          </div>
           <div class="mb-3" id="uploadModalReasonSourceBlock">
             <label class="form-label small" for="uploadModalReasonObject">Источник причины</label>
             <select class="form-select form-select-sm" id="uploadModalReasonObject" name="reason_object">

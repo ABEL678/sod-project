@@ -492,6 +492,9 @@
                 if (extra.affected_sheets) {
                     formData.append('affected_sheets', extra.affected_sheets);
                 }
+                if (extra.change_permission_id) {
+                    formData.append('change_permission_id', extra.change_permission_id);
+                }
             }
 
             try {
@@ -620,6 +623,10 @@
                 }
                 if (affectedSheetsField && affectedSheetsField.value.trim()) {
                     extra.affected_sheets = affectedSheetsField.value.trim();
+                }
+                var changePermissionField = document.getElementById('uploadModalChangePermission');
+                if (changePermissionField && changePermissionField.value) {
+                    extra.change_permission_id = changePermissionField.value;
                 }
                 var modalRoot = document.getElementById('uploadModal');
                 if (modalRoot && window.bootstrap && bootstrap.Modal) {

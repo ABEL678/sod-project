@@ -1,0 +1,64 @@
+{% extends 'storage/base.html' %}
+{% comment %}
+SPEC 2.0, волна 4 (W4-2): создание черновика РВИ ГИПом проекта.
+Документы добавляются после создания на карточке РВИ.
+{% endcomment %}
+{% block title %}Создание РВИ — Stream-CAD{% endblock %}
+{% block content %}
+<div class="container py-3" style="max-width: 760px;" data-role="rvi-create-form">
+  <div class="mb-3">
+    <div class="text-secondary small">
+      <a href="{% url 'storage:change_permission_list' %}">РВИ</a> / создание
+    </div>
+    <h1 class="h4 mb-1">Новое разрешение на внесение изменений</h1>
+    <div class="text-secondary small">Форма 9/9а приложения К ГОСТ Р 21.101-2026</div>
+  </div>
+
+  <form method="post" class="card">
+    {% csrf_token %}
+    <div class="card-body">
+      <div class="mb-3">
+        <label class="form-label small" for="rviProject">Проект</label>
+        <select class="form-select form-select-sm" id="rviProject"
+                name="project" required>
+          <option value="">— выберите —</option>
+          {% for project in projects %}
+            <option value="{{ project.pk }}"
+                    {% if selected_project == project.pk|stringformat:"s" %}selected{% endif %}>
+              {{ project.code }} — {{ project.name }}
+            </option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="mb-3">
+        <label class="form-label small" for="rviContentCreate">Содержание изменения</label>
+        <textarea class="form-control form-control-sm" id="rviContentCreate"
+                  name="content" rows="4" required
+                  placeholder="Что и на каком основании меняется. Для аннулирования документа укажите «аннулировать»."></textarea>
+      </div>
+      <div class="row g-2 mb-3">
+        <div class="col-md-5">
+          <label class="form-label small" for="rviReasonCreate">Код причины</label>
+          <select class="form-select form-select-sm" id="rviReasonCreate"
+                  name="reason_code">
+            <option value="">— прочерк —</option>
+            {% for value, label in reason_choices %}
+              <option value="{{ value }}">{{ value }} — {{ label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-md-7">
+          <label class="form-label small" for="rviNoteCreate">Примечание</label>
+          <input type="text" class="form-control form-control-sm"
+                 id="rviNoteCreate" name="note">
+        </div>
+      </div>
+      <button type="submit" class="btn btn-sm btn-primary">
+        Создать черновик
+      </button>
+      <a class="btn btn-sm btn-outline-secondary"
+         href="{% url 'storage:change_permission_list' %}">Отмена</a>
+    </div>
+  </form>
+</div>
+{% endblock %}

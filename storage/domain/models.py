@@ -483,6 +483,32 @@ class Document(models.Model):
         blank=True,
         verbose_name="Публичная ссылка действует до",
     )
+    # Аннулирование документа по РВИ (SPEC 2.0, волна 4, W4-2).
+    # Отличается от мягкого удаления (корзина): документ остаётся в
+    # истории проекта, но помечен как аннулированный и не принимает
+    # новые версии. Основание — утверждённое РВИ с записью
+    # «аннулировать» в содержании изменения.
+    annulled_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        verbose_name="Дата аннулирования",
+    )
+    annulled_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='annulled_documents',
+        verbose_name="Кто аннулировал",
+    )
+    annulment_permission = models.ForeignKey(
+        'ChangePermission',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='annulled_documents',
+        verbose_name="Основание аннулирования (РВИ)",
+    )
     is_deleted = models.BooleanField(default=False, verbose_name="Удален")
     deleted_at = models.DateTimeField(null=True, blank=True, verbose_name="Дата удаления")
     deleted_with_parent = models.BooleanField(
@@ -509,6 +535,11 @@ class Document(models.Model):
             and self.public_link_expires_at
             and self.public_link_expires_at > timezone.now()
         )
+
+    @property
+    def is_annulled(self) -> bool:
+        """Документ аннулирован по утверждённому РВИ."""
+        return self.annulled_at is not None
 
     def save(self, *args, **kwargs):
         """Страж: состояние меняется только через переход (сервис).
@@ -703,6 +734,23 @@ class DocumentVersion(models.Model):
         default='',
         verbose_name="Причина версии (текст)",
     )
+    # Основание версии — утверждённое РВИ (SPEC 2.0, волна 4, W4-2).
+    # Заполняется только upload_document() при расходовании изменения:
+    # номер изменения (графа 4) берётся из связи РВИ↔документ и
+    # фиксируется в версии для таблицы изменений основной надписи.
+    change_permission = models.ForeignKey(
+        'ChangePermission',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='versions',
+        verbose_name="Основание изменения (РВИ)",
+    )
+    change_number = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        verbose_name="Номер изменения",
+    )
     # Этап 20 (треб. 3): статус ИИ-индексации версии (RAG-поиск по PDF).
     # Значения согласованы с ai_checks.domain.models.IndexingStatus:
     # pending → processing → done | error. Choices дублируются без
@@ -816,15 +864,14 @@ class ChangeSetEntry(models.Model):
 
 
 # Разрешение на внесение изменений (РВИ), SPEC 2.0, волна 4.
-# Формы 9 и 9а приложения К ГОСТ Р 21.101-2026. Точные наименования
-# причин по таблице К.1 уточняются при реализации печатной формы
-# (W4-2); здесь фиксируются только коды 1..5.
+# Формы 9 и 9а приложения К ГОСТ Р 21.101-2026. Наименования причин —
+# по таблице К.1 (графа 7); пустой код = прочерк в графе.
 CHANGE_PERMISSION_REASON_CHOICES = [
-    ('1', 'Код 1'),
-    ('2', 'Код 2'),
-    ('3', 'Код 3'),
-    ('4', 'Код 4'),
-    ('5', 'Код 5'),
+    ('1', 'Усовершенствования'),
+    ('2', 'Изменение стандартов и норм'),
+    ('3', 'Дополнительные требования заказчика'),
+    ('4', 'Устранение ошибок'),
+    ('5', 'Другие причины'),
 ]
 
 
@@ -961,10 +1008,25 @@ class ChangePermission(models.Model):
 class ChangePermissionDocument(models.Model):
     """Связь РВИ с документом: номер изменения и список листов.
 
-    ``applied_at`` — факт расходования изменения (выпуск версии по РВИ
-    или вывод документа из архива). Утверждённая связь допускает только
-    заполнение ``applied_at``; остальные поля неизменяемы.
+    ``applied_at`` — факт расходования изменения. Расход = одно действие:
+    вывод документа из архива ИЛИ загрузка новой версии, зафиксированный
+    в ``applied_action``. Выбранная семантика (W4-2): вывод из архива
+    расходует изменение сразу, а последующая загрузка версии по тому же
+    РВИ допускается без повторного расхода — иначе ГИП не смог бы
+    вернуть документ и внести изменение одним разрешением. Аннулирование
+    документа расходует изменение отдельным действием.
+    Утверждённая связь допускает только заполнение ``applied_at`` и
+    ``applied_action``; остальные поля неизменяемы.
     """
+
+    APPLIED_BY_VERSION = 'version'
+    APPLIED_BY_UNARCHIVE = 'unarchive'
+    APPLIED_BY_ANNULMENT = 'annulment'
+    APPLIED_ACTION_CHOICES = [
+        (APPLIED_BY_VERSION, 'Загрузка версии'),
+        (APPLIED_BY_UNARCHIVE, 'Вывод из архива'),
+        (APPLIED_BY_ANNULMENT, 'Аннулирование документа'),
+    ]
 
     permission = models.ForeignKey(
         ChangePermission,
@@ -991,6 +1053,13 @@ class ChangePermissionDocument(models.Model):
         null=True,
         blank=True,
         verbose_name="Изменение израсходовано",
+    )
+    applied_action = models.CharField(
+        max_length=10,
+        choices=APPLIED_ACTION_CHOICES,
+        blank=True,
+        default='',
+        verbose_name="Чем израсходовано",
     )
 
     class Meta:
@@ -1031,9 +1100,12 @@ class ChangePermissionDocument(models.Model):
                 ),
             ).exists():
                 update_fields = kwargs.get('update_fields')
+                allowed_applied_fields = (
+                    {'applied_at'}, {'applied_at', 'applied_action'},
+                )
                 if (
                     update_fields is None
-                    or set(update_fields) != {'applied_at'}
+                    or set(update_fields) not in allowed_applied_fields
                     or old['permission_id'] != self.permission_id
                     or old['document_id'] != self.document_id
                     or old['change_number'] != self.change_number
@@ -1055,6 +1127,56 @@ class ChangePermissionDocument(models.Model):
                 "нельзя удалить"
             )
         return super().delete(*args, **kwargs)
+
+
+class ChangePermissionStatusLog(models.Model):
+    """История статусов РВИ: черновик → утверждено (→ аннулировано).
+
+    Протокольная запись для карточки РВИ. Изменяется только добавлением;
+    строки не редактируются и не удаляются.
+    """
+
+    permission = models.ForeignKey(
+        ChangePermission,
+        on_delete=models.CASCADE,
+        related_name='status_logs',
+        verbose_name="Разрешение",
+    )
+    old_status = models.CharField(
+        max_length=20,
+        blank=True,
+        default='',
+        verbose_name="Прежний статус",
+    )
+    new_status = models.CharField(
+        max_length=20,
+        verbose_name="Новый статус",
+    )
+    changed_by = models.ForeignKey(
+        User,
+        on_delete=models.PROTECT,
+        verbose_name="Кто изменил",
+    )
+    comment = models.TextField(
+        blank=True,
+        default='',
+        verbose_name="Комментарий",
+    )
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+        verbose_name="Дата изменения",
+    )
+
+    class Meta:
+        ordering = ['created_at', 'pk']
+        verbose_name = "Запись истории статуса РВИ"
+        verbose_name_plural = "История статусов РВИ"
+
+    def __str__(self):
+        return (
+            f'{self.permission_id}: {self.old_status or "—"} → '
+            f'{self.new_status}'
+        )
 
 
 class ChangePermissionRegistry(models.Model):

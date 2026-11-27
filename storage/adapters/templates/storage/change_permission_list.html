@@ -1,0 +1,115 @@
+{% extends 'storage/base.html' %}
+{% comment %}
+SPEC 2.0, волна 4 (W4-2): раздел «РВИ» — отдельная вкладка, не внутри
+документов. Список разрешений на внесение изменений (формы 9/9а
+приложения К ГОСТ Р 21.101-2026). Фильтры — проект и статус; сортировка
+по обозначению. data-role — контракт для UI-тестов.
+{% endcomment %}
+{% block title %}РВИ — Stream-CAD{% endblock %}
+{% block content %}
+<div class="container-fluid py-3" data-role="rvi-list">
+  <div class="d-flex flex-wrap align-items-center gap-2 mb-3">
+    <div>
+      <h1 class="h4 mb-1">Разрешения на внесение изменений</h1>
+      <div class="text-secondary small">
+        Формы 9/9а приложения К ГОСТ Р 21.101-2026
+      </div>
+    </div>
+    {% if can_create %}
+      <a class="btn btn-sm btn-primary ms-auto"
+         data-role="rvi-create"
+         href="{% url 'storage:change_permission_create' %}">
+        <i class="bi bi-plus-lg me-1" aria-hidden="true"></i>Создать РВИ
+      </a>
+    {% endif %}
+  </div>
+
+  <form method="get" class="row g-2 align-items-end mb-3"
+        data-role="rvi-filters">
+    <div class="col-sm-5 col-md-4">
+      <label class="form-label small mb-1" for="rviProjectFilter">Проект</label>
+      <select class="form-select form-select-sm" id="rviProjectFilter"
+              name="project">
+        <option value="">Все доступные проекты</option>
+        {% for project in project_choices %}
+          <option value="{{ project.pk }}"
+                  {% if selected_project == project.pk|stringformat:"s" %}selected{% endif %}>
+            {{ project.code }} — {{ project.name }}
+          </option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-sm-4 col-md-3">
+      <label class="form-label small mb-1" for="rviStatusFilter">Статус</label>
+      <select class="form-select form-select-sm" id="rviStatusFilter"
+              name="status">
+        <option value="">Все статусы</option>
+        {% for value, label in status_choices %}
+          <option value="{{ value }}"
+                  {% if selected_status == value %}selected{% endif %}>
+            {{ label }}
+          </option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-auto">
+      <button type="submit" class="btn btn-sm btn-outline-secondary">
+        Применить
+      </button>
+    </div>
+  </form>
+
+  <div class="table-responsive">
+    <table class="table table-sm align-middle" data-role="rvi-table">
+      <thead>
+        <tr>
+          <th>Обозначение</th>
+          <th>Проект / объект</th>
+          <th>Документы</th>
+          <th>Статус</th>
+          <th>Дата</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for permission in permissions %}
+          <tr data-role="rvi-row" data-rvi-id="{{ permission.pk }}">
+            <td>
+              <a href="{% url 'storage:change_permission_detail' permission_id=permission.pk %}">
+                {{ permission.code|default:"Черновик" }}
+              </a>
+            </td>
+            <td>
+              <div>{{ permission.project.code }}</div>
+              <div class="text-secondary small">{{ permission.project.name }}</div>
+            </td>
+            <td>
+              {% for link in permission.document_links.all %}
+                <span class="badge text-bg-light border me-1 mb-1">
+                  {{ link.document.code }} · изм. {{ link.change_number }}
+                </span>
+              {% empty %}
+                <span class="text-secondary">—</span>
+              {% endfor %}
+            </td>
+            <td>
+              <span class="badge
+                {% if permission.status == 'approved' %}text-bg-success
+                {% elif permission.status == 'annulled' %}text-bg-secondary
+                {% else %}text-bg-warning{% endif %}">
+                {{ permission.get_status_display }}
+              </span>
+            </td>
+            <td class="text-nowrap small">
+              {{ permission.approved_at|default:permission.created_at|date:"d.m.Y H:i" }}
+            </td>
+          </tr>
+        {% empty %}
+          <tr>
+            <td colspan="5" class="text-secondary">РВИ не найдены</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

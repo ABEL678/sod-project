@@ -409,6 +409,7 @@
                 class="wf-btn wf-btn-text btn btn-sm btn-outline-secondary me-1"
                 data-workflow-action="{{ action.code }}"
                 data-workflow-url="{{ action.url }}"
+                {% if action.change_permission_id %}data-change-permission-id="{{ action.change_permission_id }}"{% endif %}
                 onclick="runWorkflowAction(this)"
                 title="{{ action.label }}"
                 aria-label="{{ action.label }}">{{ action.label }}</button>
@@ -769,6 +770,9 @@
     const tokenInput = document.querySelector('input[name=csrfmiddlewaretoken]');
     const body = new URLSearchParams();
     body.set('action', action);
+    if (btn.dataset.changePermissionId) {
+      body.set('change_permission_id', btn.dataset.changePermissionId);
+    }
     fetch(url, {
       method: 'POST',
       headers: {

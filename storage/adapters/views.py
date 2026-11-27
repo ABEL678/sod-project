@@ -44,6 +44,9 @@ from storage.adapters.filters import DocumentFilter
 from storage.adapters.local_storage import LocalFileStorage
 from storage.adapters.tables import DocumentTable
 from storage.domain.models import (
+    CHANGE_PERMISSION_REASON_CHOICES,
+    ChangePermission,
+    ChangePermissionDocument,
     ChangeSetEntry,
     Company,
     DesignTask,
@@ -82,6 +85,7 @@ from storage.domain.services import (
     can_override_outcome,
     add_company_member,
     add_task_attachment,
+    add_change_permission_document,
     allowed_issue_statuses,
     archive_project,
     attach_user_to_company,
@@ -104,6 +108,13 @@ from storage.domain.services import (
     create_project_from_template,
     create_section,
     create_task,
+    create_change_permission_draft,
+    approve_change_permission,
+    can_approve_change_permission,
+    can_create_change_permission,
+    get_visible_change_permissions,
+    remove_change_permission_document,
+    update_change_permission_draft,
     delete_document,
     delete_documents,
     delete_folder,
@@ -1149,6 +1160,27 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
             'reason_rfis': RfiTask.objects.filter(
                 project=project,
             ).order_by('-number'),
+            # W4-2: основания изменения — утверждённые РВИ проекта с
+            # нерасходованным изменением. Конкретное РВИ проверяется на
+            # связь с документом в upload_document().
+            'change_permission_choices': (
+                ChangePermissionDocument.objects
+                .filter(
+                    permission__project=project,
+                    permission__status=ChangePermission.STATUS_APPROVED,
+                )
+                .filter(
+                    Q(applied_at__isnull=True)
+                    | Q(
+                        applied_action=(
+                            ChangePermissionDocument.APPLIED_BY_UNARCHIVE
+                        ),
+                        document__state__startswith='wip',
+                    )
+                )
+                .select_related('permission', 'document')
+                .order_by('permission__code', 'document__code')
+            ),
             'version_reason_choices': VERSION_REASON_CHOICES,
             'status_choices': Document.STATUS_CHOICES,
             'active_zone': active_zone,
@@ -3861,12 +3893,26 @@ class DocumentWorkflowView(LoginRequiredMixin, View):
         # Обоснование передаётся только если поле есть в форме: пустая
         # строка — явная попытка переопределения без обоснования (ValueError).
         override_justification = request.POST.get('override_justification')
+        change_permission_id = (
+            request.POST.get('change_permission_id') or ''
+        ).strip() or None
+        if change_permission_id is not None and not str(
+            change_permission_id
+        ).isdigit():
+            return JsonResponse(
+                {'status': 'error', 'error': 'Неверное основание (РВИ)'},
+                status=400,
+            )
         try:
             transition_document_zone(
                 request.user,
                 document,
                 action,
                 override_justification=override_justification,
+                change_permission=(
+                    int(change_permission_id)
+                    if change_permission_id is not None else None
+                ),
             )
         except PermissionDenied as exc:
             return JsonResponse(
@@ -4824,6 +4870,292 @@ class DocumentCodeUpdateView(LoginRequiredMixin, View):
         )
 
 
+def _gip_projects(user):
+    """Проекты, где пользователь ГИП (для создания РВИ)."""
+    return (
+        Project.objects
+        .filter(
+            memberships__user=user,
+            memberships__role_in_project='gip',
+        )
+        .distinct()
+        .order_by('code')
+    )
+
+
+def _get_visible_change_permission_or_404(user, permission_id):
+    return get_object_or_404(
+        get_visible_change_permissions(user),
+        pk=permission_id,
+    )
+
+
+def _forbidden(message):
+    return HttpResponseForbidden(str(message))
+
+
+class ChangePermissionListView(LoginRequiredMixin, TemplateView):
+    """Раздел «РВИ»: список разрешений на внесение изменений."""
+
+    template_name = 'storage/change_permission_list.html'
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        queryset = get_visible_change_permissions(self.request.user)
+        profile = getattr(self.request.user, 'userprofile', None)
+        role = getattr(profile, 'role', '')
+        if not self.request.user.is_superuser:
+            if role == 'viewer':
+                raise PermissionDenied("Нет доступа к разделу РВИ")
+            if profile is None or profile.company_id is None:
+                raise PermissionDenied("Нет доступа к разделу РВИ")
+            if role not in ('manager', 'admin', 'gip'):
+                if not ProjectMembership.objects.filter(
+                    user=self.request.user,
+                ).exists():
+                    raise PermissionDenied("Нет доступа к разделу РВИ")
+
+        project_id = (self.request.GET.get('project') or '').strip()
+        status = (self.request.GET.get('status') or '').strip()
+        if project_id.isdigit():
+            queryset = queryset.filter(project_id=int(project_id))
+        if status in dict(ChangePermission.STATUS_CHOICES):
+            queryset = queryset.filter(status=status)
+
+        queryset = queryset.prefetch_related(
+            'document_links__document',
+        ).order_by('code', '-created_at', '-pk')
+        context.update({
+            'permissions': queryset,
+            'status_choices': ChangePermission.STATUS_CHOICES,
+            'project_choices': (
+                Project.objects
+                .filter(change_permissions__in=queryset)
+                .distinct()
+                .order_by('code')
+            ),
+            'selected_project': project_id,
+            'selected_status': status,
+            'reason_choices': CHANGE_PERMISSION_REASON_CHOICES,
+            'can_create': _gip_projects(self.request.user).exists(),
+        })
+        return context
+
+
+class ChangePermissionDetailView(LoginRequiredMixin, TemplateView):
+    """Карточка РВИ: формы 9/9а, документы, история статусов."""
+
+    template_name = 'storage/change_permission_detail.html'
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        permission = _get_visible_change_permission_or_404(
+            self.request.user, self.kwargs['permission_id'],
+        )
+        links = (
+            permission.document_links
+            .select_related('document')
+            .order_by('document__code', 'change_number')
+        )
+        available_documents = (
+            Document.objects
+            .filter(
+                project=permission.project,
+                is_deleted=False,
+                annulled_at__isnull=True,
+            )
+            .exclude(change_permission_links__permission=permission)
+            .select_related('section')
+            .order_by('code')
+        )
+        context.update({
+            'permission': permission,
+            'document_links': links,
+            'status_logs': permission.status_logs.select_related(
+                'changed_by',
+            ),
+            'reason_choices': CHANGE_PERMISSION_REASON_CHOICES,
+            'status_choices': ChangePermission.STATUS_CHOICES,
+            'available_documents': available_documents,
+            'is_draft': permission.status == ChangePermission.STATUS_DRAFT,
+            'can_edit': (
+                permission.status == ChangePermission.STATUS_DRAFT
+                and can_create_change_permission(
+                    self.request.user, permission.project
+                )
+            ),
+            'can_approve': can_approve_change_permission(
+                self.request.user, permission,
+            ),
+        })
+        return context
+
+
+class ChangePermissionCreateView(LoginRequiredMixin, View):
+    """Создание черновика РВИ ГИПом проекта."""
+
+    template_name = 'storage/change_permission_form.html'
+
+    def get(self, request):
+        projects = _gip_projects(request.user)
+        if not projects.exists() and not request.user.is_superuser:
+            raise PermissionDenied(
+                "Создавать РВИ может ГИП проекта"
+            )
+        selected_project = (request.GET.get('project') or '').strip()
+        context = {
+            'projects': projects,
+            'selected_project': selected_project,
+            'reason_choices': CHANGE_PERMISSION_REASON_CHOICES,
+        }
+        return render(request, self.template_name, context)
+
+    def post(self, request):
+        project_id = (request.POST.get('project') or '').strip()
+        if not project_id.isdigit():
+            messages.error(request, 'Выберите проект')
+            return self.get(request)
+        project = get_accessible_projects(request.user).filter(
+            pk=int(project_id),
+        ).first()
+        if project is None:
+            raise PermissionDenied("Проект недоступен")
+        if not can_create_change_permission(request.user, project):
+            raise PermissionDenied(
+                "Создавать РВИ может ГИП проекта"
+            )
+        try:
+            permission = create_change_permission_draft(
+                request.user,
+                project,
+                content=(request.POST.get('content') or '').strip(),
+                reason_code=(request.POST.get('reason_code') or '').strip(),
+                note=(request.POST.get('note') or '').strip(),
+            )
+        except (ValueError, ValidationError, PermissionDenied) as exc:
+            messages.error(request, str(exc))
+            return self.get(request)
+        messages.success(
+            request,
+            'Черновик РВИ создан. Добавьте документы и утвердите разрешение.',
+        )
+        return redirect(
+            'storage:change_permission_detail', permission_id=permission.pk,
+        )
+
+
+class ChangePermissionEditView(LoginRequiredMixin, View):
+    """Редактирование черновика РВИ. Утверждённое РВИ неизменяемо."""
+
+    def post(self, request, permission_id):
+        permission = _get_visible_change_permission_or_404(
+            request.user, permission_id,
+        )
+        try:
+            update_change_permission_draft(
+                request.user,
+                permission,
+                content=(request.POST.get('content') or '').strip(),
+                reason_code=(request.POST.get('reason_code') or '').strip(),
+                note=(request.POST.get('note') or '').strip(),
+            )
+        except PermissionDenied as exc:
+            return _forbidden(exc)
+        except (ValidationError, ValueError) as exc:
+            return _forbidden(exc)
+        messages.success(request, 'Черновик РВИ обновлён')
+        return redirect(
+            'storage:change_permission_detail', permission_id=permission.pk,
+        )
+
+
+class ChangePermissionDocumentAddView(LoginRequiredMixin, View):
+    """Добавление документа в черновик РВИ (номер изменения — авто)."""
+
+    def post(self, request, permission_id):
+        permission = _get_visible_change_permission_or_404(
+            request.user, permission_id,
+        )
+        document_id = (request.POST.get('document_id') or '').strip()
+        if not document_id.isdigit():
+            return _forbidden('Выберите документ')
+        document = (
+            Document.objects
+            .filter(
+                pk=int(document_id),
+                project=permission.project,
+                is_deleted=False,
+                annulled_at__isnull=True,
+            )
+            .first()
+        )
+        if document is None:
+            return _forbidden('Документ не найден в проекте')
+        try:
+            add_change_permission_document(
+                request.user,
+                permission,
+                document,
+                sheets=(request.POST.get('sheets') or '').strip(),
+            )
+        except PermissionDenied as exc:
+            return _forbidden(exc)
+        except (ValidationError, ValueError) as exc:
+            return _forbidden(exc)
+        messages.success(
+            request,
+            f'Документ {document.code} добавлен в РВИ',
+        )
+        return redirect(
+            'storage:change_permission_detail', permission_id=permission.pk,
+        )
+
+
+class ChangePermissionDocumentRemoveView(LoginRequiredMixin, View):
+    """Удаление документа из черновика РВИ."""
+
+    def post(self, request, permission_id, document_id):
+        permission = _get_visible_change_permission_or_404(
+            request.user, permission_id,
+        )
+        document = Document.objects.filter(pk=document_id).first()
+        if document is None:
+            return _forbidden('Документ не найден')
+        try:
+            remove_change_permission_document(
+                request.user, permission, document,
+            )
+        except PermissionDenied as exc:
+            return _forbidden(exc)
+        except (ValidationError, ValueError) as exc:
+            return _forbidden(exc)
+        messages.success(request, 'Документ исключён из РВИ')
+        return redirect(
+            'storage:change_permission_detail', permission_id=permission.pk,
+        )
+
+
+class ChangePermissionApproveView(LoginRequiredMixin, View):
+    """Утверждение РВИ (Руководитель всегда; ГИП — по матрице W4-1)."""
+
+    def post(self, request, permission_id):
+        permission = _get_visible_change_permission_or_404(
+            request.user, permission_id,
+        )
+        try:
+            approve_change_permission(request.user, permission)
+        except PermissionDenied as exc:
+            return _forbidden(exc)
+        except (ValidationError, ValueError) as exc:
+            return _forbidden(exc)
+        messages.success(
+            request, 'РВИ утверждено — обозначение присвоено',
+        )
+        return redirect(
+            'storage:change_permission_detail', permission_id=permission.pk,
+        )
+
+
 class DocumentUploadAjaxView(LoginRequiredMixin, View):
     def handle_no_permission(self):
         return JsonResponse({'error': 'Требуется авторизация'}, status=403)
@@ -4884,6 +5216,26 @@ class DocumentUploadAjaxView(LoginRequiredMixin, View):
         reason_type = (request.POST.get('reason_type') or 'other').strip()
         reason_text = (request.POST.get('reason_text') or '').strip()
         affected_sheets = (request.POST.get('affected_sheets') or '').strip()
+        change_permission = None
+        raw_change_permission = (
+            request.POST.get('change_permission_id') or ''
+        ).strip()
+        if raw_change_permission:
+            if not raw_change_permission.isdigit():
+                return JsonResponse(
+                    {'error': 'Неверное основание изменения (РВИ)'},
+                    status=400,
+                )
+            change_permission = (
+                ChangePermission.objects
+                .filter(pk=raw_change_permission, project=project)
+                .first()
+            )
+            if change_permission is None:
+                return JsonResponse(
+                    {'error': 'Основание изменения (РВИ) не найдено'},
+                    status=400,
+                )
         reason_object = None
         raw_reason_object = (request.POST.get('reason_object') or '').strip()
         if raw_reason_object:
@@ -4925,6 +5277,7 @@ class DocumentUploadAjaxView(LoginRequiredMixin, View):
                 reason_object=reason_object,
                 reason_text=reason_text,
                 affected_sheets=affected_sheets,
+                change_permission=change_permission,
             )
         except ValidationError as exc:
             return JsonResponse(

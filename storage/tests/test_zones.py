@@ -12,8 +12,11 @@ from storage.domain.models import (
     User,
 )
 from storage.domain.services import (
+    add_change_permission_document,
+    approve_change_permission,
     check_zone_permission,
     create_project,
+    create_change_permission_draft,
     create_folder,
     create_section,
     move_document,
@@ -243,6 +246,7 @@ class UploadStageIndependenceTest(TestCase):
     def setUp(self):
         data = _create_test_data()
         self.admin = data['admin']
+        self.gip = data['gip']
         self.project = data['project']
         self.section = data['section']
 
@@ -260,7 +264,7 @@ class UploadStageIndependenceTest(TestCase):
             'test.pdf', b'%PDF-1.4 test content', content_type='application/pdf'
         )
 
-    def _upload(self, folder=None, code='UPL-STAGE'):
+    def _upload(self, folder=None, code='UPL-STAGE', change_permission=None):
         upload_document(
             user=self.admin,
             project=self.project,
@@ -271,10 +275,20 @@ class UploadStageIndependenceTest(TestCase):
             file=self._make_file(),
             folder=folder,
             reason_text='Тестовая причина',
+            change_permission=change_permission,
         )
         return Document.objects.get(
             project=self.project, section=self.section, code=code
         )
+
+    def _approved_permission(self, document):
+        """Утверждённое РВИ с нерасходованным изменением для документа."""
+        permission = create_change_permission_draft(
+            self.gip, self.project, content='Изменение по W4-2',
+        )
+        add_change_permission_document(self.gip, permission, document)
+        approve_change_permission(self.gip, permission)
+        return permission
 
     def _make_ready(self, doc):
         doc.state = Document.STATE_WIP_READY
@@ -301,7 +315,8 @@ class UploadStageIndependenceTest(TestCase):
         doc.refresh_from_db()
         self.assertEqual(doc.state, Document.STATE_SHARED)
 
-        self._upload(folder=self.wip_folder)
+        permission = self._approved_permission(doc)
+        self._upload(folder=self.wip_folder, change_permission=permission)
 
         doc.refresh_from_db()
         self.assertEqual(doc.state, Document.STATE_SHARED)
@@ -315,7 +330,10 @@ class UploadStageIndependenceTest(TestCase):
         doc.refresh_from_db()
         self.assertEqual(doc.state, Document.STATE_APPROVED)
 
-        self._upload(folder=self.published_folder)
+        permission = self._approved_permission(doc)
+        self._upload(
+            folder=self.published_folder, change_permission=permission,
+        )
 
         doc.refresh_from_db()
         self.assertEqual(doc.state, Document.STATE_APPROVED)

@@ -37,6 +37,14 @@
                 Корзина
             </a>
         </li>
+        {# W4-2: раздел «РВИ» — отдельная вкладка, не внутри документов #}
+        {% if user.userprofile.role != 'viewer' %}
+            <li class="nav-item">
+                <a class="nav-link" href="{% url 'storage:change_permission_list' %}">
+                    РВИ
+                </a>
+            </li>
+        {% endif %}
     </ul>
     {% if messages %}
         {% for message in messages %}

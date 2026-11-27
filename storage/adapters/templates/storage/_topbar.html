@@ -94,6 +94,17 @@
             </a>
         {% endif %}
 
+        {# W4-2: раздел «РВИ» — отдельная вкладка (не внутри документов) #}
+        {% if user.userprofile.role != 'viewer' %}
+            <a href="{% url 'storage:change_permission_list' %}"
+               class="btn btn-sm btn-outline-secondary topbar-action-desktop"
+               title="Разрешения на внесение изменений"
+               aria-label="РВИ">
+                <i class="bi bi-file-earmark-text" aria-hidden="true"></i>
+                <span class="d-none d-xl-inline ms-1">РВИ</span>
+            </a>
+        {% endif %}
+
         {# Вкладка «Помощь» (H1: статичная ссылка на start; контекстность — H3) #}
         <a href="{% url 'help:article' 'start' %}"
            class="btn btn-sm btn-outline-secondary topbar-action-desktop"

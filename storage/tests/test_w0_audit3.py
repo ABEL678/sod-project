@@ -34,6 +34,9 @@ from storage.domain.models import (
 from storage.domain.services import (
     _apply_state,
     _open_issues_count,
+    add_change_permission_document,
+    approve_change_permission,
+    create_change_permission_draft,
     create_issue,
     create_project,
     get_project_documents_queryset,
@@ -128,8 +131,21 @@ class BirthInPublishedTests(Audit3TestBase):
         )
         self.assertEqual(self._approval_entries(first_document).count(), 1)
 
+        # W4-2: повторная загрузка в опубликованный документ требует
+        # утверждённое РВИ с нерасходованным изменением.
+        permission = create_change_permission_draft(
+            self.gip,
+            self.project,
+            content='Новая редакция опубликованного документа',
+        )
+        add_change_permission_document(
+            self.gip, permission, first_document, sheets='Все',
+        )
+        approve_change_permission(self.gip, permission)
+
         second = self._upload(
             'АР-PUB-REPEAT', folder=self.published_folder,
+            change_permission=permission,
         )
         second_document = second.document
         self.assertEqual(

@@ -23,7 +23,10 @@ from storage.domain.models import (
     UserProfile,
 )
 from storage.domain.services import (
+    add_change_permission_document,
+    approve_change_permission,
     can_transition,
+    create_change_permission_draft,
     create_issue,
     create_project,
     document_internal_actions,
@@ -84,7 +87,8 @@ class ApprovalOutcomeABCTests(TestCase):
             project=self.project, zone='PUBLISHED',
         )
 
-    def _upload(self, code='АР-01', user=None, folder=None):
+    def _upload(self, code='АР-01', user=None, folder=None,
+                change_permission=None):
         return upload_document(
             user=user or self.gip,
             project=self.project,
@@ -95,6 +99,7 @@ class ApprovalOutcomeABCTests(TestCase):
             file=SimpleUploadedFile(f'{code}.pdf', b'%PDF-1.4 test'),
             reason_text='Новая редакция',
             folder=folder,
+            change_permission=change_permission,
         )
 
     def _ready_document(self, code='АР-01'):
@@ -205,13 +210,23 @@ class ApprovalOutcomeABCTests(TestCase):
         self.assertNotIn('submit_review', workflow_codes)
 
     def test_upload_to_published_blocks_only_c(self):
-        # PUT в PUBLISHED: B разрешён, C запрещён.
+        # PUT в PUBLISHED: B разрешён по утверждённому РВИ, C запрещён.
         allowed = self._upload(
             'АР-PUB-B', user=self.admin, folder=self.published_folder,
         ).document
         self._issue(allowed, 'Неблокирующее')
+        permission = create_change_permission_draft(
+            self.gip,
+            self.project,
+            content='Новая редакция по неблокирующим замечаниям',
+        )
+        add_change_permission_document(
+            self.gip, permission, allowed, sheets='Все',
+        )
+        approve_change_permission(self.gip, permission)
         self._upload(
             'АР-PUB-B', user=self.admin, folder=self.published_folder,
+            change_permission=permission,
         )
         allowed.refresh_from_db()
         self.assertEqual(allowed.status, 'approved')
@@ -220,6 +235,8 @@ class ApprovalOutcomeABCTests(TestCase):
             'АР-PUB-C', user=self.admin, folder=self.published_folder,
         ).document
         self._issue(blocked, 'Блокирующее', is_blocking=True)
+        # Плечо C без РВИ: загрузку останавливает итог C, до проверки
+        # основания изменения дело не доходит.
         with self.assertRaisesMessage(ValueError, APPROVAL_BLOCKED_MESSAGE):
             self._upload(
                 'АР-PUB-C', user=self.admin, folder=self.published_folder,

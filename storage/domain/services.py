@@ -27,6 +27,7 @@ from storage.domain.models import (
     ChangePermission,
     ChangePermissionDocument,
     ChangePermissionRegistry,
+    ChangePermissionStatusLog,
     ChangeSetEntry,
     Company,
     DesignTask,
@@ -2859,6 +2860,17 @@ ZONE_WORKFLOW_ACTIONS = {
         'to': 'ARCHIVE',
         'roles': ('admin',),
     },
+    # W4-2: вывод из архива — только ГИП (и админ) по утверждённому РВИ
+    # с нерасходованным изменением. Размещение (пользовательская папка)
+    # сохраняется; каноническая папка этапа ARCHIVE заменяется на WIP,
+    # потому что этап хранится и в ней.
+    'unarchive': {
+        'label': 'Вывести из архива',
+        'icon': 'bi-arrow-counterclockwise',
+        'from': 'ARCHIVE',
+        'to': 'WIP',
+        'roles': ('admin', 'gip'),
+    },
 }
 
 _ZONE_BY_STATUS = {status: zone for zone, status in ZONE_STATUS_MAP.items()}
@@ -2883,7 +2895,7 @@ TRANSITION_ROLES = {
     ('approved', 'archived'): frozenset({'admin'}),
     ('approved', 'draft'): frozenset({'admin'}),
     ('approved', 'in_review'): frozenset({'admin'}),
-    ('archived', 'draft'): frozenset({'admin'}),
+    ('archived', 'draft'): frozenset({'admin', 'gip'}),
     ('archived', 'in_review'): frozenset({'admin'}),
     ('archived', 'approved'): frozenset({'admin'}),
 }
@@ -3362,6 +3374,13 @@ def document_workflow_actions(user: User, document: Document) -> list[dict]:
             continue
         if code in ('publish', 'approve') and approval_outcome(document) == 'C':
             continue
+        if code == 'unarchive':
+            # W4-2: действие показываем только при наличии утверждённого
+            # РВИ с нерасходованным изменением; иначе оно гарантированно
+            # завершится отказом.
+            change_link = get_unapplied_change_permission(document)
+            if change_link is None:
+                continue
         target_status = ZONE_STATUS_MAP.get(spec['to'])
         target_suitability = ZONE_SUITABILITY_MAP.get(spec['to'])
         if not can_transition(
@@ -3372,12 +3391,15 @@ def document_workflow_actions(user: User, document: Document) -> list[dict]:
         ):
             continue
         if _workflow_role_allowed(user, document, code):
-            actions.append({
+            action = {
                 'code': code,
                 'label': spec['label'],
                 'icon': spec['icon'],
                 'kind': 'zone',
-            })
+            }
+            if code == 'unarchive':
+                action['change_permission_id'] = change_link.permission_id
+            actions.append(action)
     return actions
 
 
@@ -3410,12 +3432,21 @@ def transition_document_zone(
     document: Document,
     action_code: str,
     override_justification: str | None = None,
+    change_permission: ChangePermission | int | None = None,
 ) -> Document:
     """Контролируемый переход документа между зонами ISO 19650.
 
     Проверяет матрицу ролей, переносит документ в каноническую папку
     целевой зоны, синхронизирует статус документа и рассылает
     уведомления участникам (issues.Notification).
+
+    W4-2: действие ``unarchive`` (ARCHIVE → WIP) доступно ГИП/админу
+    только по утверждённому РВИ с нерасходованным изменением. Изменение
+    расходуется этим действием (``applied_action='unarchive'``); сама
+    новая версия загружается отдельно и может переиспользовать ту же
+    связь без повторного расхода. Размещение (пользовательская папка)
+    сохраняется; каноническая папка этапа ARCHIVE заменяется на WIP,
+    потому что этап хранится и в ней.
     """
     action = ZONE_WORKFLOW_ACTIONS.get(action_code)
     if action is None:
@@ -3463,7 +3494,15 @@ def transition_document_zone(
         raise ValueError(APPROVAL_BLOCKED_MESSAGE)
 
     target_folder = document.folder
-    if target_folder is None or _is_canonical_zone_folder(target_folder):
+    if action_code == 'unarchive':
+        # Размещение сохраняем: пользовательская папка остаётся. Но
+        # каноническая папка этапа хранит зону, поэтому при выводе из
+        # архива её нужно заменить на каноническую WIP.
+        if target_folder is None or _is_canonical_zone_folder(target_folder):
+            target_folder = _get_or_create_zone_folder(
+                document.project, 'WIP', user
+            )
+    elif target_folder is None or _is_canonical_zone_folder(target_folder):
         target_folder = _get_or_create_zone_folder(
             document.project, action['to'], user
         )
@@ -3478,7 +3517,30 @@ def transition_document_zone(
             'PUBLISHED': Document.STATE_APPROVED,
             'ARCHIVE': Document.STATE_ARCHIVED,
         }[action['to']]
-    _apply_state(user, document, target_state, folder=target_folder)
+
+    if action_code == 'unarchive':
+        with transaction.atomic():
+            locked_document = Document.objects.select_for_update().get(
+                pk=document.pk,
+            )
+            link, consume = _get_locked_change_permission_link(
+                locked_document, change_permission,
+            )
+            if not consume:
+                raise PermissionDenied(
+                    "Изменение по этому РВИ уже израсходовано"
+                )
+            link.applied_at = timezone.now()
+            link.applied_action = (
+                ChangePermissionDocument.APPLIED_BY_UNARCHIVE
+            )
+            link.save(update_fields=['applied_at', 'applied_action'])
+            _apply_state(
+                user, locked_document, target_state, folder=target_folder,
+            )
+        document = locked_document
+    else:
+        _apply_state(user, document, target_state, folder=target_folder)
 
     _notify_zone_transition(user, document, action_code)
     return document
@@ -3653,6 +3715,7 @@ def upload_document(
     reason_object=None,
     reason_text: str = '',
     affected_sheets: str = '',
+    change_permission: ChangePermission | int | None = None,
 ) -> DocumentVersion:
     """Единственная точка создания версий документа.
 
@@ -3679,6 +3742,11 @@ def upload_document(
     - SPEC 2.0, волна 0, п. 7: новый документ, рождённый сразу в
       утверждённом состоянии (папка PUBLISHED), получает запись
       одобрения ('approval') — итог A, создатель как одобривший.
+    - W4-2: повторная загрузка версии в документ на этапе SHARED (итог
+      A/B), PUBLISHED или ARCHIVE требует основание — утверждённое РВИ
+      с нерасходованным изменением (``change_permission``). При успехе
+      версия получает ``change_number`` и ссылку на РВИ, а связь
+      расходуется атомарно. Для WIP-документов РВИ не требуется.
     """
     if not skip_section_write_check and not check_write_permission(user, section):
         raise PermissionDenied("Нет прав на запись в этот раздел")
@@ -3728,11 +3796,14 @@ def upload_document(
         code=code,
     ).select_related('folder').first()
     if existing_doc is not None:
-        existing_zone = _effective_zone(existing_doc)
-        if existing_zone == 'ARCHIVE':
+        if existing_doc.is_annulled:
             raise PermissionDenied(
-                "Документ в архиве — загрузка новых версий запрещена"
+                "Документ аннулирован — загрузка новых версий запрещена"
             )
+        existing_zone = _effective_zone(existing_doc)
+        # W4-2: архивация больше не является безоговорочным запретом.
+        # Без утверждённого РВИ загрузка отклоняется сообщением об
+        # основании; с РВИ — разрешена (админ), связь расходуется.
         if not check_zone_permission(
             user, existing_doc.folder, section, zone=existing_zone
         ):
@@ -3798,6 +3869,54 @@ def upload_document(
             ):
                 raise ValueError(APPROVAL_BLOCKED_MESSAGE)
 
+        # W4-2: основание изменения для документа в охвате РВИ. Связь
+        # блокируется select_for_update внутри той же транзакции, что и
+        # создание версии: две параллельные загрузки не израсходуют одно
+        # изменение дважды.
+        change_link = None
+        if not created:
+            if change_permission_required(doc):
+                change_link, consume = _get_locked_change_permission_link(
+                    doc,
+                    change_permission,
+                    allow_unarchive_reuse=True,
+                )
+                if consume:
+                    change_link.applied_at = timezone.now()
+                    change_link.applied_action = (
+                        ChangePermissionDocument.APPLIED_BY_VERSION
+                    )
+                    change_link.save(update_fields=[
+                        'applied_at', 'applied_action',
+                    ])
+            elif change_permission is not None:
+                # WIP правится свободно: РВИ не требуется и не расходуется.
+                # Исключение — переиспользование связи, уже израсходованной
+                # выводом из архива: версия получает номер изменения того же
+                # РВИ без повторного расхода (семантика W4-2).
+                permission_id = (
+                    change_permission.pk
+                    if isinstance(change_permission, ChangePermission)
+                    else change_permission
+                )
+                candidate = (
+                    ChangePermissionDocument.objects
+                    .select_for_update()
+                    .select_related('permission')
+                    .filter(
+                        document=doc,
+                        permission_id=permission_id,
+                        permission__status=ChangePermission.STATUS_APPROVED,
+                        applied_at__isnull=False,
+                        applied_action=(
+                            ChangePermissionDocument.APPLIED_BY_UNARCHIVE
+                        ),
+                    )
+                    .first()
+                )
+                if candidate is not None:
+                    change_link = candidate
+
         # Вычисляем следующую версию
         max_number = DocumentVersion.objects.filter(document=doc).aggregate(Max('version_number'))['version_number__max']
         next_version = (max_number or 0) + 1
@@ -3818,6 +3937,12 @@ def upload_document(
             ),
             object_id=reason_object.pk if reason_object is not None else None,
             reason_text=reason_text,
+            change_permission=(
+                change_link.permission if change_link is not None else None
+            ),
+            change_number=(
+                change_link.change_number if change_link is not None else None
+            ),
         )
         _create_changeset_release(version, user, affected_sheets)
 
@@ -7035,15 +7160,24 @@ def create_change_permission_draft(
         CHANGE_PERMISSION_REASON_CHOICES
     ):
         raise ValueError("Неверный код причины изменения")
-    return ChangePermission.objects.create(
-        project=project,
-        organization=project.company,
-        author=user,
-        content=content,
-        reason_code=reason_code,
-        note=note or '',
-        status=ChangePermission.STATUS_DRAFT,
-    )
+    with transaction.atomic():
+        permission = ChangePermission.objects.create(
+            project=project,
+            organization=project.company,
+            author=user,
+            content=content,
+            reason_code=reason_code,
+            note=note or '',
+            status=ChangePermission.STATUS_DRAFT,
+        )
+        ChangePermissionStatusLog.objects.create(
+            permission=permission,
+            old_status='',
+            new_status=ChangePermission.STATUS_DRAFT,
+            changed_by=user,
+            comment='Черновик создан',
+        )
+    return permission
 
 
 def update_change_permission_draft(
@@ -7085,29 +7219,60 @@ def update_change_permission_draft(
     return permission
 
 
+def _next_change_number_for_document(document: Document) -> int:
+    """Следующий номер изменения для документа (графа 4).
+
+    Номер — порядковый по документу, а не по РВИ: максимум по всем
+    утверждённым (в том числе израсходованным) связям этого документа
+    плюс один. Два документа в одном общем РВИ могут иметь одинаковый
+    номер изменения — это нормально.
+    """
+    max_number = (
+        ChangePermissionDocument.objects
+        .filter(
+            document=document,
+            permission__status__in=(
+                ChangePermission.STATUS_APPROVED,
+                ChangePermission.STATUS_ANNULLED,
+            ),
+        )
+        .aggregate(max_number=Max('change_number'))['max_number']
+    )
+    return (max_number or 0) + 1
+
+
 def add_change_permission_document(
     user: User,
     permission: ChangePermission,
     document: Document,
-    change_number: int,
     sheets: str = '',
 ) -> ChangePermissionDocument:
-    """Связывает документ с черновиком РВИ (графы 4 и 5)."""
+    """Связывает документ с черновиком РВИ (графы 4 и 5).
+
+    Номер изменения назначает система: следующий порядковый номер
+    изменения этого документа (см. ``_next_change_number_for_document``).
+    Ручной ввод номера из UI и сервиса удалён (W4-2, задача 0.2).
+    """
     _ensure_change_permission_draft_editor(user, permission)
     if document.project_id != permission.project_id:
         raise ValueError("Документ относится к другому проекту")
-    if not isinstance(change_number, int) or change_number < 1:
-        raise ValueError("Номер изменения должен быть положительным числом")
-    if ChangePermissionDocument.objects.filter(
-        permission=permission, document=document,
-    ).exists():
-        raise ValueError("Документ уже включён в это РВИ")
-    return ChangePermissionDocument.objects.create(
-        permission=permission,
-        document=document,
-        change_number=change_number,
-        sheets=sheets or '',
-    )
+    with transaction.atomic():
+        # Блокировка строки документа сериализует автонумерацию: две
+        # параллельные связи одного документа не получат один номер.
+        locked_document = (
+            Document.objects.select_for_update().get(pk=document.pk)
+        )
+        if ChangePermissionDocument.objects.filter(
+            permission=permission, document=locked_document,
+        ).exists():
+            raise ValueError("Документ уже включён в это РВИ")
+        change_number = _next_change_number_for_document(locked_document)
+        return ChangePermissionDocument.objects.create(
+            permission=permission,
+            document=locked_document,
+            change_number=change_number,
+            sheets=sheets or '',
+        )
 
 
 def remove_change_permission_document(
@@ -7180,6 +7345,13 @@ def approve_change_permission(
         locked.save(update_fields=[
             'code', 'status', 'approved_by', 'approved_at', 'updated_at',
         ])
+        ChangePermissionStatusLog.objects.create(
+            permission=locked,
+            old_status=ChangePermission.STATUS_DRAFT,
+            new_status=ChangePermission.STATUS_APPROVED,
+            changed_by=user,
+            comment=f'Утверждено, обозначение {locked.code}',
+        )
     permission.refresh_from_db()
     return permission
 
@@ -7207,8 +7379,16 @@ def get_unapplied_change_permission(
 def mark_change_permission_applied(
     permission: ChangePermission,
     document: Document,
+    action: str = ChangePermissionDocument.APPLIED_BY_VERSION,
 ) -> ChangePermissionDocument:
-    """Фиксирует расходование изменения РВИ для документа."""
+    """Фиксирует расходование изменения РВИ для документа.
+
+    ``action`` — чем именно израсходовано: загрузка версии, вывод из
+    архива или аннулирование документа. Повторное расходование одной
+    связи запрещено.
+    """
+    if action not in dict(ChangePermissionDocument.APPLIED_ACTION_CHOICES):
+        raise ValueError("Неизвестное действие расходования РВИ")
     with transaction.atomic():
         link = (
             ChangePermissionDocument.objects
@@ -7228,5 +7408,231 @@ def mark_change_permission_applied(
                 "Изменение по этому РВИ уже израсходовано"
             )
         link.applied_at = timezone.now()
-        link.save(update_fields=['applied_at'])
+        link.applied_action = action
+        link.save(update_fields=['applied_at', 'applied_action'])
     return link
+
+
+# ---------------------------------------------------------------------
+# W4-2: точки срабатывания РВИ
+# ---------------------------------------------------------------------
+
+# Состояния, в которых изменение документа требует утверждённого РВИ.
+# WIP-состояния правятся свободно (SPEC 2.0, волна 4).
+CHANGE_PERMISSION_REQUIRED_STATES = frozenset({
+    Document.STATE_SHARED,
+    Document.STATE_APPROVED,
+    Document.STATE_AS_BUILT,
+    Document.STATE_ARCHIVED,
+})
+
+WIP_DOCUMENT_STATES = frozenset({
+    Document.STATE_WIP_DRAFT,
+    Document.STATE_WIP_INTERNAL_REVIEW,
+    Document.STATE_WIP_REWORK,
+    Document.STATE_WIP_READY,
+})
+
+
+def change_permission_required(document: Document) -> bool:
+    """Требуется ли РВИ для новой версии существующего документа.
+
+    Охват (задача 1.1 W4-2): «На согласовании» (итог A/B), «Опубликован»,
+    «Архив». Документы WIP правятся свободно.
+    """
+    if document.state not in CHANGE_PERMISSION_REQUIRED_STATES:
+        return False
+    if document.state == Document.STATE_SHARED:
+        # Итог C и так блокирует действия; для A/B изменение уже
+        # переданного документа требует разрешения.
+        return approval_outcome(document) in ('A', 'B')
+    return True
+
+
+def _expected_change_permission_message(document: Document) -> str:
+    """Понятное пользователю сообщение: какое РВИ ожидается."""
+    available = (
+        ChangePermissionDocument.objects
+        .filter(
+            document=document,
+            permission__status=ChangePermission.STATUS_APPROVED,
+            applied_at__isnull=True,
+        )
+        .select_related('permission')
+        .order_by('permission__code', 'pk')
+    )
+    labels = [
+        f'{link.permission.code or "РВИ без обозначения"} '
+        f'(изм. {link.change_number})'
+        for link in available
+    ]
+    if labels:
+        return (
+            "Для изменения документа требуется основание — утверждённое "
+            "РВИ с нерасходованным изменением. Доступны: "
+            + ', '.join(labels)
+        )
+    return (
+        "Для изменения документа требуется утверждённое РВИ с "
+        "нерасходованным изменением. Подходящих РВИ нет — оформите "
+        "черновик, добавьте документ и утвердите разрешение."
+    )
+
+
+def _get_locked_change_permission_link(
+    document: Document,
+    permission: ChangePermission | int | None,
+    *,
+    allow_unarchive_reuse: bool = False,
+) -> tuple[ChangePermissionDocument, bool]:
+    """Проверяет и блокирует связь РВИ↔документ.
+
+    Возвращает ``(link, consume)``: ``consume=True`` — изменение ещё не
+    израсходовано и должно быть отмечено этим действием; ``False`` —
+    изменение уже израсходовано выводом из архива, и та же связь
+    переиспользуется для загрузки версии без повторного расхода.
+    """
+    if permission is None:
+        raise PermissionDenied(_expected_change_permission_message(document))
+    if isinstance(permission, int):
+        permission = ChangePermission.objects.filter(pk=permission).first()
+    if permission is None:
+        raise PermissionDenied("Основание изменения (РВИ) не найдено")
+
+    link = (
+        ChangePermissionDocument.objects
+        .select_for_update()
+        .select_related('permission')
+        .filter(document=document, permission=permission)
+        .first()
+    )
+    if link is None:
+        raise PermissionDenied(
+            f'РВИ {permission.code or "без обозначения"} не связано с '
+            f'документом {document.code}'
+        )
+    if permission.status != ChangePermission.STATUS_APPROVED:
+        raise PermissionDenied(
+            f'РВИ {permission.code or "без обозначения"} не утверждено — '
+            "ожидается утверждённое РВИ с нерасходованным изменением"
+        )
+    if link.applied_at is not None:
+        if (
+            allow_unarchive_reuse
+            and link.applied_action
+            == ChangePermissionDocument.APPLIED_BY_UNARCHIVE
+            and document.state in WIP_DOCUMENT_STATES
+        ):
+            return link, False
+        raise PermissionDenied(
+            f'Изменение по РВИ {permission.code or "без обозначения"} '
+            "уже израсходовано"
+        )
+    return link, True
+
+
+def get_visible_change_permissions(user: User):
+    """РВИ, видимые пользователю (W4-2, доступ по образцу документов).
+
+    - Руководитель и администратор — все РВИ организации;
+    - ГИП — РВИ проектов, где он ГИП;
+    - остальные участники проекта — РВИ проектов своего членства;
+    - viewer и не-участники — ничего.
+    """
+    queryset = ChangePermission.objects.select_related(
+        'project', 'organization', 'author', 'approved_by',
+    )
+    if user is None or not user.is_authenticated:
+        return queryset.none()
+    if user.is_superuser:
+        return queryset
+    profile = getattr(user, 'userprofile', None)
+    company = get_user_company(user)
+    if profile is None or company is None:
+        return queryset.none()
+    if profile.role in ('manager', 'admin'):
+        return queryset.filter(organization=company)
+    if profile.role == 'viewer':
+        return queryset.none()
+    if profile.role == 'gip':
+        return queryset.filter(
+            project__memberships__user=user,
+            project__memberships__role_in_project='gip',
+        ).distinct()
+    return queryset.filter(
+        project__memberships__user=user,
+    ).distinct()
+
+
+def can_view_change_permission(user: User, permission: ChangePermission) -> bool:
+    """Может ли пользователь открыть карточку РВИ."""
+    return get_visible_change_permissions(user).filter(pk=permission.pk).exists()
+
+
+def can_create_change_permission(user: User, project: Project) -> bool:
+    """Создавать черновик РВИ может ГИП проекта (и superuser)."""
+    return _is_project_gip(user, project)
+
+
+def annul_document(
+    user: User,
+    document: Document,
+    permission: ChangePermission,
+) -> Document:
+    """Аннулирует документ по утверждённому РВИ (W4-2, задача 1.3).
+
+    Доступно для документов в охвате РВИ (SHARED/Опубликован/Архив) и
+    только ГИП проекта (или администратор). РВИ обязано быть утверждено,
+    связано с документом и иметь нерасходованное изменение; изменение
+    расходуется этим действием (``applied_action='annulment'``).
+    Содержание РВИ должно содержать запись «аннулировать» — это
+    смысловое требование ГОСТ; жёсткая проверка текста не выполняется.
+    """
+    if user is None or not user.is_authenticated:
+        raise PermissionDenied("Требуется авторизация")
+    if not (
+        _is_project_gip(user, document.project)
+        or (
+            _is_project_admin(user, document.project)
+            and _check_company_access(
+                user, document.project.company_id,
+            )
+        )
+    ):
+        raise PermissionDenied(
+            "Аннулировать документ может ГИП проекта или администратор"
+        )
+    if document.is_deleted:
+        raise ValueError("Документ находится в корзине")
+    if document.is_annulled:
+        raise ValidationError("Документ уже аннулирован")
+    if not change_permission_required(document):
+        raise ValueError(
+            "Аннулирование доступно только для документа на этапе "
+            "«На согласовании», «Опубликован» или «Архив»"
+        )
+
+    with transaction.atomic():
+        locked_document = Document.objects.select_for_update().get(
+            pk=document.pk,
+        )
+        link, consume = _get_locked_change_permission_link(
+            locked_document, permission,
+        )
+        if not consume:
+            raise PermissionDenied(
+                "Изменение по этому РВИ уже израсходовано"
+            )
+        link.applied_at = timezone.now()
+        link.applied_action = ChangePermissionDocument.APPLIED_BY_ANNULMENT
+        link.save(update_fields=['applied_at', 'applied_action'])
+        locked_document.annulled_at = timezone.now()
+        locked_document.annulled_by = user
+        locked_document.annulment_permission = permission
+        locked_document.updated_at = timezone.now()
+        locked_document.save(update_fields=[
+            'annulled_at', 'annulled_by', 'annulment_permission',
+            'updated_at',
+        ])
+    document.refresh_from_db()
+    return document
