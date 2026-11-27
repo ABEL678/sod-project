@@ -648,7 +648,17 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
     def _get_project(self):
         if not hasattr(self, '_project_cache'):
             self._project_cache = get_object_or_404(
-                get_accessible_projects(self.request.user),
+                get_accessible_projects(self.request.user).prefetch_related(
+                    # project.gip и проверки прав ГИПа читают состав
+                    # проекта; без префетча топбар и guard-ветки дают
+                    # несколько одинаковых membership-запросов.
+                    Prefetch(
+                        'memberships',
+                        queryset=ProjectMembership.objects.select_related(
+                            'user',
+                        ),
+                    ),
+                ),
                 pk=self.kwargs['pk'],
             )
         return self._project_cache
@@ -969,6 +979,14 @@ class ProjectDetailView(LoginRequiredMixin, CottonTableView):
                 'parent__parent__parent',
                 'parent__parent__parent__parent',
                 'parent__parent__parent__parent__parent',
+            )
+            .prefetch_related(
+                # check_write_permission проверяет ГИПа через
+                # section.project.memberships, check_zone_permission —
+                # через folder.project.memberships. Два префетча снимают
+                # по два запроса на каждую папку списка.
+                'project__memberships',
+                'section__project__memberships',
             )
             .order_by('order', 'name')
         )

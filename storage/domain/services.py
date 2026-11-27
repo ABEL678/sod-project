@@ -302,10 +302,18 @@ def _clear_profile_cache(user: User) -> None:
     (_is_company_admin, get_user_company, can_transition) начинают видеть
     прежние значения роли/компании — например, обновлённый в Панели
     управления админ ещё воспринимался как viewer до конца запроса.
+
+    Вместе с профилем сбрасываются производные кэши доступа на инстансе
+    пользователя: компания (_sod_company_cache) и проверенные проекты
+    (_sod_project_access_cache). Оба живут не дольше запроса, но при
+    смене компании/роли в пределах одного запроса обязаны быть свежими.
     """
     cache = getattr(getattr(user, '_state', None), 'fields_cache', None)
     if cache is not None:
         cache.pop('userprofile', None)
+    for attribute in ('_sod_company_cache', '_sod_project_access_cache'):
+        if hasattr(user, attribute):
+            delattr(user, attribute)
 
 
 def _check_company_access(user: User, company_id: int) -> bool:
@@ -493,7 +501,31 @@ def normalize_document_view_config(config: dict) -> dict:
 
 
 def _ensure_project_access(user: User, project: Project) -> None:
-    if not get_accessible_projects(user).filter(pk=project.pk).exists():
+    """Проверяет доступ к проекту без повторных EXISTS в одном запросе.
+
+    Реестр вызывает сервисы дерева, документов и зон по отдельности;
+    каждый сервис исторически проверял доступ самостоятельно — на одну
+    страницу уходило до восьми одинаковых ``SELECT 1 FROM project``.
+    Результат кэшируется на инстансе пользователя (как уже сделанный
+    кэш компании в ``_check_company_access``). Ключ включает компанию:
+    при смене компании в том же запросе ``_clear_profile_cache``
+    сбрасывает кэш, поэтому устаревшее разрешение не переиспользуется.
+    """
+    if user.is_superuser:
+        company_key = None
+    else:
+        profile = getattr(user, 'userprofile', None)
+        company_key = profile.company_id if profile is not None else None
+    key = (project.pk, company_key)
+    cache = getattr(user, '_sod_project_access_cache', None)
+    if cache is None:
+        cache = {}
+        user._sod_project_access_cache = cache
+    if key not in cache:
+        cache[key] = get_accessible_projects(user).filter(
+            pk=project.pk,
+        ).exists()
+    if not cache[key]:
         raise PermissionDenied("Нет доступа к проекту")
 
 
@@ -728,6 +760,11 @@ def get_project_documents_queryset(
         'current_version',
         'current_version__uploaded_by',
         'created_by',
+    ).prefetch_related(
+        # Права строки реестра (ГИП) проверяются по составу проекта:
+        # _is_project_gip читает project.memberships. Без префетча это
+        # запрос на каждую строку и на каждое действие документа.
+        'project__memberships',
     ).order_by(*ordering)
 
 
