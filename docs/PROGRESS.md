@@ -65,6 +65,17 @@
 
 ## Журнал (Changelog)
 
+### 27.11.2026 — Волна 3, шаг W3-6: закрытие находок аудита волны 3
+
+- Основание — вердикт внешнего аудита волны 3: MAJOR-1, MINOR-1…MINOR-6.
+- **MAJOR-1 (красный CI на `e50c74f`):** из `test_app_js_uses_panel_url_templates` удалён устаревший ассерт `': root.dataset.moveUrlTemplate'` — после удаления копирования в W3-5 в `app.js` остались `apiUrl(root.dataset.moveUrlTemplate, …)` (строки 1151 и 1828), а тернарного `? … :` больше нет. Остальные ассерты теста не менялись.
+- **MINOR-1:** `docs/help/documents.md` — абзац о копировании переписан: копирования СОД→СОД нет (удалено в W3-5 решением владельца); доступны перемещение (DnD) и скачивание файла на компьютер; упоминание причины «Копия документа» убрано.
+- **MINOR-2:** пользовательские `ValueError` про «виртуальные зоны» переформулированы на «системную папку этапа» (`storage/domain/services.py:1855`, `2282`); имена и мета-уровень не менялись.
+- **MINOR-3/MINOR-4/MINOR-5:** в `PROGRESS.md` закрыты чекбоксы MINOR-2, MINOR-3/5, MINOR-4, MINOR-6, MINOR-7 (факт — `b210014`), добавлена запись W3-4, обновлены якоря INFO-2, MINOR-4, MINOR-6, INFO-5; `MASTER_SPEC.md` 1.8 → 1.9 (синхронно с `ARCHITECTURE.md`).
+- **MINOR-6:** удалён посторонний файл `$null` из корня репозитория (попал в `b210014`).
+- **Диагностика ai_checks (CI-аннотация `ai_checks/tests/test_reports.py:124`):** сетевой зависимости нет — тест намеренно поднимает `RuntimeError('нет сети')` в локальной заглушке `BrokenProvider` и проверяет офлайн-обработку сбоя LLM; пакет `ai_checks/` коммитом `e50c74f` не менялся. Правка не потребовалась; фактическая причина падения CI — MAJOR-1.
+- Ветка `w3-6-audit-fixes` от `origin/main` (`e50c74f`).
+
 ### 27.11.2026 — Волна 3, шаг W3-5: копирование удалено, терминология UI, кэш allowed_sections
 
 - **MINOR-1 (решение владельца 27.11.2026):** копирование документов СОД→СОД удалено полностью — сервис `copy_document`, `DocumentCopyView`, маршрут `documents/<id>/copy/`, ветка Ctrl-drop в `static/js/app.js`, хелпер `_unique_copy_code`. Документ — единственная сущность с версионностью, живёт один жизненный цикл проекта; дубли недопустимы. Выгрузка файла на локальный компьютер (download) — отдельная функция, не копия сущности.
@@ -72,6 +83,15 @@
 - **INFO-5:** набор `allowed_sections` (developer/contractor) кэшируется на инстансе пользователя на время запроса; кэш сбрасывается `_clear_profile_cache` при смене роли/компании; семантика проверок не изменена.
 - Тесты: удалены тесты, кодифицировавшие копирование (`test_t9_dnd_copy.py`, `test_w2_dnd.py`, `test_zones.py`, `test_sprint5.py`, `test_w0_p5.py`, `test_w0_p8.py`, `test_w0_audit3.py`); тестов прав, где копирование было лишь способом разложить данные, не обнаружено.
 - Ветка `w3-5-term-remove-copy` от `origin/main` (`b210014`).
+
+### 27.11.2026 — Волна 3, шаг W3-4: пробелы DnD, негативные права, JS-контракты
+
+- **MINOR-2:** закрыты пробелы покрытия инварианта «этап неизменен»: перенос документа на этапе SHARED, сброс в корень (`folder=None`), ассерт этапа в `test_developer_can_drop_within_allowed_section` (`storage/tests/test_w2_dnd.py`).
+- **MINOR-3/MINOR-5:** возвращены негативные тесты прав перемещения по текущему этапу: `test_gip_cannot_move_published_document_to_another_section` (`storage/tests/test_sprint5.py:137`), `test_published_document_rejected_even_with_flag` (`storage/tests/test_sprint7.py:79`), плюс отказы для developer/gip на этапах SHARED/PUBLISHED/ARCHIVE (`storage/tests/test_zones.py`).
+- **MINOR-4:** тест `test_archive_document_cannot_be_moved_even_by_admin` переименован в `test_archive_document_move_into_canonical_wip_folder_is_rejected` с исправленным докстрингом: запрет даёт каноническая цель WIP, а не этап архива (`storage/tests/test_zones.py:764`).
+- **MINOR-6:** усилены JS-контракты (`storage/tests/test_w2_dnd.py:530-590`): блок drop-обработчика выделяется маркерами, проверяются `data-drop-folder="{{ folder.pk }}"`, фактический вызов `window.confirm(` в цепочке drop, `method: 'POST'` внутри `postMoveRequest`, `initHtmx()` внутри `init`.
+- **MINOR-7:** пути к статикам CWD-независимы: `PROJECT_ROOT = Path(__file__).resolve().parents[2]` (`storage/tests/test_w2_dnd.py:40`), `_read` читает от него.
+- Ветка `w3-4-test-coverage` от `origin/main`; коммит `b210014`, слит в `main` fast-forward.
 
 ### 27.11.2026 — Волна 3, шаг W3-2: повторная загрузка версии не меняет этап (MAJOR-1)
 
@@ -439,15 +459,15 @@ BLOCKER и MAJOR не обнаружены; 5 MINOR:
 - [x] **W3-UPLOAD-STAGE (MAJOR-1).** Повторная загрузка версии не меняет этап жизненного цикла. Решение владельца от 27.11.2026 — вариант 1: выровнять код под правило 1.7, правило не уточнять. `upload_document` сохраняет `Document.state`; этап меняется только `transition_document_zone()`. Проверка итога C при загрузке в PUBLISHED оставлена как самостоятельная валидация; `_approval_target_changes` удалён. Тесты — `storage/tests/test_zones.py`; документация — ARCHITECTURE.md/MASTER_SPEC.md 1.8.
 - [x] **INFO-4.** Закрыто: устаревшие исторические пометки в PROGRESS.md исправлены (коммит W3-1 `67db735`; ветка `w2-7-e2e-dnd` влита в main).
 - [x] **MINOR-1.** Закрыто решением владельца от 27.11.2026: копирование документов СОД→СОД отсутствует — `copy_document`, эндпоинт `POST /documents/<id>/copy/` и Ctrl-drop удалены. Документ един и живёт один жизненный цикл проекта; дубли недопустимы. Выгрузка файла на компьютер — отдельная функция download, не копия сущности.
-- [ ] **MINOR-2.** Пробелы покрытия инварианта «этап неизменен»: этап Shared, сброс в корень, ассерт этапа в `test_developer_can_drop_within_allowed_section` (`storage/tests/test_w2_dnd.py`).
-- [ ] **MINOR-3/MINOR-5.** Вернуть негативные тесты прав перемещения по текущему этапу (ГИП/разработчик → 403) вместо заменённых позитивных (`storage/tests/test_sprint5.py:112-127`, `storage/tests/test_sprint7.py:56-76`).
-- [ ] **MINOR-4.** Переименовать/исправить докстринг `test_archive_document_cannot_be_moved_even_by_admin` (`storage/tests/test_zones.py:694-713`) — имя противоречит фактическому поведению.
-- [ ] **MINOR-6.** Усилить слабые подстрочные проверки JS (`storage/tests/test_w2_dnd.py:525-558`): `data-drop-folder` с pk, фактический вызов подтверждений в цепочке drop.
-- [ ] **MINOR-7.** CWD-независимые пути к статикам в `storage/tests/test_w2_dnd.py` (паттерн `Path(__file__).resolve().parents[2]`).
+- [x] **MINOR-2.** Закрыто в W3-4 (`b210014`): добавлены перенос документа на этапе SHARED, сброс в корень (`folder=None`) и ассерт этапа в `test_developer_can_drop_within_allowed_section` (`storage/tests/test_w2_dnd.py`).
+- [x] **MINOR-3/MINOR-5.** Закрыто в W3-4 (`b210014`): возвращены негативные тесты прав перемещения по текущему этапу — ГИП/разработчик → отказ (`storage/tests/test_sprint5.py:137`, `storage/tests/test_sprint7.py:79`, `storage/tests/test_zones.py`).
+- [x] **MINOR-4.** Закрыто в W3-4 (`b210014`): тест переименован в `test_archive_document_move_into_canonical_wip_folder_is_rejected` с исправленным докстрингом (`storage/tests/test_zones.py:764`).
+- [x] **MINOR-6.** Закрыто в W3-4 (`b210014`): JS-проверки усилены — `data-drop-folder` с pk, фактический вызов подтверждений в цепочке drop, проверки внутри выделенных блоков (`storage/tests/test_w2_dnd.py:530-590`).
+- [x] **MINOR-7.** Закрыто в W3-4 (`b210014`): CWD-независимые пути к статикам через `PROJECT_ROOT = Path(__file__).resolve().parents[2]` (`storage/tests/test_w2_dnd.py:40`).
 - [x] **MINOR-8.** Термин «зона» в пользовательских строках UI заменён на «этап»: `_documents_panel.html`, подписи иконок `_folder_tree.html`, `static/js/app.js`; `verbose_name` моделей (`storage/domain/models.py`) — миграция `0045`.
-- [ ] **INFO-2.** Терминальность этапа «Архив»: нет штатного workflow-действия возврата (`ZONE_WORKFLOW_ACTIONS`, `storage/domain/services.py:2911-2940`); кандидат на продуктовое решение владельца.
+- [ ] **INFO-2.** Терминальность этапа «Архив»: нет штатного workflow-действия возврата (`ZONE_WORKFLOW_ACTIONS`, `storage/domain/services.py:2829-2858`); кандидат на продуктовое решение владельца.
   - **Решение владельца по INFO-2 (27.11.2026):** вывод документа из этапа «Архив» — только на основании РВИ (Разрешение на внесение изменений, ГОСТ 21.101-2026, с внесением в реестр/журнал). Реализация двухэтапная: (1) тип документа РВИ по ГОСТ + реестр/журнал; (2) workflow-действие «вывод из архива» ARCHIVE → WIP (выполняет ГИП), требующее связанного зарегистрированного РВИ. До выполнения п.1 этап «Архив» фактически терминален. Размещение при выводе не меняется.
-- [x] **INFO-5.** Кэш `allowed_sections` на время запроса: developer/contractor проверяются по закэшированному набору ID; кэш сбрасывается `_clear_profile_cache`. Семантика проверок не изменена.
+- [x] **INFO-5.** Кэш `allowed_sections` на время запроса: developer/contractor проверяются по закэшированному набору ID (`_allowed_section_ids`, `storage/domain/services.py:310-328`); кэш сбрасывается `_clear_profile_cache` (`storage/domain/services.py:282-307`). Семантика проверок не изменена.
 
 ### ИИ-контур (Этап 19)
 

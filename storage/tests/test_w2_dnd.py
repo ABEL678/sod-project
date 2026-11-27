@@ -526,7 +526,6 @@ class DndClientContractTests(T8UltimateTestBase):
         self.assertIn('root.dataset.moveUrlTemplate', js)
         self.assertIn('root.dataset.folderMoveUrlTemplate', js)
         self.assertIn('apiUrl(root.dataset.folderMoveUrlTemplate', js)
-        self.assertIn(': root.dataset.moveUrlTemplate', js)
 
     def test_app_js_guards_archive_and_confirms_section_change(self):
         js = self._read('static/js/app.js')

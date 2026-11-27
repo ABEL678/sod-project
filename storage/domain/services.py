@@ -1852,7 +1852,7 @@ def create_folder(
             raise ValueError("Нельзя создать папку внутри удалённой папки")
         if _is_canonical_zone_folder(parent) or parent.zone != 'WIP':
             raise ValueError(
-                "Нельзя создавать папки внутри виртуальных зон — "
+                "Нельзя создавать папки внутри системной папки этапа — "
                 "используйте разделы проекта"
             )
         if parent.section_id is not None:
@@ -2279,7 +2279,7 @@ def move_folder(
             raise ValueError("Нельзя переместить папку в собственный потомок")
         if _is_canonical_zone_folder(parent) or parent.zone != 'WIP':
             raise ValueError(
-                "Нельзя перемещать папки внутрь виртуальных зон"
+                "Нельзя перемещать папки внутрь системной папки этапа"
             )
         new_section = parent.section
     elif section is not None:
