@@ -164,9 +164,14 @@ class ReviewResultFilterTests(W0P1TestBase):
         with CaptureQueriesContext(connection) as captured:
             result = list(queryset)
 
+        # Фильтр по ручному коду (S1) не должен порождать отдельный запрос
+        # к документам. С W2-6 в выборку добавлен prefetch состава проекта
+        # (project__memberships) — это намеренный второй SELECT для прав
+        # строки реестра. Поэтому считаем только запросы к storage_document.
         selects = [
             query for query in captured.captured_queries
             if query['sql'].lstrip().upper().startswith('SELECT')
+            and 'storage_document' in query['sql']
         ]
         self.assertEqual(len(selects), 1)
         self.assertEqual([doc.pk for doc in result], [target.pk])
