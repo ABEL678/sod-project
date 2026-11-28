@@ -161,7 +161,12 @@ class AnnulCreatesOriginalTests(ChangePermissionOriginalsTestBase):
         self.assertEqual(original.sha256, hashlib.sha256(file_bytes).hexdigest())
         self.assertTrue(original.inventory_number)
 
-        rows = get_change_permission_print_rows(approved)
+        rows = get_change_permission_print_rows(approved, annulment=True)
+        plain_rows = get_change_permission_print_rows(approved)
+        self.assertFalse(any(
+            'АННУЛИРОВАНО' in (row.get('note') or '')
+            for row in plain_rows['rows']
+        ))
         self.assertTrue(any(
             'АННУЛИРОВАНО' in (row.get('note') or '')
             for row in rows['rows']

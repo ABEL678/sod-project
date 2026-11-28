@@ -7366,13 +7366,7 @@ def _write_change_permission_original(
             "Подлинник РВИ этого типа уже записан и неизменяем"
         )
 
-    data = get_change_permission_print_rows(permission)
-    if annulment and data.get('rows'):
-        data = dict(data)
-        data['rows'] = [
-            dict(row, note=f'{row["note"]} | АННУЛИРОВАНО')
-            for row in data['rows']
-        ]
+    data = get_change_permission_print_rows(permission, annulment=annulment)
     buffer = build_change_permission_pdf(data)
     content = buffer.getvalue()
 
@@ -7557,13 +7551,17 @@ def abbreviate_document_codes(codes, base_code: str = '') -> str:
     return '; '.join(shortened)
 
 
-def get_change_permission_print_rows(permission: ChangePermission) -> dict:
+def get_change_permission_print_rows(permission: ChangePermission, annulment: bool = False) -> dict:
     """Данные печатной формы 9/9а (приложение К).
 
     Возвращает шапку формы, обозначения для графы 2 и строки по каждому
     документу РВИ. Содержание изменения повторяется в каждой строке с
     подчёркнутым обозначением документа — документы разделяются линией.
     Если документов нет, печатается одна строка с прочерками.
+
+    При ``annulment=True`` в ``note`` каждой строки добавляется
+    «АННУЛИРОВАНО» (метка аннул-подлинника; отдельная графа ГОСТ не
+    предусмотрена).
     """
     links = list(
         permission.document_links
@@ -7596,6 +7594,11 @@ def get_change_permission_print_rows(permission: ChangePermission) -> dict:
             'reason_code': permission.reason_code or '—',
             'note': permission.note or '—',
         }]
+    if annulment:
+        rows = [
+            dict(row, note=f'{row["note"]} | АННУЛИРОВАНО')
+            for row in rows
+        ]
     return {
         'permission': permission,
         'code': permission.code or '—',
