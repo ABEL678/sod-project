@@ -1292,10 +1292,22 @@ class ChangePermissionOriginal(models.Model):
             f'{self.get_record_type_display()} {self.inventory_number}'
         )
 
-    def verify_sha256(self, data: bytes) -> bool:
-        """Сверка целостности: хэш текущих байт с записью при создании."""
+    def verify_sha256(self, data: bytes = None) -> bool:
+        """Сверка целостности: хэш текущих байт файла с записью при создании.
+
+        Если ``data`` не передан, читает текущий файл по актуальному
+        ``settings.MEDIA_ROOT`` (FileSystemStorage создаётся на каждый
+        вызов, не кэширует путь на уровне модуля).
+        """
         import hashlib
 
+        from django.conf import settings
+        from django.core.files.storage import FileSystemStorage
+
+        if data is None:
+            storage = FileSystemStorage()
+            with storage.open(self.file.name, 'rb') as handle:
+                data = handle.read()
         return hashlib.sha256(data).hexdigest() == self.sha256
 
     def save(self, *args, **kwargs):

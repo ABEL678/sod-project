@@ -34,10 +34,14 @@ from storage.domain.services import (
 User = get_user_model()
 
 
-@override_settings(MEDIA_ROOT=tempfile.mkdtemp())
 class ChangePermissionOriginalsTestBase(TestCase):
     def setUp(self):
         self.media_root = tempfile.mkdtemp()
+        from django.test.utils import override_settings
+
+        self._media_override = override_settings(MEDIA_ROOT=self.media_root)
+        self._media_override.enable()
+        self.addCleanup(self._media_override.disable)
         self.company = Company.objects.create(name='Подлинники Организация')
         self.admin = User.objects.create_user(
             username='orig_admin', password='pass123',
@@ -86,7 +90,9 @@ class ChangePermissionOriginalsTestBase(TestCase):
     def tearDown(self):
         import shutil
 
+        self._media_override.disable()
         shutil.rmtree(self.media_root, ignore_errors=True)
+        super().tearDown()
 
     def _draft(self, content='Изменить планировку'):
         permission = create_change_permission_draft(

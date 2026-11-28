@@ -15,7 +15,7 @@ from PIL import Image, UnidentifiedImageError
 
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.core.files.base import ContentFile
-from django.core.files.storage import default_storage
+from django.core.files.storage import FileSystemStorage, default_storage
 from django.core.validators import validate_email
 from django.db.models import Count, Max, Min, Prefetch, Q, QuerySet
 from django.db import transaction
@@ -7382,7 +7382,8 @@ def _write_change_permission_original(
             permission.organization,
         )
         file_name = f'change_permission_originals/{permission.pk}/{record_type}.pdf'
-        saved_path = default_storage.save(file_name, ContentFile(content))
+        storage = FileSystemStorage()
+        saved_path = storage.save(file_name, ContentFile(content))
         original = ChangePermissionOriginal.objects.create(
             permission=permission,
             file=saved_path,
