@@ -110,8 +110,7 @@ class ChangePermissionOriginalsTestBase(TestCase):
 class ApproveCreatesOriginalTests(ChangePermissionOriginalsTestBase):
     def test_approve_creates_original_with_sha256_and_inventory(self):
         permission = self._draft()
-        with self.settings(MEDIA_ROOT=self.media_root):
-            approved = approve_change_permission(self.manager, permission)
+        approved = approve_change_permission(self.manager, permission)
 
         original = ChangePermissionOriginal.objects.get(
             permission=approved,
@@ -131,8 +130,7 @@ class ApproveCreatesOriginalTests(ChangePermissionOriginalsTestBase):
 
     def test_approve_duplicates_hash_and_inventory_in_status_log(self):
         permission = self._draft()
-        with self.settings(MEDIA_ROOT=self.media_root):
-            approved = approve_change_permission(self.manager, permission)
+        approved = approve_change_permission(self.manager, permission)
 
         original = ChangePermissionOriginal.objects.get(
             permission=approved,
@@ -150,9 +148,8 @@ class ApproveCreatesOriginalTests(ChangePermissionOriginalsTestBase):
 class AnnulCreatesOriginalTests(ChangePermissionOriginalsTestBase):
     def test_annul_creates_original_with_annulment_mark(self):
         permission = self._draft()
-        with self.settings(MEDIA_ROOT=self.media_root):
-            approved = approve_change_permission(self.manager, permission)
-            annul_change_permission(self.manager, approved, comment='Отмена')
+        approved = approve_change_permission(self.manager, permission)
+        annul_change_permission(self.manager, approved, comment='Отмена')
 
         original = ChangePermissionOriginal.objects.get(
             permission=approved,
@@ -173,15 +170,13 @@ class AnnulCreatesOriginalTests(ChangePermissionOriginalsTestBase):
 class OriginalImmutabilityTests(ChangePermissionOriginalsTestBase):
     def test_repeated_approve_raises(self):
         permission = self._draft()
-        with self.settings(MEDIA_ROOT=self.media_root):
-            approved = approve_change_permission(self.manager, permission)
-            with self.assertRaises(ValidationError):
-                approve_change_permission(self.manager, approved)
+        approved = approve_change_permission(self.manager, permission)
+        with self.assertRaises(ValidationError):
+            approve_change_permission(self.manager, approved)
 
     def test_update_raises(self):
         permission = self._draft()
-        with self.settings(MEDIA_ROOT=self.media_root):
-            approved = approve_change_permission(self.manager, permission)
+        approved = approve_change_permission(self.manager, permission)
 
         original = ChangePermissionOriginal.objects.get(
             permission=approved,
@@ -193,8 +188,7 @@ class OriginalImmutabilityTests(ChangePermissionOriginalsTestBase):
 
     def test_delete_raises(self):
         permission = self._draft()
-        with self.settings(MEDIA_ROOT=self.media_root):
-            approved = approve_change_permission(self.manager, permission)
+        approved = approve_change_permission(self.manager, permission)
 
         original = ChangePermissionOriginal.objects.get(
             permission=approved,
@@ -207,8 +201,7 @@ class OriginalImmutabilityTests(ChangePermissionOriginalsTestBase):
 class HashVerificationTests(ChangePermissionOriginalsTestBase):
     def test_verify_sha256_ok(self):
         permission = self._draft()
-        with self.settings(MEDIA_ROOT=self.media_root):
-            approved = approve_change_permission(self.manager, permission)
+        approved = approve_change_permission(self.manager, permission)
 
         original = ChangePermissionOriginal.objects.get(
             permission=approved,
@@ -219,8 +212,7 @@ class HashVerificationTests(ChangePermissionOriginalsTestBase):
 
     def test_verify_sha256_fails_after_tamper(self):
         permission = self._draft()
-        with self.settings(MEDIA_ROOT=self.media_root):
-            approved = approve_change_permission(self.manager, permission)
+        approved = approve_change_permission(self.manager, permission)
 
         original = ChangePermissionOriginal.objects.get(
             permission=approved,
@@ -237,9 +229,8 @@ class InventoryRegistryTests(ChangePermissionOriginalsTestBase):
         second = create_change_permission_draft(
             self.gip, self.project, content='Второе', reason_code='1',
         )
-        with self.settings(MEDIA_ROOT=self.media_root):
-            approve_change_permission(self.manager, first)
-            approve_change_permission(self.manager, second)
+        approve_change_permission(self.manager, first)
+        approve_change_permission(self.manager, second)
 
         numbers = ChangePermissionOriginal.objects.filter(
             permission__in=[first, second],
@@ -257,8 +248,7 @@ class InventoryRegistryTests(ChangePermissionOriginalsTestBase):
             ).exists()
         )
         permission = self._draft()
-        with self.settings(MEDIA_ROOT=self.media_root):
-            approve_change_permission(self.manager, permission)
+        approve_change_permission(self.manager, permission)
 
         self.assertTrue(
             ChangePermissionOriginalRegistry.objects.filter(
