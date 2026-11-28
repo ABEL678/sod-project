@@ -4,9 +4,10 @@ from django.conf import settings
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ObjectDoesNotExist, ValidationError
-from django.db import models
+from django.db import models, transaction
 from django.contrib.auth.models import User
 from django.utils import timezone
+import hashlib
 
 
 class Company(models.Model):
@@ -1227,6 +1228,106 @@ class ChangePermissionRegistry(models.Model):
     class Meta:
         verbose_name = "Реестр разрешений на изменения"
         verbose_name_plural = "Реестры разрешений на изменения"
+
+    def __str__(self):
+        return f'{self.organization}: {self.last_number}'
+
+
+class ChangePermissionOriginal(models.Model):
+    """Подлинник РВИ — электронный документ архива организации.
+
+    Фиксируется в момент утверждения и в момент аннулирования РВИ
+    (ГОСТ Р 21.101-2026 п. 7.2.3/7.2.5, ГОСТ Р 21.1003). Неизменяем
+    после записи: insert-only, никаких update/delete через сервисный
+    слой; попытка изменения файла или хэша — явное исключение.
+
+    Хэш SHA-256 файла, инвентарный номер и время записи дублируются
+    в ``ChangePermissionStatusLog`` той же транзакцией.
+    """
+
+    TYPE_APPROVAL = 'approval'
+    TYPE_ANNULMENT = 'annulment'
+    TYPE_CHOICES = [
+        (TYPE_APPROVAL, 'Утверждение'),
+        (TYPE_ANNULMENT, 'Аннулирование'),
+    ]
+
+    permission = models.ForeignKey(
+        ChangePermission,
+        on_delete=models.CASCADE,
+        related_name='originals',
+        verbose_name="Разрешение",
+    )
+    file = models.FileField(
+        upload_to='change_permission_originals/%Y/%m/',
+        verbose_name="Файл подлинника (PDF)",
+    )
+    sha256 = models.CharField(max_length=64, verbose_name="SHA-256 файла")
+    inventory_number = models.CharField(
+        max_length=50,
+        verbose_name="Инвентарный номер (сквозной по организации)",
+    )
+    recorded_at = models.DateTimeField(
+        verbose_name="Время записи",
+    )
+    record_type = models.CharField(
+        max_length=10,
+        choices=TYPE_CHOICES,
+        verbose_name="Тип записи",
+    )
+
+    class Meta:
+        verbose_name = "Подлинник РВИ"
+        verbose_name_plural = "Подлинники РВИ"
+        constraints = [
+            models.UniqueConstraint(
+                fields=['permission', 'record_type'],
+                name='uniq_change_permission_original_per_type',
+            ),
+        ]
+
+    def __str__(self):
+        return (
+            f'{self.permission.code or self.permission_id} '
+            f'{self.get_record_type_display()} {self.inventory_number}'
+        )
+
+    def verify_sha256(self, data: bytes) -> bool:
+        """Сверка целостности: хэш текущих байт с записью при создании."""
+        import hashlib
+
+        return hashlib.sha256(data).hexdigest() == self.sha256
+
+    def save(self, *args, **kwargs):
+        if not self._state.adding:
+            raise ValidationError("Подлинник РВИ неизменяем после записи")
+        return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValidationError("Подлинник РВИ нельзя удалить")
+
+
+class ChangePermissionOriginalRegistry(models.Model):
+    """Сквозной реестр инвентарных номеров подлинников по организации.
+
+    Аналог реестра РВИ: строка блокируется ``select_for_update`` при
+    нумерации, чтобы номера выдавались атомарно и без дыр.
+    """
+
+    organization = models.OneToOneField(
+        Company,
+        on_delete=models.CASCADE,
+        related_name='change_permission_original_registry',
+        verbose_name="Организация",
+    )
+    last_number = models.PositiveIntegerField(
+        default=0,
+        verbose_name="Последний номер",
+    )
+
+    class Meta:
+        verbose_name = "Реестр инвентарных номеров подлинников РВИ"
+        verbose_name_plural = "Реестры инвентарных номеров подлинников РВИ"
 
     def __str__(self):
         return f'{self.organization}: {self.last_number}'

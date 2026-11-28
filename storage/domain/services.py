@@ -22,10 +22,13 @@ from django.utils import timezone
 
 logger = logging.getLogger(__name__)
 
+from storage.adapters.rvi_print import build_change_permission_pdf
 from storage.domain.models import (
     CHANGE_PERMISSION_REASON_CHOICES,
     ChangePermission,
     ChangePermissionDocument,
+    ChangePermissionOriginal,
+    ChangePermissionOriginalRegistry,
     ChangePermissionRegistry,
     ChangePermissionStatusLog,
     ChangeSetEntry,
@@ -7319,6 +7322,87 @@ def _next_change_permission_code(organization: Company) -> str:
     return f'{registry.last_number}-{year_suffix:02d}'
 
 
+def _next_change_permission_original_number(organization: Company) -> str:
+    """Выдаёт сквозной инвентарный номер подлинника РВИ атомарно.
+
+    Формат — «номер-YY» по аналогии с реестром РВИ; блокировка строки
+    реестра ``select_for_update`` сериализует выдачу номеров. Вызывается
+    только внутри ``transaction.atomic``.
+    """
+    registry, _ = ChangePermissionOriginalRegistry.objects.get_or_create(
+        organization=organization,
+    )
+    registry = ChangePermissionOriginalRegistry.objects.select_for_update().get(
+        pk=registry.pk,
+    )
+    registry.last_number += 1
+    registry.save(update_fields=['last_number'])
+    year_suffix = timezone.localdate().year % 100
+    return f'{registry.last_number}-{year_suffix:02d}'
+
+
+def _write_change_permission_original(
+    permission: ChangePermission,
+    record_type: str,
+    annulment: bool = False,
+) -> ChangePermissionOriginal:
+    """Записывает подлинник РВИ (PDF формы 9/9а) в архив организации.
+
+    Insert-only: повторная запись того же типа для РВИ невозможна
+    (UniqueConstraint + явная проверка), файл и хэш после записи не
+    меняются. Инвентарный номер, хэш и время записи дублируются в
+    ``ChangePermissionStatusLog`` той же транзакции.
+    """
+    if not ChangePermission.objects.filter(pk=permission.pk).exists():
+        raise ValidationError("РВИ не существует")
+
+    existing = ChangePermissionOriginal.objects.filter(
+        permission=permission,
+        record_type=record_type,
+    ).first()
+    if existing is not None:
+        raise ValidationError(
+            "Подлинник РВИ этого типа уже записан и неизменяем"
+        )
+
+    data = get_change_permission_print_rows(permission)
+    if annulment and data.get('rows'):
+        data = dict(data)
+        data['rows'] = [
+            dict(row, note=f'{row["note"]} | АННУЛИРОВАНО')
+            for row in data['rows']
+        ]
+    buffer = build_change_permission_pdf(data)
+    content = buffer.getvalue()
+    sha256 = hashlib.sha256(content).hexdigest()
+
+    with transaction.atomic():
+        inventory_number = _next_change_permission_original_number(
+            permission.organization,
+        )
+        file_name = f'change_permission_originals/{permission.pk}/{record_type}.pdf'
+        saved_path = default_storage.save(file_name, ContentFile(content))
+        original = ChangePermissionOriginal.objects.create(
+            permission=permission,
+            file=saved_path,
+            sha256=sha256,
+            inventory_number=inventory_number,
+            recorded_at=timezone.now(),
+            record_type=record_type,
+        )
+        ChangePermissionStatusLog.objects.create(
+            permission=permission,
+            old_status=permission.status,
+            new_status=permission.status,
+            changed_by=permission.approved_by or permission.author,
+            comment=(
+                f'Записан подлинник ({original.get_record_type_display()}), '
+                f'инв. {inventory_number}, sha256 {sha256[:12]}...'
+            ),
+        )
+    return original
+
+
 def approve_change_permission(
     user: User,
     permission: ChangePermission,
@@ -7327,6 +7411,7 @@ def approve_change_permission(
 
     Утверждающий вычисляется в момент действия: Руководитель организации
     всегда; ГИП проекта — только если ни один документ РВИ не в архиве.
+    После утверждения записывается подлинник РВИ (форма 9/9а).
     """
     with transaction.atomic():
         locked = (
@@ -7362,6 +7447,9 @@ def approve_change_permission(
             new_status=ChangePermission.STATUS_APPROVED,
             changed_by=user,
             comment=f'Утверждено, обозначение {locked.code}',
+        )
+        _write_change_permission_original(
+            locked, ChangePermissionOriginal.TYPE_APPROVAL,
         )
     permission.refresh_from_db()
     return permission
@@ -7636,6 +7724,10 @@ def annul_change_permission(
             new_status=ChangePermission.STATUS_ANNULLED,
             changed_by=user,
             comment=comment or 'РВИ аннулировано',
+        )
+        _write_change_permission_original(
+            locked, ChangePermissionOriginal.TYPE_ANNULMENT,
+            annulment=True,
         )
     permission.refresh_from_db()
     return permission

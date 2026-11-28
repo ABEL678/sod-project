@@ -266,6 +266,31 @@ sod_project/
 
 **Уникальность:** (permission, document). После утверждения РВИ допускается только заполнение `applied_at` и `applied_action`.
 
+#### ChangePermissionOriginal (подлинник РВИ, W5-1)
+
+Подлинник РВИ — электронный документ архива организации (ГОСТ Р 21.101-2026 п. 7.2.3/7.2.5, ГОСТ Р 21.1003). Фиксируется в момент утверждения и в момент аннулирования. Неизменяем после записи: insert-only, никаких update/delete через сервисный слой; попытка изменения файла или хэша — явное исключение.
+
+| Поле | Тип | Описание |
+|---|---|---|
+| permission | FK → ChangePermission, related_name=originals | РВИ |
+| file | FileField, upload_to='change_permission_originals/%Y/%m/' | PDF формы 9/9а, существующее хранилище проекта |
+| sha256 | CharField(64) | SHA-256 файла на момент записи |
+| inventory_number | CharField(50) | Сквозной инвентарный номер по организации (реестр) |
+| recorded_at | DateTimeField | Время записи |
+| record_type | CharField(10), choices | approval / annulment |
+
+**Constraint:** не более одной записи каждого типа на РВИ (`uniq_change_permission_original_per_type`). `save`/`delete` после записи запрещены (модель + сервис).
+
+**Точки записи (только две):**
+1. `approve_change_permission` — после утверждения: генерация PDF формы 9/9а, запись подлинника, хэш и инвентарный номер дублируются в `ChangePermissionStatusLog` той же транзакции.
+2. `annul_change_permission` — после аннулирования: PDF с пометкой «АННУЛИРОВАНО» в графе «Примечание» (отдельная графа ГОСТ не предусмотрена; выбран вариант «Примечание» как наименее инвазивный для формы), запись подлинника.
+
+**Реестр инвентарных номеров:** `ChangePermissionOriginalRegistry` (OneToOne → Company, `last_number`), выдача атомарна через `select_for_update` (`_next_change_permission_original_number`), формат «N-YY» по аналогии с реестром РВИ.
+
+**Контроль целостности:** `ChangePermissionOriginal.verify_sha256(data)` — сверка SHA-256 текущего файла с записью (минимум для будущего просмотра архива, без UI в этой волне).
+
+**Инвентарная книга:** админ-панель `ChangePermissionOriginalAdmin` (только чтение: permission, record_type, inventory_number, sha256, recorded_at), реестр `ChangePermissionOriginalRegistryAdmin`; в карточке РВИ список подлинников виден через `related_name='originals'` (без загрузок/удалений). Полный UI архива организации — следующая волна.
+
 #### ChangePermissionStatusLog (РВИ, Волна 4)
 
 История статусов карточки РВИ (черновик → утверждено → аннулировано): `permission` (FK, related_name=status_logs), `old_status`/`new_status`, `changed_by`, `comment`, `created_at`. Записи только добавляются.

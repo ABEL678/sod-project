@@ -1,6 +1,8 @@
 from django.contrib import admin
 from .domain.models import (
     ChangeSetEntry,
+    ChangePermissionOriginal,
+    ChangePermissionOriginalRegistry,
     Company, Customer, Project, Section, Document, DocumentVersion, UserProfile, ProjectMembership,
     DocumentView, Specification, VorItem,
     DesignTask, DesignTaskStatusLog, DesignTaskAttachment, TaskTemplate,
@@ -74,6 +76,37 @@ class ChangeSetEntryAdmin(admin.ModelAdmin):
 
     def has_delete_permission(self, request, obj=None):
         return False
+
+
+@admin.register(ChangePermissionOriginal)
+class ChangePermissionOriginalAdmin(admin.ModelAdmin):
+    """Инвентарная книга подлинников РВИ — только чтение (архив)."""
+
+    list_display = (
+        'permission', 'record_type', 'inventory_number', 'sha256',
+        'recorded_at',
+    )
+    list_filter = ('record_type',)
+    search_fields = ('permission__code', 'inventory_number')
+    readonly_fields = (
+        'permission', 'file', 'sha256', 'inventory_number', 'recorded_at',
+        'record_type',
+    )
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(ChangePermissionOriginalRegistry)
+class ChangePermissionOriginalRegistryAdmin(admin.ModelAdmin):
+    list_display = ('organization', 'last_number')
+    search_fields = ('organization__name',)
 
 
 @admin.register(UserProfile)
