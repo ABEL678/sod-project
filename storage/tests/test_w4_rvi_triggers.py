@@ -582,7 +582,7 @@ class ChangePermissionUiTests(RviTestBase):
         self.assertEqual(
             [label for _, label in CHANGE_PERMISSION_REASON_CHOICES],
             [
-                'Усовершенствования',
+                'Введение усовершенствований',
                 'Изменение стандартов и норм',
                 'Дополнительные требования заказчика',
                 'Устранение ошибок',

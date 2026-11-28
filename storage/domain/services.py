@@ -3890,10 +3890,15 @@ def upload_document(
                         'applied_at', 'applied_action',
                     ])
             elif change_permission is not None:
-                # WIP правится свободно: РВИ не требуется и не расходуется.
-                # Исключение — переиспользование связи, уже израсходованной
-                # выводом из архива: версия получает номер изменения того же
-                # РВИ без повторного расхода (семантика W4-2).
+                # W4-2: документ вне охвата РВИ правится свободно — РВИ не
+                # требуется и не расходуется. Исключение — переиспользование
+                # связи, уже израсходованной выводом из архива: версия
+                # получает номер изменения того же РВИ без повторного расхода
+                # (семантика W4-2, точка «загрузка версии»). Путь
+                # переиспользования обязан жить здесь: он допустим ТОЛЬКО
+                # при applied_action == APPLIED_BY_UNARCHIVE; при поданном
+                # change_permission вне охвата и без такой связи — явная
+                # ошибка, а не молчаливое игнорирование.
                 permission_id = (
                     change_permission.pk
                     if isinstance(change_permission, ChangePermission)
@@ -3916,6 +3921,10 @@ def upload_document(
                 )
                 if candidate is not None:
                     change_link = candidate
+                else:
+                    raise ValueError(
+                        "РВИ не требуется для документа в текущем состоянии"
+                    )
 
         # Вычисляем следующую версию
         max_number = DocumentVersion.objects.filter(document=doc).aggregate(Max('version_number'))['version_number__max']
