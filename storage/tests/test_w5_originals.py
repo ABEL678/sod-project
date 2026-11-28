@@ -6,6 +6,7 @@
 """
 
 import hashlib
+import shutil
 import tempfile
 
 from django.contrib.auth import get_user_model
@@ -34,14 +35,22 @@ from storage.domain.services import (
 User = get_user_model()
 
 
+@override_settings(MEDIA_ROOT=tempfile.mkdtemp())
 class ChangePermissionOriginalsTestBase(TestCase):
-    def setUp(self):
-        self.media_root = tempfile.mkdtemp()
-        from django.test.utils import override_settings
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls._media_root = tempfile.mkdtemp()
+        cls._override = override_settings(MEDIA_ROOT=cls._media_root)
+        cls._override.enable()
+        cls.addClassCleanup(cls._override.disable)
 
-        self._media_override = override_settings(MEDIA_ROOT=self.media_root)
-        self._media_override.enable()
-        self.addCleanup(self._media_override.disable)
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls._media_root, ignore_errors=True)
+        super().tearDownClass()
+
+    def setUp(self):
         self.company = Company.objects.create(name='Подлинники Организация')
         self.admin = User.objects.create_user(
             username='orig_admin', password='pass123',
@@ -86,13 +95,6 @@ class ChangePermissionOriginalsTestBase(TestCase):
             state=Document.STATE_WIP_DRAFT,
             created_by=self.admin,
         )
-
-    def tearDown(self):
-        import shutil
-
-        self._media_override.disable()
-        shutil.rmtree(self.media_root, ignore_errors=True)
-        super().tearDown()
 
     def _draft(self, content='Изменить планировку'):
         permission = create_change_permission_draft(
