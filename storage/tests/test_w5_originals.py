@@ -6,10 +6,11 @@
 """
 
 import hashlib
+import tempfile
 
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.utils import timezone
 
 from storage.domain.models import (
@@ -33,8 +34,10 @@ from storage.domain.services import (
 User = get_user_model()
 
 
+@override_settings(MEDIA_ROOT=tempfile.mkdtemp())
 class ChangePermissionOriginalsTestBase(TestCase):
     def setUp(self):
+        self.media_root = tempfile.mkdtemp()
         self.company = Company.objects.create(name='Подлинники Организация')
         self.admin = User.objects.create_user(
             username='orig_admin', password='pass123',
@@ -49,6 +52,13 @@ class ChangePermissionOriginalsTestBase(TestCase):
         UserProfile.objects.update_or_create(
             user=self.gip,
             defaults={'role': 'gip', 'company': self.company},
+        )
+        self.manager = User.objects.create_user(
+            username='orig_manager', password='pass123',
+        )
+        UserProfile.objects.update_or_create(
+            user=self.manager,
+            defaults={'role': 'manager', 'company': self.company},
         )
         self.project = create_project(
             company=self.company,
@@ -72,6 +82,11 @@ class ChangePermissionOriginalsTestBase(TestCase):
             state=Document.STATE_WIP_DRAFT,
             created_by=self.admin,
         )
+
+    def tearDown(self):
+        import shutil
+
+        shutil.rmtree(self.media_root, ignore_errors=True)
 
     def _draft(self, content='Изменить планировку'):
         permission = create_change_permission_draft(

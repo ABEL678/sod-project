@@ -2,6 +2,7 @@ import base64
 from collections import defaultdict
 from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
+import hashlib
 import io
 import logging
 import re
