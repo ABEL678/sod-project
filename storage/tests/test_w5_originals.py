@@ -155,9 +155,10 @@ class AnnulCreatesOriginalTests(ChangePermissionOriginalsTestBase):
             permission=approved,
             record_type=ChangePermissionOriginal.TYPE_ANNULMENT,
         )
-        self.assertTrue(original.file.read())
-        self.assertEqual(original.sha256, hashlib.sha256(
-            original.file.read()).hexdigest())
+        file_bytes = original.file.read()
+        self.assertTrue(file_bytes)
+        self.assertTrue(file_bytes.startswith(b'%PDF-'))
+        self.assertEqual(original.sha256, hashlib.sha256(file_bytes).hexdigest())
         self.assertTrue(original.inventory_number)
 
         rows = get_change_permission_print_rows(approved)

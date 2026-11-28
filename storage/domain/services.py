@@ -7375,7 +7375,6 @@ def _write_change_permission_original(
         ]
     buffer = build_change_permission_pdf(data)
     content = buffer.getvalue()
-    sha256 = hashlib.sha256(content).hexdigest()
 
     with transaction.atomic():
         inventory_number = _next_change_permission_original_number(
@@ -7384,6 +7383,7 @@ def _write_change_permission_original(
         file_name = f'change_permission_originals/{permission.pk}/{record_type}.pdf'
         storage = FileSystemStorage()
         saved_path = storage.save(file_name, ContentFile(content))
+        sha256 = hashlib.sha256(content).hexdigest()
         original = ChangePermissionOriginal.objects.create(
             permission=permission,
             file=saved_path,
